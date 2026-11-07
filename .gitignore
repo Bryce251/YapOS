@@ -1,0 +1,8 @@
+config.json
+data/
+node_modules/
+.env
+*.tmp
+CLAUDE.md
+.claude/
+docs/

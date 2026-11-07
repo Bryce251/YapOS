@@ -1,0 +1,7 @@
+{
+  "token": "yb_paste_your_bot_token_here",
+  "verified": false,
+  "ownerId": "",
+  "dataDir": "data",
+  "gateway": true
+}
