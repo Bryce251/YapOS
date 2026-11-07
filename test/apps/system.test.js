@@ -47,7 +47,7 @@ test('/status reports connection and budget', async () => {
   const text = h.textOf(ans[0]);
   assert.match(text, /Latency/);
   assert.match(text, /Message budget/);
-  assert.equal(ans[0].type, 'reply', 'panels with buttons are normal messages');
+  assert.equal(ans[0].type, 'ephemeral', 'only the owner sees it');
 });
 
 test('/apps is admin only and toggles apps', async () => {
@@ -120,4 +120,13 @@ test('the home screen only shows the Status button to the bot owner', async () =
   assert.ok(!h.allButtons(owner).some((b) => b.custom_id === 'yo:system:status'));
   const me = await h.slash('menu', '', { user: IDS.admin });
   assert.ok(h.allButtons(me).some((b) => b.custom_id === 'yo:system:status'));
+});
+test('/status stays private: no buttons, so it is never posted publicly', async () => {
+  const h = await createHarness();
+  const ans = await h.slash('status', '', { user: IDS.owner });
+  assert.equal(ans.length, 1);
+  assert.equal(ans[0].type, 'ephemeral');
+  assert.ok(!ans[0].components?.length);
+  const clicked = await h.click('yo:system:status', { user: IDS.owner });
+  assert.equal(clicked[0].type, 'ephemeral');
 });

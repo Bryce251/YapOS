@@ -96,7 +96,7 @@ async function statusView(ctx) {
     { name: 'Handled', value: `${engine.stats.commands} commands · ${engine.stats.interactions} clicks`, inline: true },
     { name: 'Features on this server', value: capLines.join('\n'), inline: false },
   ];
-  return { embeds: [card({ title: '📊 System monitor', fields, color: 'system', footer: `${VERSION.full} · SDK ${SDK_VERSION}` })], components: [row(button('Refresh', cid('status'), 'secondary', '🔄'))] };
+  return { embeds: [card({ title: '📊 System monitor', fields, color: 'system', footer: `${VERSION.full} · SDK ${SDK_VERSION} · run /status again to refresh` })] };
 }
 
 async function showStatus(ctx) {
