@@ -1,24 +1,37 @@
-app = "yapos"
-primary_region = "ams"
-kill_signal = "SIGTERM"
-kill_timeout = 10
+# fly.toml app configuration file generated for yapos on 2026-11-07T21:55:55Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'yapos'
+primary_region = 'ams'
+kill_signal = 'SIGTERM'
+kill_timeout = '10s'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  NODE_ENV = "production"
-  YAPOS_DATA_DIR = "/data"
-  YAPOS_OWNER_ID = "2c416a35-eac2-4e0e-a310-8648b5ecd7af"
+  NODE_ENV = 'production'
+  YAPOS_DATA_DIR = '/data'
+  YAPOS_OWNER_ID = '2c416a35-eac2-4e0e-a310-8648b5ecd7af'
 
-[mounts]
-  source = "yapos_data"
-  destination = "/data"
-  initial_size = "1gb"
+[[mounts]]
+  source = 'yapos_data'
+  destination = '/data'
+  initial_size = '1gb'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
 
 [[restart]]
-  policy = "always"
+  policy = 'always'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "256mb"
+  size = 'shared-cpu-1x'
+  memory = '256mb'
