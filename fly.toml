@@ -1,0 +1,24 @@
+app = "yapos"
+primary_region = "ams"
+kill_signal = "SIGTERM"
+kill_timeout = 10
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  YAPOS_DATA_DIR = "/data"
+  YAPOS_OWNER_ID = "2c416a35-eac2-4e0e-a310-8648b5ecd7af"
+
+[mounts]
+  source = "yapos_data"
+  destination = "/data"
+  initial_size = "1gb"
+
+[[restart]]
+  policy = "always"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

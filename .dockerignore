@@ -1,0 +1,10 @@
+.git
+node_modules
+data
+config.json
+.env
+test
+docs
+CLAUDE.md
+.claude
+*.tmp
