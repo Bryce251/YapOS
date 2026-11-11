@@ -83,6 +83,7 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
   const engine = {
     bot, config, store, log, apps, settings, perms, caps, budget, prompts, yap, services, cache, stats, startedAt, VERSION,
     router: null,
+    dmRoutes: [],
     contextFor: (source, opts) => createContext(engine, source, opts),
     service: (id) => services.get(id) || null,
     isBotOwner: (uid) => !!uid && uid === (config.ownerId || bot.me?.bot?.owner_id),

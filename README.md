@@ -2,7 +2,7 @@
 
 The all-in-one operating system for your Yapin' server. Moderation, automod, welcomes, role menus and more, organised as **apps** that each server installs or uninstalls with `/apps`.
 
-**YapOS 1.0 "Boot"** · System, Setup, Mod, Automod, Welcome, Roles, Levels, Tickets.
+**YapOS 1.0 "Boot"** · System, Setup, Mod, Automod, Welcome, Roles, Levels, Tickets, Studio.
 
 ## Run it
 
@@ -32,6 +32,7 @@ Needs Node.js 18 or newer (22+ so the live gateway is used; older versions fall 
 | Roles | `/roles` |
 | Levels | `/rank` `/leaderboard` `/levels` |
 | Tickets | `/ticket` `/tickets` |
+| Studio | `/caption` `/gif` (needs ffmpeg installed) |
 
 Every hub command opens a panel. Most also take typed shortcuts, like `/mod timeout @sam 10m spam`, and `/yap` understands plain words: `/yap timeout @sam 10m`.
 

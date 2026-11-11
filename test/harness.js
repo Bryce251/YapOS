@@ -370,12 +370,13 @@ export async function createHarness({ verified = false, store = createMemoryStor
     bot, engine, fake, store, log, lines, IDS,
     settle,
 
-    async message(content, { user = IDS.member, channel = IDS.channels.general, server = S, replyTo = null, authorAsString = false, authorBot = false } = {}) {
+    async message(content, { user = IDS.member, channel = IDS.channels.general, server = S, replyTo = null, authorAsString = false, authorBot = false, attachment = null } = {}) {
       const stored = fake.addUserMessage(channel, user, content);
+      stored.attachment_path = attachment;
       const data = {
         id: stored.id, channel_id: channel, channel_name: fake.channelById(channel)?.name, server_id: server,
         author_id: user, author: authorAsString ? nameOf(user) : { id: user, username: nameOf(user), display_name: nameOf(user) },
-        content, attachment: null, reply_to_id: replyTo, created_at: stored.created_at,
+        content, attachment, reply_to_id: replyTo, created_at: stored.created_at,
         mentioned: content.includes(`<@${IDS.bot}>`), author_bot: authorBot,
       };
       const cmd = /^[/!]([a-z0-9_-]{1,32})(?:\s+([\s\S]*))?$/i.exec(content);
@@ -436,10 +437,11 @@ export async function createHarness({ verified = false, store = createMemoryStor
       await settle();
     },
 
-    async dm(content, { user = IDS.member } = {}) {
+    async dm(content, { user = IDS.member, attachments = [] } = {}) {
       const cid = `d${user.slice(1)}`;
       fake.state.dms[cid] = user;
-      await bot.handle({ id: ++evId, type: 'dm_message', data: { id: uuid(4), channel_id: cid, dm_channel_id: cid, server_id: null, is_dm: true, dm: true, author_id: user, author: nameOf(user), author_name: nameOf(user), content, attachment: null, attachments: [], created_at: new Date().toISOString(), author_bot: false } });
+      const files = attachments.map((a) => ({ path: a.path, name: a.name ?? null, size: a.size ?? null, width: a.width ?? null, height: a.height ?? null, voice_secs: a.voice_secs ?? null }));
+      await bot.handle({ id: ++evId, type: 'dm_message', data: { id: uuid(4), channel_id: cid, dm_channel_id: cid, server_id: null, is_dm: true, dm: true, author_id: user, author: nameOf(user), author_name: nameOf(user), content, attachment: files[0]?.path ?? null, attachments: files, created_at: new Date().toISOString(), author_bot: false } });
       await settle();
     },
 

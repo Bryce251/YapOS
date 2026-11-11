@@ -56,6 +56,7 @@ export function defineApp(def) {
     }
 
     if (def.yap) for (const y of [].concat(def.yap)) engine.yap.add(meta.id, y);
+    if (def.dm) engine.dmRoutes.push({ app: meta.id, match: def.dm.match, run: def.dm.run });
     if (def.services) engine.services.set(meta.id, def.services(engine));
     if (def.init) return def.init(engine);
     return undefined;
@@ -66,6 +67,7 @@ export function defineApp(def) {
     try { await def.dispose?.(engine); } finally {
       engine.router.unregisterApp(meta.id);
       engine.yap.removeApp(meta.id);
+      for (let i = engine.dmRoutes.length - 1; i >= 0; i--) if (engine.dmRoutes[i].app === meta.id) engine.dmRoutes.splice(i, 1);
       engine.services.delete(meta.id);
       engine.apps.unregister(meta.id);
     }

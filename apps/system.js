@@ -186,6 +186,14 @@ export const { setup, teardown, check } = defineApp({
 
   events: {
     dm_message: async (ctx, msg) => {
+      for (const route of ctx.engine.dmRoutes) {
+        let claimed = false;
+        try { claimed = !!(await route.match(msg)); } catch { claimed = false; }
+        if (!claimed) continue;
+        const appCtx = ctx.engine.contextFor(msg, { app: route.app, kind: 'dm' });
+        try { await route.run(appCtx, msg); } catch (e) { await appCtx.fail(e); }
+        return;
+      }
       if (ctx.engine.services.get('pocket')) return;
       await msg.reply(`👋 Hi! I'm ${VERSION.full}. **YapOS Pocket**, your personal assistant here in DMs, is coming soon. In a server, try **/menu**.`).catch(() => {});
     },
