@@ -1,5 +1,6 @@
 import { Bot } from './engine/sdk.js';
-import { loadConfig, VERSION } from './engine/config.js';
+import { loadConfig, VERSION, ROOT } from './engine/config.js';
+import { pickDataDir, probeStorage, describeProbe } from './engine/datadir.js';
 import { createLogger } from './engine/log.js';
 import { createJsonStore, flushOnExit } from './engine/storage.js';
 import { createBackups } from './engine/backup.js';
@@ -9,8 +10,14 @@ import { teeConsoleToFile } from './engine/logfile.js';
 import path from 'node:path';
 
 const config = loadConfig();
+const picked = pickDataDir(config, ROOT);
+config.dataPath = picked.path;
 teeConsoleToFile(path.join(config.dataPath, 'logs'));
 const log = createLogger();
+if (picked.fellBack) log.warn(`couldn't write to the data folder ${picked.wanted} (${picked.error}), so I'm using ${picked.path} instead. Check YAPOS_DATA_DIR.`);
+if (process.platform === 'linux') {
+  try { log.info(describeProbe(probeStorage(ROOT))); } catch (e) { log.debug('storage check failed', e?.message); }
+}
 
 if (!config.token) {
   log.error('No bot token found. Set YAPPER_BOT_TOKEN, or copy config.example.json to config.json and paste your token there.');
