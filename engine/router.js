@@ -79,10 +79,10 @@ export function createRouter({ bot, engine, log }) {
 
   const panelOwners = new Map();
   const MAX_PANEL_LOCKS = 5000;
-  function claimPanel(messageId, userId, ttlMs) {
+  function claimPanel(messageId, userId, ttlMs, serverId = null) {
     if (!messageId || !userId) return;
     if (panelOwners.size >= MAX_PANEL_LOCKS) panelOwners.delete(panelOwners.keys().next().value);
-    panelOwners.set(messageId, { userId, expires: Date.now() + ttlMs });
+    panelOwners.set(messageId, { userId, serverId, expires: Date.now() + ttlMs });
   }
   function releasePanel(messageId) { panelOwners.delete(messageId); }
   function panelOwner(messageId) {
@@ -116,7 +116,8 @@ export function createRouter({ bot, engine, log }) {
     const i = guardInteraction(raw, { log });
     try {
       const owner = panelOwner(raw.message_id);
-      if (owner && owner !== raw.user_id) {
+      const panelServer = panelOwners.get(raw.message_id)?.serverId || raw.server_id;
+      if (owner && owner !== raw.user_id && owner !== engine.bot.me?.id && !(await engine.perms.isOwner(panelServer, raw.user_id))) {
         await i.ephemeral('', { embeds: [dialog.warn('Not your panel', `<@${owner}> opened this one, so only they can use it. Run the command yourself to get your own.`)] });
         return;
       }

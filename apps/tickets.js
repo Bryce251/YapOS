@@ -477,10 +477,34 @@ async function buildTicket(ctx, { type, topic, answers, cfg }) {
   return ctx.ok('Your ticket is open', `Head over to <#${t.channelId}>. Only you and the staff can see it.${sent ? '' : '\n-# I could not post the welcome message there, but the channel is ready.'}`);
 }
 
-function formatMessageLine(m, botId) {
-  const who = m.author?.display_name || m.author?.username || (m.author_id === botId ? 'YapOS' : 'unknown');
+async function mentionNames(engine, sid) {
+  const [members, roles, channels] = await Promise.all([
+    engine.cache.members(sid).catch(() => []),
+    engine.perms.roles(sid).catch(() => []),
+    engine.cache.channels(sid).catch(() => []),
+  ]);
+  const botId = engine.bot.me?.id;
+  const users = new Map(members.map((m) => [m.id, m.nickname || m.display_name || m.username]));
+  if (botId) users.set(botId, 'YapOS');
+  return {
+    users,
+    roles: new Map(roles.map((r) => [r.id, r.name])),
+    channels: new Map(channels.map((c) => [c.id, c.name])),
+  };
+}
+
+function readable(text, names) {
+  return String(text)
+    .replace(/<@!?([\w-]+)>/g, (all, id) => `@${names.users.get(id) || 'someone'}`)
+    .replace(/<@&([\w-]+)>/g, (all, id) => `@${names.roles.get(id) || 'role'}`)
+    .replace(/<#([\w-]+)>/g, (all, id) => `#${names.channels.get(id) || 'channel'}`)
+    .replace(/<a?:(\w+):[\w-]+>/g, ':$1:');
+}
+
+function formatMessageLine(m, botId, names) {
+  const who = m.author_id === botId ? 'YapOS' : (names.users.get(m.author_id) || m.author?.display_name || m.author?.username || 'unknown');
   const bits = [];
-  if (m.content) bits.push(String(m.content).replace(/\n/g, '\n    '));
+  if (m.content) bits.push(readable(m.content, names).replace(/\n/g, '\n    '));
   const files = [];
   if (m.attachment_name) files.push(m.attachment_name);
   if (m.attachment?.name) files.push(m.attachment.name);
@@ -488,7 +512,7 @@ function formatMessageLine(m, botId) {
   if (m.attachment_path && !files.length) files.push(String(m.attachment_path).split('/').pop());
   for (const f of [].concat(m.attachments || [], m.files || [])) if (f?.name) files.push(f.name);
   for (const f of uniq(files)) bits.push(`[file: ${f}]`);
-  for (const e of m.embeds || []) if (e?.title) bits.push(`[card: ${e.title}]`);
+  for (const e of m.embeds || []) if (e?.title) bits.push(`[card: ${readable(e.title, names)}]`);
   return `[${stamp(m.created_at)}] ${who}: ${bits.join(' ') || '(no text)'}`;
 }
 
@@ -518,7 +542,7 @@ async function readHistory(engine, t) {
 
 async function buildTranscript(engine, sid, t, { closedBy, reason } = {}) {
   const cfg = cfgOf(engine, sid);
-  const msgs = await readHistory(engine, t);
+  const [msgs, names] = await Promise.all([readHistory(engine, t), mentionNames(engine, sid)]);
   const head = [
     `Ticket #${pad(t.number)} (${typeById(cfg, t.typeId)?.name || 'Ticket'})`,
     `Opened by ${await usernameOf(engine, sid, t.openerId, t.openerId)} on ${stamp(t.createdAt)} UTC`,
@@ -528,7 +552,7 @@ async function buildTranscript(engine, sid, t, { closedBy, reason } = {}) {
   if (t.topic) head.push(`Topic: ${t.topic}`);
   for (const a of t.answers || []) head.push(`${a.q} ${a.a}`);
   head.push('-'.repeat(40));
-  const lines = msgs.map((m) => formatMessageLine(m, engine.bot.me?.id));
+  const lines = msgs.map((m) => formatMessageLine(m, engine.bot.me?.id, names));
   return { text: `${[...head, ...lines].join('\n')}\n`, count: msgs.length };
 }
 
@@ -553,7 +577,7 @@ function chunkText(text, size = CHUNK_SIZE) {
 const transcriptName = (t) => `ticket-${pad(t.number)}-transcript.txt`;
 
 async function sendTranscript(engine, sid, channelId, t, transcript, { embed, maxChunks = MAX_CHUNKS, priority = 'normal', serverId = sid } = {}) {
-  const file = { name: transcriptName(t), data: Buffer.from(transcript.text, 'utf8') };
+  const file = { name: transcriptName(t), data: Buffer.from(`﻿${transcript.text}`, 'utf8') };
   const asFile = () => engine.budget.send({ serverId, channelId, content: '', opts: { embeds: embed ? [embed] : undefined, files: [file] }, priority }).then(() => 'file');
   const asText = async () => {
     if (embed) await engine.budget.send({ serverId, channelId, content: '', opts: { embeds: [embed] }, priority });
@@ -1115,7 +1139,7 @@ async function runTickets(ctx, tokensIn) {
     if (sub === 'panel') {
       if (!rest.length) return await askPanelChannel(ctx);
       const here = /^here$/i.test(rest[0]);
-      const ch = here ? await channelHere(ctx) : await ctx.findChannel(rest[0]);
+      const ch = here ? await channelHere(ctx) : await ctx.findChannel(rest.join(' '));
       if (!ch) return here ? await notHere(ctx) : await ctx.warn("I couldn't find that channel", 'Mention it, like `/tickets panel #support`.');
       return await postPanel(ctx, ch);
     }

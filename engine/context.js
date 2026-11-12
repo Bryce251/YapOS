@@ -25,8 +25,8 @@ export function createContext(engine, source, { app = null, kind, args, values }
 
   let answered = false;
   const claim = (sent, p) => {
-    if (!sent?.id || p.open || !serverId || !userId) return;
-    engine.router.claimPanel(sent.id, userId, p.keep ? KEPT_PANEL_LOCK_MS : (p.ttl ?? PANEL_TTL_MS) + LOCK_GRACE_MS);
+    if (!sent?.id || p.open || !serverId || !userId || userId === bot.me?.id) return;
+    engine.router.claimPanel(sent.id, userId, p.keep ? KEPT_PANEL_LOCK_MS : (p.ttl ?? PANEL_TTL_MS) + LOCK_GRACE_MS, serverId);
   };
   const cleanUp = (sent, ttl, keep) => {
     if (!sent?.id || keep || !channelId) return;
@@ -62,7 +62,16 @@ export function createContext(engine, source, { app = null, kind, args, values }
     async channels(kindFilter) { const all = await engine.cache.channels(serverId); return kindFilter ? all.filter((c) => c.type === kindFilter) : all; },
     async findUser(token) { return resolveUser(token, await ctx.members()); },
     async findRole(token) { return resolveRole(token, await ctx.roles()); },
-    async findChannel(token, kindFilter = 'text') { return resolveChannel(token, await ctx.channels(kindFilter)); },
+    async findChannel(token, kindFilter = 'text') {
+      const raw = String(token ?? '').replace(/[​-‍﻿]/g, '').trim();
+      const idMatch = /<#([\w-]+)>/.exec(raw) || /\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i.exec(raw);
+      const query = idMatch ? `<#${idMatch[1]}>` : raw.replace(/^#+\s*/, '').replace(/[.,!?;:]+$/, '');
+      if (!query) return null;
+      const hit = resolveChannel(query, await ctx.channels(kindFilter));
+      if (hit) return hit;
+      engine.cache.invalidate(serverId);
+      return resolveChannel(query, await ctx.channels(kindFilter));
+    },
 
     async reply(payload, opts) {
       const p = normalize(payload, opts);

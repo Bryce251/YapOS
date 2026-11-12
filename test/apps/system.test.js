@@ -139,11 +139,16 @@ test('a panel only works for the person who opened it', async () => {
   const before = h.engine.settings.isEnabled(IDS.server, target);
   const member = await h.click(toggle.custom_id, { user: IDS.member, messageId: toggle.messageId });
   assert.match(h.textOf(member[0]), /Not your panel/);
-  const otherAdmin = await h.click(toggle.custom_id, { user: IDS.owner, messageId: toggle.messageId });
+  h.addSecondAdmin();
+  const otherAdmin = await h.click(toggle.custom_id, { user: IDS.admin2, messageId: toggle.messageId });
   assert.match(h.textOf(otherAdmin[0]), /Not your panel/);
   assert.equal(h.engine.settings.isEnabled(IDS.server, target), before, 'nothing changed');
   await h.click(toggle.custom_id, { user: IDS.admin, messageId: toggle.messageId });
   assert.equal(h.engine.settings.isEnabled(IDS.server, target), !before, 'the opener can still use it');
+  const flip = toggle.custom_id.replace(/:(on|off)$/, (m, v) => (v === 'on' ? ':off' : ':on'));
+  const byOwner = await h.click(flip, { user: IDS.owner, messageId: toggle.messageId });
+  assert.doesNotMatch(h.textOf(byOwner[0]), /Not your panel/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, target), before, 'the owner can use it too');
 });
 
 test('the home screen is locked to whoever ran /menu, typed or from the slash menu', async () => {
@@ -632,4 +637,52 @@ test('a second ordinary member gets their own working home, help and app panel',
   assert.match(h.textOf(help[0]), /A sample app for tests/);
   const yap = await h.slash('yap', 'demoword hi', { user: IDS.member2 });
   assert.match(h.textOf(yap[0]), /Demo yap/);
+});
+
+test('the server owner and the bot owner can press buttons on anyone\'s panel', async () => {
+  const h = await createHarness();
+  h.addSecondAdmin();
+  h.engine.config.ownerId = IDS.member2;
+  h.engine.perms.invalidate();
+  const ans = await h.slash('apps', '', { user: IDS.admin });
+  const toggle = h.allButtons(ans).find((b) => b.custom_id.startsWith('yo:system:toggle:'));
+  assert.ok(toggle.messageId);
+  const target = toggle.custom_id.split(':')[3];
+  const on = toggle.custom_id.replace(/:(on|off)$/, ':on');
+  const off = toggle.custom_id.replace(/:(on|off)$/, ':off');
+  const start = h.engine.settings.isEnabled(IDS.server, target);
+
+  for (const user of [IDS.member, IDS.mod, IDS.admin2]) {
+    for (const id of [on, off]) {
+      const out = await h.click(id, { user, messageId: toggle.messageId });
+      assert.match(h.textOf(out[0]), /Not your panel/, user);
+    }
+  }
+  assert.equal(h.engine.settings.isEnabled(IDS.server, target), start);
+
+  const serverOwner = await h.click(start ? off : on, { user: IDS.owner, messageId: toggle.messageId });
+  assert.doesNotMatch(h.textOf(serverOwner[0]), /Not your panel/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, target), !start, 'the server owner pressed it');
+
+  const botOwner = await h.click(start ? on : off, { user: IDS.member2, messageId: toggle.messageId });
+  assert.doesNotMatch(h.textOf(botOwner[0]), /Not your panel/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, target), start, 'the bot owner pressed it without owning the server');
+
+  const home = await h.slash('menu', '', { user: IDS.member });
+  const tile = h.allButtons(home).find((b) => b.custom_id.startsWith('yo:system:open:'));
+  assert.ok(tile.messageId);
+  for (const user of [IDS.admin, IDS.admin2, IDS.mod]) {
+    assert.match(h.textOf((await h.click(tile.custom_id, { user, messageId: tile.messageId }))[0]), /Not your panel/);
+  }
+  for (const user of [IDS.owner, IDS.member2]) {
+    assert.doesNotMatch(h.textOf((await h.click(tile.custom_id, { user, messageId: tile.messageId }))[0]), /Not your panel/);
+  }
+});
+
+test('without a bot owner setting, the owner on record with Yapin\' is the bot owner', async () => {
+  const h = await createHarness();
+  assert.equal(h.engine.isBotOwner(IDS.owner), true);
+  assert.equal(h.engine.isBotOwner(IDS.admin), false);
+  assert.equal(h.engine.isBotOwner(IDS.bot), false);
+  assert.equal(h.engine.isBotOwner(null), false);
 });

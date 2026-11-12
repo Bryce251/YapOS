@@ -450,7 +450,8 @@ test('reset one person, then Undo', async () => {
   assert.ok(undo.messageId);
   const locked = await h.click(undo.custom_id, { user: IDS.member, messageId: undo.messageId });
   assert.match(lastText(h, locked), /Not your panel/);
-  const otherAdmin = await h.click(undo.custom_id, { user: IDS.owner, messageId: undo.messageId });
+  h.addSecondAdmin();
+  const otherAdmin = await h.click(undo.custom_id, { user: IDS.admin2, messageId: undo.messageId });
   assert.match(lastText(h, otherAdmin), /Not your panel/);
   const refused = await h.click(undo.custom_id, { user: IDS.member });
   assert.match(lastText(h, refused), /Only admins/);
@@ -461,6 +462,12 @@ test('reset one person, then Undo', async () => {
   assert.equal(userOf(h, IDS.member).xp, 900);
   assert.equal(userOf(h, IDS.member).voiceSeconds, 120);
   assert.equal(userOf(h, IDS.member).level, levelFor(900));
+  const again = await h.slash('levels', 'reset @sam', { user: IDS.admin });
+  assert.equal(userOf(h, IDS.member).xp, 0);
+  const ownerUndo = h.findButton('Undo', again);
+  const byOwner = await h.click(ownerUndo.custom_id, { user: IDS.owner, messageId: ownerUndo.messageId });
+  assert.doesNotMatch(lastText(h, byOwner), /Not your panel/);
+  assert.equal(userOf(h, IDS.member).xp, 900);
 });
 
 test('reset someone from the panel form', async () => {
@@ -718,15 +725,20 @@ test('every settings button is locked to the admin who opened the panel', async 
   const panel = await h.slash('levels', '', { user: IDS.admin });
   const buttons = h.allButtons(panel);
   assert.ok(buttons.length >= 11);
+  h.addSecondAdmin();
   for (const b of buttons) {
     assert.ok(b.messageId, b.label);
-    for (const user of [IDS.member, IDS.mod, IDS.owner]) {
+    for (const user of [IDS.member, IDS.mod, IDS.admin2]) {
       const out = await h.click(b.custom_id, { user, messageId: b.messageId });
       assert.match(lastText(h, out), /Not your panel/, b.label);
     }
   }
   assert.deepEqual(cfg(h), before);
   assert.equal(userOf(h, IDS.member).xp, 900);
+  const board = h.findButton('Leaderboard', panel);
+  const byOwner = await h.click(board.custom_id, { user: IDS.owner, messageId: board.messageId });
+  assert.doesNotMatch(lastText(h, byOwner), /Not your panel/);
+  assert.match(lastText(h, byOwner), /Leaderboard/);
 });
 
 test('forged or leftover staff buttons are refused by role', async () => {
@@ -770,7 +782,8 @@ test('the reset confirm and its Undo stay with the admin who asked', async () =>
   seed(h, { [IDS.member]: { xp: 900 } });
   const ask = await h.slash('levels', 'reset all', { user: IDS.admin });
   const yes = h.findButton('Yes, reset everyone', ask);
-  for (const user of [IDS.member, IDS.mod, IDS.owner]) {
+  h.addSecondAdmin();
+  for (const user of [IDS.member, IDS.mod, IDS.admin2]) {
     const out = await h.click(yes.custom_id, { user, messageId: yes.messageId });
     assert.match(lastText(h, out), /Not your panel/);
   }
@@ -786,6 +799,11 @@ test('the reset confirm and its Undo stay with the admin who asked', async () =>
   assert.equal(userOf(h, IDS.member).xp, 0);
   await h.click(undo.custom_id, { user: IDS.admin, messageId: yes.messageId });
   assert.equal(userOf(h, IDS.member).xp, 900);
+  const askAgain = await h.slash('levels', 'reset all', { user: IDS.admin });
+  const yesAgain = h.findButton('Yes, reset everyone', askAgain);
+  const byOwner = await h.click(yesAgain.custom_id, { user: IDS.owner, messageId: yesAgain.messageId });
+  assert.doesNotMatch(lastText(h, byOwner), /Not your panel/);
+  assert.equal(userOf(h, IDS.member).xp, 0);
 });
 
 test('an Undo button pressed from another server is refused', async () => {

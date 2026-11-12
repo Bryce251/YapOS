@@ -22,6 +22,7 @@ export const IDS = {
   mod: 'a0000000-0000-4000-8000-000000000003',
   member: 'a0000000-0000-4000-8000-000000000004',
   member2: 'a0000000-0000-4000-8000-000000000005',
+  admin2: 'a0000000-0000-4000-8000-000000000006',
   roles: {
     admin: 'r0000000-0000-4000-8000-000000000007',
     bot: 'r0000000-0000-4000-8000-000000000006',
@@ -288,7 +289,8 @@ export function createFakeYapin() {
     const files = [];
     for (const [key, value] of form.entries()) {
       if (!/^files?(\[\d+\])?$/.test(key) || typeof value === 'string') continue;
-      files.push({ name: value.name || 'file', size: value.size, text: await value.text() });
+      const bytes = Buffer.from(await value.arrayBuffer());
+      files.push({ name: value.name || 'file', size: value.size, text: await value.text(), bytes });
     }
     if (files.length > 4) throw httpError(400, 'Up to 4 files per message');
     for (const f of files) {
@@ -426,6 +428,12 @@ export async function createHarness({ verified = false, store = createMemoryStor
       await bot.handle({ id: ++evId, type: remove ? 'reaction_remove' : 'reaction_add', data: { message_id: messageId, channel_id: channel, server_id: server, user_id: user, username: nameOf(user), emoji, message_author_id: IDS.bot } });
       await settle();
     },
+    addSecondAdmin() {
+      if (!fake.memberOf(S, IDS.admin2)) fake.state.members[S].push({ id: IDS.admin2, username: 'casey', display_name: 'Casey', nickname: null, roles: [IDS.roles.admin, IDS.roles.member], joined_at: '2026-01-07T00:00:00Z' });
+      engine.cache.invalidate(S);
+      return IDS.admin2;
+    },
+
     async voiceJoin(userId, { channel = IDS.channels.voice, server = S } = {}) {
       (fake.state.voice[channel] ||= new Set()).add(userId);
       await bot.handle({ id: ++evId, type: 'voice_join', data: { user_id: userId, channel_id: channel, server_id: server } });

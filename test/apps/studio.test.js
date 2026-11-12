@@ -1143,7 +1143,8 @@ test('the Studio tile answers only the person whose home screen it is, and staff
   assert.equal(own[0].type, 'ephemeral');
   assert.match(h.textOf(own[0]), HOW_TO);
   assert.equal(h.allButtons(own).length, 0);
-  for (const user of [IDS.member2, IDS.mod, IDS.admin, IDS.owner]) {
+  h.addSecondAdmin();
+  for (const user of [IDS.member2, IDS.mod, IDS.admin, IDS.admin2]) {
     const other = await h.click(tile.custom_id, { user, messageId: tile.messageId });
     assert.equal(other.length, 1);
     assert.equal(other[0].type, 'ephemeral');
@@ -1158,6 +1159,12 @@ test('the Studio tile answers only the person whose home screen it is, and staff
   assert.match(h.textOf(barged[0]), /Not your panel/);
   const second = await h.click(typedTile.custom_id, { user: IDS.member2, messageId: typedTile.messageId });
   assert.match(h.textOf(second[0]), HOW_TO);
+
+  const ownerOnTheirs = await h.click(tile.custom_id, { user: IDS.owner, messageId: tile.messageId });
+  assert.equal(ownerOnTheirs.length, 1);
+  assert.doesNotMatch(h.textOf(ownerOnTheirs[0]), /Not your panel/);
+  assert.equal(h.textOf(ownerOnTheirs[0]), h.textOf(own[0]));
+  assert.equal(h.allButtons(ownerOnTheirs).length, 0);
 
   const ownerMenu = await h.slash('menu', '', { user: IDS.owner });
   const ownerTile = h.findButton(TILE, ownerMenu);

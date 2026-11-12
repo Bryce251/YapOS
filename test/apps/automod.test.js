@@ -461,18 +461,21 @@ test('verify button will not hand out a role that became powerful', async () => 
 
 test('settings panel buttons are locked to the admin who opened it', async () => {
   const { h } = await setup({ features: { selects: false } });
+  h.addSecondAdmin();
   const opened = await h.slash('automod', '', { user: IDS.admin });
   const panel = opened[opened.length - 1];
   for (const label of ['Caps lock', 'Strict', 'Refresh']) {
     const b = h.findButton(label, panel);
     assert.ok(b.messageId, 'panel message id known');
-    for (const user of [IDS.member, IDS.mod, IDS.owner]) {
+    for (const user of [IDS.member, IDS.mod, IDS.admin2]) {
       const ans = await h.click(b.custom_id, { user, messageId: b.messageId });
       assert.match(h.textOf(ans[0]), /Not your panel/);
     }
   }
   assert.equal(config(h).filters.caps, false);
   assert.equal(config(h).strictness, 'normal');
+  const byOwner = await h.click(h.findButton('Refresh', panel).custom_id, { user: IDS.owner, messageId: panel.message.id });
+  assert.doesNotMatch(h.textOf(byOwner[0]), /Not your panel/);
   await h.click(h.findButton('Caps lock', panel).custom_id, { user: IDS.admin, messageId: panel.message.id });
   assert.equal(config(h).filters.caps, true);
 });
@@ -502,11 +505,15 @@ test('strictness select is locked to the opener and refused by role when forged'
   const opened = await h.slash('automod', '', { user: IDS.admin });
   const panel = opened[opened.length - 1];
   const sel = h.allButtons(opened).find((b) => b.isSelect);
-  const other = await h.pick(sel.custom_id, ['strict'], { user: IDS.owner, messageId: panel.message.id });
+  h.addSecondAdmin();
+  const other = await h.pick(sel.custom_id, ['strict'], { user: IDS.admin2, messageId: panel.message.id });
   assert.match(h.textOf(other[0]), /Not your panel/);
   const forged = await h.pick(sel.custom_id, ['strict'], { user: IDS.member });
   assert.match(h.textOf(forged[0]), /Only admins/);
   assert.equal(config(h).strictness, 'normal');
+  const byOwner = await h.pick(sel.custom_id, ['relaxed'], { user: IDS.owner, messageId: panel.message.id });
+  assert.doesNotMatch(h.textOf(byOwner[0]), /Not your panel/);
+  assert.equal(config(h).strictness, 'relaxed');
   await h.pick(sel.custom_id, ['strict'], { user: IDS.admin, messageId: panel.message.id });
   assert.equal(config(h).strictness, 'strict');
 });
@@ -665,15 +672,20 @@ test('owning another server gives no power over this one', async () => {
   const alert = h.lastSent(C.modlog);
   const before = structuredClone(config(h));
 
+  const onPanel = await h.click('yo:automod:toggle:caps', { user: IDS.member, messageId: panel.message.id });
+  assert.match(h.textOf(onPanel[0]), /Not your panel/);
+  const capsInS2 = h.engine.settings.appConfig(S2, 'automod').filters.caps;
   const onTheirs = await h.click('yo:automod:toggle:caps', { user: IDS.member, server: S2, channel: G2, messageId: panel.message.id });
-  assert.match(h.textOf(onTheirs[0]), /Not your panel/);
+  assert.match(h.textOf(onTheirs[0]), /Not your panel/, 'owning another server does not unlock a panel from this server');
+  assert.equal(h.engine.settings.appConfig(S2, 'automod').filters.caps, capsInS2);
+  assert.deepEqual(config(h), before);
   const undoFromAway = await h.click(undo.custom_id, { user: IDS.member, server: S2, channel: G2 });
   assert.match(h.textOf(undoFromAway[0]), /Only admins/);
   assert.deepEqual(config(h).words.list, []);
 
   await h.click('yo:automod:toggle:caps', { user: IDS.member, server: S2, channel: G2 });
   await h.slash('automod', 'words add theirs', { user: IDS.member, server: S2, channel: G2 });
-  assert.equal(h.engine.settings.appConfig(S2, 'automod').filters.caps, true);
+  assert.equal(h.engine.settings.appConfig(S2, 'automod').filters.caps, !capsInS2, 'they still run their own server');
   assert.deepEqual(h.engine.settings.appConfig(S2, 'automod').words.list, ['theirs']);
   assert.deepEqual(config(h), before);
 

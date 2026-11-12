@@ -453,7 +453,8 @@ test('another admin cannot press buttons on a panel they did not open', async ()
   const h = await createHarness({ apps: ['roles'] });
   const mid = await newMenu(h);
   const editor = await h.slash('roles', `open ${mid}`, admin);
-  const ans = await h.clickButton('Delete', { user: IDS.owner, in: last(editor) });
+  h.addSecondAdmin();
+  const ans = await h.clickButton('Delete', { user: IDS.admin2, in: last(editor) });
   assert.match(h.textOf(ans[0]), /Not your panel/);
   assert.ok(menus(h)[mid]);
   const mine = await h.clickButton('Delete', { user: IDS.admin, in: last(editor) });
@@ -467,6 +468,9 @@ test('another admin cannot press buttons on a panel they did not open', async ()
   const forged = await h.click(undo.custom_id, { user: IDS.mod });
   assert.match(h.textOf(forged[0]), /Only admins/);
   assert.equal(menus(h)[mid], undefined);
+  const byOwner = await h.click(undo.custom_id, { user: IDS.owner, messageId: panel.id });
+  assert.doesNotMatch(h.textOf(byOwner[0]), /Not your panel/);
+  assert.ok(menus(h)[mid], 'the owner can press Undo on an admin panel');
 });
 
 test('form handlers and the yap route check the role themselves', async () => {

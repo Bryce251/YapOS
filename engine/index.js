@@ -45,7 +45,8 @@ export function detectChannels(channels) {
 export function createEngine({ bot, config = {}, store = createMemoryStore(), log = createLogger(), appsDir = path.join(ROOT, 'apps') } = {}) {
   const apps = createAppRegistry();
   const settings = createSettings({ store, apps });
-  const perms = createPerms({ bot, settings });
+  const isBotOwner = (uid) => !!uid && uid === (config.ownerId || bot.me?.bot?.owner_id);
+  const perms = createPerms({ bot, settings, isBotOwner });
   const caps = createCaps({ settings, log });
   const budget = createBudget({ bot, verified: !!config.verified, log });
   const prompts = createPrompts();
@@ -86,7 +87,7 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
     dmRoutes: [],
     contextFor: (source, opts) => createContext(engine, source, opts),
     service: (id) => services.get(id) || null,
-    isBotOwner: (uid) => !!uid && uid === (config.ownerId || bot.me?.bot?.owner_id),
+    isBotOwner,
     detectChannels: async (sid) => detectChannels(await cache.channels(sid)),
 
     async chatForm(ctx, { title, fields, action }) {

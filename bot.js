@@ -4,9 +4,12 @@ import { createLogger } from './engine/log.js';
 import { createJsonStore, flushOnExit } from './engine/storage.js';
 import { createEngine } from './engine/index.js';
 import { takeLock } from './engine/lock.js';
+import { teeConsoleToFile } from './engine/logfile.js';
+import path from 'node:path';
 
-const log = createLogger();
 const config = loadConfig();
+teeConsoleToFile(path.join(config.dataPath, 'logs'));
+const log = createLogger();
 
 if (!config.token) {
   log.error('No bot token found. Set YAPPER_BOT_TOKEN, or copy config.example.json to config.json and paste your token there.');

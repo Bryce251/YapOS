@@ -275,9 +275,12 @@ test('close by the opener: transcript file in the log, then channel and role are
   assert.ok(logMsg, 'transcript posted to the log');
   const file = logMsg.files[0];
   assert.equal(file.name, 'ticket-0001-transcript.txt');
+  assert.deepEqual([...file.bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'starts with a UTF-8 byte order mark');
+  assert.match(file.bytes.toString('utf8'), /^\uFEFFTicket #0001 \(Support\)/);
   assert.match(file.text, /\[2026-11-07 12:00\] Sam: hello, my printer is on fire/);
-  assert.match(file.text, /\] Morgan: try turning it off and on/);
-  assert.match(file.text, /\[card: 🎫 Ticket #0001: Support\]/);
+  assert.match(file.text, /\] Mo: try turning it off and on/);
+  assert.match(file.text, /\] YapOS: @Sam \[card: 🎫 Ticket #0001: Support\]/);
+  assert.doesNotMatch(file.text, /<@|<#/);
   assert.match(file.text, /Reason: fixed it/);
   assert.match(h.textOf(logMsg), /Ticket #0001 closed/);
   assert.match(h.textOf(logMsg), /Sent a copy/);
@@ -1066,4 +1069,66 @@ test('hostile text in forms and topics stays harmless', async () => {
   const ownerIn = await h.click(customId('tickets', 'readd', t.number, IDS.owner), { user: IDS.member2, channel: t.channelId });
   assert.match(lastText(h, ownerIn), /Only staff or the person who opened/);
   assert.deepEqual(h.fake.memberOf(S, IDS.member).roles.filter((r) => Object.values(R).includes(r)), [R.member], 'the opener gained no server role');
+});
+
+test('/tickets panel finds the channel however it is written', async () => {
+  const h = await make();
+  const C = IDS.channels.roles;
+  const forms = ['#get-roles', '# get-roles', `<#${C}>.`, `<#${C}>,`, C, 'get roles', `​#get-roles​`, `# get-roles!`];
+  for (const form of forms) {
+    const before = h.sent(C).length;
+    const posted = await h.slash('tickets', `panel ${form}`, { user: IDS.admin });
+    assert.match(lastText(h, posted), /Panel posted/, form);
+    assert.equal(h.sent(C).length, before + 1, form);
+    const panelMsg = h.lastSent(C);
+    assert.ok(h.findButton('Open a ticket', panelMsg), form);
+    assert.equal(h.engine.settings.appConfig(S, 'tickets').panelChannelId, C, form);
+    assert.equal(h.engine.settings.appConfig(S, 'tickets').panelMessageId, panelMsg.id, form);
+  }
+  const missing = await h.slash('tickets', 'panel #no-such-place', { user: IDS.admin });
+  assert.match(lastText(h, missing), /couldn't find that channel/);
+});
+
+test('/tickets panel finds a channel made after the channel list was cached', async () => {
+  const h = await make();
+  const cached = await h.engine.cache.channels(S);
+  const id = 'c0000000-0000-4000-8000-0000000000aa';
+  assert.ok(!cached.some((c) => c.id === id));
+  h.fake.state.channels[S].push({ id, name: 'support-desk', type: 'text', kind: 'text', server_id: S, position: 9, category: null, category_id: null, private: false, read_only: false, slowmode: 0 });
+  assert.ok(!(await h.engine.cache.channels(S)).some((c) => c.id === id), 'the cache still has the old list');
+  const posted = await h.slash('tickets', 'panel #support-desk', { user: IDS.admin });
+  assert.match(lastText(h, posted), /Panel posted/);
+  assert.ok(h.findButton('Open a ticket', h.lastSent(id)));
+  assert.equal(h.engine.settings.appConfig(S, 'tickets').panelChannelId, id);
+});
+
+test('transcripts turn mention codes into names and start with a byte order mark', async () => {
+  const h = await make();
+  const { t } = await openTicketFor(h, IDS.member, 'mentions');
+  await h.message(`hey <@${IDS.member}>, ask <@&${R.mod}> in <#${G}> or <@!${IDS.member2}>, not <@a0000000-0000-4000-8000-0000000000ff>`, { user: IDS.mod, channel: t.channelId });
+  await h.message(`thanks <@${IDS.bot}>`, { user: IDS.member, channel: t.channelId });
+  await closeWithTimers(h, t, { user: IDS.member, reason: 'done' });
+  const file = h.sent(LOG).find((m) => m.files?.length).files[0];
+  assert.equal(file.bytes.toString('utf8').charCodeAt(0), 0xfeff);
+  assert.deepEqual([...file.bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  assert.match(file.text, /\] Mo: hey @Sam, ask @Moderator in #general or @Riley, not @someone/);
+  assert.match(file.text, /\] Sam: thanks @YapOS/);
+  assert.match(file.text, /\] YapOS: @Sam \[card: /);
+  assert.doesNotMatch(file.text, /<@|<#|a0000000-0000-4000-8000/);
+});
+
+test('in a transcript the bot is YapOS even with a server nickname, and cards and emoji read as words', async () => {
+  const h = await make();
+  h.fake.memberOf(S, IDS.bot).nickname = 'Helper Bot';
+  h.engine.cache.invalidate(S);
+  const { t } = await openTicketFor(h, IDS.member, 'nicknamed bot');
+  await h.message(`ping <@${IDS.bot}> <:party:e0000000-0000-4000-8000-000000000001> <a:wave:e0000000-0000-4000-8000-000000000002>`, { user: IDS.member, channel: t.channelId });
+  h.fake.state.messages[t.channelId].push({ id: 'd0000000-0000-4000-8000-0000000000c1', channel_id: t.channelId, author_id: IDS.bot, content: '', embeds: [{ title: `Claimed by <@${IDS.mod}> for <@&${R.mod}>` }], components: null, flags: 0, reply_to_id: null, created_at: new Date(Date.parse(h.fake.state.messages[t.channelId].at(-1).created_at) + 1).toISOString(), edited_at: null, deleted: false, files: null, attachment_name: null });
+  await closeWithTimers(h, t, { user: IDS.member, reason: 'done' });
+  const file = h.sent(LOG).find((m) => m.files?.length).files[0];
+  assert.match(file.text, /\] Sam: ping @YapOS :party: :wave:/);
+  assert.match(file.text, /\] YapOS: \[card: Claimed by @Mo for @Moderator\]/);
+  assert.match(file.text, /\] YapOS: @Sam \[card: /);
+  assert.doesNotMatch(file.text, /Helper Bot/);
+  assert.doesNotMatch(file.text, /<@|<#|<:|<a:|e0000000-/);
 });

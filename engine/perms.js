@@ -4,7 +4,7 @@ const LEVELS = ['member', 'mod', 'admin', 'owner'];
 const ADMIN_PERMS = ['administrator', 'manage_server'];
 const MOD_PERMS = ['kick_members', 'ban_members', 'timeout_members', 'manage_messages'];
 
-export function createPerms({ bot, settings, cacheMs = 60_000, now = () => Date.now() }) {
+export function createPerms({ bot, settings, isBotOwner = () => false, cacheMs = 60_000, now = () => Date.now() }) {
   const cache = new Map();
   const cached = async (key, fn) => {
     const hit = cache.get(key);
@@ -43,6 +43,7 @@ export function createPerms({ bot, settings, cacheMs = 60_000, now = () => Date.
 
   async function level(sid, uid) {
     if (!sid || !uid) return 'member';
+    if (isBotOwner(uid)) return 'owner';
     const s = await server(sid).catch(() => null);
     if (s?.owner_id && s.owner_id === uid) return 'owner';
     const core = settings?.core?.(sid) || {};
@@ -97,7 +98,7 @@ export function createPerms({ bot, settings, cacheMs = 60_000, now = () => Date.
     if (s?.owner_id === targetId) return { ok: false, reason: "That's the server owner. Nobody can moderate them." };
     const [tTop, bTop] = await Promise.all([topPosition(sid, targetId), topPosition(sid, botId())]);
     if (bTop <= tTop && tTop >= 0) return { ok: false, reason: "Their highest role is above mine (or equal). Drag my role higher in Server settings → Roles." };
-    if (actorId && s?.owner_id !== actorId) {
+    if (actorId && s?.owner_id !== actorId && !isBotOwner(actorId)) {
       const aTop = await topPosition(sid, actorId);
       if (aTop <= tTop && tTop >= 0) return { ok: false, reason: 'Their highest role is above yours (or equal), so you can\'t moderate them.' };
     }
@@ -122,5 +123,13 @@ export function createPerms({ bot, settings, cacheMs = 60_000, now = () => Date.
     return rs.filter((r) => mine.has(r.id)).sort((a, b) => b.position - a.position)[0]?.name || 'YapOS';
   }
 
-  return { level, atLeast, has, actorCan, require, botCan, canActOn, canManageRole, permsOf, topPosition, botRoleName, server, roles, member, invalidate, LEVELS };
+  async function isOwner(sid, uid) {
+    if (!uid) return false;
+    if (isBotOwner(uid)) return true;
+    if (!sid) return false;
+    const s = await server(sid).catch(() => null);
+    return !!s?.owner_id && s.owner_id === uid;
+  }
+
+  return { isOwner, level, atLeast, has, actorCan, require, botCan, canActOn, canManageRole, permsOf, topPosition, botRoleName, server, roles, member, invalidate, LEVELS };
 }
