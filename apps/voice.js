@@ -392,6 +392,10 @@ async function createRoomFor(engine, sid, uid) {
       return null;
     }
     if (!channel?.id) return null;
+    const landed = channel.category_id !== undefined ? channel.category_id : channel.category !== undefined ? (channel.category?.id ?? null) : undefined;
+    if (categoryId && landed !== undefined && landed !== categoryId) {
+      await engine.bot.editChannel(channel.id, { categoryId }).catch(debug(engine, 'move new room into its category failed'));
+    }
     solved(engine, sid, 'create', 'full', 'busy');
     engine.cache.invalidate(sid);
     const room = writeRoom(engine, sid, { id: channel.id, key: newKey(engine, sid), ownerId: uid, name: channel.name || name, createdAt: now(engine), roleId: null, locked: false, hidden: false, panel: null });

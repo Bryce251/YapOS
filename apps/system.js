@@ -1,5 +1,5 @@
 import { defineApp } from '../engine/apps.js';
-import { card, dialog, button, row, rows, select, bar, ICONS } from '../engine/ui.js';
+import { card, dialog, button, linkButton, row, rows, select, bar, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
 import { formatDuration, didYouMean, tokenize } from '../engine/parse.js';
 import { VERSION } from '../engine/config.js';
@@ -179,6 +179,30 @@ async function statusView(ctx) {
   return { embeds: [card({ title: '📊 System monitor', fields, color: 'system', footer: `${VERSION.full} · SDK ${SDK_VERSION} · run /status again to refresh` })] };
 }
 
+function dashboardBase(engine) {
+  const raw = String(engine.config?.dashboardUrl || '').trim();
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') return null;
+    return u.origin;
+  } catch {
+    return null;
+  }
+}
+
+function dashboardView(engine, sid) {
+  const base = dashboardBase(engine);
+  if (!base) return { embeds: [dialog.warn("The web dashboard isn't on yet", "YapOS's owner hasn't connected the web dashboard. Everything still works from **/menu**.")] };
+  const here = sid ? `${base}/servers/${encodeURIComponent(sid)}` : `${base}/servers`;
+  const body = sid
+    ? "Change this server's settings, read mod cases and see leaderboards from your browser. Log in with your Yapin' account. You only see servers you manage."
+    : "Change your servers' settings from your browser. Log in with your Yapin' account.";
+  const buttons = [linkButton(sid ? 'Open this server' : 'Open the dashboard', here, '🌐')];
+  if (sid) buttons.push(linkButton('All my servers', `${base}/servers`, '🗂️'));
+  return { embeds: [card({ title: '🌐 YapOS dashboard', body, color: 'system', footer: base.replace(/^https?:\/\//, '') })], components: [row(...buttons)] };
+}
+
 async function showStatus(ctx) {
   if (!ctx.engine.isBotOwner(ctx.userId)) return ctx.ephemeral({ embeds: [dialog.denied('botowner', { body: "Only YapOS's owner can open the system monitor." })] });
   return ctx.ephemeral(await statusView(ctx));
@@ -285,6 +309,7 @@ export const { setup, teardown, check } = defineApp({
     menu: { description: 'Open the YapOS home screen', run: showHome },
     help: { description: 'What YapOS can do. Try /help mod', serverOnly: false, run: (ctx) => sendWithSelectFallback(ctx, helpView(ctx.engine, ctx.serverId, ctx.argv[0]?.toLowerCase())) },
     status: { description: 'System monitor: latency, connection, message budget (bot owner only)', serverOnly: false, run: (ctx) => showStatus(ctx) },
+    dashboard: { description: 'Open the YapOS web dashboard to change settings in your browser', serverOnly: false, run: (ctx) => ctx.reply(dashboardView(ctx.engine, ctx.serverId)) },
     apps: { description: 'Install or uninstall YapOS apps (admins)', perm: 'admin', run: showApps },
     yap: { description: 'Do anything in plain words: /yap timeout @sam 10m, /yap welcome', run: runYap },
   },

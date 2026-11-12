@@ -943,3 +943,33 @@ test('review: default room names follow the same rules as renames', async () => 
   assert.deepEqual(names, ['Voice room', 'Voice room']);
   assert.equal(roomNameFor({ display_name: 'Sam' }), "Sam's room");
 });
+
+test('a new room lands in the Create room category even when Yapin drops it on create', async () => {
+  const { h } = await make();
+  const { createId } = await setUp(h);
+  const VC = uuid(7);
+  h.fake.state.channels[S].find((c) => c.id === createId).category_id = VC;
+  const base = h.bot.api;
+  h.bot.api = async (method, fullPath, body) => {
+    if (method === 'POST' && /^\/servers\/[^/]+\/channels$/.test(fullPath)) {
+      const out = await base(method, fullPath, { ...body, category_id: undefined });
+      return out;
+    }
+    return base(method, fullPath, body);
+  };
+  const room = await makeRoom(h);
+  assert.ok(room, 'room made');
+  const made = h.fake.state.channels[S].find((c) => c.id === room.id);
+  assert.equal(made.category_id, VC);
+  const edits = h.fake.calls.filter((c) => c.method === 'PATCH' && c.path === `/channels/${room.id}`);
+  assert.equal(edits.length, 1);
+});
+
+test('a new room that already landed in its category is not edited again', async () => {
+  const { h } = await make();
+  const { createId } = await setUp(h);
+  h.fake.state.channels[S].find((c) => c.id === createId).category_id = uuid(8);
+  const room = await makeRoom(h);
+  assert.ok(room);
+  assert.equal(h.fake.calls.filter((c) => c.method === 'PATCH' && c.path === `/channels/${room.id}`).length, 0);
+});

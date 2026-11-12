@@ -844,3 +844,25 @@ test('the Home button rebuilds the home screen for whoever presses it', async ()
   const noServer = await h.click('yo:system:home', { user: IDS.member, server: null });
   assert.match(h.textOf(noServer[0]), /Servers only/);
 });
+
+const linksIn = (answers) => answers.flatMap((a) => (a.components || []).flatMap((r) => r.components || [])).filter((b) => b.url).map((b) => b.url);
+
+test('/dashboard links to this server on the web dashboard', async () => {
+  const h = await createHarness();
+  h.engine.config.dashboardUrl = 'https://yapos.dev/';
+  const ans = await h.slash('dashboard', '', { user: IDS.member });
+  assert.deepEqual(linksIn(ans), [`https://yapos.dev/servers/${encodeURIComponent(IDS.server)}`, 'https://yapos.dev/servers']);
+  assert.match(h.textOf(ans[0]), /YapOS dashboard/);
+});
+
+test('/dashboard says so when no dashboard is connected', async () => {
+  const h = await createHarness();
+  h.engine.config.dashboardUrl = '';
+  const ans = await h.slash('dashboard');
+  assert.match(h.textOf(ans[0]), /isn't on yet/);
+  assert.deepEqual(linksIn(ans), []);
+  h.engine.config.dashboardUrl = 'http://evil.example';
+  const plain = await h.slash('dashboard');
+  assert.deepEqual(linksIn(plain), [], 'only https dashboards get a link');
+  assert.match(h.textOf(plain[0]), /isn't on yet/);
+});
