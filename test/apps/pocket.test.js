@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHarness, IDS } from '../harness.js';
 import { createMemoryStore } from '../../engine/storage.js';
-import { parseWhen, resolveZone } from '../../apps/pocket.js';
+import { parseWhen, resolveZone, highlightMatches } from '../../apps/pocket.js';
 
 const S = IDS.server;
 const G = IDS.channels.general;
@@ -644,4 +644,249 @@ test('the old bookmark emoji no longer sends a copy, only the speech bubble does
   const msg = h.fake.addUserMessage(IDS.channels.general, IDS.member2, 'save me');
   await h.react(msg.id, '🔖', { user: IDS.member });
   assert.equal(Object.keys(h.fake.state.dms).length, 0, 'no DM for the old emoji');
+});
+
+const highlightsOf = (h, uid = IDS.member) => h.engine.store.get('pocket', uid, null)?.highlights || [];
+const highlightDms = (h, uid = IDS.member) => h.sent(dmOf(uid)).filter((m) => (m.embeds || []).some((e) => /was mentioned in/.test(e.title || '')));
+
+test('highlights: add, list, remove, clear, undo and the 15 cap', async () => {
+  const h = await make();
+  const cmd = h.bot.commands.get('highlight');
+  assert.ok(cmd && cmd.description.length <= 100);
+  const add = await h.slash('highlight', 'add Pizza', { user: IDS.member });
+  assert.match(lastText(h, add), /Highlight 1 saved/);
+  assert.deepEqual(highlightsOf(h), ['pizza']);
+  const dupe = await h.slash('highlight', 'add pizza', { user: IDS.member });
+  assert.match(lastText(h, dupe), /Already saved/);
+  const short = await h.slash('highlight', 'add x', { user: IDS.member });
+  assert.match(lastText(h, short), /at least 2 characters/);
+  const long = await h.slash('highlight', `add ${'a'.repeat(51)}`, { user: IDS.member });
+  assert.match(lastText(h, long), /under 50 characters/);
+  await h.slash('pocket', 'highlight add game night', { user: IDS.member });
+  await h.slash('yap', 'highlight add tacos', { user: IDS.member });
+  await h.dm('highlight add movies', { user: IDS.member });
+  assert.match(h.textOf(h.lastSent(dmOf(IDS.member))), /Highlight 4 saved/);
+  assert.deepEqual(highlightsOf(h), ['pizza', 'game night', 'tacos', 'movies']);
+  const list = await h.slash('highlight', 'list', { user: IDS.member });
+  const panel = h.lastSent(G);
+  assert.match(h.textOf(panel), /Highlights \(4\/15\)/);
+  assert.match(h.textOf(panel), /game night/);
+  checkLimits(panel);
+  assert.ok(list.length >= 1);
+  const rm = await h.slash('highlight', 'remove 2', { user: IDS.member });
+  assert.match(lastText(h, rm), /game night/);
+  assert.deepEqual(highlightsOf(h), ['pizza', 'tacos', 'movies']);
+  await h.clickButton('Undo', { user: IDS.member, in: rm });
+  assert.ok(highlightsOf(h).includes('game night'));
+  await h.slash('highlight', 'remove tacos', { user: IDS.member });
+  assert.ok(!highlightsOf(h).includes('tacos'));
+  const missing = await h.slash('highlight', 'remove sushi', { user: IDS.member });
+  assert.match(lastText(h, missing), /isn't one of yours/);
+  const clear = await h.slash('highlight', 'clear', { user: IDS.member });
+  assert.match(lastText(h, clear), /Removed 3 highlights/);
+  assert.deepEqual(highlightsOf(h), []);
+  for (let i = 1; i <= 15; i++) await h.slash('highlight', `add word${i}`, { user: IDS.member });
+  const full = await h.slash('highlight', 'add word16', { user: IDS.member });
+  assert.match(lastText(h, full), /list is full/);
+  assert.equal(highlightsOf(h).length, 15);
+  await h.slash('highlight', 'list', { user: IDS.member });
+  checkLimits(h.lastSent(G));
+});
+
+test('highlights: the panel lists words, removes with a button and old saved users still load', async () => {
+  const h = await make();
+  h.engine.store.set('pocket', IDS.member, { tz: 'Europe/London', notes: [{ id: 1, text: 'old note', at: 0 }], nextNote: 2 });
+  await h.slash('highlight', 'add pizza', { user: IDS.member });
+  const u = h.engine.store.get('pocket', IDS.member);
+  assert.equal(u.notes[0].text, 'old note');
+  assert.equal(u.tz, 'Europe/London');
+  await h.slash('pocket', '', { user: IDS.member });
+  const home = h.lastSent(G);
+  assert.match(h.textOf(home), /Highlights/);
+  checkLimits(home);
+  await h.clickButton('Highlights', { user: IDS.member, in: home });
+  const view = h.lastSent(G);
+  assert.match(h.textOf(view), /pizza/);
+  const del = h.allButtons(view).find((b) => b.label === '1');
+  assert.ok(del, 'remove button');
+  await h.click(del.custom_id, { user: IDS.member, messageId: view.id });
+  assert.deepEqual(highlightsOf(h), []);
+  const add = await h.clickButton('Add', { user: IDS.member, in: h.lastSent(G) });
+  assert.ok(add.some((a) => a.type === 'modal'));
+});
+
+test('highlights: a matching message DMs the member with the word and a link', async () => {
+  const h = await make();
+  await h.slash('highlight', 'add pizza', { user: IDS.member });
+  await h.message('anyone up for some PIZZA tonight?', { user: IDS.member2 });
+  const dms = highlightDms(h);
+  assert.equal(dms.length, 1);
+  const e = dms[0].embeds[0];
+  assert.match(e.title, /"pizza" was mentioned in #general/);
+  assert.match(e.title, /Test Town/);
+  assert.match(e.description, /PIZZA tonight/);
+  assert.match(e.footer.text, /\/highlight remove pizza to stop/);
+  const link = dms[0].components[0].components[0];
+  assert.equal(link.label, 'Jump to message');
+  assert.match(link.url, /msg=/);
+  assert.match(link.url, new RegExp(`channel=${G}`));
+  assert.equal(highlightDms(h, IDS.member2).length, 0);
+});
+
+test('highlights: whole words only, any case, phrases and special characters', async () => {
+  assert.ok(highlightMatches('pizza', 'I love Pizza!'));
+  assert.ok(highlightMatches('pizza', 'pizza'));
+  assert.ok(!highlightMatches('pizza', 'pizzas are great'));
+  assert.ok(!highlightMatches('pizza', 'pepperonipizza'));
+  assert.ok(highlightMatches('game night', 'is GAME   night on?'));
+  assert.ok(!highlightMatches('game night', 'game nightly'));
+  assert.ok(highlightMatches('c++', 'I write C++ code'));
+  assert.ok(!highlightMatches('a.b', 'axb'));
+  assert.ok(highlightMatches('café', 'meet at the CAFÉ'));
+  assert.ok(!highlightMatches('café', 'cafés'));
+  const h = await make();
+  await h.slash('highlight', 'add pizza', { user: IDS.member });
+  await h.message('pizzas everywhere', { user: IDS.member2 });
+  assert.equal(highlightDms(h).length, 0);
+  await h.message('Pizza time', { user: IDS.member2 });
+  assert.equal(highlightDms(h).length, 1);
+});
+
+test('highlights: no DM to the author, a mentioned user, when paused, or someone active in the channel', async () => {
+  const h = await make();
+  await h.slash('highlight', 'add pizza', { user: IDS.member });
+  await h.slash('highlight', 'add pizza', { user: IDS.member2 });
+  await h.skip(10 * 60_000);
+  await h.message('pizza for me', { user: IDS.member });
+  assert.equal(highlightDms(h).length, 0, 'not to the author');
+  assert.equal(highlightDms(h, IDS.member2).length, 1, 'but to the other person');
+  await h.skip(10 * 60_000);
+  await h.message(`<@${IDS.member}> want pizza?`, { user: IDS.mod });
+  assert.equal(highlightDms(h).length, 0, 'mentioned people already get pinged');
+  await h.skip(10 * 60_000);
+  await h.slash('highlight', 'pause', { user: IDS.member });
+  await h.message('pizza again', { user: IDS.mod });
+  assert.equal(highlightDms(h).length, 0, 'paused');
+  await h.slash('highlight', 'resume', { user: IDS.member });
+  await h.message('hello all', { user: IDS.member });
+  await h.skip(60_000);
+  await h.message('pizza pizza', { user: IDS.mod });
+  assert.equal(highlightDms(h).length, 0, 'they were just here');
+  await h.skip(6 * 60_000);
+  await h.message('last call for pizza', { user: IDS.mod });
+  assert.equal(highlightDms(h).length, 1);
+  await h.skip(6 * 60_000);
+  await h.message('my highlight is pizza', { user: IDS.mod, authorBot: true });
+  assert.equal(highlightDms(h).length, 1, 'bots never trigger highlights');
+});
+
+test('highlights: one per channel every 5 minutes, saved words load from storage', async () => {
+  const h = await make();
+  h.engine.store.set('pocket', IDS.member, { highlights: ['pizza'] });
+  await h.message('pizza', { user: IDS.member2 });
+  assert.equal(highlightDms(h).length, 1, 'found from storage');
+  await h.message('more pizza', { user: IDS.member2 });
+  assert.equal(highlightDms(h).length, 1, 'cooldown in this channel');
+  await h.message('pizza news', { user: IDS.member2, channel: IDS.channels.news });
+  assert.equal(highlightDms(h).length, 2, 'another channel is fine');
+  await h.skip(5 * 60_000 + 1000);
+  await h.message('pizza is back', { user: IDS.member2 });
+  assert.equal(highlightDms(h).length, 3);
+});
+
+test('highlights: a private channel the member cannot see is skipped, admins still get it', async () => {
+  const h = await make();
+  await h.slash('highlight', 'add pizza', { user: IDS.member });
+  await h.slash('highlight', 'add pizza', { user: IDS.admin });
+  await h.message('secret pizza plans', { user: IDS.mod, channel: IDS.channels.modlog });
+  assert.equal(highlightDms(h).length, 0);
+  assert.equal(highlightDms(h, IDS.admin).length, 1);
+  const ch = h.fake.channelById(IDS.channels.modlog);
+  ch.role_ids = [IDS.roles.member];
+  h.engine.cache.invalidate(S);
+  await h.skip(6 * 60_000);
+  await h.message('more pizza plans', { user: IDS.mod, channel: IDS.channels.modlog });
+  assert.equal(highlightDms(h).length, 1, 'their role can see it now');
+});
+
+test('highlights: closed DMs do not crash', async () => {
+  const h = await make();
+  await h.slash('highlight', 'add pizza', { user: IDS.member });
+  h.fake.features.dms = false;
+  await h.message('pizza', { user: IDS.member2 });
+  assert.equal(highlightDms(h).length, 0);
+  h.fake.features.dms = true;
+});
+
+test('review: highlights from a private channel skip the bot owner and manage-server members who cannot see it', async () => {
+  const h = await make();
+  const managers = 'r0000000-0000-4000-8000-000000000008';
+  h.fake.state.servers[S].owner_id = IDS.admin2;
+  h.fake.memberOf(S, IDS.owner).roles = [IDS.roles.member];
+  h.fake.state.roles[S].push({ id: managers, name: 'Managers', color: null, position: 5, perms: { manage_server: true }, auto: null, mentionable: false });
+  h.fake.memberOf(S, IDS.member2).roles = [managers, IDS.roles.member];
+  assert.equal(await h.engine.perms.level(S, IDS.owner), 'owner', 'still the bot owner');
+  assert.equal(await h.engine.perms.level(S, IDS.member2), 'admin', 'a YapOS admin through manage_server');
+  await h.slash('highlight', 'add pizza', { user: IDS.owner });
+  await h.slash('highlight', 'add pizza', { user: IDS.member2 });
+  await h.message('secret pizza plans', { user: IDS.mod, channel: IDS.channels.modlog });
+  assert.equal(highlightDms(h, IDS.owner).length, 0);
+  assert.equal(highlightDms(h, IDS.member2).length, 0);
+  await h.message('public pizza plans', { user: IDS.mod });
+  assert.equal(highlightDms(h, IDS.owner).length, 1, 'public channels still work');
+});
+
+test('review: an @everyone view_channel deny override hides a channel from highlights', async () => {
+  const h = await make();
+  await h.slash('highlight', 'add pizza', { user: IDS.member });
+  await h.bot.setChannelPermissions(IDS.channels.news, 'everyone', { deny: ['view_channel'] });
+  await h.message('pizza in the hidden channel', { user: IDS.mod, channel: IDS.channels.news });
+  assert.equal(highlightDms(h).length, 0);
+  await h.message('pizza in general', { user: IDS.mod });
+  assert.equal(highlightDms(h).length, 1);
+});
+
+test('review: a slow highlight DM does not hold up the message event', async () => {
+  const h = await make();
+  await h.slash('highlight', 'add pizza', { user: IDS.member });
+  const realDm = h.bot.dm;
+  h.bot.dm = () => new Promise(() => {});
+  const done = await Promise.race([
+    h.message('pizza time', { user: IDS.member2 }).then(() => 'done'),
+    new Promise((r) => setTimeout(() => r('stuck'), 1500)),
+  ]);
+  h.bot.dm = realDm;
+  assert.equal(done, 'done');
+  await h.message('more pizza', { user: IDS.member2, channel: IDS.channels.news });
+  assert.equal(highlightDms(h).length, 1, 'later highlights still go out');
+});
+
+test('review: highlights only look up people known in the server, at most 25, and remember non-members', async () => {
+  const h = await make();
+  await h.dm('highlight add pizza', { user: IDS.member });
+  assert.deepEqual(h.engine.store.get('pocket', IDS.member).servers, []);
+  await h.message('hello', { user: IDS.member, channel: IDS.channels.news });
+  assert.deepEqual(h.engine.store.get('pocket', IDS.member).servers, [S], 'any message records the server');
+  await h.message('pizza?', { user: IDS.member2 });
+  assert.equal(highlightDms(h).length, 1, 'set by DM, delivered in the server');
+
+  const elsewhere = 'a0000000-0000-4000-8000-0000000000aa';
+  h.engine.store.set('pocket', elsewhere, { highlights: ['tacos'], servers: ['5e000000-0000-4000-8000-0000000000ff'] });
+  const strangers = Array.from({ length: 30 }, (_, i) => `a0000000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`);
+  for (const id of strangers) h.engine.store.set('pocket', id, { highlights: ['tacos'] });
+  await h.skip(16 * 60_000);
+  const looked = [];
+  const realMember = h.engine.perms.member;
+  h.engine.perms.member = (sid, uid) => { looked.push(uid); return realMember(sid, uid); };
+  await h.message('tacos tonight', { user: IDS.member2 });
+  assert.ok(!looked.includes(elsewhere), 'someone only seen in another server is not looked up');
+  const first = new Set(looked.filter((u) => strangers.includes(u)));
+  assert.equal(first.size, 25, 'at most 25 lookups for one message');
+  await h.skip(2 * 60_000);
+  looked.length = 0;
+  await h.message('tacos again', { user: IDS.member2, channel: IDS.channels.news });
+  const again = new Set(looked.filter((u) => strangers.includes(u)));
+  assert.equal(again.size, 5, 'only the five not tried yet');
+  assert.ok([...again].every((u) => !first.has(u)), 'non-members found last time are skipped for 10 minutes');
+  h.engine.perms.member = realMember;
 });

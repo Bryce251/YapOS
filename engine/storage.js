@@ -102,6 +102,7 @@ function base(load, onChange) {
     keys(ns) { return [...nsData(ns).keys()]; },
     entries(ns) { return [...nsData(ns)].map(([k, v]) => [k, clone(v)]); },
     async flush() { dirty.clear(); },
+    beforeExit: new Set(),
     _dirty: dirty,
     _peek(ns, key) {
       const d = data.get(ns);
@@ -464,11 +465,25 @@ export function createJsonStore({ dir, delay = 250, log = null, backupDir } = {}
   return store;
 }
 
+export function runBeforeExit(store, log) {
+  let ran = 0;
+  for (const fn of [...(store?.beforeExit || [])]) {
+    try {
+      fn();
+      ran++;
+    } catch (e) {
+      log?.error?.('an app could not save before stopping', e);
+    }
+  }
+  return ran;
+}
+
 export function flushOnExit(store, log) {
   let done = false;
   const stopNow = (sig) => {
     if (done) return;
     done = true;
+    runBeforeExit(store, log);
     try {
       const n = store.flushSync ? store.flushSync() : 0;
       log?.info(`saved data before stopping (${sig}${n ? `, ${n} file${n === 1 ? '' : 's'}` : ''})`);
@@ -483,6 +498,7 @@ export function flushOnExit(store, log) {
   process.on('exit', () => {
     if (done) return;
     done = true;
+    runBeforeExit(store, log);
     try { store.flushSync?.(); } catch {}
   });
 }

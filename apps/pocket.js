@@ -4,6 +4,7 @@ import { customId } from '../engine/router.js';
 import { messageFiles, messageLink, isPicture } from '../engine/links.js';
 import { tokenize, parseDuration, takeDuration, formatDuration, mentionedUserIds, clip, didYouMean, authorName } from '../engine/parse.js';
 import { isTimeZone, partsAt, zonedTime, nextRun } from '../engine/scheduler.js';
+import { canMemberSee } from '../engine/visibility.js';
 
 const ID = 'pocket';
 const KIND = 'pocket.remind';
@@ -30,8 +31,24 @@ const MAX_AHEAD_MS = 366 * DAY;
 const PAGE = 10;
 const HELP_REPEAT_MS = 10 * 60_000;
 const THROTTLE_LIMIT = 2000;
+const MAX_HIGHLIGHTS = 15;
+const HIGHLIGHT_MIN = 2;
+const HIGHLIGHT_MAX = 50;
+const HIGHLIGHT_GAP_MS = 5 * 60_000;
+const HIGHLIGHT_SEEN_MS = 5 * 60_000;
+const HIGHLIGHTS_PER_HOUR = 20;
+const HIGHLIGHTS_PER_MINUTE = 10;
+const HIGHLIGHT_INDEX_TTL_MS = 15 * 60_000;
+const HIGHLIGHT_TEXT_MAX = 1000;
+const HIGHLIGHT_LOOKUPS = 25;
+const HIGHLIGHT_NOT_MEMBER_MS = 10 * 60_000;
+const KNOWN_SERVERS_SAVED = 50;
+const KNOWN_SERVERS_MEMORY = 200;
+const MATCHER_LIMIT = 5000;
+const WORD_CHARS = /[\p{L}\p{N}_]+/gu;
 
-const DM_WORDS = ['remind', 'note', 'notes', 'todo', 'todos', 'afk', 'pocket', 'help', 'tz'];
+const DM_WORDS = ['remind', 'note', 'notes', 'todo', 'todos', 'afk', 'pocket', 'help', 'tz', 'highlight', 'highlights'];
+const HIGHLIGHT_WORDS = ['highlight', 'highlights', 'hl'];
 const DEL_WORDS = ['delete', 'del', 'remove', 'rm', 'forget'];
 const DONE_WORDS = ['done', 'check', 'tick', 'finish', 'finished', 'complete', 'undone', 'uncheck', 'untick'];
 const CANCEL_WORDS = ['cancel', 'delete', 'del', 'remove', 'stop', 'rm'];
@@ -48,7 +65,7 @@ const states = new WeakMap();
 function stateOf(engine) {
   let s = states.get(engine);
   if (!s) {
-    s = { afkReplies: new Map(), helpShown: new Map() };
+    s = { afkReplies: new Map(), helpShown: new Map(), hlIndex: null, hlSeen: new Map(), hlCool: new Map(), hlHourly: new Map(), hlAbsent: new Map(), hlRecent: [] };
     states.set(engine, s);
   }
   return s;
@@ -68,13 +85,16 @@ function afterWords(text, n) {
   return s.trim();
 }
 
-const blankUser = () => ({ tz: null, notes: [], todos: [], nextNote: 1, nextTodo: 1, nextReminder: 1, bookmarks: { total: 0, times: [], recent: [] }, delivered: {} });
+const blankUser = () => ({ tz: null, notes: [], todos: [], nextNote: 1, nextTodo: 1, nextReminder: 1, bookmarks: { total: 0, times: [], recent: [] }, delivered: {}, highlights: [], highlightsPaused: false, servers: [] });
 function fillUser(d) {
   const u = { ...blankUser(), ...(d && typeof d === 'object' ? d : {}) };
   u.notes = Array.isArray(u.notes) ? u.notes : [];
   u.todos = Array.isArray(u.todos) ? u.todos : [];
   u.bookmarks = { total: 0, times: [], recent: [], ...(u.bookmarks || {}) };
   u.delivered = u.delivered && typeof u.delivered === 'object' ? u.delivered : {};
+  u.highlights = Array.isArray(u.highlights) ? u.highlights.filter((w) => typeof w === 'string' && w).slice(0, MAX_HIGHLIGHTS) : [];
+  u.highlightsPaused = !!u.highlightsPaused;
+  u.servers = Array.isArray(u.servers) ? u.servers.filter((s) => typeof s === 'string' && s).slice(-KNOWN_SERVERS_SAVED) : [];
   return u;
 }
 const readUser = (engine, uid) => fillUser(engine.store.get(ID, uid, null));
@@ -527,6 +547,15 @@ async function onMessage(ctx, msg) {
     await welcomeBack(engine, msg, uid, now);
   }
 
+  await afkMentions(engine, msg, uid, now);
+  try {
+    highlightMessage(engine, msg, uid, now);
+  } catch (e) {
+    engine.log.debug('[pocket] could not check a message for highlights', e?.message);
+  }
+}
+
+async function afkMentions(engine, msg, uid, now) {
   const mentioned = [...new Set(mentionedUserIds(msg.content))].filter((id) => id !== uid && id !== botId(engine) && engine.store.has(ID, afkKey(id)));
   if (!mentioned.length) return;
   const st = stateOf(engine);
@@ -576,6 +605,353 @@ async function welcomeBack(engine, msg, uid, now) {
   } catch (e) {
     engine.log.debug('could not post the welcome back note', e?.message);
   }
+}
+
+const wordsOf = (text) => String(text ?? '').toLowerCase().match(WORD_CHARS) || [];
+const escapeRe = (s) => s.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
+const hashOf = (s) => {
+  let n = 5381;
+  for (const ch of String(s)) n = ((n * 33) ^ ch.codePointAt(0)) >>> 0;
+  return n.toString(36);
+};
+
+const matchers = new Map();
+function matcherFor(phrase) {
+  let re = matchers.get(phrase);
+  if (!re) {
+    if (matchers.size >= MATCHER_LIMIT) matchers.clear();
+    const body = phrase.split(/\s+/).filter(Boolean).map(escapeRe).join('\\s+');
+    re = new RegExp(`(?<![\\p{L}\\p{N}_])${body}(?![\\p{L}\\p{N}_])`, 'iu');
+    matchers.set(phrase, re);
+  }
+  return re;
+}
+
+export function highlightMatches(phrase, text) {
+  const p = cleanHighlight(phrase);
+  return !!p && matcherFor(p).test(String(text ?? ''));
+}
+
+function cleanHighlight(text) {
+  return oneLine(text).replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '').trim().toLowerCase();
+}
+
+function checkHighlight(text) {
+  const clean = cleanHighlight(text);
+  if (!clean) return { error: 'Write the word after it, like `/highlight add pizza`.' };
+  if (clean.length < HIGHLIGHT_MIN) return { error: `Highlights need at least ${HIGHLIGHT_MIN} characters.` };
+  if (clean.length > HIGHLIGHT_MAX) return { error: `Keep highlights under ${HIGHLIGHT_MAX} characters.` };
+  if (!wordsOf(clean).length) return { error: 'A highlight needs at least one letter or number.' };
+  return { clean };
+}
+
+function indexAdd(index, uid, phrases) {
+  if (!phrases.length) return;
+  index.users.set(uid, phrases);
+  for (const phrase of phrases) {
+    const first = wordsOf(phrase)[0];
+    if (!first) continue;
+    let list = index.byWord.get(first);
+    if (!list) { list = []; index.byWord.set(first, list); }
+    list.push({ uid, phrase });
+  }
+}
+
+function indexDrop(index, uid) {
+  const had = index.users.get(uid);
+  if (!had) return;
+  index.users.delete(uid);
+  for (const phrase of had) {
+    const first = wordsOf(phrase)[0];
+    const list = index.byWord.get(first);
+    if (!list) continue;
+    const kept = list.filter((e) => e.uid !== uid);
+    if (kept.length) index.byWord.set(first, kept); else index.byWord.delete(first);
+  }
+}
+
+function highlightIndex(engine) {
+  const st = stateOf(engine);
+  const now = nowOf(engine);
+  if (st.hlIndex && now - st.hlIndex.builtAt < HIGHLIGHT_INDEX_TTL_MS) return st.hlIndex;
+  const index = { builtAt: now, byWord: new Map(), users: new Map(), where: new Map() };
+  let keys = [];
+  try { keys = engine.store.keys?.(ID) || []; } catch (e) { engine.log.debug('[pocket] could not list saved users for highlights', e?.message); }
+  for (const key of keys) {
+    if (key.startsWith('afk-')) continue;
+    const d = engine.store.get(ID, key, null);
+    if (!d || !Array.isArray(d.highlights) || !d.highlights.length) continue;
+    const u = fillUser(d);
+    indexAdd(index, key, u.highlights);
+    if (u.servers.length) index.where.set(key, new Set(u.servers));
+  }
+  st.hlIndex = index;
+  return index;
+}
+
+function reindexUser(engine, uid) {
+  const index = stateOf(engine).hlIndex;
+  if (!index) return;
+  indexDrop(index, uid);
+  const u = readUser(engine, uid);
+  indexAdd(index, uid, u.highlights);
+  if (u.highlights.length && u.servers.length) index.where.set(uid, new Set([...(index.where.get(uid) || []), ...u.servers]));
+  else if (!u.highlights.length) index.where.delete(uid);
+}
+
+function rememberServer(engine, uid, sid) {
+  if (!uid || !sid) return;
+  const index = highlightIndex(engine);
+  const known = index.where.get(uid);
+  if (known?.has(sid)) return;
+  updateUser(engine, uid, (u) => { u.servers = [...u.servers.filter((s) => s !== sid), sid].slice(-KNOWN_SERVERS_SAVED); });
+  const next = known || new Set();
+  next.add(sid);
+  while (next.size > KNOWN_SERVERS_MEMORY) next.delete(next.values().next().value);
+  index.where.set(uid, next);
+}
+
+function changeHighlights(engine, uid, fn) {
+  const out = updateUser(engine, uid, fn);
+  reindexUser(engine, uid);
+  return out;
+}
+
+function addHighlight(engine, uid, text) {
+  const { clean, error } = checkHighlight(text);
+  if (error) return { error };
+  return changeHighlights(engine, uid, (u) => {
+    if (u.highlights.includes(clean)) return { dupe: true, word: clean };
+    if (u.highlights.length >= MAX_HIGHLIGHTS) return { full: true };
+    u.highlights.push(clean);
+    return { word: clean, count: u.highlights.length };
+  });
+}
+
+function removeHighlight(engine, uid, token) {
+  const raw = cleanHighlight(token);
+  return changeHighlights(engine, uid, (u) => {
+    let i = u.highlights.indexOf(raw);
+    if (i < 0) {
+      const n = numberArg(raw);
+      if (n && n <= u.highlights.length) i = n - 1;
+    }
+    if (i < 0) return null;
+    const [word] = u.highlights.splice(i, 1);
+    return { word, index: i };
+  });
+}
+
+function restoreHighlights(engine, uid, words) {
+  return changeHighlights(engine, uid, (u) => {
+    const back = words.filter((w) => !u.highlights.includes(w)).slice(0, Math.max(0, MAX_HIGHLIGHTS - u.highlights.length));
+    u.highlights.push(...back);
+    return back.length;
+  });
+}
+
+function stamp(map, key, value) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > THROTTLE_LIMIT) map.delete(map.keys().next().value);
+}
+
+function within(map, key, now, ttl) {
+  const t = map.get(key);
+  return t !== undefined && now - t < ttl;
+}
+
+const hourlyOf = (st, uid, now) => (st.hlHourly.get(uid) || []).filter((t) => now - t < HOUR);
+
+function isHighlightCommand(msg) {
+  if (!msg.command) return false;
+  if (msg.command === 'highlight') return true;
+  if (msg.command === 'pocket' || msg.command === 'yap') return HIGHLIGHT_WORDS.includes(wordsOf(msg.args)[0]);
+  return false;
+}
+
+function highlightMessage(engine, msg, uid, now) {
+  const st = stateOf(engine);
+  const index = highlightIndex(engine);
+  if (!index.users.size) return;
+  if (index.users.has(uid)) {
+    stamp(st.hlSeen, `${uid}:${msg.channel_id}`, now);
+    rememberServer(engine, uid, msg.server_id);
+  }
+  const content = String(msg.content ?? '');
+  if (!content.trim() || isHighlightCommand(msg)) return;
+
+  const found = new Map();
+  for (const word of new Set(wordsOf(content))) {
+    for (const e of index.byWord.get(word) || []) {
+      if (e.uid === uid || found.has(e.uid)) continue;
+      if (matcherFor(e.phrase).test(content)) found.set(e.uid, e.phrase);
+    }
+  }
+  if (!found.size) return;
+
+  const mentioned = new Set(mentionedUserIds(content));
+  for (const m of Array.isArray(msg.mentions) ? msg.mentions : []) mentioned.add(typeof m === 'string' ? m : m?.id);
+  const sid = msg.server_id;
+  const known = [];
+  const unseen = [];
+  for (const [target, phrase] of found) {
+    if (known.length >= HIGHLIGHT_LOOKUPS) break;
+    if (target === botId(engine) || mentioned.has(target)) continue;
+    const where = index.where.get(target);
+    if (where?.size && !where.has(sid)) continue;
+    if (within(st.hlAbsent, `${sid}:${target}`, now, HIGHLIGHT_NOT_MEMBER_MS)) continue;
+    const key = `${target}:${msg.channel_id}`;
+    if (within(st.hlSeen, key, now, HIGHLIGHT_SEEN_MS) || within(st.hlCool, key, now, HIGHLIGHT_GAP_MS)) continue;
+    if (hourlyOf(st, target, now).length >= HIGHLIGHTS_PER_HOUR) continue;
+    const user = readUser(engine, target);
+    if (user.highlightsPaused || !user.highlights.includes(phrase)) continue;
+    (where?.has(sid) ? known : unseen).push({ target, phrase, user, key });
+  }
+  const picked = [...known, ...unseen].slice(0, HIGHLIGHT_LOOKUPS);
+  if (!picked.length) return;
+  for (const c of picked) stamp(st.hlCool, c.key, now);
+  deliverHighlights(engine, msg, picked, now).catch((e) => engine.log.debug('[pocket] could not deliver highlights', e?.message));
+}
+
+async function deliverHighlights(engine, msg, picked, now) {
+  const st = stateOf(engine);
+  const sid = msg.server_id;
+  const channels = await engine.cache.channels(sid).catch(() => []);
+  const channel = (Array.isArray(channels) ? channels : []).find((c) => c.id === msg.channel_id);
+  for (const c of picked) {
+    const release = () => { if (st.hlCool.get(c.key) === now) st.hlCool.delete(c.key); };
+    try {
+      if (!channel) { release(); continue; }
+      const member = await engine.perms.member(sid, c.target).catch(() => undefined);
+      if (!member) {
+        if (member === null) stamp(st.hlAbsent, `${sid}:${c.target}`, now);
+        release();
+        continue;
+      }
+      rememberServer(engine, c.target, sid);
+      if (!(await canMemberSee(engine, sid, c.target, msg.channel_id))) { release(); continue; }
+      st.hlRecent = st.hlRecent.filter((t) => now - t < 60_000);
+      const hourly = hourlyOf(st, c.target, now);
+      if (st.hlRecent.length >= HIGHLIGHTS_PER_MINUTE || hourly.length >= HIGHLIGHTS_PER_HOUR) {
+        engine.log.debug('[pocket] highlight limit reached, skipping');
+        release();
+        continue;
+      }
+      st.hlRecent.push(now);
+      stamp(st.hlHourly, c.target, [...hourly, now]);
+      await sendHighlight(engine, msg, c.target, c.phrase, channel, c.user);
+    } catch (e) {
+      release();
+      engine.log.debug('[pocket] could not send a highlight', e?.message);
+    }
+  }
+}
+
+async function contextLines(engine, msg) {
+  try {
+    const recent = await engine.bot.messages(msg.channel_id, 4);
+    const list = Array.isArray(recent) ? recent : [];
+    const at = list.findIndex((m) => m.id === msg.id);
+    const before = (at >= 0 ? list.slice(0, at) : list.filter((m) => m.id !== msg.id)).filter((m) => m.content).slice(-2);
+    return before.map((m) => `-# **${plain(clip(authorName(m), 40))}:** ${clip(oneLine(plain(m.content)), 150)}`);
+  } catch (e) {
+    engine.log.debug('[pocket] could not read context for a highlight', e?.message);
+    return [];
+  }
+}
+
+async function sendHighlight(engine, msg, target, phrase, channel, user) {
+  const server = await engine.perms.server(msg.server_id).catch(() => null);
+  const link = messageLink(msg.server_id, msg.channel_id, msg.id);
+  const sentAt = Date.parse(msg.created_at);
+  const author = clip(authorName(msg), 100);
+  const context = await contextLines(engine, msg);
+  const text = `**${plain(author)}:** ${plain(clip(String(msg.content ?? ''), HIGHLIGHT_TEXT_MAX))}`;
+  const fields = [
+    { name: 'From', value: author, inline: true },
+    { name: 'Where', value: clip(`#${channel.name}${server?.name ? ` in ${server.name}` : ''}`, 200), inline: true },
+    { name: 'Sent', value: whenAt(Number.isFinite(sentAt) ? sentAt : nowOf(engine), tzOf(user)), inline: true },
+  ];
+  const embed = card({
+    title: clip(`🔔 "${phrase}" was mentioned in #${channel.name}${server?.name ? ` (${server.name})` : ''}`, 256),
+    url: link || undefined,
+    body: [...context, text].join('\n'),
+    fields,
+    color: 'pocket',
+    footer: `/highlight remove ${phrase} to stop`,
+  });
+  try {
+    const dm = await engine.bot.dm(target);
+    await engine.budget.send({ serverId: null, channelId: dm, content: '', opts: { embeds: [embed], components: link ? [row(linkButton('Jump to message', link, '↗️'))] : [] }, priority: 'low' });
+  } catch (e) {
+    engine.log.debug(`[pocket] could not DM a highlight (DMs may be closed): ${e?.message}`);
+  }
+}
+
+function highlightExamples() {
+  return [
+    '`/highlight add pizza` · `/highlight add game night`',
+    '`/highlight list` · `/highlight remove pizza` · `/highlight remove 2`',
+    '`/highlight pause` · `/highlight resume` · `/highlight clear`',
+  ].join('\n');
+}
+
+async function runHighlight(ctx, raw) {
+  const out = await highlightCommand(ctx, raw);
+  if (ctx.serverId && ctx.userId && readUser(ctx.engine, ctx.userId).highlights.length) rememberServer(ctx.engine, ctx.userId, ctx.serverId);
+  return out;
+}
+
+async function highlightCommand(ctx, raw) {
+  const { engine } = ctx;
+  const uid = ctx.userId;
+  const text = oneLine(raw);
+  const words = text.split(' ').filter(Boolean);
+  const sub = (words[0] || '').toLowerCase();
+  const rest = afterWords(text, 1);
+
+  if (!sub || ['list', 'show', 'all', 'panel'].includes(sub)) return showPanel(ctx, 'hl');
+  if (sub === 'help' || sub === '?') {
+    return answer(ctx, { embeds: [card({ title: '🔔 Highlights', body: `Save words or phrases. When someone says one in a channel you can see, I DM you a copy with a link.\nUp to ${MAX_HIGHLIGHTS}, ${HIGHLIGHT_MIN} to ${HIGHLIGHT_MAX} characters each. Whole words only, so **pizza** doesn't match **pizzas**.\nI watch the servers we share where you've sent a message or used /highlight.\n\n${highlightExamples()}`, color: 'pocket' })] });
+  }
+  if (['add', 'new', 'save', '+'].includes(sub)) return addHighlightReply(ctx, rest);
+  if (DEL_WORDS.includes(sub) || sub === '-') {
+    if (!rest) return ctx.warn('Which one?', 'Add the word or its number, like `/highlight remove pizza` or `/highlight remove 2`.');
+    const gone = removeHighlight(engine, uid, rest);
+    if (!gone) return ctx.warn(`"${clip(plain(cleanHighlight(rest)), 50)}" isn't one of yours`, 'See your list with `/highlight list`.');
+    const undo = undoButton(engine, ctx, 'highlight', async () => restoreHighlights(engine, uid, [gone.word]) > 0);
+    return ctx.ok('Highlight removed', `I won't DM you about **${plain(gone.word)}** any more.`, { components: [row(undo)] });
+  }
+  if (['clear', 'reset', 'wipe'].includes(sub)) {
+    const gone = changeHighlights(engine, uid, (u) => { const was = u.highlights; u.highlights = []; return was; });
+    if (!gone.length) return ctx.info('Nothing to clear', "You don't have any highlights yet.");
+    const undo = undoButton(engine, ctx, 'highlights', async () => restoreHighlights(engine, uid, gone) > 0);
+    return ctx.ok('Highlights cleared', `Removed ${plural(gone.length, 'highlight')}.`, { components: [row(undo)] });
+  }
+  if (['pause', 'snooze', 'off', 'mute', 'stop'].includes(sub)) {
+    updateUser(engine, uid, (u) => { u.highlightsPaused = true; });
+    return ctx.ok('Highlights paused', "I won't DM you about your words until you type `/highlight resume`.");
+  }
+  if (['resume', 'unpause', 'on', 'unmute', 'start'].includes(sub)) {
+    updateUser(engine, uid, (u) => { u.highlightsPaused = false; });
+    const n = readUser(engine, uid).highlights.length;
+    return ctx.ok('Highlights are on', n ? `I'm watching for your ${plural(n, 'word')} again.` : 'Add a word with `/highlight add pizza`.');
+  }
+  if (words.length === 1) {
+    const guess = didYouMean(sub, ['add', 'remove', 'list', 'clear', 'pause', 'resume', 'help']);
+    if (guess.length) return ctx.warn("I didn't get that", `Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?\n\n${highlightExamples()}`);
+  }
+  return addHighlightReply(ctx, text);
+}
+
+function addHighlightReply(ctx, text) {
+  const out = addHighlight(ctx.engine, ctx.userId, text);
+  if (out.error) return ctx.warn('Nothing to save', `${out.error}\n\n${highlightExamples()}`);
+  if (out.dupe) return ctx.info('Already saved', `**${plain(out.word)}** is already one of your highlights.`);
+  if (out.full) return ctx.warn('Your list is full', `You can have ${MAX_HIGHLIGHTS} highlights. Remove one with \`/highlight remove <word>\`.`);
+  const paused = readUser(ctx.engine, ctx.userId).highlightsPaused ? '\n-# Your highlights are paused. Type `/highlight resume` to turn them on.' : '';
+  return ctx.ok(`Highlight ${out.count} saved`, `When someone says **${plain(out.word)}** in a channel you can see, I'll DM you.${paused}\n-# \`/highlight list\` to see them all.`);
 }
 
 const isBookmark = (emoji) => {
@@ -735,19 +1111,39 @@ function homeView(engine, uid, { inServer = false, notice = '' } = {}) {
     { name: '📝 Notes', value: `${user.notes.length} of ${MAX_NOTES}${preview(user.notes, (n) => `• ${clip(oneLine(plain(n.text)), 40)}`)}`, inline: true },
     { name: '☑️ To-dos', value: `${open.length} open · ${done} done${preview(open, (t) => `⬜ ${clip(oneLine(plain(t.text)), 40)}`)}`, inline: true },
     { name: '💬 Bookmarks', value: `${user.bookmarks.total || 0} sent to your DMs\n-# React 💬 to any message`, inline: true },
+    { name: '🔔 Highlights', value: user.highlights.length ? `${user.highlights.length} of ${MAX_HIGHLIGHTS}${user.highlightsPaused ? ' (paused)' : ''}${preview(user.highlights, (w) => `• ${clip(plain(w), 40)}`)}` : 'None yet\n-# `/highlight add pizza`', inline: true },
   ];
   const intro = inServer ? 'Your personal assistant. Only you can press these buttons.\n-# Want it private? Type **pocket** in my DMs.' : 'Your personal assistant. Type **help** to see everything you can tell me.';
   const btns = [
     button('Notes', cid('v', uid, 'notes', 1), 'secondary', '📝'),
     button('To-dos', cid('v', uid, 'todos', 1), 'secondary', '☑️'),
     button('Reminders', cid('v', uid, 'rems', 1), 'secondary', '⏰'),
+    button('Highlights', cid('v', uid, 'hl', 1), 'secondary', '🔔'),
     button('Time zone', cid('tz', uid), 'secondary', '🕒'),
   ];
   if (afk) btns.push(button("I'm back", cid('back', uid), 'success', '👋'));
   return {
     content: '',
     embeds: [card({ title: `${ICONS.pocket} YapOS Pocket`, body: [notice, intro].filter(Boolean).join('\n\n'), fields, color: 'pocket' })],
-    components: [row(btns)],
+    components: splitRows(btns),
+  };
+}
+
+function highlightsView(engine, uid, { notice = '', extra = [] } = {}) {
+  const user = readUser(engine, uid);
+  const list = user.highlights;
+  const lines = list.map((w, i) => `**${i + 1}.** ${clip(plain(w), 60)}`);
+  const status = user.highlightsPaused ? '⏸️ Paused. I won\'t DM you until you resume.' : '';
+  const body = list.length ? lines.join('\n') : 'No highlights yet. Press **Add** or type `/highlight add pizza`.';
+  const hint = '-# When someone says one of these in a channel you can see, I DM you a copy. 🗑️ buttons remove one.';
+  const del = list.map((w, i) => button(`${i + 1}`, cid('hd', uid, hashOf(w)), 'secondary', '🗑️'));
+  const tools = [];
+  if (list.length < MAX_HIGHLIGHTS) tools.push(button('Add', cid('ha', uid), 'success', '➕'));
+  tools.push(user.highlightsPaused ? button('Resume', cid('hp', uid, 'on'), 'primary', '▶️') : button('Pause', cid('hp', uid, 'off'), 'secondary', '⏸️'));
+  return {
+    content: '',
+    embeds: [card({ title: `🔔 Highlights (${list.length}/${MAX_HIGHLIGHTS})`, body: [notice, status, body, hint].filter(Boolean).join('\n\n'), color: 'pocket' })],
+    components: [...splitRows(del), navRow(uid, 'hl', 1, 1, [...tools, ...extra])],
   };
 }
 
@@ -801,6 +1197,7 @@ function viewFor(engine, uid, view, page, opts = {}) {
   if (view === 'notes') return notesView(engine, uid, page, opts);
   if (view === 'todos') return todosView(engine, uid, page, opts);
   if (view === 'rems') return remindersView(engine, uid, page, opts);
+  if (view === 'hl') return highlightsView(engine, uid, opts);
   return homeView(engine, uid, opts);
 }
 
@@ -926,6 +1323,7 @@ async function runPocket(ctx, raw) {
   if (sub === 'tz' || sub === 'timezone' || sub === 'zone' || sub === 'time') return setZone(ctx, rest);
   if (sub === 'afk') return runAfk(ctx, rest);
   if (sub === 'remind' || sub === 'reminder' || sub === 'reminders') return words.length > 1 ? runRemind(ctx, rest) : showPanel(ctx, 'rems');
+  if (HIGHLIGHT_WORDS.includes(sub)) return runHighlight(ctx, rest);
 
   if (sub === 'note' || sub === 'notes') {
     if (!rest || (sub === 'notes' && /^(list|all|show)$/.test(rest))) return showPanel(ctx, 'notes');
@@ -979,7 +1377,7 @@ async function runPocket(ctx, raw) {
     return ctx.ok(`To-do ${out.count} added`, `⬜ ${clip(oneLine(plain(rest)), 200)}\n-# Tick it off with \`/pocket todo done ${out.count}\` or the buttons in \`/pocket todos\`.`);
   }
 
-  const guess = didYouMean(sub, ['note', 'notes', 'todo', 'todos', 'tz', 'afk', 'remind', 'help']);
+  const guess = didYouMean(sub, ['note', 'notes', 'todo', 'todos', 'tz', 'afk', 'remind', 'highlight', 'help']);
   return ctx.warn("I didn't get that", `I don't know **${clip(sub.replace(/[^a-z0-9-]/gi, ''), 30) || 'that'}**.${guess.length ? ` Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?` : ''}\nTry \`/pocket\` on its own for your panel, or \`/pocket help\`.`);
 }
 
@@ -991,6 +1389,7 @@ function helpCard(engine) {
     '☑️ `todo finish essay` · `todos` · `todo done 1`',
     '🕒 `tz Europe/London`',
     '💤 `afk lunch` · `afk off`',
+    '🔔 `highlight add pizza` · `highlights` · `highlight pause`',
     '📱 `pocket` opens your panel',
   ];
   if (engine.apps.has('studio')) lines.push('🎞️ send a picture with `caption your text` to make a GIF');
@@ -998,7 +1397,7 @@ function helpCard(engine) {
     content: "👋 Hi! I'm **YapOS Pocket**, your personal assistant.",
     embeds: [card({
       title: `${ICONS.pocket} What you can type here`,
-      body: `${lines.join('\n')}\n\n-# In a server: **/remind**, **/afk**, **/pocket**, and react 💬 to any message to get a copy in your DMs.`,
+      body: `${lines.join('\n')}\n\n-# In a server: **/remind**, **/afk**, **/pocket**, **/highlight**, and react 💬 to any message to get a copy in your DMs.`,
       color: 'pocket',
     })],
   };
@@ -1027,6 +1426,7 @@ async function runDm(ctx, msg) {
   if (word === 'remind') return runRemind(ctx, rest);
   if (word === 'afk') return runAfk(ctx, rest);
   if (word === 'help') return answer(ctx, helpCard(ctx.engine));
+  if (HIGHLIGHT_WORDS.includes(word)) return runHighlight(ctx, rest);
   if (word === 'pocket') return runPocket(ctx, rest);
   return runPocket(ctx, raw);
 }
@@ -1041,7 +1441,7 @@ export const { setup, teardown, check } = defineApp({
   id: ID,
   name: 'Pocket',
   icon: ICONS.pocket,
-  description: 'Your assistant: reminders, notes, to-dos, AFK, bookmarks.',
+  description: 'Your assistant: reminders, notes, to-dos, AFK, bookmarks, highlights.',
   category: 'Personal',
   panelPerm: 'member',
 
@@ -1049,6 +1449,7 @@ export const { setup, teardown, check } = defineApp({
     remind: { description: 'Reminders by DM: /remind in 2h stretch, /remind tomorrow 9:00 call mum, /remind list', run: (ctx) => runRemind(ctx, ctx.args) },
     afk: { description: "Go AFK: /afk lunch. I'll tell people who mention you. /afk off to come back", run: (ctx) => runAfk(ctx, ctx.args) },
     pocket: { description: 'Your personal panel: /pocket note buy milk, /pocket todo finish essay, /pocket tz Europe/London', run: (ctx) => runPocket(ctx, ctx.args) },
+    highlight: { description: 'DM me when someone says your words: /highlight add pizza, /highlight list', run: (ctx) => runHighlight(ctx, ctx.args) },
   },
 
   components: {
@@ -1121,6 +1522,25 @@ export const { setup, teardown, check } = defineApp({
         return ctx.ok(`To-do ${out.count} added`, `⬜ ${clip(oneLine(plain(ctx.values?.text)), 200)}`);
       },
     },
+    ha: own((ctx) => ctx.form({
+      title: 'New highlight',
+      action: 'hlsave',
+      fields: [{ id: 'text', label: 'Word or phrase', style: 'short', placeholder: 'pizza', max: HIGHLIGHT_MAX }],
+    })),
+    hlsave: { run: (ctx) => addHighlightReply(ctx, ctx.values?.text) },
+    hd: own(async (ctx) => {
+      const uid = ctx.userId;
+      const word = readUser(ctx.engine, uid).highlights.find((w) => hashOf(w) === ctx.argv[1]);
+      const gone = word ? removeHighlight(ctx.engine, uid, word) : null;
+      if (!gone) return updateView(ctx, 'hl', 1, { notice: 'That highlight is gone already.' });
+      const undo = undoButton(ctx.engine, ctx, 'highlight', async () => restoreHighlights(ctx.engine, uid, [gone.word]) > 0);
+      return updateView(ctx, 'hl', 1, { notice: `🗑️ Removed: ${clip(plain(gone.word), 60)}`, extra: [undo] });
+    }),
+    hp: own(async (ctx) => {
+      const paused = ctx.argv[1] === 'off';
+      updateUser(ctx.engine, ctx.userId, (u) => { u.highlightsPaused = paused; });
+      return updateView(ctx, 'hl', 1, { notice: paused ? '⏸️ Highlights paused.' : '▶️ Highlights are on again.' });
+    }),
   },
 
   jobs: {
@@ -1142,6 +1562,7 @@ export const { setup, teardown, check } = defineApp({
     { words: ['afk'], run: (ctx) => runAfk(ctx, ctx.args) },
     { words: ['pocket'], run: (ctx) => runPocket(ctx, ctx.args) },
     { words: ['todo', 'todos'], run: (ctx) => runPocket(ctx, `${ctx.word} ${ctx.args}`) },
+    { words: ['highlight', 'highlights'], run: (ctx) => runHighlight(ctx, ctx.args) },
   ],
 
   panel: (ctx) => showPanel(ctx, 'home'),
@@ -1157,6 +1578,7 @@ export const { setup, teardown, check } = defineApp({
     'Reminders come by DM. If your DMs are closed, I mention you in the channel where you set it. Up to 10 repeating ones each.',
     'Times use your time zone: `/pocket tz Europe/London` (UTC until you set one).',
     'React 💬 to any message and I DM you a copy (up to 20 an hour).',
+    'Highlights: `/highlight add pizza` and I DM you when someone says it in a channel you can see. Up to 15 words, `/highlight pause` to snooze.',
     'Everything works in my DMs too: type **help** there.',
   ],
 
