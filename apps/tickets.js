@@ -1,7 +1,7 @@
 import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row, rows, select, freeze, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
-import { tokenize, clip, normalizeName, didYouMean, parseBool, fuzzyFind, formatDuration } from '../engine/parse.js';
+import { tokenize, clip, normalizeName, didYouMean, parseBool, fuzzyFind, formatDuration, ID_RE } from '../engine/parse.js';
 import { explain, looksLikeFeatureOff } from '../engine/errors.js';
 
 const ID = 'tickets';
@@ -22,6 +22,16 @@ const TRANSCRIPT_COOLDOWN_MS = 60_000;
 const STAFF_PERMS = ['administrator', 'manage_server', 'kick_members', 'ban_members', 'timeout_members', 'manage_messages'];
 const CAP_CHECKS = ['roles', 'files', 'dms', 'selects', 'modals'];
 const CAP_LABELS = { roles: 'Role management', files: 'Sending files', dms: 'Direct messages', selects: 'Select menus', modals: 'Pop-up forms' };
+const MAX_TYPE_STAFF = 10;
+const HOUR = 3_600_000;
+const MAX_AUTOCLOSE_HOURS = 720;
+const WARN_LEAD_MAX_MS = 12 * HOUR;
+const QUIET_TOUCH_MS = 10 * 60_000;
+const MAX_SEEN = 5000;
+const WARN_JOB = 'tickets.quietwarn';
+const CLOSE_JOB = 'tickets.quietclose';
+const STARS = [1, 2, 3, 4, 5];
+const MAX_COMMENT = 500;
 
 const TYPES = {
   support: { id: 'support', name: 'Support', emoji: '🎫', questions: [] },
@@ -46,14 +56,15 @@ const SUBS = lookup({
 });
 const ADMIN_SUBS = lookup({
   panel: 'panel', post: 'panel', category: 'category', cat: 'category', staff: 'staff', log: 'log', logs: 'log',
-  types: 'types', type: 'types', limit: 'limit', ping: 'ping', tidy: 'tidy', cleanup: 'tidy', settings: 'home', home: 'home',
+  types: 'types', type: 'type', limit: 'limit', ping: 'ping', tidy: 'tidy', cleanup: 'tidy', settings: 'home', home: 'home',
+  autoclose: 'autoclose', 'auto-close': 'autoclose', quiet: 'autoclose', idle: 'autoclose',
 });
 const OFF_WORDS = /^(off|none|clear|reset|default|no)$/i;
 
 const runtimes = new WeakMap();
 function rt(engine) {
   let r = runtimes.get(engine);
-  if (!r) { r = { pending: new Map(), opening: new Set(), timers: new Map(), transcripts: new Map() }; runtimes.set(engine, r); }
+  if (!r) { r = { pending: new Map(), opening: new Set(), timers: new Map(), transcripts: new Map(), seen: new Map(), touched: new Map(), channels: new Map() }; runtimes.set(engine, r); }
   return r;
 }
 
@@ -114,7 +125,17 @@ function typesOf(cfg) {
     name: clip(t.name || 'Support', 40),
     emoji: t.emoji || '🎫',
     questions: [].concat(t.questions || []).filter(Boolean).slice(0, MAX_QUESTIONS),
+    staffRoles: uniq([].concat(t.staffRoles || []).filter((r) => typeof r === 'string')).slice(0, MAX_TYPE_STAFF),
   }));
+}
+
+function roleList(ids, max) {
+  const shown = ids.slice(0, max).map((r) => `<@&${r}>`).join(' ');
+  return ids.length > max ? `${shown} +${ids.length - max} more` : shown;
+}
+
+function typeStaffRoles(cfg, typeId) {
+  return typeById(cfg, typeId)?.staffRoles || [];
 }
 
 function typeById(cfg, typeId) {
@@ -157,7 +178,7 @@ function takePending(engine, key) {
   return p;
 }
 
-async function staffRoleIds(engine, sid) {
+async function globalStaffRoleIds(engine, sid) {
   const cfg = cfgOf(engine, sid);
   if (cfg.staffRoles?.length) return uniq(cfg.staffRoles);
   const core = engine.settings.core(sid);
@@ -166,13 +187,21 @@ async function staffRoleIds(engine, sid) {
   return uniq([...byPerm, ...(core.modRoles || []), ...(core.adminRoles || [])]);
 }
 
-async function isStaff(engine, sid, uid) {
+async function staffRoleIds(engine, sid, typeId = null) {
+  const global = await globalStaffRoleIds(engine, sid);
+  return uniq([...global, ...(typeId ? typeStaffRoles(cfgOf(engine, sid), typeId) : [])]);
+}
+
+async function isStaff(engine, sid, uid, t = null) {
   const level = await engine.perms.level(sid, uid);
   if (engine.perms.atLeast(level, 'admin')) return true;
   const cfg = cfgOf(engine, sid);
-  if (cfg.staffRoles?.length) {
+  const typeRoles = t ? typeStaffRoles(cfg, t.typeId) : [];
+  if (cfg.staffRoles?.length || typeRoles.length) {
     const m = await engine.perms.member(sid, uid).catch(() => null);
-    return (m?.roles || []).some((r) => cfg.staffRoles.includes(r));
+    const mine = m?.roles || [];
+    if (typeRoles.length && mine.some((r) => typeRoles.includes(r))) return true;
+    if (cfg.staffRoles?.length) return mine.some((r) => cfg.staffRoles.includes(r));
   }
   return engine.perms.atLeast(level, 'mod');
 }
@@ -226,7 +255,7 @@ function adminOnly(run) {
 const notYourConfirm = (ctx) => ctx.ephemeral({ embeds: [dialog.denied(null, { title: 'Not your panel', body: 'Someone else asked to close this ticket. Run `/ticket close` yourself to get your own buttons.' })] });
 
 async function canManage(ctx, t) {
-  return t.openerId === ctx.userId || isStaff(ctx.engine, ctx.serverId, ctx.userId);
+  return t.openerId === ctx.userId || isStaff(ctx.engine, ctx.serverId, ctx.userId, t);
 }
 
 async function botTopRoleId(engine, sid) {
@@ -406,7 +435,7 @@ async function cleanupMade(engine, sid, made) {
   engine.cache.invalidate(sid);
 }
 
-async function makeSpace(ctx, { number, cfg }) {
+async function makeSpace(ctx, { number, cfg, type }) {
   const { engine, bot, serverId: sid, userId: uid } = ctx;
   const made = { roleId: null, channelId: null, mode: 'role', rolesError: null };
   try {
@@ -430,7 +459,7 @@ async function makeSpace(ctx, { number, cfg }) {
     const ch = await withStep('make the ticket channel', 'manage_channels', () => bot.createChannel(sid, name, { kind: 'text', categoryId: cfg.categoryId || undefined }));
     made.channelId = ch.id;
     made.name = ch.name || name;
-    const [staff, botRole] = await Promise.all([staffRoleIds(engine, sid), botTopRoleId(engine, sid)]);
+    const [staff, botRole] = await Promise.all([staffRoleIds(engine, sid, type?.id), botTopRoleId(engine, sid)]);
     made.roleIds = uniq([made.roleId, ...staff, botRole]);
     await withStep('make the ticket channel private', 'manage_channels', () => bot.editChannel(ch.id, { private: true, roleIds: made.roleIds }));
     engine.cache.invalidate(sid);
@@ -448,7 +477,7 @@ async function buildTicket(ctx, { type, topic, answers, cfg }) {
   const startedAt = Date.now();
   let made;
   try {
-    made = await makeSpace(ctx, { number, cfg });
+    made = await makeSpace(ctx, { number, cfg, type });
   } catch (e) {
     const { title, body } = explain(e, e.ticketStep || { action: 'open your ticket' });
     if (!e.friendly) engine.log.warn(`[tickets] opening ticket #${pad(number)} failed: ${e?.message}`);
@@ -459,10 +488,15 @@ async function buildTicket(ctx, { type, topic, answers, cfg }) {
     id: `${sid}:${number}`, number, channelId: made.channelId, roleId: made.roleId, openerId: uid, typeId: type.id,
     claimedBy: null, status: 'open', createdAt: now, closedAt: null, closedBy: null, reason: null,
     answers, topic: clip(topic, 1000), members: [], mode: made.mode, name: made.name, cardId: null, anchorAt: new Date(startedAt - 1000).toISOString(),
+    lastActivityAt: engine.scheduler.now(), quietWarn: null, rating: null, ratingAsk: null,
   };
   writeData(engine, sid, (d) => { d.tickets[number] = t; });
+  rememberChannel(engine, sid, t);
+  rt(engine).touched.set(`${sid}:${number}`, t.lastActivityAt);
+  scheduleQuiet(engine, sid, t);
 
-  const staffPing = cfg.pingStaff && cfg.staffRoles?.length ? ` ${cfg.staffRoles.map((r) => `<@&${r}>`).join(' ')}` : '';
+  const pingRoles = uniq([...(cfg.staffRoles || []), ...(type.staffRoles || [])]);
+  const staffPing = cfg.pingStaff && pingRoles.length ? ` ${pingRoles.map((r) => `<@&${r}>`).join(' ')}` : '';
   const sent = await ctx.send(t.channelId, { content: `<@${uid}>${staffPing}`, embeds: [ticketCard(engine, sid, t)], components: cardComponents(t) }, { priority: 'high' }).catch((e) => {
     engine.log.warn(`[tickets] welcome card failed in ticket #${pad(number)}: ${e?.message}`);
     return null;
@@ -629,6 +663,8 @@ async function closeTicket(engine, sid, t, { by = null, reason = '' } = {}) {
   const fresh = getTicket(engine, sid, t.number);
   if (!fresh || fresh.status !== 'open') return { already: true };
   patchTicket(engine, sid, t.number, { status: 'closing' });
+  cancelQuiet(engine, sid, t.number);
+  forgetChannel(engine, sid, fresh);
   const channel = !(await channelGone(engine, sid, t.channelId));
   const notes = [];
   let transcript = null;
@@ -649,6 +685,10 @@ async function closeTicket(engine, sid, t, { by = null, reason = '' } = {}) {
   if (transcript) {
     const dmOk = await dmTranscript(engine, sid, closed, transcript);
     notes.push(dmOk ? `Sent a copy to <@${t.openerId}> in DMs.` : `Couldn't DM a copy to <@${t.openerId}> (DMs are off or closed).`);
+  }
+  if (reason !== HAND_DELETED) {
+    const asked = await askRating(engine, sid, closed);
+    notes.push(asked ? `Asked <@${t.openerId}> to rate the help in DMs.` : `Couldn't ask <@${t.openerId}> for a rating (DMs are off or closed).`);
   }
   const logCh = logChannelOf(engine, sid);
   const summary = closeSummary(closed, { by, reason, count: transcript ? transcript.count : null, notes });
@@ -702,6 +742,367 @@ async function finishCleanup(engine, sid, num) {
   if (problems.length) await postLog(engine, sid, { embeds: [dialog.warn(`Ticket #${pad(num)} cleanup`, problems.join('\n'))] }, 'normal');
 }
 
+function channelMap(engine, sid) {
+  const { channels } = rt(engine);
+  let m = channels.get(sid);
+  if (!m) {
+    m = new Map();
+    for (const t of Object.values(readData(engine, sid).tickets)) if (t.status === 'open' && t.channelId) m.set(t.channelId, t.number);
+    channels.set(sid, m);
+    reconcileQuiet(engine, sid);
+  }
+  return m;
+}
+
+function reconcileQuiet(engine, sid) {
+  const s = engine.scheduler;
+  if (!s || !quietHours(cfgOf(engine, sid))) return 0;
+  const has = new Set([WARN_JOB, CLOSE_JOB].flatMap((kind) => s.list({ kind, serverId: sid }).map((j) => j.key)));
+  let n = 0;
+  for (const t of allOpen(engine, sid)) {
+    if (has.has(String(t.number))) continue;
+    const ready = Number.isFinite(t.lastActivityAt) ? t : patchTicket(engine, sid, t.number, { lastActivityAt: s.now() }) || t;
+    if (scheduleQuiet(engine, sid, ready)) n++;
+  }
+  return n;
+}
+
+function dropQuietMemory(engine, sid) {
+  rt(engine).channels.delete(sid);
+}
+
+function rememberChannel(engine, sid, t) {
+  if (t.channelId) channelMap(engine, sid).set(t.channelId, t.number);
+}
+
+function forgetChannel(engine, sid, t) {
+  const m = rt(engine).channels.get(sid);
+  if (m && t.channelId && m.get(t.channelId) === t.number) m.delete(t.channelId);
+}
+
+function capSeen(map) {
+  while (map.size > MAX_SEEN) map.delete(map.keys().next().value);
+}
+
+function quietHours(cfg) {
+  const n = Number(cfg.autoCloseHours);
+  return Number.isFinite(n) && n >= 1 ? Math.min(MAX_AUTOCLOSE_HOURS, Math.floor(n)) : 0;
+}
+
+const leadFor = (hours) => Math.min(WARN_LEAD_MAX_MS, Math.round((hours * HOUR) / 2));
+
+function quietBase(engine, sid, t) {
+  const seen = rt(engine).seen.get(`${sid}:${t.number}`) || 0;
+  const saved = Number.isFinite(t.lastActivityAt) ? t.lastActivityAt : t.createdAt;
+  return Math.max(saved || 0, seen);
+}
+
+function cancelQuiet(engine, sid, num) {
+  const s = engine.scheduler;
+  if (!s) return;
+  for (const kind of [WARN_JOB, CLOSE_JOB]) s.cancelWhere({ kind, serverId: sid, key: String(num) });
+}
+
+function scheduleQuiet(engine, sid, t) {
+  const s = engine.scheduler;
+  if (!s || !t || t.status !== 'open') return null;
+  const hours = quietHours(cfgOf(engine, sid));
+  if (!hours) {
+    cancelQuiet(engine, sid, t.number);
+    return null;
+  }
+  const warnAt = quietBase(engine, sid, t) + hours * HOUR - leadFor(hours);
+  try {
+    s.cancelWhere({ kind: CLOSE_JOB, serverId: sid, key: String(t.number) });
+    return s.schedule({ kind: WARN_JOB, at: Math.max(warnAt, s.now()), serverId: sid, key: String(t.number), data: { num: t.number } });
+  } catch (e) {
+    engine.log.warn(`[tickets] couldn't schedule the quiet check for #${pad(t.number)}: ${e?.message}`);
+    return null;
+  }
+}
+
+function rescheduleAllQuiet(engine, sid) {
+  const now = engine.scheduler.now();
+  let n = 0;
+  for (const t of allOpen(engine, sid)) {
+    const ready = Number.isFinite(t.lastActivityAt) ? t : patchTicket(engine, sid, t.number, { lastActivityAt: now }) || t;
+    if (scheduleQuiet(engine, sid, ready)) n++;
+  }
+  return n;
+}
+
+function hoursText(hours) {
+  return hours % 24 === 0 ? plural(hours / 24, 'day') : plural(hours, 'hour');
+}
+
+function waitText(ms) {
+  const mins = Math.max(1, Math.round(ms / 60_000));
+  if (mins < 60) return plural(mins, 'minute');
+  return plural(Math.round(mins / 60), 'hour');
+}
+
+function warningPayload(num, closeInMs) {
+  return {
+    embeds: [card({ title: '💤 This ticket has gone quiet', body: `This ticket will close in ${waitText(closeInMs)} because it's been quiet.\nSay something here or press **Keep open** if you still need it. Closing saves a transcript as usual.`, color: 'warn' })],
+    components: [row(button('Keep open', cid('keepopen', num), 'success', '✋'))],
+  };
+}
+
+async function quietWarnJob(job, engine) {
+  const sid = job.serverId;
+  if (!sid) return undefined;
+  if (!engine.settings.isEnabled(sid, ID)) return dropQuietMemory(engine, sid);
+  const num = Number(job.data?.num);
+  const t = getTicket(engine, sid, num);
+  if (!t || t.status !== 'open') return undefined;
+  const hours = quietHours(cfgOf(engine, sid));
+  if (!hours) return undefined;
+  const s = engine.scheduler;
+  const now = s.now();
+  const base = quietBase(engine, sid, t);
+  const lead = leadFor(hours);
+  const warnAt = base + hours * HOUR - lead;
+  if (warnAt > now + 1000) return { reschedule: warnAt };
+  const closeAt = Math.max(base + hours * HOUR, now + lead);
+  if (!(t.quietWarn && t.quietWarn.base === base && t.quietWarn.closeAt > now)) {
+    patchTicket(engine, sid, num, { quietWarn: { base, closeAt, messageId: null } });
+    let sent = null;
+    try {
+      const p = warningPayload(num, closeAt - now);
+      sent = await engine.budget.send({ serverId: sid, channelId: t.channelId, content: `<@${t.openerId}>`, opts: p, priority: 'low' });
+    } catch (e) {
+      patchTicket(engine, sid, num, { quietWarn: null });
+      if (await channelGone(engine, sid, t.channelId)) {
+        await closeTicket(engine, sid, t, { by: engine.bot.me?.id, reason: HAND_DELETED });
+        return undefined;
+      }
+      throw e;
+    }
+    patchTicket(engine, sid, num, (x) => (x.quietWarn?.base === base ? { quietWarn: { ...x.quietWarn, messageId: sent?.id || null } } : {}));
+  }
+  const warned = getTicket(engine, sid, num)?.quietWarn;
+  s.schedule({ kind: CLOSE_JOB, at: warned?.closeAt ?? closeAt, serverId: sid, key: String(num), data: { num } });
+  return undefined;
+}
+
+async function quietCloseJob(job, engine) {
+  const sid = job.serverId;
+  if (!sid) return undefined;
+  if (!engine.settings.isEnabled(sid, ID)) return dropQuietMemory(engine, sid);
+  const num = Number(job.data?.num);
+  const t = getTicket(engine, sid, num);
+  if (!t || t.status !== 'open') return undefined;
+  const hours = quietHours(cfgOf(engine, sid));
+  if (!hours) return undefined;
+  const base = quietBase(engine, sid, t);
+  if (!t.quietWarn || t.quietWarn.base !== base) {
+    scheduleQuiet(engine, sid, t);
+    return undefined;
+  }
+  const now = engine.scheduler.now();
+  if (t.quietWarn.closeAt > now + 1000) return { reschedule: t.quietWarn.closeAt };
+  await closeTicket(engine, sid, t, { by: null, reason: `Closed automatically after ${hoursText(hours)} with no messages` });
+  return undefined;
+}
+
+async function calmWarning(engine, t, text) {
+  const w = t.quietWarn;
+  if (!w?.messageId) return;
+  await engine.budget.edit({ channelId: t.channelId, messageId: w.messageId, opts: { embeds: [card({ title: '💬 Ticket stays open', body: text, color: 'tickets' })], components: [] } }).catch((e) => engine.log.debug('quiet warning edit failed', e?.message));
+}
+
+async function onTicketMessage(ctx, msg) {
+  const { engine, serverId: sid } = ctx;
+  if (!sid || msg.dm || msg.author_bot || !msg.channel_id) return;
+  const map = channelMap(engine, sid);
+  const num = map.get(msg.channel_id);
+  if (!num) return;
+  const r = rt(engine);
+  const k = `${sid}:${num}`;
+  const now = engine.scheduler.now();
+  r.seen.delete(k);
+  r.seen.set(k, now);
+  capSeen(r.seen);
+  const t = getTicket(engine, sid, num);
+  if (!t || t.status !== 'open') {
+    map.delete(msg.channel_id);
+    return;
+  }
+  if (!t.quietWarn && now - (r.touched.get(k) || 0) < QUIET_TOUCH_MS) return;
+  r.touched.delete(k);
+  r.touched.set(k, now);
+  capSeen(r.touched);
+  const updated = patchTicket(engine, sid, num, { lastActivityAt: now, quietWarn: null });
+  scheduleQuiet(engine, sid, updated);
+  if (t.quietWarn) await calmWarning(engine, t, 'Someone replied, so this ticket stays open.');
+}
+
+async function keepOpen(ctx, t) {
+  const { engine, serverId: sid } = ctx;
+  if (!(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can keep it open.');
+  const now = engine.scheduler.now();
+  const k = `${sid}:${t.number}`;
+  rt(engine).seen.set(k, now);
+  rt(engine).touched.set(k, now);
+  const updated = patchTicket(engine, sid, t.number, { lastActivityAt: now, quietWarn: null });
+  scheduleQuiet(engine, sid, updated);
+  const hours = quietHours(cfgOf(engine, sid));
+  const body = `<@${ctx.userId}> kept this ticket open.${hours ? ` It closes after ${hoursText(hours)} with no messages.` : ''}`;
+  const payload = { embeds: [card({ title: '✋ Ticket stays open', body, color: 'tickets' })], components: [] };
+  if (ctx.kind === 'button' && t.quietWarn?.messageId && ctx.source.message_id === t.quietWarn.messageId) return ctx.update(payload);
+  if (t.quietWarn) await calmWarning(engine, t, body);
+  return ctx.ok('Ticket stays open', hours ? `I'll only close it after ${hoursText(hours)} with no messages.` : 'Auto-close is off, so it stays open until someone closes it.');
+}
+
+function starsText(n) {
+  return `${'⭐'.repeat(n)}${'▫️'.repeat(5 - n)}`;
+}
+
+function ratingRows(sid, num) {
+  return [row(STARS.map((n) => button(String(n), cid('rate', sid, num, n), n >= 4 ? 'success' : 'secondary', '⭐')))];
+}
+
+function ratingAskCard(serverName, t) {
+  return card({ title: `${ICONS.tickets} How did we do?`, body: `Your ticket #${pad(t.number)}${serverName ? ` on **${clip(serverName, 80)}**` : ''} was closed. How happy are you with the help you got?\nPress 1 (not at all) to 5 (very happy). You can add a comment after.`, color: 'tickets' });
+}
+
+function ratingThanks(t, sid) {
+  const r = t.rating;
+  const lines = [`You gave ticket #${pad(t.number)} ${starsText(r.stars)} (${r.stars}/5).`];
+  if (r.comment) lines.push(`> ${clip(r.comment.replace(/\n/g, ' '), 300)}`);
+  lines.push('Thanks, the staff will see it.');
+  return {
+    embeds: [card({ title: `${ICONS.ok} Thanks for rating`, body: lines.join('\n'), color: 'ok' })],
+    components: r.comment ? [] : [row(button('Add a comment', cid('ratenote', sid, t.number), 'secondary', '💬'))],
+  };
+}
+
+function ratingLogCard(t) {
+  const r = t.rating;
+  const fields = [
+    { name: 'Rating', value: `${starsText(r.stars)} ${r.stars}/5`, inline: true },
+    { name: 'Opened by', value: `<@${t.openerId}>`, inline: true },
+    { name: 'Claimed by', value: t.claimedBy ? `<@${t.claimedBy}>` : 'Nobody', inline: true },
+  ];
+  if (r.comment) fields.push({ name: 'Comment', value: clip(r.comment, MAX_COMMENT), inline: false });
+  return card({ title: `⭐ Ticket #${pad(t.number)} rated ${r.stars}/5`, fields, color: r.stars >= 4 ? 'ok' : r.stars <= 2 ? 'warn' : 'tickets' });
+}
+
+async function askRating(engine, sid, t) {
+  if (!t?.openerId || t.openerId === engine.bot.me?.id || t.rating) return false;
+  const server = await engine.perms.server(sid).catch(() => null);
+  try {
+    return await engine.caps.attempt(sid, 'dms', async () => {
+      const dmChannel = await engine.bot.dm(t.openerId);
+      const sent = await engine.budget.send({ serverId: null, channelId: dmChannel, content: '', opts: { embeds: [ratingAskCard(server?.name, t)], components: ratingRows(sid, t.number) }, priority: 'low' });
+      patchTicket(engine, sid, t.number, { ratingAsk: { channelId: dmChannel, messageId: sent?.id || null } });
+      return true;
+    }, () => false);
+  } catch (e) {
+    engine.log.debug('rating DM failed', e?.message);
+    return false;
+  }
+}
+
+function ratingTarget(ctx, sidArg, numArg) {
+  const { engine } = ctx;
+  const sid = String(sidArg || '');
+  const num = Number(numArg);
+  if (!ID_RE.test(sid) || !Number.isInteger(num) || num < 1) return { stop: () => ctx.warn('This button is too old', 'It no longer points at a ticket.') };
+  if (ctx.serverId && ctx.serverId !== sid) return { stop: () => ctx.warn('This button belongs to another server', 'Rate a ticket from the DM I sent you about it.') };
+  if (!engine.settings.isEnabled(sid, ID)) return { stop: () => ctx.warn("Tickets isn't installed there any more", "So I can't save a rating for this ticket. Thanks anyway!") };
+  const t = getTicket(engine, sid, num);
+  if (!t) return { stop: () => ctx.info('That ticket is gone', 'I have no record of it any more.') };
+  if (t.openerId !== ctx.userId) return { stop: () => ctx.ephemeral({ embeds: [dialog.denied(null, { title: 'Not your ticket', body: 'Only the person who opened this ticket can rate it.' })] }) };
+  if (t.status === 'open') return { stop: () => ctx.info('This ticket is still open', 'You can rate it once it is closed.') };
+  return { sid, num, t };
+}
+
+async function rateTicket(ctx) {
+  const target = ratingTarget(ctx, ctx.argv[0], ctx.argv[1]);
+  if (target.stop) return target.stop();
+  const stars = Number(ctx.argv[2]);
+  if (!STARS.includes(stars)) return ctx.warn('This button is too old', 'Pick a number from 1 to 5 on the latest message.');
+  const { engine } = ctx;
+  const { sid, num } = target;
+  let fresh = false;
+  const updated = patchTicket(engine, sid, num, (x) => {
+    if (x.rating) return {};
+    fresh = true;
+    return { rating: { stars, at: Date.now(), comment: null, logMessageId: null } };
+  });
+  const onCard = ctx.kind === 'button' && !!ctx.source.message_id && ctx.source.message_id === updated.ratingAsk?.messageId;
+  if (!fresh) {
+    if (onCard) return ctx.update(ratingThanks(updated, sid));
+    return ctx.info('Already rated', `You already gave this ticket ${updated.rating.stars}/5. One rating per ticket.`);
+  }
+  if (onCard) await ctx.update(ratingThanks(updated, sid));
+  else await ctx.ephemeral(ratingThanks(updated, sid));
+  const logged = await postLog(engine, sid, { embeds: [ratingLogCard(updated)] }, 'low');
+  if (logged?.id) patchTicket(engine, sid, num, (x) => (x.rating ? { rating: { ...x.rating, logMessageId: logged.id } } : {}));
+  return null;
+}
+
+async function askComment(ctx) {
+  const target = ratingTarget(ctx, ctx.argv[0], ctx.argv[1]);
+  if (target.stop) return target.stop();
+  const { t } = target;
+  if (!t.rating) return ctx.warn('Pick your stars first', 'Press a number from 1 to 5, then you can add a comment.');
+  if (t.rating.comment) return ctx.info('Comment already saved', 'You can only leave one comment per ticket. Thanks!');
+  const { engine } = ctx;
+  const capSid = ctx.serverId || null;
+  const modal = {
+    custom_id: cid('ratesave', target.sid, target.num),
+    title: `Ticket #${pad(t.number)}: your comment`,
+    components: [{ type: 'text_input', custom_id: 'comment', label: 'What went well, or what could be better?', style: 'paragraph', required: true, max_length: MAX_COMMENT }],
+  };
+  if (engine.caps.state(capSid, 'modals') !== false && typeof ctx.source.showModal === 'function') {
+    try {
+      await ctx.source.showModal(modal);
+      engine.caps.mark(capSid, 'modals', true);
+      return null;
+    } catch (e) {
+      engine.caps.mark(capSid, 'modals', false, e?.message);
+    }
+  }
+  return ctx.info("Comments aren't available here", 'Pop-up forms are switched off for me, so I can only take your stars. They are saved, thanks!');
+}
+
+async function saveComment(ctx) {
+  const target = ratingTarget(ctx, ctx.argv[0], ctx.argv[1]);
+  if (target.stop) return target.stop();
+  const { engine } = ctx;
+  const { sid, num } = target;
+  const text = clip(String(ctx.values?.comment ?? '').trim(), MAX_COMMENT);
+  if (!text) return ctx.warn('The comment was empty', 'Nothing was saved. Your stars still count.');
+  let outcome = 'saved';
+  const updated = patchTicket(engine, sid, num, (x) => {
+    if (!x.rating) { outcome = 'norating'; return {}; }
+    if (x.rating.comment) { outcome = 'already'; return {}; }
+    return { rating: { ...x.rating, comment: text } };
+  });
+  if (outcome === 'norating') return ctx.warn('Pick your stars first', 'Press a number from 1 to 5, then you can add a comment.');
+  if (outcome === 'already') return ctx.info('Comment already saved', 'You can only leave one comment per ticket. Thanks!');
+  await ctx.ok('Comment saved', 'Thanks! The staff will see it with your rating.');
+  if (updated.ratingAsk?.messageId) {
+    await engine.budget.edit({ channelId: updated.ratingAsk.channelId, messageId: updated.ratingAsk.messageId, opts: ratingThanks(updated, sid) }).catch((e) => engine.log.debug('rating card edit failed', e?.message));
+  }
+  const logCh = logChannelOf(engine, sid);
+  if (logCh && updated.rating.logMessageId) {
+    const edited = await engine.budget.edit({ channelId: logCh, messageId: updated.rating.logMessageId, opts: { embeds: [ratingLogCard(updated)] } }).then(() => true, () => false);
+    if (edited) return null;
+  }
+  await postLog(engine, sid, { embeds: [ratingLogCard(updated)] }, 'low');
+  return null;
+}
+
+function ratingSummary(engine, sid) {
+  const rated = Object.values(readData(engine, sid).tickets).filter((t) => t.rating?.stars);
+  if (!rated.length) return 'No ratings yet';
+  const avg = rated.reduce((a, t) => a + t.rating.stars, 0) / rated.length;
+  return `⭐ ${avg.toFixed(1)} average from ${plural(rated.length, 'rating')}`;
+}
+
 function confirmRows(sess) {
   return [row(button('Close ticket', cid('closeyes', sess), 'danger', ICONS.lock), button('Keep it open', cid('closeno', sess), 'secondary'))];
 }
@@ -731,7 +1132,7 @@ async function confirmClose(ctx) {
 }
 
 async function claimTicket(ctx, t) {
-  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId))) return refuse(ctx, 'staff', 'Only staff can claim tickets. A staff member will be with you soon.');
+  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId, t))) return refuse(ctx, 'staff', 'Only staff can claim tickets. A staff member will be with you soon.');
   let outcome = 'won';
   const updated = patchTicket(ctx.engine, ctx.serverId, t.number, (x) => {
     if (x.status !== 'open') { outcome = 'closed'; return {}; }
@@ -752,7 +1153,7 @@ async function claimTicket(ctx, t) {
 
 async function unclaimTicket(ctx, stale) {
   const t = getTicket(ctx.engine, ctx.serverId, stale.number) || stale;
-  const staff = await isStaff(ctx.engine, ctx.serverId, ctx.userId);
+  const staff = await isStaff(ctx.engine, ctx.serverId, ctx.userId, t);
   if (staff && !t.claimedBy) return ctx.info('Not claimed', 'Nobody has claimed this ticket yet.');
   if (!staff || (t.claimedBy !== ctx.userId && !(await isAdmin(ctx.engine, ctx.serverId, ctx.userId)))) {
     return refuse(ctx, 'admin', 'Only the person who claimed this ticket, or an admin, can unclaim it.');
@@ -806,7 +1207,7 @@ async function removePerson(ctx, t, token) {
 }
 
 async function renameTicket(ctx, t, text) {
-  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId))) return refuse(ctx, 'staff', 'Only staff can rename tickets.');
+  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId, t))) return refuse(ctx, 'staff', 'Only staff can rename tickets.');
   const name = cleanChannelName(text);
   if (!name) return ctx.warn('What should it be called?', 'Try `/ticket rename billing-question`. Letters, numbers and dashes, up to 32.');
   const before = t.name || (await ctx.bot.channel(t.channelId))?.name || `ticket-${pad(t.number)}`;
@@ -858,8 +1259,8 @@ function ticketHelp(t) {
 const notTicket = (ctx) => ctx.warn("This isn't a ticket channel", 'Run this inside a ticket channel. To open a new ticket, use `/ticket open your topic`.');
 
 async function closeByNumber(ctx, numText, reason) {
-  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId))) return notTicket(ctx);
   const t = getTicket(ctx.engine, ctx.serverId, Number(String(numText).replace(/^#/, '')));
+  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId, t))) return notTicket(ctx);
   if (!t) return ctx.warn('No such ticket', `I couldn't find ticket **#${clip(numText, 10)}**.`);
   if (t.status !== 'open') return ctx.info('Already closed', `Ticket #${pad(t.number)} is already closed.`);
   return askClose(ctx, t, reason);
@@ -965,11 +1366,12 @@ async function setupView(ctx) {
     { name: 'Staff', value: cfg.staffRoles?.length ? cfg.staffRoles.map((r) => `<@&${r}>`).join(' ') : 'Anyone who is a mod or admin', inline: true },
     { name: 'Tickets per person', value: String(clampLimit(cfg.limit)), inline: true },
     { name: 'Ping staff on new tickets', value: cfg.pingStaff ? '🟢 On' : '⚪ Off', inline: true },
-    { name: `Types (${types.length}/${MAX_TYPES})`, value: types.map(formatTypeLine).join('\n'), inline: false },
-    { name: 'Open tickets', value: String(open), inline: true },
+    { name: 'Auto-close when quiet', value: quietHours(cfg) ? `🟢 After ${hoursText(quietHours(cfg))} with no messages` : '⚪ Off', inline: true },
+    { name: `Types (${types.length}/${MAX_TYPES})`, value: types.map((t) => `${formatTypeLine(t)}${t.staffRoles.length ? `\n-# Extra staff: ${roleList(t.staffRoles, 3)}` : ''}`).join('\n'), inline: false },
+    { name: 'Open tickets and ratings', value: `${open} open · ${ratingSummary(engine, sid)}`, inline: true },
     { name: 'Features on this server', value: CAP_CHECKS.map((c) => capLine(engine, sid, c)).join('\n'), inline: false },
   ];
-  const body = `${warnings.length ? `${warnings.join('\n')}\n\n` : ''}Members open a private channel with the staff. Each ticket gets its own role, so only the member, people they add, and staff can see it.\n-# Typed: \`/tickets panel #channel\`, \`/tickets staff @role\`, \`/tickets log #channel\`, \`/tickets limit 1\`, \`/tickets category name\`.`;
+  const body = `${warnings.length ? `${warnings.join('\n')}\n\n` : ''}Members open a private channel with the staff. Each ticket gets its own role, so only the member, people they add, and staff can see it.\n-# Typed: \`/tickets panel #channel\`, \`/tickets staff @role\`, \`/tickets log #channel\`, \`/tickets limit 1\`, \`/tickets category name\`, \`/tickets type report staff @role\`, \`/tickets autoclose 48\`.`;
   return {
     embeds: [card({ title: `${ICONS.tickets} Ticket setup`, body, fields, color: 'tickets' })],
     components: [
@@ -985,6 +1387,10 @@ async function setupView(ctx) {
         button(cfg.pingStaff ? 'Stop pinging staff' : 'Ping staff', cid('ping'), 'secondary', '🔔'),
         button('Tidy up', cid('tidy'), 'secondary', '🧹'),
         button('Refresh', cid('home'), 'secondary', '🔄'),
+      ),
+      row(
+        button('Staff per type', cid('typestaff'), 'secondary', '🧑‍💼'),
+        button('Auto-close', cid('edit', 'autoclose'), 'secondary', '💤'),
       ),
     ],
   };
@@ -1080,6 +1486,104 @@ async function setLimit(ctx, text) {
   return ctx.ok('Limit saved', `Each person can have ${plural(n, 'open ticket')} at a time.`);
 }
 
+async function setAutoClose(ctx, text) {
+  const raw = String(text || '').trim().toLowerCase();
+  const cfg = ctx.config();
+  if (!raw) {
+    const hours = quietHours(cfg);
+    return ctx.info('Auto-close', hours ? `Tickets close after ${hoursText(hours)} with no messages. I warn in the ticket first.\n-# Change it with \`/tickets autoclose 48\`, or \`/tickets autoclose off\`.` : 'Off. Turn it on with `/tickets autoclose 48` (hours, or like `2d`).');
+  }
+  if (OFF_WORDS.test(raw) || raw === '0') {
+    ctx.patchConfig({ autoCloseHours: 0 });
+    for (const t of allOpen(ctx.engine, ctx.serverId)) {
+      cancelQuiet(ctx.engine, ctx.serverId, t.number);
+      if (!t.quietWarn) continue;
+      patchTicket(ctx.engine, ctx.serverId, t.number, { quietWarn: null });
+      await calmWarning(ctx.engine, t, 'Auto-close was turned off, so this ticket stays open.');
+    }
+    return ctx.ok('Auto-close off', 'Quiet tickets stay open until someone closes them.');
+  }
+  const m = /^(\d{1,4})\s*(h|hr|hrs|hour|hours|d|day|days)?$/.exec(raw);
+  const hours = m ? Number(m[1]) * (/^d/.test(m[2] || '') ? 24 : 1) : NaN;
+  if (!Number.isInteger(hours) || hours < 1 || hours > MAX_AUTOCLOSE_HOURS) return ctx.warn("That didn't work", `Use a number of hours from 1 to ${MAX_AUTOCLOSE_HOURS}, like \`/tickets autoclose 48\` or \`/tickets autoclose 2d\`. Use \`off\` to turn it off.`);
+  ctx.patchConfig({ autoCloseHours: hours });
+  const n = rescheduleAllQuiet(ctx.engine, ctx.serverId);
+  const lead = waitText(leadFor(hours));
+  return ctx.ok('Auto-close on', `A ticket with no messages for ${hoursText(hours)} closes by itself, with the usual transcript. ${lead} before that I post a warning with a **Keep open** button.${n ? `\n-# Watching ${plural(n, 'open ticket')} now.` : ''}`);
+}
+
+function findType(cfg, word) {
+  const types = typesOf(cfg);
+  const w = normalizeName(word);
+  if (!w) return null;
+  return types.find((t) => t.id === w || normalizeName(t.name) === w) || types.find((t) => normalizeName(t.name).split('-')[0] === w) || null;
+}
+
+async function setTypeStaff(ctx, typeId, tokens) {
+  const cfg = ctx.config();
+  const types = typesOf(cfg);
+  const type = types.find((t) => t.id === typeId);
+  if (!type) return ctx.warn('That type is gone', 'Open `/tickets` again to see the current types.');
+  let roles = [];
+  if (tokens.length && !OFF_WORDS.test(tokens[0])) {
+    const missing = [];
+    for (const tok of tokens) {
+      const r = await ctx.findRole(tok);
+      if (r) roles.push(r); else missing.push(tok);
+    }
+    if (missing.length) return ctx.warn("I couldn't find some roles", `No role matches ${missing.map((x) => `**${clip(x, 30)}**`).join(', ')}. Mention them, like @Helpers.`);
+    roles = roles.filter((r, i) => roles.findIndex((x) => x.id === r.id) === i);
+    if (roles.length > MAX_TYPE_STAFF) return ctx.warn('That is a lot of roles', `Each type can have up to ${MAX_TYPE_STAFF} extra staff roles.`);
+    const auto = roles.find((r) => r.auto && r.auto !== 'none') || roles.find((r) => /^@?everyone$/i.test(r.name) || r.id === ctx.serverId);
+    if (auto) return ctx.warn("That role can't be ticket staff", `**${auto.name}** is given to everyone automatically, so every member would see these tickets.`);
+  }
+  const next = types.map((t) => (t.id === type.id ? { ...t, staffRoles: roles.map((r) => r.id) } : t));
+  ctx.patchConfig({ types: next });
+  if (!roles.length) return ctx.ok(`${type.name}: no extra staff`, `Only the main ticket staff see new **${type.name}** tickets.`);
+  return ctx.ok(`${type.name}: staff saved`, `${roles.map((r) => `<@&${r.id}>`).join(' ')} can see, claim and close new **${type.emoji} ${type.name}** tickets, along with the main ticket staff.\n-# Tickets that are already open keep the people who could see them.`);
+}
+
+async function typeCommand(ctx, rest) {
+  if (!rest.length) return typesForm(ctx);
+  const cfg = ctx.config();
+  const type = findType(cfg, rest[0]);
+  if (!type) {
+    const names = typesOf(cfg).map((t) => t.id);
+    const guess = didYouMean(normalizeName(rest[0]), names);
+    return ctx.warn("I couldn't find that type", `Types here: ${names.map((n) => `**${n}**`).join(', ')}.${guess.length ? `\nDid you mean **${guess[0]}**?` : ''}`);
+  }
+  const what = String(rest[1] || '').toLowerCase();
+  if (!what) return ctx.info(`${type.emoji} ${type.name}`, `${type.questions.length ? `Questions: ${type.questions.join('; ')}` : 'No questions.'}\nExtra staff: ${type.staffRoles.length ? type.staffRoles.map((r) => `<@&${r}>`).join(' ') : 'none'}\n-# Set staff with \`/tickets type ${type.id} staff @role\`.`);
+  if (!/^(staff|roles?|team|helpers)$/.test(what)) return ctx.warn("I didn't get that", `Try \`/tickets type ${type.id} staff @role\`, or \`/tickets type ${type.id} staff off\`.`);
+  return setTypeStaff(ctx, type.id, rest.slice(2));
+}
+
+function typeStaffView(cfg) {
+  const types = typesOf(cfg);
+  const lines = types.map((t) => `${t.emoji} **${t.name}**: ${t.staffRoles.length ? t.staffRoles.map((r) => `<@&${r}>`).join(' ') : 'main staff only'}`);
+  return {
+    embeds: [card({ title: '🧑‍💼 Staff per ticket type', body: `${lines.join('\n')}\n\nExtra staff roles see, claim and close tickets of that type, on top of the main ticket staff.\n-# Pick a type to change it, or type \`/tickets type <type> staff @role\`.`, color: 'tickets' })],
+    components: [...rows(types.map((t) => button(t.name, cid('tstaff', t.id), 'secondary', t.emoji))).slice(0, 1), row(button('Back', cid('home'), 'secondary', '⬅️'))],
+  };
+}
+
+async function askTypeStaff(ctx) {
+  const cfg = ctx.config();
+  const type = typesOf(cfg).find((t) => t.id === ctx.argv[0]);
+  if (!type) return ctx.warn('That type is gone', 'Open `/tickets` again to see the current types.');
+  const roles = await ctx.roles().catch(() => []);
+  const names = type.staffRoles.map((id) => roles.find((r) => r.id === id)?.name).filter(Boolean);
+  rememberPending(ctx.engine, `tstaff:${ctx.serverId}:${ctx.userId}`, { typeId: type.id });
+  return ctx.form({ title: `${type.name} staff`, action: 'savetstaff', fields: [{ id: 'value', label: 'Staff roles (names, space separated)', style: 'short', required: false, value: names.map((n) => (/\s/.test(n) ? `"${n}"` : n)).join(' '), placeholder: 'Helpers "Report Team", or "none"', max: 200 }] });
+}
+
+async function saveTypeStaff(ctx) {
+  if (!(await adminGate(ctx))) return null;
+  const p = takePending(ctx.engine, `tstaff:${ctx.serverId}:${ctx.userId}`);
+  if (!p) return ctx.warn('This form expired', 'Press **Staff per type** again.');
+  return setTypeStaff(ctx, p.typeId, tokenize(String(ctx.values?.value || '').trim()));
+}
+
 function typesForm(ctx) {
   const types = typesOf(ctx.config());
   const fields = [];
@@ -1092,8 +1596,10 @@ function typesForm(ctx) {
 async function saveTypes(ctx) {
   if (!(await adminGate(ctx))) return null;
   const lines = Array.from({ length: MAX_TYPES }, (_, i) => ctx.values?.[`t${i + 1}`] || '');
-  const types = parseTypes(lines);
-  if (!types.length) return ctx.warn('I need at least one type', 'Write it like `🎫 Support` or `🚩 Report: Who are you reporting?; What happened?`.');
+  const parsed = parseTypes(lines);
+  if (!parsed.length) return ctx.warn('I need at least one type', 'Write it like `🎫 Support` or `🚩 Report: Who are you reporting?; What happened?`.');
+  const old = typesOf(ctx.config());
+  const types = parsed.map((t) => ({ ...t, staffRoles: old.find((o) => o.id === t.id)?.staffRoles || [] }));
   ctx.patchConfig({ types });
   await refreshPostedPanel(ctx.engine, ctx.serverId);
   return ctx.ok('Ticket types saved', `${types.map((t) => `${formatTypeLine(t)}`).join('\n')}\n-# Up to ${MAX_QUESTIONS} questions each, split with ;`);
@@ -1104,6 +1610,7 @@ const EDIT_FORMS = lookup({
   log: () => ({ title: 'Ticket log channel', label: 'Log channel name', value: '', placeholder: 'ticket-logs, or "off"' }),
   category: (cfg) => ({ title: 'Ticket category', label: 'Category name', value: cfg.categoryName || '', placeholder: 'Support, or "none"' }),
   limit: (cfg) => ({ title: 'Tickets per person', label: `Open tickets per person (1-${MAX_LIMIT})`, value: String(clampLimit(cfg.limit)), placeholder: '1' }),
+  autoclose: (cfg) => ({ title: 'Auto-close quiet tickets', label: 'Hours with no messages, or "off"', value: quietHours(cfg) ? String(quietHours(cfg)) : '', placeholder: '48, 2d, or off' }),
 });
 
 async function saveEdit(ctx, what) {
@@ -1113,6 +1620,7 @@ async function saveEdit(ctx, what) {
   if (what === 'log') return setLog(ctx, text);
   if (what === 'category') return setCategory(ctx, text);
   if (what === 'limit') return setLimit(ctx, text);
+  if (what === 'autoclose') return setAutoClose(ctx, text || 'off');
   return null;
 }
 
@@ -1153,6 +1661,8 @@ async function runTickets(ctx, tokensIn) {
     if (sub === 'log') return await setLog(ctx, rest[0]);
     if (sub === 'limit') return await setLimit(ctx, rest[0]);
     if (sub === 'types') return await typesForm(ctx);
+    if (sub === 'type') return await typeCommand(ctx, rest);
+    if (sub === 'autoclose') return await setAutoClose(ctx, rest.join(' '));
     if (sub === 'tidy') return await tidyUp(ctx);
     if (sub === 'ping') {
       const on = rest.length ? parseBool(rest[0]) : !ctx.config().pingStaff;
@@ -1171,7 +1681,7 @@ function ticketComponent(fn, { staffOnly = false } = {}) {
     run: async (ctx) => {
       const t = getTicket(ctx.engine, ctx.serverId, ctx.argv[0]);
       if (!t || t.status !== 'open') return ctx.info('This ticket is closed', 'Open a new one with `/ticket` if you still need help.');
-      if (staffOnly && !(await isStaff(ctx.engine, ctx.serverId, ctx.userId))) return refuse(ctx, 'staff', 'Only staff can do that.');
+      if (staffOnly && !(await isStaff(ctx.engine, ctx.serverId, ctx.userId, t))) return refuse(ctx, 'staff', 'Only staff can do that.');
       return fn(ctx, t);
     },
   };
@@ -1205,14 +1715,27 @@ export const { setup, teardown, check } = defineApp({
     pingStaff: false,
     panelChannelId: null,
     panelMessageId: null,
+    autoCloseHours: 0,
   },
+
+  jobs: {
+    quietwarn: quietWarnJob,
+    quietclose: quietCloseJob,
+  },
+
+  events: {
+    message: onTicketMessage,
+  },
+
+  panelPerm: 'member',
 
   commands: {
     ticket: { description: 'Open a support ticket: /ticket [topic]. Inside one: /ticket close, claim, add @user, rename', run: (ctx) => runTicket(ctx) },
     tickets: { description: 'Ticket setup (admins): /tickets panel #channel, staff @role, log #channel, types, limit 1', perm: 'admin', run: (ctx) => runTickets(ctx) },
   },
 
-  components: guarded({
+  components: {
+    ...guarded({
     open: {
       run: async (ctx) => {
         const topic = topicFromSession(ctx, ctx.argv[1]);
@@ -1306,7 +1829,16 @@ export const { setup, teardown, check } = defineApp({
       return ctx.update(await setupView(ctx));
     }),
     tidy: adminOnly((ctx) => tidyUp(ctx)),
-  }),
+    typestaff: adminOnly(async (ctx) => ctx.ephemeral(typeStaffView(ctx.config()))),
+    tstaff: adminOnly((ctx) => askTypeStaff(ctx)),
+    savetstaff: { perm: 'admin', run: saveTypeStaff },
+    saveautoclose: { perm: 'admin', run: (ctx) => saveEdit(ctx, 'autoclose') },
+    keepopen: ticketComponent(keepOpen),
+    }),
+    rate: { run: rateTicket },
+    ratenote: { run: askComment },
+    ratesave: { run: saveComment },
+  },
 
   yap: [{
     words: ['ticket', 'tickets', 'support', 'help-desk'],
@@ -1346,6 +1878,9 @@ export const { setup, teardown, check } = defineApp({
     'Each ticket is a private channel with its own role: the member, people they add, and staff see it.',
     'Closing saves a transcript to the log channel and DMs a copy to the member when DMs work.',
     'Staff can close a ticket from anywhere with /ticket close 12, even if its channel was deleted by hand.',
+    'After closing, the member gets a DM asking for a 1 to 5 star rating (and an optional comment); it shows up in the ticket log.',
+    'Each type can have its own extra staff: /tickets type report staff @role.',
+    '/tickets autoclose 48 closes tickets after 48 quiet hours, with a warning and a Keep open button first.',
   ],
 
   init(engine) {
@@ -1365,5 +1900,8 @@ export const { setup, teardown, check } = defineApp({
     r.pending.clear();
     r.opening.clear();
     r.transcripts.clear();
+    r.seen.clear();
+    r.touched.clear();
+    r.channels.clear();
   },
 });

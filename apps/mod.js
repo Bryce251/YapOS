@@ -1,5 +1,6 @@
 import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row, ICONS } from '../engine/ui.js';
+import { MAX_TRIES } from '../engine/scheduler.js';
 import { customId } from '../engine/router.js';
 import { tokenize, parseDuration, takeDuration, formatDuration, didYouMean, fuzzyFind, normalizeName, userId, clip } from '../engine/parse.js';
 import { friendly, permName, explain, looksLikeFeatureOff } from '../engine/errors.js';
@@ -15,6 +16,16 @@ const MAX_WARNS = 2000;
 const STEPS_MAX = 1000;
 const STEPS_COUNT_MAX = 20;
 const PURGE_BUTTON_DEFAULT = 10;
+const MIN_MS = 60000;
+const YEAR_MS = 365 * DAY_MS;
+const MAX_NOTES = 2000;
+const MAX_NOTES_PER_USER = 25;
+const NOTE_MAX_LEN = 500;
+const MAX_HISTORY = 10;
+const UNBAN_KIND = 'mod.unban';
+const UNINSTALLED_RETRY_MS = 6 * 3600000;
+const PENDING_TTL_MS = 15 * 60000;
+const MAX_PENDING = 500;
 
 const DEFAULT_ESCALATION = [
   { at: 3, action: 'timeout', durationMs: 3600000 },
@@ -52,6 +63,8 @@ const SUB_ALIASES = {
   history: 'cases', purge: 'purge', clear: 'purge', slowmode: 'slowmode', slow: 'slowmode', lock: 'lock',
   unlock: 'unlock', settings: 'settings', config: 'settings', panel: 'panel', home: 'panel',
   log: 'log', logs: 'log', modlog: 'log', logchannel: 'log',
+  note: 'note', unnote: 'unnote', notes: 'notes',
+  user: 'user', lookup: 'user', whois: 'user', userinfo: 'user', member: 'user',
   modrole: 'modrole', modroles: 'modrole', staff: 'modrole',
   adminrole: 'adminrole', adminroles: 'adminrole',
 };
@@ -65,15 +78,20 @@ const USAGE = {
   timeout: '`/mod timeout @sam 10m spamming` (a bare number means minutes, `off` clears it; with no length I ask how long)',
   untimeout: '`/mod untimeout @sam`',
   kick: '`/mod kick @sam reason`',
-  ban: '`/mod ban @sam reason`',
+  ban: '`/mod ban @sam reason` (permanent) or `/mod ban @sam 7d reason` (lifted after 7 days)',
   unban: '`/mod unban <user id or mention>`',
   warn: '`/mod warn @sam reason`',
   warnings: '`/mod warnings @sam`',
   purge: '`/mod purge 20` or `/mod purge 20 @sam`',
   slowmode: '`/mod slowmode 10s` or `/mod slowmode off`',
+  note: '`/mod note @sam keeps arguing in #general`',
+  notes: '`/mod notes @sam`',
+  unnote: '`/mod note remove 4`',
+  user: '`/mod user @sam`',
+  reason: '`/case 12 reason posted scam links`',
 };
 
-const emptyData = () => ({ seq: 0, cases: [], warns: [], locks: {} });
+const emptyData = () => ({ seq: 0, cases: [], warns: [], locks: {}, noteSeq: 0, notes: [] });
 
 function readData(engine, sid) {
   return { ...emptyData(), ...engine.store.get(ID, sid, emptyData()) };
@@ -99,7 +117,54 @@ async function nameFor(engine, sid, uid) {
   return m ? `@${m.username}` : `<@${uid}>`;
 }
 
+async function displayNameFor(engine, sid, uid) {
+  if (!uid) return 'someone';
+  const members = await engine.cache.members(sid).catch(() => []);
+  const m = members.find((x) => x.id === uid);
+  return m?.nickname || m?.display_name || m?.username || 'someone';
+}
+
+const nowMs = (engine) => engine.scheduler?.now?.() ?? Date.now();
+
 const when = (at) => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const pad2 = (n) => String(n).padStart(2, '0');
+
+function untilText(at, now) {
+  const d = new Date(at);
+  const year = d.getUTCFullYear() !== new Date(now).getUTCFullYear() ? ` ${d.getUTCFullYear()}` : '';
+  return `${WEEKDAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}${year}, ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())} UTC`;
+}
+
+function dayText(at) {
+  const d = new Date(at);
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+function roughSpan(ms) {
+  for (const [name, size] of [['year', YEAR_MS], ['month', 30 * DAY_MS], ['week', 7 * DAY_MS], ['day', DAY_MS], ['hour', 3600000], ['minute', MIN_MS]]) {
+    if (ms >= size) {
+      const n = Math.floor(ms / size);
+      return `${n} ${name}${n === 1 ? '' : 's'}`;
+    }
+  }
+  return 'less than a minute';
+}
+
+function longDuration(ms) {
+  let left = Math.max(MIN_MS, Math.round(ms / MIN_MS) * MIN_MS);
+  const parts = [];
+  for (const [name, size] of [['year', YEAR_MS], ['day', DAY_MS], ['hour', 3600000], ['minute', MIN_MS]]) {
+    if (left >= size) {
+      const n = Math.floor(left / size);
+      parts.push(`${n} ${name}${n === 1 ? '' : 's'}`);
+      left -= n * size;
+    }
+  }
+  return parts.slice(0, 2).join(' ');
+}
 const ago = (at) => `${formatDuration(Math.max(1000, Date.now() - at))} ago`;
 
 function caseLine(c) {
@@ -119,6 +184,12 @@ function caseEmbed(c, extra = '') {
   if (c.channelId) fields.push({ name: 'Channel', value: `<#${c.channelId}>`, inline: true });
   if (c.source && c.source !== 'mod') fields.push({ name: 'Source', value: c.source === 'automod' ? 'Automod' : 'Manual', inline: true });
   if (c.undone) fields.push({ name: 'Status', value: 'Undone', inline: true });
+  if (c.meta?.until) fields.push({ name: 'Ban ends', value: untilText(c.meta.until, c.at), inline: true });
+  const history = (c.history || []).slice(-3).reverse();
+  if (history.length) {
+    const lines = history.map((h) => `Was: ${h.reason ? clip(h.reason, 120) : '*no reason*'} (edited by ${h.byName || 'someone'}, ${when(h.at)})`);
+    fields.push({ name: 'Earlier reasons', value: lines.join('\n'), inline: false });
+  }
   return card({
     title: `${ACTION_ICONS[c.action] || ICONS.mod} Case #${c.id}: ${ACTION_LABELS[c.action] || c.action}`,
     body: `${c.reason ? `**Reason:** ${c.reason}` : '*No reason given.*'}${extra ? `\n${extra}` : ''}`,
@@ -150,6 +221,21 @@ function createService(engine) {
     });
   }
 
+  async function logCase(serverId, c, extra = '') {
+    if (!c) return null;
+    const sent = await log(serverId, caseEmbed(c, extra));
+    if (sent?.id) {
+      const channelId = sent.channel_id || engine.settings.core(serverId).logChannel;
+      writeData(engine, serverId, (d) => {
+        const x = d.cases.find((y) => y.id === c.id);
+        if (!x) return;
+        x.log = { channelId, messageId: sent.id };
+        if (extra) x.logExtra = extra;
+      });
+    }
+    return sent;
+  }
+
   async function addCase(serverId, { action, targetId = null, actorId = null, reason = '', durationMs = null, source = 'mod', targetName, actorName, channelId = null, meta } = {}) {
     const tName = targetName ?? await nameFor(engine, serverId, targetId);
     const aName = actorName ?? await nameFor(engine, serverId, actorId);
@@ -167,7 +253,7 @@ function createService(engine) {
     const minutes = clampMinutes(durationMs);
     await bot.timeout(serverId, targetId, minutes, String(reason || '').slice(0, 200));
     const c = await addCase(serverId, { action: minutes ? 'timeout' : 'untimeout', targetId, actorId, reason, durationMs: minutes * 60000, source, targetName, actorName });
-    log(serverId, caseEmbed(c));
+    logCase(serverId, c);
     return c;
   }
 
@@ -180,10 +266,12 @@ function createService(engine) {
       if (rule.action === 'timeout') c = await timeout(serverId, targetId, { actorId, durationMs, reason, source, targetName });
       else {
         if (rule.action === 'kick') await bot.kick(serverId, targetId);
-        else if (rule.action === 'ban') await bot.ban(serverId, targetId);
-        else return null;
+        else if (rule.action === 'ban') {
+          await bot.ban(serverId, targetId);
+          cancelUnban(engine, serverId, targetId);
+        } else return null;
         c = await addCase(serverId, { action: rule.action, targetId, actorId, reason, source, targetName });
-        log(serverId, caseEmbed(c));
+        logCase(serverId, c);
       }
       return { action: rule.action, durationMs, ok: true, case: c };
     } catch (error) {
@@ -200,12 +288,22 @@ function createService(engine) {
     const count = activeWarns(engine, serverId, targetId).length;
     const rules = [].concat(engine.settings.appConfig(serverId, ID).escalation || []);
     const rule = rules.find((r) => Number(r.at) === count);
-    log(serverId, caseEmbed(c, `They now have **${count}** active warning${count === 1 ? '' : 's'}.`));
+    logCase(serverId, c, `They now have **${count}** active warning${count === 1 ? '' : 's'}.`);
     const escalated = rule ? await escalate(serverId, targetId, rule, { count, source, targetName: c.targetName }) : null;
     return { case: c, count, escalated };
   }
 
-  return { addCase, warn, timeout, log };
+  return { addCase, warn, timeout, log, logCase };
+}
+
+function cancelUnban(engine, serverId, targetId) {
+  if (!engine.scheduler || !serverId || !targetId) return 0;
+  return engine.scheduler.cancelWhere({ kind: UNBAN_KIND, serverId, key: targetId });
+}
+
+function pendingUnban(engine, serverId, targetId) {
+  if (!engine.scheduler || !serverId || !targetId) return null;
+  return engine.scheduler.list({ kind: UNBAN_KIND, serverId, key: targetId })[0] || null;
 }
 
 const svc = (ctx) => ctx.engine.service(ID) || createService(ctx.engine);
@@ -297,10 +395,10 @@ async function tryDm(ctx, userId, text) {
   }
 }
 
-async function dmText(ctx, def, reason, durationMs) {
+async function dmText(ctx, def, reason, durationMs, until = null) {
   const server = await ctx.engine.perms.server(ctx.serverId).catch(() => null);
   const name = server?.name || 'the server';
-  const length = durationMs ? ` for ${formatDuration(durationMs)}` : '';
+  const length = until ? ` until ${untilText(until, nowMs(ctx.engine))} (${longDuration(durationMs)})` : durationMs ? ` for ${formatDuration(durationMs)}` : '';
   return `You were ${def.dm} **${name}**${length}.${reason ? `\nReason: ${reason}` : ''}`;
 }
 
@@ -362,6 +460,7 @@ async function runAction(ctx, kind, tokens) {
   const def = ACTIONS[kind];
   const { user, rest } = await takeTarget(ctx, tokens);
   if (!user) return ctx.warn(`Who should I ${def.verb}?`, `Try ${USAGE[kind]}.`);
+  if (kind === 'ban') return runBan(ctx, user, rest);
   if (kind !== 'timeout') return performAction(ctx, kind, user, { reason: rest.join(' ') });
   if (CLEAR_WORDS.test(rest[0] || '')) return performAction(ctx, 'untimeout', user, { reason: rest.slice(1).join(' ') });
   const d = takeDuration(rest);
@@ -371,6 +470,54 @@ async function runAction(ctx, kind, tokens) {
   const durationMs = clampMinutes(d.ms) * 60000;
   const note = d.ms > MAX_TIMEOUT_MIN * 60000 ? '\n-# Yapin\' timeouts go up to 28 days, so I used that.' : '';
   return performAction(ctx, 'timeout', user, { durationMs, reason, note });
+}
+
+const YEAR_WORD = /^(\d+(?:\.\d+)?)\s*(y|yr|yrs|year|years)$/i;
+const BARE_NUMBER = /^\d+(\.\d+)?$/;
+
+function takeBanLength(words) {
+  const first = words[0] || '';
+  if (FOREVER_WORDS.test(first)) return { ms: null, rest: words.slice(1) };
+  const pair = `${first} ${words[1] || ''}`.trim();
+  for (const [text, used] of [[first, 1], [pair, 2]]) {
+    const y = YEAR_WORD.exec(text);
+    if (y) return { ms: Math.round(Number(y[1]) * YEAR_MS), rest: words.slice(used) };
+  }
+  if (!/^\d/.test(first)) return { ms: null, rest: words };
+  const d = takeDuration(words);
+  if (d.ms === null) return { ms: null, rest: words };
+  if (BARE_NUMBER.test(first) && d.rest.length === words.length - 1) return { ms: null, rest: words };
+  return d;
+}
+
+async function runBan(ctx, user, words) {
+  const { ms, rest } = takeBanLength(words);
+  const reason = rest.join(' ');
+  if (ms === null) return performAction(ctx, 'ban', user, { reason });
+  if (ms < MIN_MS) return ctx.warn('Too short', `A temporary ban has to last at least 1 minute. Try ${USAGE.ban}.`);
+  if (ms > YEAR_MS) return ctx.warn('Too long', 'Temporary bans go up to 1 year. Leave the length out for a permanent ban, like `/ban @sam spamming`.');
+  return performAction(ctx, 'ban', user, { reason, durationMs: Math.round(ms / MIN_MS) * MIN_MS });
+}
+
+function scheduleUnban(ctx, user, label, durationMs) {
+  const s = ctx.engine.scheduler;
+  if (!s) throw friendly("I can't lift bans by myself right now, so I didn't ban anyone. Leave the length out for a permanent ban.", { title: 'Temporary bans are off' });
+  const until = s.now() + durationMs;
+  const previous = pendingUnban(ctx.engine, ctx.serverId, user.id);
+  const job = s.schedule({ kind: UNBAN_KIND, at: until, serverId: ctx.serverId, key: user.id, data: { userId: user.id, name: label, until } });
+  return { job, until, previous };
+}
+
+function dropTempBan(engine, serverId, temp) {
+  if (!temp) return;
+  engine.scheduler.cancel(temp.job.id);
+  const p = temp.previous;
+  if (!p) return;
+  try {
+    engine.scheduler.schedule({ kind: UNBAN_KIND, at: p.at, serverId, key: p.key, data: p.data });
+  } catch (e) {
+    engine.log.debug('mod could not put back the earlier unban', e?.message);
+  }
 }
 
 async function askTimeoutLength(ctx, user, words) {
@@ -416,8 +563,10 @@ async function performAction(ctx, kind, user, { durationMs = null, reason: rawRe
     const base = { actorId: ctx.userId, reason, source: 'mod', targetName: label, actorName: aName };
     const service = svc(ctx);
     if (kind === 'warn') return await replyWarn(ctx, user, label, base, service, answer);
+    let temp = null;
+    if (kind === 'ban' && durationMs) temp = scheduleUnban(ctx, user, label, durationMs);
     let dm = 'off';
-    if (def.dm && kind !== 'timeout') dm = await tryDm(ctx, user.id, await dmText(ctx, def, reason, durationMs));
+    if (def.dm && kind !== 'timeout') dm = await tryDm(ctx, user.id, await dmText(ctx, def, reason, durationMs, temp?.until));
     let c;
     let undo = null;
     if (kind === 'timeout' || kind === 'untimeout') {
@@ -432,10 +581,21 @@ async function performAction(ctx, kind, user, { durationMs = null, reason: rawRe
       }
     } else {
       if (kind === 'kick') await ctx.bot.kick(ctx.serverId, user.id);
-      if (kind === 'ban') await ctx.bot.ban(ctx.serverId, user.id);
-      if (kind === 'unban') await ctx.bot.unban(ctx.serverId, user.id);
-      c = await service.addCase(ctx.serverId, { action: kind, targetId: user.id, ...base });
-      service.log(ctx.serverId, caseEmbed(c));
+      if (kind === 'ban') {
+        try {
+          await ctx.bot.ban(ctx.serverId, user.id);
+        } catch (e) {
+          dropTempBan(ctx.engine, ctx.serverId, temp);
+          throw e;
+        }
+        if (!temp) cancelUnban(ctx.engine, ctx.serverId, user.id);
+      }
+      if (kind === 'unban') {
+        await ctx.bot.unban(ctx.serverId, user.id);
+        cancelUnban(ctx.engine, ctx.serverId, user.id);
+      }
+      c = await service.addCase(ctx.serverId, { action: kind, targetId: user.id, ...base, durationMs: temp ? durationMs : null, meta: temp ? { until: temp.until } : undefined });
+      service.logCase(ctx.serverId, c);
       if (kind === 'ban') {
         undo = ctx.engine.router.addUndo({
           serverId: ctx.serverId, actorId: ctx.userId, label: `ban of ${label}`,
@@ -444,8 +604,9 @@ async function performAction(ctx, kind, user, { durationMs = null, reason: rawRe
         });
       }
     }
-    const length = c.durationMs ? ` for **${formatDuration(c.durationMs)}**` : '';
-    const body = `${label}${length}.${reason ? `\n**Reason:** ${reason}` : ''}\n-# Case #${c.id}${note}${dmNote(dm)}`;
+    const length = temp ? ` is banned until **${untilText(temp.until, nowMs(ctx.engine))}** (in ${longDuration(durationMs)})` : c.durationMs ? ` for **${formatDuration(c.durationMs)}**` : '';
+    const autoNote = temp ? "\n-# I'll lift the ban by myself when it ends." : '';
+    const body = `${label}${length}.${reason ? `\n**Reason:** ${reason}` : ''}\n-# Case #${c.id}${autoNote}${note}${dmNote(dm)}`;
     return answer({ embeds: [dialog.ok(def.title, body, { color: 'mod' })], components: undo ? [row(undo.button)] : [] });
   } catch (e) {
     return ctx.fail(e, { action: def.verb, perm: def.perm, target: label });
@@ -492,10 +653,11 @@ async function undoBan(ctx, i, user, label, c) {
   await guardedUndo(i, { action: 'unban', perm: 'ban_members', target: label }, async () => {
     await undoGate(ctx, i, ACTIONS.unban, user.id, label);
     await ctx.bot.unban(ctx.serverId, user.id);
+    cancelUnban(ctx.engine, ctx.serverId, user.id);
     markUndone(ctx.engine, ctx.serverId, c.id);
     const service = svc(ctx);
     const u = await service.addCase(ctx.serverId, { action: 'unban', targetId: user.id, actorId: i.user_id, reason: `Undo of case #${c.id}`, targetName: label });
-    service.log(ctx.serverId, caseEmbed(u));
+    service.logCase(ctx.serverId, u);
     await undoReply(i, dialog.ok('Ban undone', `${label} is unbanned. They can join again with an invite.\n-# Case #${u.id}`));
   });
 }
@@ -528,7 +690,7 @@ async function undoWarn(ctx, i, user, label, out) {
     } else if (esc?.ok && esc.action === 'kick') notes.push("It also caused a kick, which can't be undone. They can rejoin with an invite.");
     const service = svc(ctx);
     const u = await service.addCase(ctx.serverId, { action: 'unwarn', targetId: user.id, actorId: i.user_id, reason: `Undo of case #${out.case.id}`, targetName: label });
-    service.log(ctx.serverId, caseEmbed(u));
+    service.logCase(ctx.serverId, u);
     const count = activeWarns(ctx.engine, ctx.serverId, user.id).length;
     await undoReply(i, dialog.ok('Warning removed', [`${label} is back to **${count}** warning${count === 1 ? '' : 's'}.`, ...notes].join('\n')));
   });
@@ -566,7 +728,7 @@ async function runPurge(ctx, tokens) {
     const skipped = Array.isArray(res?.skipped) ? res.skipped.length : 0;
     const service = svc(ctx);
     const c = await service.addCase(ctx.serverId, { action: 'purge', targetId: user?.id ?? null, targetName: label, actorId: ctx.userId, reason: `${deleted} message${deleted === 1 ? '' : 's'} deleted${skipped ? `, ${skipped} skipped` : ''}`, channelId: ctx.channelId });
-    service.log(ctx.serverId, caseEmbed(c));
+    service.logCase(ctx.serverId, c);
     const skippedNote = skipped ? `\n${skipped} couldn't be removed. Yapin' only bulk deletes messages from the last 14 days.` : '';
     return ctx.ok(`Cleared ${deleted} message${deleted === 1 ? '' : 's'}`, `${label ? `From ${label} in` : 'In'} <#${ctx.channelId}>.${skippedNote}\n-# Case #${c.id}. Deleted messages can't be brought back.`);
   } catch (e) {
@@ -740,7 +902,7 @@ async function doLock(ctx, channel, rawReason, locking, respond) {
       if (r.already) return respond ? answer({ embeds: [dialog.info('Already locked', `${chName} is already locked.`)], components: [] }) : ctx.info('Already locked', `${chName} is already locked.`);
       writeData(ctx.engine, ctx.serverId, (d) => { d.locks[channel.id] = { via: r.via, prev: r.prev || null, prevReadOnly: !!r.prevReadOnly, at: Date.now(), by: ctx.userId }; });
       const c = await service.addCase(ctx.serverId, { action: 'lock', actorId: ctx.userId, actorName: aName, targetName: chName, reason, channelId: channel.id, meta: { via: r.via } });
-      service.log(ctx.serverId, caseEmbed(c, viaNote(r)));
+      service.logCase(ctx.serverId, c, viaNote(r));
       const undo = ctx.engine.router.addUndo({
         serverId: ctx.serverId, actorId: ctx.userId, label: `lock of #${channel.name || 'channel'}`,
         manual: channel.name ? `/unlock #${channel.name}` : `/unlock in ${chName}`,
@@ -768,7 +930,7 @@ async function doUnlock(ctx, channel, reason, actorId) {
   writeData(ctx.engine, ctx.serverId, (d) => { delete d.locks[channel.id]; });
   const service = svc(ctx);
   const c = await service.addCase(ctx.serverId, { action: 'unlock', actorId, targetName: `<#${channel.id}>`, reason, channelId: channel.id, meta: { via: r.via } });
-  service.log(ctx.serverId, caseEmbed(c));
+  service.logCase(ctx.serverId, c);
   return c;
 }
 
@@ -837,7 +999,7 @@ async function applySlowmode(ctx, channel, requested, respond) {
     await ctx.bot.editChannel(channel.id, { slowmode: seconds });
     const service = svc(ctx);
     const c = await service.addCase(ctx.serverId, { action: 'slowmode', actorId: ctx.userId, targetName: chName, durationMs: seconds * 1000, reason: seconds ? `${formatDuration(seconds * 1000)} between messages` : 'Slowmode off', channelId: channel.id });
-    service.log(ctx.serverId, caseEmbed(c));
+    service.logCase(ctx.serverId, c);
     const undo = ctx.engine.router.addUndo({
       serverId: ctx.serverId, actorId: ctx.userId, label: `slowmode back to ${prev ? formatDuration(prev * 1000) : 'off'}`,
       manual: `/mod slowmode ${channel.name ? `#${channel.name} ` : ''}${prev ? formatDuration(prev * 1000).replace(/\s+/g, '') : 'off'}`,
@@ -878,7 +1040,310 @@ async function runCase(ctx, tokens) {
   if (!Number.isInteger(n) || n < 1) return ctx.warn('Which case?', 'Give me a case number, like `/case 12`.');
   const c = readData(ctx.engine, ctx.serverId).cases.find((x) => x.id === n);
   if (!c) return ctx.warn(`No case #${n}`, "I couldn't find that case. Cases are numbered per server, starting at 1.");
+  if (/^(reason|why)$/i.test(tokens[1] || '')) return editCaseReason(ctx, c, tokens.slice(2).join(' '));
   return ctx.ephemeral({ embeds: [caseEmbed(c)] });
+}
+
+async function editCaseReason(ctx, c, text) {
+  const { engine, serverId } = ctx;
+  const reason = String(text || '').trim().slice(0, 500);
+  if (!reason) return ctx.warn('What should the new reason be?', `Type it after the word reason, like ${USAGE.reason.replace('12', String(c.id))}.`);
+  const isAdmin = engine.perms.atLeast(await ctx.level(), 'admin');
+  if (!isAdmin && c.actorId !== ctx.userId) {
+    return ctx.ephemeral({ embeds: [dialog.denied('admin', { body: `Case #${c.id} was made by ${c.actorName || 'someone else'}, so only they or an admin can change its reason.` })] });
+  }
+  if (reason === c.reason) return ctx.info('Nothing changed', `Case #${c.id} already has that reason.`);
+  const byName = await displayNameFor(engine, serverId, ctx.userId);
+  const updated = writeData(engine, serverId, (d) => {
+    const x = d.cases.find((y) => y.id === c.id);
+    if (!x) return null;
+    x.history = [...(x.history || []), { reason: x.reason, by: ctx.userId, byName, at: Date.now() }].slice(-MAX_HISTORY);
+    x.reason = reason;
+    for (const w of d.warns) if (w.caseId === x.id) w.reason = reason;
+    return { ...x };
+  });
+  if (!updated) return ctx.warn(`No case #${c.id}`, "That case isn't here any more.");
+  let logNote = '';
+  if (updated.log?.messageId && updated.log?.channelId) {
+    try {
+      await engine.budget.edit({ channelId: updated.log.channelId, messageId: updated.log.messageId, opts: { embeds: [caseEmbed(updated, updated.logExtra || '')] } });
+      logNote = '\n-# I updated the log message too.';
+    } catch (e) {
+      engine.log.debug('mod log edit failed', e?.message);
+      logNote = "\n-# I couldn't update the old log message. It may have been deleted.";
+    }
+  }
+  return ctx.ephemeral({ embeds: [dialog.ok('Reason updated', `Case #${updated.id} now says: ${clip(reason, 300)}\n-# The old reason is kept in the case history.${logNote}`, { color: 'mod' })] });
+}
+
+const isStaffAbove = async (ctx) => ctx.engine.perms.atLeast(await ctx.level(), 'admin');
+
+async function runNote(ctx, tokens) {
+  const first = (tokens[0] || '').toLowerCase();
+  if (/^(remove|delete|del|rm|forget)$/.test(first)) return removeNote(ctx, tokens.slice(1));
+  const { user, rest } = await takeTarget(ctx, tokens);
+  if (!user) return ctx.warn('Who is the note about?', `Try ${USAGE.note}.`);
+  const label = tag(user);
+  const raw = rest.join(' ').trim();
+  if (!raw) return ctx.warn('What should the note say?', `Type it after their name, like ${USAGE.note}.`);
+  const text = raw.slice(0, NOTE_MAX_LEN);
+  const byName = await actorName(ctx);
+  const out = writeData(ctx.engine, ctx.serverId, (d) => {
+    d.noteSeq += 1;
+    const note = { id: d.noteSeq, targetId: user.id, targetName: label, text, by: ctx.userId, byName, at: Date.now() };
+    d.notes.push(note);
+    const theirs = d.notes.filter((x) => x.targetId === user.id);
+    const extra = theirs.length - MAX_NOTES_PER_USER;
+    if (extra > 0) {
+      const cut = new Set(theirs.slice(0, extra).map((x) => x.id));
+      d.notes = d.notes.filter((x) => !cut.has(x.id));
+    }
+    if (d.notes.length > MAX_NOTES) d.notes.splice(0, d.notes.length - MAX_NOTES);
+    return { note, count: Math.min(theirs.length, MAX_NOTES_PER_USER), dropped: Math.max(0, extra) };
+  });
+  const lines = [
+    `**${label}:** ${clip(text, 300)}`,
+    `-# Note #${out.note.id}. Only mods can read notes, and ${label} wasn't told. They have ${out.count} note${out.count === 1 ? '' : 's'}.`,
+  ];
+  if (raw.length > NOTE_MAX_LEN) lines.push(`-# I kept the first ${NOTE_MAX_LEN} characters.`);
+  if (out.dropped) lines.push(`-# People keep up to ${MAX_NOTES_PER_USER} notes, so I let go of the oldest one.`);
+  return ctx.ok('Note saved', lines.join('\n'));
+}
+
+function noteLine(n) {
+  return `\`#${n.id}\` ${clip(n.text, 160)} · ${n.byName || 'a mod'} · ${ago(n.at)}`;
+}
+
+async function showNotes(ctx, tokens) {
+  const { user } = await takeTarget(ctx, tokens);
+  if (!user) return ctx.warn('Whose notes?', `Try ${USAGE.notes}.`);
+  const label = tag(user);
+  const notes = readData(ctx.engine, ctx.serverId).notes.filter((n) => n.targetId === user.id);
+  if (!notes.length) return ctx.info(`No notes on ${label}`, `Add one with ${USAGE.note.replace('@sam', label)}.`);
+  const body = `${notes.slice(-15).reverse().map(noteLine).join('\n')}\n\n-# Only mods can read these. Remove one with ${USAGE.unnote}.`;
+  return ctx.ephemeral({ embeds: [card({ title: `🗒️ Notes on ${label} (${notes.length})`, body, color: 'mod' })] });
+}
+
+async function removeNote(ctx, tokens) {
+  const id = Number(String(tokens[0] || '').replace(/^#/, ''));
+  if (!Number.isInteger(id) || id < 1) return ctx.warn('Which note?', `Give me the note number, like ${USAGE.unnote}.`);
+  const note = readData(ctx.engine, ctx.serverId).notes.find((n) => n.id === id);
+  if (!note) return ctx.warn(`No note #${id}`, "I couldn't find that note. `/mod notes @sam` lists someone's notes with their numbers.");
+  if (note.by !== ctx.userId && !(await isStaffAbove(ctx))) {
+    return ctx.ephemeral({ embeds: [dialog.denied('admin', { body: `Note #${id} was written by ${note.byName || 'another mod'}, so only they or an admin can remove it.` })] });
+  }
+  writeData(ctx.engine, ctx.serverId, (d) => { d.notes = d.notes.filter((n) => n.id !== id); });
+  return ctx.ok('Note removed', `Note #${id} on ${note.targetName || 'them'} is gone.`);
+}
+
+function timeoutEnd(member, now) {
+  const t = member?.timeout ?? member?.timeout_until ?? member?.timed_out_until ?? null;
+  if (!t) return null;
+  let raw = typeof t === 'object' ? (t.until ?? t.expires_at ?? t.ends_at ?? t.timeout_until ?? null) : t;
+  if (raw === null || raw === undefined || raw === true) return { at: null };
+  if (typeof raw === 'number' && raw < 1e12) raw *= 1000;
+  const at = typeof raw === 'number' ? raw : Date.parse(raw);
+  if (!Number.isFinite(at)) return { at: null };
+  return at > now ? { at } : null;
+}
+
+function shortCaseLine(c) {
+  const dur = c.durationMs ? ` · ${formatDuration(c.durationMs)}` : '';
+  const why = c.reason ? ` · ${clip(c.reason, 50)}` : '';
+  return `\`#${c.id}\` ${ACTION_ICONS[c.action] || '•'} **${ACTION_LABELS[c.action] || c.action}**${dur}${why} · ${ago(c.at)}${c.undone ? ' · *undone*' : ''}`;
+}
+
+async function topRoles(ctx, member) {
+  const mine = new Set(member?.roles || []);
+  if (!mine.size) return 'None';
+  const all = await ctx.engine.perms.roles(ctx.serverId).catch(() => []);
+  const list = all.filter((r) => mine.has(r.id) && !/^@?everyone$/i.test(r.name || '') && r.id !== ctx.serverId)
+    .sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
+  if (!list.length) return 'None';
+  const shown = list.slice(0, 5).map((r) => `**${clip(r.name, 40)}**`).join(', ');
+  return list.length > 5 ? `${shown} and ${list.length - 5} more` : shown;
+}
+
+async function lookupView(ctx, user) {
+  const { engine, serverId } = ctx;
+  refreshRoles(engine, serverId, user.id);
+  const member = await ctx.bot.member(serverId, user.id).catch(() => null);
+  const label = tag(member || user);
+  const now = nowMs(engine);
+  const data = readData(engine, serverId);
+  const fields = [];
+  if (member) {
+    const shown = member.nickname || member.display_name;
+    fields.push({ name: 'Name', value: shown && shown !== member.username ? `${clip(shown, 60)} (@${member.username})` : `@${member.username}`, inline: true });
+    const joined = Date.parse(member.joined_at || '');
+    if (Number.isFinite(joined)) fields.push({ name: 'Joined', value: `${dayText(joined)} (${roughSpan(Math.max(0, now - joined))} ago)`, inline: true });
+    fields.push({ name: 'Roles', value: await topRoles(ctx, member), inline: false });
+    if (member.invite_code || member.inviter_id) {
+      const inviter = member.inviter_id ? await nameFor(engine, serverId, member.inviter_id) : null;
+      const code = member.invite_code ? `\`${clip(member.invite_code, 40)}\`` : 'an invite';
+      fields.push({ name: 'Joined with', value: `${code}${inviter ? ` from ${inviter}` : ''}`, inline: true });
+    }
+    const t = timeoutEnd(member, now);
+    fields.push({ name: 'Timeout', value: t ? (t.at ? `Until ${untilText(t.at, now)} (${longDuration(t.at - now)} left)` : 'Timed out right now') : 'None', inline: true });
+  } else {
+    fields.push({ name: 'Name', value: `${label}\nNot in the server right now.`, inline: true });
+    const bans = await ctx.bot.bans(serverId).catch(() => null);
+    const banned = Array.isArray(bans) && bans.some((b) => (b.user_id ?? b.user?.id) === user.id);
+    const job = pendingUnban(engine, serverId, user.id);
+    if (banned || job) fields.push({ name: 'Ban', value: job ? `Banned until ${untilText(job.at, now)} (in ${longDuration(Math.max(MIN_MS, job.at - now))})` : 'Banned', inline: true });
+  }
+  const warns = activeWarns(engine, serverId, user.id, data).length;
+  const notes = data.notes.filter((n) => n.targetId === user.id);
+  fields.push({ name: 'Active warnings', value: String(warns), inline: true });
+  fields.push({ name: 'Notes', value: String(notes.length), inline: true });
+  const cases = data.cases.filter((c) => c.targetId === user.id);
+  fields.push({ name: `Last cases (${cases.length} in all)`, value: cases.slice(-5).reverse().map(shortCaseLine).join('\n') || 'None. A clean record.', inline: false });
+  const buttons = [];
+  if (member) {
+    buttons.push(button('Warn', cid('uwarn', user.id), 'secondary', '⚠️'));
+    buttons.push(button('Timeout', cid('uto', user.id), 'secondary', '⏳'));
+  }
+  const alreadyBanned = fields.some((f) => f.name === 'Ban');
+  if (!alreadyBanned) buttons.push(button('Ban', cid('uban', user.id), 'danger', '🔨'));
+  const body = `Notes: ${USAGE.notes.replace('@sam', label)}${notes.length ? '' : ` · add one with ${USAGE.note.replace('@sam', label)}`}`;
+  return {
+    embeds: [card({ title: `🔎 ${label}`, body, fields, color: 'mod' })],
+    components: buttons.length ? [row(...buttons)] : [],
+  };
+}
+
+async function runLookup(ctx, tokens) {
+  try {
+    const { user } = await takeTarget(ctx, tokens);
+    if (!user) return await ctx.warn('Who should I look up?', `Try ${USAGE.user}.`);
+    return await ctx.ephemeral(await lookupView(ctx, user));
+  } catch (e) {
+    return ctx.fail(e);
+  }
+}
+
+async function lookupTarget(ctx) {
+  const id = userId(ctx.argv[0]);
+  if (!id) return null;
+  return (await ctx.findUser(id)) || { id };
+}
+
+const pendingWarns = new Map();
+
+function rememberWarn(ctx, targetId) {
+  const now = Date.now();
+  for (const [k, v] of pendingWarns) if (v.expires < now) pendingWarns.delete(k);
+  if (pendingWarns.size >= MAX_PENDING) pendingWarns.delete(pendingWarns.keys().next().value);
+  pendingWarns.set(`${ctx.serverId}:${ctx.userId}`, { targetId, expires: now + PENDING_TTL_MS });
+}
+
+function takeWarn(ctx) {
+  const k = `${ctx.serverId}:${ctx.userId}`;
+  const p = pendingWarns.get(k);
+  pendingWarns.delete(k);
+  return p && p.expires >= Date.now() ? p : null;
+}
+
+async function lookupWarn(ctx) {
+  const user = await lookupTarget(ctx);
+  if (!user) return expiredQuestion(ctx);
+  const label = tag(user);
+  try {
+    await checkCanAct(ctx, user.id, ACTIONS.warn, label);
+  } catch (e) {
+    return ctx.fail(e, { action: 'warn', target: label });
+  }
+  rememberWarn(ctx, user.id);
+  return ctx.form({
+    title: clip(`Warn ${label}`, 45),
+    action: 'uwarnsave',
+    fields: [{ id: 'reason', label: 'Reason (optional)', style: 'paragraph', required: false, max: 200, placeholder: 'Spamming links in general' }],
+  });
+}
+
+async function saveLookupWarn(ctx) {
+  const p = takeWarn(ctx);
+  if (!p) return expiredQuestion(ctx);
+  const user = (await ctx.findUser(p.targetId)) || { id: p.targetId };
+  return performAction(ctx, 'warn', user, { reason: String(ctx.values?.reason || '').trim() });
+}
+
+async function lookupTimeout(ctx) {
+  const user = await lookupTarget(ctx);
+  if (!user) return expiredQuestion(ctx);
+  return askTimeoutLength(ctx, user, []);
+}
+
+const BAN_CHOICES = { perm: { label: 'Permanent', ms: null }, '1d': { label: '1 day', ms: DAY_MS }, '7d': { label: '7 days', ms: 7 * DAY_MS }, '30d': { label: '30 days', ms: 30 * DAY_MS } };
+
+async function lookupBan(ctx) {
+  const user = await lookupTarget(ctx);
+  if (!user) return expiredQuestion(ctx);
+  const label = tag(user);
+  try {
+    await checkCanAct(ctx, user.id, ACTIONS.ban, label);
+  } catch (e) {
+    return ctx.fail(e, { action: ACTIONS.ban.verb, perm: ACTIONS.ban.perm, target: label });
+  }
+  const sid = ctx.engine.router.session({ kind: 'ban', userId: ctx.userId, serverId: ctx.serverId, targetId: user.id });
+  const buttons = Object.entries(BAN_CHOICES).map(([k, v]) => button(v.label, cid('blen', sid, k), k === 'perm' ? 'danger' : 'primary'));
+  buttons.push(button('Cancel', cid('blen', sid, 'cancel'), 'secondary'));
+  const body = `How long should ${label} be banned?\n-# To add a reason, type it instead, like \`/ban ${label} 7d spamming\`.`;
+  return ctx.ephemeral({ embeds: [dialog.warn('Ban', body, { color: 'mod' })], components: [row(...buttons)] });
+}
+
+async function pickBanLength(ctx) {
+  const [sid, choice] = ctx.argv;
+  const s = ctx.engine.router.getSession(sid);
+  if (!ownQuestion(ctx, s, 'ban')) return expiredQuestion(ctx);
+  ctx.engine.router.dropSession(sid);
+  if (choice === 'cancel') return cancelled(ctx);
+  const picked = BAN_CHOICES[choice];
+  if (!picked) return expiredQuestion(ctx);
+  const user = (await ctx.findUser(s.targetId)) || { id: s.targetId };
+  return performAction(ctx, 'ban', user, { durationMs: picked.ms, respond: (p) => ctx.update(p) });
+}
+
+function askLookup(ctx) {
+  return ctx.form({
+    title: 'Look someone up',
+    action: 'lookupsave',
+    fields: [{ id: 'who', label: 'Who? A name, @mention or user id', style: 'short', max: 100, placeholder: 'sam' }],
+  });
+}
+
+async function tellUnbanFailed(engine, serverId, targetId, name, error) {
+  const service = engine.service(ID) || createService(engine);
+  const { body } = explain(error, { action: 'unban', perm: 'ban_members', target: name || 'them' });
+  const text = `${name || 'Someone'}'s temporary ban ended, but I couldn't lift it: ${body}\nUnban them by hand with \`/mod unban ${targetId}\`.`;
+  await service.log(serverId, dialog.warn("I couldn't lift a ban", text, { color: 'mod' }));
+}
+
+async function runUnbanJob(job, engine) {
+  const serverId = job.serverId;
+  const targetId = job.data?.userId || job.key;
+  if (!serverId || !targetId) return undefined;
+  if (!engine.settings.isEnabled(serverId, ID)) {
+    engine.scheduler.schedule({ kind: UNBAN_KIND, at: engine.scheduler.now() + UNINSTALLED_RETRY_MS, serverId, key: job.key || targetId, data: { ...(job.data || {}), userId: targetId, paused: true } });
+    return undefined;
+  }
+  if (readData(engine, serverId).cases.some((c) => c.meta?.jobId === job.id)) return undefined;
+  const bans = await engine.bot.bans(serverId).catch(() => null);
+  if (Array.isArray(bans) && !bans.some((b) => (b.user_id ?? b.user?.id) === targetId)) return undefined;
+  try {
+    await engine.bot.unban(serverId, targetId);
+  } catch (e) {
+    if (e?.status !== 404) {
+      if ((job.attempt || 1) < MAX_TRIES) throw e;
+      await tellUnbanFailed(engine, serverId, targetId, job.data?.name, e);
+      return undefined;
+    }
+  }
+  const why = job.late ? ' (I was offline when it ended)' : job.data?.paused ? ' (Mod was uninstalled when it ended)' : '';
+  const service = engine.service(ID) || createService(engine);
+  const c = await service.addCase(serverId, { action: 'unban', targetId, targetName: job.data?.name, actorId: engine.bot.me?.id ?? null, actorName: '@YapOS', reason: `Ban expired${why}`, meta: { jobId: job.id, expired: true } });
+  await service.logCase(serverId, c);
+  return undefined;
 }
 
 async function showCases(ctx, tokens) {
@@ -1004,15 +1469,17 @@ async function panelView(ctx) {
   const cutoff = days ? now - days * DAY_MS : -Infinity;
   const activeWarnCount = data.warns.filter((w) => w.at >= cutoff).length;
   const locked = Object.keys(data.locks).length;
+  const tempBans = ctx.engine.scheduler ? ctx.engine.scheduler.list({ kind: UNBAN_KIND, serverId: ctx.serverId }).length : 0;
   const recent = data.cases.slice(-5).reverse().map(caseLine).join('\n') || 'No cases yet. Quiet server!';
   const fields = [
     { name: 'Cases', value: String(data.cases.length), inline: true },
     { name: 'Last 24h', value: String(lastDay), inline: true },
     { name: 'Active warnings', value: String(activeWarnCount), inline: true },
     { name: 'Locked channels', value: String(locked), inline: true },
+    { name: 'Temporary bans', value: String(tempBans), inline: true },
     { name: 'Recent', value: recent, inline: false },
   ];
-  const body = 'Type an action, like `/mod timeout @sam 10m spam`, `/mod warn @sam`, `/mod purge 20`, `/mod slowmode 10s`.\nShortcuts: /warn /timeout /kick /ban /purge /lock /unlock /case';
+  const body = 'Type an action, like `/mod timeout @sam 10m spam`, `/mod warn @sam`, `/ban @sam 7d spam`, `/mod purge 20`, `/mod slowmode 10s`.\nLook people up with `/mod user @sam`, keep private notes with `/mod note @sam text`.\nShortcuts: /warn /timeout /kick /ban /purge /lock /unlock /case';
   return {
     embeds: [card({ title: `${ICONS.mod} Mod`, body, fields, color: 'mod' })],
     components: [
@@ -1022,6 +1489,7 @@ async function panelView(ctx) {
         button('Clear 10 messages', cid('purge', 10), 'secondary', '🧹'),
       ),
       row(
+        button('Look up', cid('lookup'), 'primary', '🔎'),
         button('Recent cases', cid('cases'), 'secondary', '📋'),
         button('Settings', cid('settings'), 'secondary', '⚙️'),
       ),
@@ -1052,6 +1520,10 @@ async function route(ctx, sub, tokens) {
     if (sub === 'lock') return await runLock(ctx, tokens, true);
     if (sub === 'unlock') return await runLock(ctx, tokens, false);
     if (sub === 'settings') return await ctx.ephemeral(settingsView(ctx));
+    if (sub === 'note') return await runNote(ctx, tokens);
+    if (sub === 'unnote') return await removeNote(ctx, tokens);
+    if (sub === 'notes') return await showNotes(ctx, tokens);
+    if (sub === 'user') return await runLookup(ctx, tokens);
     if (sub === 'log' || sub === 'modrole' || sub === 'adminrole') {
       await requireFresh(ctx, 'admin');
       if (sub === 'log') return await runLogChannel(ctx, tokens);
@@ -1076,7 +1548,7 @@ async function runHub(ctx) {
 
 const shortcut = (sub) => (ctx) => route(ctx, sub, ctx.argv);
 
-const YAP_WORDS = ['timeout', 'mute', 'unmute', 'untimeout', 'kick', 'ban', 'unban', 'warn', 'warnings', 'purge', 'clear', 'slowmode', 'lock', 'unlock', 'case'];
+const YAP_WORDS = ['timeout', 'mute', 'unmute', 'untimeout', 'kick', 'ban', 'unban', 'warn', 'warnings', 'purge', 'clear', 'slowmode', 'lock', 'unlock', 'case', 'whois'];
 
 export const { setup, teardown, check } = defineApp({
   id: ID,
@@ -1084,6 +1556,7 @@ export const { setup, teardown, check } = defineApp({
   icon: ICONS.mod,
   description: 'Timeouts, warnings, bans, purge, locks and case history.',
   category: 'Moderation',
+  panelPerm: 'mod',
 
   defaults: {
     dmOnAction: true,
@@ -1092,15 +1565,15 @@ export const { setup, teardown, check } = defineApp({
   },
 
   commands: {
-    mod: { description: 'Mod panel, or type: /mod timeout @sam 10m spam, /mod purge 20, /mod lock', perm: 'mod', run: runHub },
+    mod: { description: 'Mod panel, or type: /mod timeout @sam 10m spam, /mod user @sam, /mod note @sam text', perm: 'mod', run: runHub },
     warn: { description: 'Warn someone: /warn @sam reason (repeat warnings add timeouts, kicks, bans)', perm: 'mod', run: shortcut('warn') },
     timeout: { description: 'Time someone out: /timeout @sam 10m reason (off clears it)', perm: 'mod', run: shortcut('timeout') },
     kick: { description: 'Kick someone: /kick @sam reason', perm: 'mod', run: shortcut('kick') },
-    ban: { description: 'Ban someone: /ban @sam reason', perm: 'mod', run: shortcut('ban') },
+    ban: { description: 'Ban someone: /ban @sam reason, or /ban @sam 7d reason to lift it after 7 days', perm: 'mod', run: shortcut('ban') },
     purge: { description: 'Delete recent messages: /purge 20, or /purge 20 @sam for one person', perm: 'mod', run: shortcut('purge') },
     lock: { description: 'Stop everyone posting here: /lock, or /lock announcements reason', perm: 'mod', run: shortcut('lock') },
     unlock: { description: 'Let everyone post again: /unlock or /unlock #channel', perm: 'mod', run: shortcut('unlock') },
-    case: { description: 'Look up a mod case: /case 12, or /case for recent ones', perm: 'mod', run: shortcut('case') },
+    case: { description: 'Look up a mod case: /case 12, /case 12 reason new text, or /case for recent ones', perm: 'mod', run: shortcut('case') },
   },
 
   components: {
@@ -1112,6 +1585,13 @@ export const { setup, teardown, check } = defineApp({
     tlen: { perm: 'mod', run: staff('mod', pickTimeoutLength) },
     lockpick: { perm: 'mod', run: staff('mod', pickLockChannel) },
     slen: { perm: 'mod', run: staff('mod', pickSlowmode) },
+    lookup: { perm: 'mod', run: staff('mod', askLookup) },
+    lookupsave: { perm: 'mod', run: staff('mod', (ctx) => runLookup(ctx, tokenize(String(ctx.values?.who || '')))) },
+    uwarn: { perm: 'mod', run: staff('mod', lookupWarn) },
+    uwarnsave: { perm: 'mod', run: staff('mod', saveLookupWarn) },
+    uto: { perm: 'mod', run: staff('mod', lookupTimeout) },
+    uban: { perm: 'mod', run: staff('mod', lookupBan) },
+    blen: { perm: 'mod', run: staff('mod', pickBanLength) },
     purge: { perm: 'mod', run: staff('mod', (ctx) => runPurge(ctx, [String(buttonCount(ctx.argv[0]))])) },
     dm: {
       perm: 'admin',
@@ -1147,6 +1627,18 @@ export const { setup, teardown, check } = defineApp({
         return ctx.ok('Warning rules saved', `Warnings count for ${days ? `${days} days` : 'forever'}.\nSteps: ${formatSteps(parsed.steps) || 'none'}.`);
       },
     },
+  },
+
+  jobs: {
+    unban: runUnbanJob,
+  },
+
+  onInstall: (engine, serverId) => {
+    const s = engine.scheduler;
+    if (!s) return;
+    for (const job of s.list({ kind: UNBAN_KIND, serverId })) {
+      if (job.data?.paused) s.schedule({ kind: UNBAN_KIND, at: s.now(), serverId, key: job.key, data: job.data });
+    }
   },
 
   yap: [{
@@ -1188,6 +1680,10 @@ export const { setup, teardown, check } = defineApp({
     'Lengths: 10m, 2h, 1d. A bare number means minutes for timeouts and seconds for slowmode. Leave the length out and I ask.',
     'Channels can be named plainly: `/lock announcements raid` locks #announcements. If the name is close, I ask first.',
     'Every action gets a case number. /case 12 shows one, /mod warnings @sam lists warnings.',
+    'Temporary bans: `/ban @sam 7d spamming` lifts the ban by itself after 7 days (up to 1 year). Leave the length out for a permanent ban.',
+    'Fix a case reason with `/case 12 reason new text`. Mods can edit their own cases, admins any. The old reason stays in the history.',
+    '`/mod user @sam` shows joins, roles, timeout, warnings, notes and recent cases, with Warn, Timeout and Ban buttons.',
+    'Private notes: `/mod note @sam text` (no warning, no DM), `/mod notes @sam` to read them, `/mod note remove 4` to delete one.',
     'Bans, timeouts, warnings, locks and slowmode changes come with an Undo button for 10 minutes.',
     'Admins: `/mod log #mod-log` picks where actions are logged. `/mod modrole add @Helpers` makes a role count as mods.',
     'Server owner: `/mod adminrole add @Managers` makes a role count as YapOS admins.',

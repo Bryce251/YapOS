@@ -16,6 +16,7 @@ export function createSettings({ store, apps }) {
   const write = (sid, fn) => store.update(NS, sid, (d) => { d.core ||= {}; d.apps ||= {}; fn(d); }, { core: {}, apps: {} });
 
   const appMeta = (id) => apps?.get(id)?.meta || null;
+  const toggleListeners = new Set();
 
   return {
     core: (sid) => merge(CORE_DEFAULTS, doc(sid).core),
@@ -29,7 +30,13 @@ export function createSettings({ store, apps }) {
       if (a && typeof a.enabled === 'boolean') return a.enabled;
       return meta?.defaultEnabled !== false;
     },
-    setEnabled(sid, appId, on) { write(sid, (d) => { d.apps[appId] = { ...(d.apps[appId] || {}), enabled: !!on }; }); },
+    setEnabled(sid, appId, on) {
+      const was = this.isEnabled(sid, appId);
+      write(sid, (d) => { d.apps[appId] = { ...(d.apps[appId] || {}), enabled: !!on }; });
+      const now = this.isEnabled(sid, appId);
+      if (sid && was !== now) for (const fn of [...toggleListeners]) fn(sid, appId, now);
+    },
+    onToggle(fn) { toggleListeners.add(fn); return () => toggleListeners.delete(fn); },
 
     appConfig(sid, appId) {
       const defaults = appMeta(appId)?.defaults || {};

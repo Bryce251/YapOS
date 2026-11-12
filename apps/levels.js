@@ -1,7 +1,7 @@
 import { defineApp } from '../engine/apps.js';
-import { card, dialog, button, row, bar, onOff, ICONS } from '../engine/ui.js';
+import { card, dialog, button, row, onOff, ICONS, COLORS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
-import { tokenize, formatDuration, didYouMean, fillTemplate, clip, normalizeName, parseBool, channelId as channelMention, roleId as roleMention } from '../engine/parse.js';
+import { tokenize, didYouMean, fillTemplate, clip, normalizeName, parseBool, channelId as channelMention, roleId as roleMention } from '../engine/parse.js';
 import { permName, explain, friendly } from '../engine/errors.js';
 
 const ID = 'levels';
@@ -21,6 +21,20 @@ const DEFAULT_MESSAGE = '🎉 {user} reached **level {level}**!';
 const MEDALS = ['🥇', '🥈', '🥉'];
 const ANNOUNCE_MODES = ['here', 'channel', 'dm', 'off'];
 const ANNOUNCE_LABELS = { here: 'Same channel', channel: 'Level-up channel', dm: 'DM', off: 'Off' };
+const BAR_WIDTH = 10;
+const BAR_EMPTY = '⬛';
+const AVATAR_CACHE_MS = 10 * 60_000;
+const AVATAR_CACHE_LIMIT = 2000;
+const AVATAR_LOOKUP_MS = 1500;
+const AVATAR_HOST = 'https://files.yapper.website/avatars/';
+const SITE_HOST = 'https://www.yapin.gg';
+const TIERS = [
+  { min: 30, name: 'red', color: COLORS.error, square: '🟥' },
+  { min: 20, name: 'gold', color: COLORS.economy, square: '🟨' },
+  { min: 10, name: 'purple', color: COLORS.roles, square: '🟪' },
+  { min: 5, name: 'green', color: COLORS.ok, square: '🟩' },
+  { min: 0, name: 'blue', color: COLORS.info, square: '🟦' },
+];
 
 const STAFF_PERMS = ['administrator', 'manage_server', 'manage_roles', 'manage_channels', 'manage_messages', 'manage_webhooks', 'manage_emojis', 'manage_events', 'manage_nicknames', 'kick_members', 'ban_members', 'timeout_members', 'move_members', 'mute_members', 'mention_everyone', 'view_audit_log'];
 const isStaffPerm = (k) => STAFF_PERMS.includes(k) || k.startsWith('manage_');
@@ -52,6 +66,30 @@ export function levelFor(totalXp) {
   return level;
 }
 
+export function tierOf(level) {
+  const l = Math.max(0, Math.floor(Number(level) || 0));
+  return TIERS.find((t) => l >= t.min) || TIERS[TIERS.length - 1];
+}
+
+const unit = (frac) => Math.max(0, Math.min(1, Number(frac) || 0));
+
+export function progressBar(frac, square = TIERS[TIERS.length - 1].square, width = BAR_WIDTH) {
+  const full = Math.min(width, Math.floor(unit(frac) * width + 1e-9));
+  return square.repeat(full) + BAR_EMPTY.repeat(width - full);
+}
+
+export const percentOf = (frac) => Math.min(100, Math.floor(unit(frac) * 100 + 1e-9));
+
+export function avatarUrl(path) {
+  if (typeof path !== 'string' || !path.trim()) return null;
+  const p = path.trim();
+  if (/\s|\\/.test(p)) return null;
+  if (/^https:\/\//i.test(p)) return [AVATAR_HOST, `${SITE_HOST}/`].some((host) => p.toLowerCase().startsWith(host)) ? p : null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(p) || p.startsWith('//') || /[?#]/.test(p) || p.split('/').includes('..')) return null;
+  if (p.startsWith('/')) return SITE_HOST + p;
+  return AVATAR_HOST + p;
+}
+
 export function progressOf(totalXp) {
   const xp = Math.max(0, Math.floor(Number(totalXp) || 0));
   const level = levelFor(xp);
@@ -64,7 +102,7 @@ const states = new WeakMap();
 function stateOf(engine) {
   let s = states.get(engine);
   if (!s) {
-    s = { lastXp: new Map(), pendingMsgs: new Map(), sessions: new Map(), closed: new Map(), voiceCache: new Map(), logged: new Set(), seen: 0 };
+    s = { lastXp: new Map(), pendingMsgs: new Map(), sessions: new Map(), closed: new Map(), voiceCache: new Map(), avatars: new Map(), logged: new Set(), seen: 0 };
     states.set(engine, s);
   }
   return s;
@@ -231,7 +269,7 @@ function applyGain(engine, sid, uid, { xp = 0, voiceSeconds = 0, messages = 0 })
     u.xp = Math.max(0, Math.round(u.xp + xp));
     u.level = levelFor(u.xp);
     u.voiceSeconds = Math.max(0, Math.round(u.voiceSeconds + voiceSeconds));
-    u.messages += messages;
+    u.messages = (Number(u.messages) || 0) + (Number(messages) || 0);
     if (xp > 0) u.lastXpAt = Date.now();
     d.users[uid] = u;
     after = u.level;
@@ -368,30 +406,172 @@ function ranked(engine, sid, sort = 'xp') {
     .sort((a, b) => b[field] - a[field] || b.xp - a.xp || a.id.localeCompare(b.id));
 }
 
-const voiceText = (s) => (s > 0 ? formatDuration(s * 1000) : 'none yet');
+const num = (n) => Math.max(0, Math.round(Number(n) || 0)).toLocaleString('en-US');
+const graphemes = (text) => (typeof Intl.Segmenter === 'function'
+  ? Array.from(new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text), (g) => g.segment)
+  : Array.from(text));
+export function shorten(text, max) {
+  const s = String(text ?? '');
+  if (s.length <= max) return s;
+  let out = '';
+  for (const g of graphemes(s)) {
+    if (out.length + g.length > max - 1) break;
+    out += g;
+  }
+  return `${out.trimEnd()}…`;
+}
+const NAME_MAX = 64;
+const BOARD_NAME_MAX = 32;
+const mdSafe = (name, fallback = 'someone', max = NAME_MAX) => shorten(plainName(name).replace(/[*_`~|\\]/g, '').replace(/\s+/g, ' ').trim(), max) || fallback;
+const displayName = (m) => m?.nickname || m?.display_name || m?.username || 'Someone';
+
+export function voiceText(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (!s) return 'none yet';
+  if (s < 60) return 'under a minute';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (!h) return `${m}m`;
+  return m ? `${num(h)}h ${m}m` : `${num(h)}h`;
+}
+
+function sinceText(joinedAt) {
+  if (!joinedAt) return null;
+  const d = new Date(joinedAt);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+
+function tipFor(cfg) {
+  const chat = cfg.messageXp !== false;
+  const voice = cfg.voiceXp === true;
+  if (chat && voice) return 'Chat to earn XP · voice counts too';
+  if (chat) return 'Chat to earn XP · keep the conversation going';
+  if (voice) return 'Hang out in voice with friends to earn XP';
+  return 'XP is paused on this server right now';
+}
+
+async function avatarPathOf(engine, member) {
+  if (!member?.id) return null;
+  if (Object.prototype.hasOwnProperty.call(member, 'avatar_path')) return member.avatar_path ?? null;
+  const st = stateOf(engine);
+  const now = Date.now();
+  const hit = st.avatars.get(member.id);
+  if (hit && now - hit.at < AVATAR_CACHE_MS) return hit.path;
+  if (typeof engine.bot.user !== 'function') return null;
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), AVATAR_LOOKUP_MS); timer.unref?.(); });
+  const user = await Promise.race([Promise.resolve().then(() => engine.bot.user(member.id)), timeout]).catch(() => undefined);
+  clearTimeout(timer);
+  if (user === undefined) return null;
+  const path = user?.avatar_path ?? null;
+  if (st.avatars.size >= AVATAR_CACHE_LIMIT) st.avatars.clear();
+  st.avatars.set(member.id, { at: now, path });
+  return path;
+}
+
+function withAuthor(embed, name, icon) {
+  embed.author = { name: shorten(name, 256) };
+  if (icon) embed.author.icon_url = icon;
+  return embed;
+}
+
+const roleLabeller = (roles) => (id) => {
+  const r = roles.find((x) => x.id === id);
+  return r ? `**@${mdSafe(r.name, 'role')}**` : 'a role that was deleted';
+};
 
 async function rankView(ctx, target) {
   const { engine, serverId: sid } = ctx;
+  const stored = readDoc(engine, sid).users[target.id] || null;
   const u = readUser(engine, sid, target.id);
   const p = progressOf(u.xp);
+  const tier = tierOf(p.level);
   const list = ranked(engine, sid);
   const pos = list.findIndex((x) => x.id === target.id);
   const cfg = ctx.config();
-  const next = rewardList(cfg).find((r) => r.level > p.level);
-  const roles = next ? await ctx.roles().catch(() => []) : [];
-  const nextRole = next ? roles.find((r) => r.id === next.roleId) : null;
-  const name = target.nickname || target.display_name || target.username || 'Someone';
-  const lines = [
-    `**Level ${p.level}** · ${u.xp.toLocaleString('en-US')} XP`,
-    `\`${bar(p.frac, 14)}\` ${p.into.toLocaleString('en-US')} / ${p.need.toLocaleString('en-US')} XP to level ${p.level + 1}`,
-    pos >= 0 ? `🏆 Rank **#${pos + 1}** of ${list.length}` : '🏆 Not ranked yet. Chat a bit to get on the board!',
-    `🎙️ Voice time: ${voiceText(u.voiceSeconds)}`,
-    next ? `🎁 Next reward: **${nextRole ? `@${nextRole.name}` : 'a role'}** at level ${next.level}` : null,
-  ].filter(Boolean);
+  const rewards = rewardList(cfg);
+  const next = rewards.find((r) => r.level > p.level);
+  const roles = rewards.length ? await ctx.roles().catch(() => []) : [];
+  const roleLabel = roleLabeller(roles);
+  const self = target.id === ctx.userId;
+  const name = displayName(target);
+  const icon = avatarUrl(await avatarPathOf(engine, target).catch(() => null));
+  const empty = !(u.xp > 0) && !(u.voiceSeconds > 0);
+  const maxed = p.level >= MAX_LEVEL;
+  const head = maxed ? `**Level ${num(p.level)}**  ▸  max level` : `**Level ${num(p.level)}**  ▸  Level ${num(p.level + 1)}`;
+  const nextReward = next ? `Level ${num(next.level)} → ${roleLabel(next.roleId)}` : rewards.length ? 'all unlocked 🎉' : 'none set';
+  const since = sinceText(target.joined_at);
+  let body;
+  let fields;
+  if (empty) {
+    body = [head, progressBar(0, tier.square), self ? 'No XP yet. Say hi in chat to get started!' : `No XP yet. ${mdSafe(name)} shows up here after their first chats.`].join('\n');
+    fields = [
+      { name: '🎁 Next reward', value: nextReward, inline: true },
+      since ? { name: '📅 Member since', value: since, inline: true } : null,
+    ];
+  } else {
+    body = (maxed ? [
+      head,
+      `${progressBar(1, tier.square)}  **100%**`,
+      'Top of the ladder. Nothing left to unlock! 🎉',
+    ] : [
+      head,
+      `${progressBar(p.frac, tier.square)}  **${percentOf(p.frac)}%**`,
+      `${num(p.into)} / ${num(p.need)} XP · **${num(p.need - p.into)} XP** to go`,
+    ]).join('\n');
+    const msgs = Number.isFinite(stored?.messages) ? `\`${num(stored.messages)}\`` : 'not counted yet';
+    fields = [
+      { name: '🏆 Rank', value: pos >= 0 ? `\`#${num(pos + 1)} of ${num(list.length)}\`` : 'not ranked yet', inline: true },
+      { name: '✨ Total XP', value: `\`${num(u.xp)}\``, inline: true },
+      { name: '💬 Messages', value: msgs, inline: true },
+      { name: '🎙️ Voice', value: u.voiceSeconds >= 60 ? `\`${voiceText(u.voiceSeconds)}\`` : voiceText(u.voiceSeconds), inline: true },
+      { name: '🎁 Next reward', value: nextReward, inline: true },
+      since ? { name: '📅 Member since', value: since, inline: true } : null,
+    ];
+  }
+  const embed = withAuthor(card({ body, fields, color: tier.color, footer: tipFor(cfg), thumbnail: icon || undefined }), name, icon);
   return {
-    embeds: [card({ title: `${ICONS.levels} ${name}`, body: lines.join('\n'), color: 'levels' })],
-    components: [row(button('Leaderboard', cid('lbpeek'), 'secondary', '🏆'))],
+    embeds: [embed],
+    components: [row(
+      button('Leaderboard', cid('lbpeek'), 'secondary', '🏆'),
+      button('Rewards', cid('rewards', target.id), 'secondary', '🎁'),
+    )],
   };
+}
+
+async function rewardsView(ctx, subjectId) {
+  const { engine, serverId: sid } = ctx;
+  const wanted = typeof subjectId === 'string' && /^[\w-]{1,64}$/.test(subjectId) ? subjectId : ctx.userId;
+  let uid = wanted;
+  let member = await engine.perms.member(sid, uid).catch(() => null);
+  if (!member && uid !== ctx.userId) {
+    uid = ctx.userId;
+    member = await engine.perms.member(sid, uid).catch(() => null);
+  }
+  const self = uid === ctx.userId;
+  const u = readUser(engine, sid, uid);
+  const level = levelFor(u.xp);
+  const cfg = ctx.config();
+  const rewards = rewardList(cfg);
+  const isAdmin = engine.perms.atLeast(await ctx.level().catch(() => 'member'), 'admin');
+  let body;
+  if (!rewards.length) {
+    body = ['No level rewards yet.', isAdmin ? '-# Admins: add one with `/levels reward 5 @Regular`.' : '-# Levels still count, so keep chatting!'].join('\n');
+  } else {
+    const roleLabel = roleLabeller(await ctx.roles().catch(() => []));
+    const holds = new Set(member?.roles || []);
+    const lines = rewards.map((r) => {
+      const status = holds.has(r.roleId)
+        ? `✅ ${self ? 'you have it' : 'has it'}`
+        : level >= r.level ? '✅ unlocked' : `🔒 locked · ${num(totalXpForLevel(r.level) - u.xp)} XP to go`;
+      return `**Level ${num(r.level)}** → ${roleLabel(r.roleId)}  ${status}`;
+    });
+    const lead = self ? null : `-# Showing progress for **${mdSafe(displayName(member), 'them')}**`;
+    body = [lead, ...lines].filter(Boolean).join('\n');
+  }
+  const footer = !rewards.length ? tipFor(cfg) : cfg.stackRewards === false ? 'Only the highest reward role is kept' : 'Every reward role you earn is yours to keep';
+  return { embeds: [card({ title: '🎁 Level rewards', body, color: tierOf(level).color, footer })] };
 }
 
 async function showRank(ctx, tokens, how = 'reply') {
@@ -411,7 +591,17 @@ async function showRank(ctx, tokens, how = 'reply') {
     const m = await engine.perms.member(ctx.serverId, target.id).catch(() => null);
     if (m) target = m;
   }
-  return ctx[how](await rankView(ctx, target));
+  const view = await rankView(ctx, target);
+  try {
+    return await ctx[how](view);
+  } catch (e) {
+    const embed = view.embeds[0];
+    if (e?.status !== 400 || !(embed.thumbnail || embed.author?.icon_url)) throw e;
+    engine.log.debug('[levels] rank card picture refused, sending without it', e?.message);
+    delete embed.thumbnail;
+    delete embed.author.icon_url;
+    return ctx[how](view);
+  }
 }
 
 async function leaderboardView(ctx, page, sort) {
@@ -420,23 +610,40 @@ async function leaderboardView(ctx, page, sort) {
   const list = ranked(engine, sid, by);
   const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
   const p = Math.min(Math.max(1, Math.floor(Number(page) || 1)), pages);
-  const members = await ctx.members().catch(() => []);
-  const names = new Map(members.map((m) => [m.id, m.nickname || m.display_name || m.username]));
-  const slice = list.slice((p - 1) * PAGE_SIZE, p * PAGE_SIZE);
+  const [members, server] = await Promise.all([ctx.members().catch(() => []), engine.perms.server(sid).catch(() => null)]);
+  const names = new Map(members.map((m) => [m.id, displayName(m)]));
+  const start = (p - 1) * PAGE_SIZE;
+  const slice = list.slice(start, start + PAGE_SIZE);
+  const stat = (u) => (by === 'voice' ? `${voiceText(u.voiceSeconds)} in voice` : `Level ${num(levelFor(u.xp))} · ${num(u.xp)} XP`);
   const lines = slice.map((u, i) => {
-    const n = (p - 1) * PAGE_SIZE + i;
-    const mark = MEDALS[n] || `**${n + 1}.**`;
-    const who = names.get(u.id) || 'someone who left';
-    return by === 'voice' ? `${mark} ${who} · ${voiceText(u.voiceSeconds)} in voice` : `${mark} ${who} · Level ${u.level} · ${u.xp.toLocaleString('en-US')} XP`;
+    const n = start + i;
+    const mark = MEDALS[n] || `\`#${n + 1}\``;
+    const who = names.has(u.id) ? mdSafe(names.get(u.id), 'someone', BOARD_NAME_MAX) : 'someone who left';
+    return `${mark} **${who}** · ${stat(u)}${u.id === ctx.userId ? '  ◂ you' : ''}`;
   });
+  const mine = list.findIndex((x) => x.id === ctx.userId);
+  let you = null;
+  if (list.length && (mine < start || mine >= start + PAGE_SIZE)) {
+    you = mine >= 0
+      ? `-# You: #${num(mine + 1)} · ${by === 'voice' ? `${voiceText(list[mine].voiceSeconds)} in voice` : `Level ${num(levelFor(list[mine].xp))}`}`
+      : `-# You're not on the board yet. ${by === 'voice' ? 'Hang out in voice with friends' : 'Say hi in chat'} to join in!`;
+  }
   const empty = by === 'voice' ? 'Nobody has voice time yet. Hop in a voice channel with friends!' : 'Nobody has XP yet. Start chatting to get on the board!';
+  const body = lines.length ? [...lines, ...(you ? ['', you] : [])].join('\n') : empty;
+  const serverName = mdSafe(server?.name, '');
+  const title = by === 'voice'
+    ? `🎙️ ${serverName ? `${serverName} voice leaderboard` : 'Voice leaderboard'}`
+    : `🏆 ${serverName ? `${serverName} leaderboard` : 'Leaderboard'}`;
+  const accent = list.length ? tierOf(levelFor(list[0].xp)).color : COLORS.levels;
+  const buttons = [];
+  if (pages > 1) {
+    buttons.push(button('Prev', cid('lb', p - 1, by), 'secondary', '⬅️', { disabled: p <= 1 }));
+    buttons.push(button('Next', cid('lb', p + 1, by), 'secondary', '➡️', { disabled: p >= pages }));
+  }
+  buttons.push(button(by === 'voice' ? 'Sort by XP' : 'Sort by voice time', cid('lb', 1, by === 'voice' ? 'xp' : 'voice'), 'primary', by === 'voice' ? '📈' : '🎙️'));
   return {
-    embeds: [card({ title: `🏆 Leaderboard${by === 'voice' ? ': voice time' : ''}`, body: lines.join('\n') || empty, color: 'levels', footer: `Page ${p} of ${pages} · ${list.length} ranked` })],
-    components: [row(
-      button('Prev', cid('lb', p - 1, by), 'secondary', '⬅️', { disabled: p <= 1 }),
-      button('Next', cid('lb', p + 1, by), 'secondary', '➡️', { disabled: p >= pages }),
-      button(by === 'voice' ? 'Sort by XP' : 'Sort by voice time', cid('lb', 1, by === 'voice' ? 'xp' : 'voice'), 'primary', by === 'voice' ? '📈' : '🎙️'),
-    )],
+    embeds: [card({ title, body, color: accent, footer: `Page ${p} of ${pages} · ${num(list.length)} ranked` })],
+    components: [row(buttons)],
   };
 }
 
@@ -776,6 +983,7 @@ export const { setup, teardown, check } = defineApp({
         return ownsPanel(ctx) ? ctx.update(view) : ctx.reply(view);
       },
     },
+    rewards: { run: async (ctx) => ctx.ephemeral(await rewardsView(ctx, ctx.argv[0])) },
     lbpeek: {
       run: async (ctx) => {
         const view = await leaderboardView(ctx, 1, 'xp');

@@ -47,6 +47,19 @@ const REASONS = {
 
 const FILTER_OF = { flood: 'spam', dupes: 'spam', mentions: 'mentions', everyone: 'mentions', caps: 'caps', links: 'links', invites: 'invites', words: 'words' };
 
+const ACTIONS = {
+  delete: { label: 'Delete', emoji: '🗑️', blurb: 'I delete the message and remind them.', words: ['delete', 'del', 'remove', 'default', 'normal'] },
+  warn: { label: 'Delete + warn', emoji: '⚠️', blurb: 'I delete it and give them a warning (warnings can escalate).', words: ['warn', 'warning', 'strike'] },
+  timeout: { label: 'Delete + 10m timeout', emoji: '⏳', blurb: 'I delete it and time them out for 10 minutes.', words: ['timeout', 'mute', 'tempmute', 'time-out'] },
+  kick: { label: 'Delete + kick', emoji: '👢', blurb: 'I delete it and kick them from the server.', words: ['kick', 'boot'] },
+  log: { label: 'Log only', emoji: '📝', blurb: 'I leave the message alone and only note it in the log.', words: ['log', 'logonly', 'log-only', 'watch', 'report', 'nothing', 'ignore'] },
+};
+const ACTION_FILTERS = ['spam', 'mentions', 'caps', 'links', 'invites', 'words'];
+const STRIKE_ACTIONS = new Set(['warn', 'timeout', 'kick']);
+const STRIKE_VERBS = { warn: 'warn them', timeout: 'time them out', kick: 'kick them' };
+const AUTO_TIMEOUT_MS = 10 * 60_000;
+const MAX_FILTER_EXEMPT = 25;
+
 const ALL_OFF = { spam: false, mentions: false, caps: false, links: false, invites: false, words: false, raid: false };
 const PRESETS = {
   gaming: { filters: { ...ALL_OFF, spam: true, mentions: true, invites: true, words: true }, strictness: 'normal', summary: 'spam and mention filters on' },
@@ -66,8 +79,34 @@ const DEFAULTS = {
   words: { list: [] },
   raid: { joins: 8, seconds: 20, autoLiftMinutes: 15 },
   exempt: { channels: [], roles: [] },
+  actions: { spam: 'delete', mentions: 'delete', caps: 'delete', links: 'delete', invites: 'delete', words: 'delete' },
+  filterExempt: { spam: [], mentions: [], caps: [], links: [], invites: [], words: [] },
   verify: { enabled: false, channelId: null, roleId: null },
 };
+
+function actionOf(cfg, filter) {
+  const a = cfg.actions && Object.hasOwn(cfg.actions, filter) ? cfg.actions[filter] : null;
+  return typeof a === 'string' && Object.hasOwn(ACTIONS, a) ? a : 'delete';
+}
+
+function exemptChannelsOf(cfg, filter) {
+  const list = cfg.filterExempt && Object.hasOwn(cfg.filterExempt, filter) ? cfg.filterExempt[filter] : null;
+  return Array.isArray(list) ? list.filter((c) => typeof c === 'string') : [];
+}
+
+function activeHere(cfg, filter, channelIdValue) {
+  return !!cfg.filters[filter] && !exemptChannelsOf(cfg, filter).includes(channelIdValue);
+}
+
+function actionKey(word) {
+  const w = String(word || '').toLowerCase().replace(/^delete\s*\+\s*/, '');
+  return Object.entries(ACTIONS).find(([k, a]) => k === w || a.words.includes(w))?.[0] || null;
+}
+
+function actionFromWords(words) {
+  const keys = words.flatMap((w) => String(w).split('+')).map(actionKey).filter(Boolean);
+  return keys.find((k) => k !== 'delete') || keys[0] || null;
+}
 
 const NOTICE_GAP_MS = 30_000;
 const STRIKE_GAP_MS = 30_000;
@@ -221,27 +260,27 @@ function trackMessage(engine, sid, uid, msg, lim) {
 }
 
 function checkMessage(cfg, msg, track) {
-  const f = cfg.filters;
+  const on = (filter) => activeHere(cfg, filter, msg.channel_id);
   const lim = limits(cfg);
   const content = String(msg.content || '');
-  if (f.spam && track) {
+  if (on('spam') && track) {
     if (track.recent.length > lim.floodMax) return { kind: 'flood', burst: track.recent };
     if (track.same.length >= lim.dupes) return { kind: 'dupes', burst: track.same };
   }
-  if (f.mentions) {
+  if (on('mentions')) {
     if (EVERYONE_RE.test(content)) return { kind: 'everyone' };
     if (distinctMentions(content) > lim.mentionMax) return { kind: 'mentions' };
   }
-  if (f.invites && INVITE_RE.test(content)) return { kind: 'invites' };
-  if (f.links) {
+  if (on('invites') && INVITE_RE.test(content)) return { kind: 'invites' };
+  if (on('links')) {
     const host = blockedLink(content, cfg.links.allow || []);
     if (host) return { kind: 'links', detail: host };
   }
-  if (f.words) {
+  if (on('words')) {
     const hit = findBadWord(content, cfg.words.list);
     if (hit) return { kind: 'words', detail: hit };
   }
-  if (f.caps) {
+  if (on('caps')) {
     const { letters, share } = capsShare(content);
     if (letters >= lim.capsMin && share > lim.capsPercent) return { kind: 'caps' };
   }
@@ -338,51 +377,92 @@ async function postNotice(engine, sid, channelIdValue, uid, kind) {
   return true;
 }
 
-async function strike(engine, sid, uid, kind, cfg) {
+function freshStrike(engine, sid, uid, kind) {
   const key = `${sid}:${uid}:${kind}`;
   const { strikeAt } = mem(engine);
   const last = strikeAt.get(key);
-  if (last && now() - last < STRIKE_GAP_MS) return null;
+  if (last && now() - last < STRIKE_GAP_MS) return false;
   strikeAt.set(key, now());
   capMap(strikeAt);
-  const mod = engine.service('mod');
-  const reason = `Automod: ${REASONS[kind]}`;
-  const actorId = engine.bot.me?.id;
-  if (!mod) return { kind: 'logged' };
-  try {
-    if (kind === 'flood' && mod.timeout) {
-      const durationMs = cfg.spam.timeoutMinutes * 60_000;
-      await mod.timeout(sid, uid, { actorId, durationMs, reason, source: 'automod' });
-      return { kind: 'timeout', durationMs };
-    }
-    if (mod.warn) {
-      const out = await mod.warn(sid, uid, { actorId, reason, source: 'automod' });
-      return { kind: 'warn', count: out?.count ?? null };
-    }
-  } catch (e) {
-    engine.log.warn(`[automod] strike failed in ${sid}: ${e?.message}`);
-    return { kind: 'failed' };
-  }
-  return { kind: 'logged' };
+  return true;
 }
 
-async function handleViolation(engine, sid, msg, hit, cfg, uid) {
-  const items = hit.burst?.length ? hit.burst : [{ id: msg.id, channelId: msg.channel_id, deleted: false }];
-  const deleted = await deleteMessages(engine, sid, items);
-  const noticed = await postNotice(engine, sid, msg.channel_id, uid, hit.kind);
-  const s = await strike(engine, sid, uid, hit.kind, cfg);
-  if (!noticed && !s) return;
-  const strikeText = !s ? null : s.kind === 'timeout' ? `Timed out for ${formatDuration(s.durationMs)}` : s.kind === 'warn' ? `Warned${s.count ? ` (warning ${s.count})` : ''}` : s.kind === 'failed' ? "Couldn't add a strike" : 'Logged only (Mod app not installed)';
-  const embed = card({
+function strikeActionsInUse(cfg) {
+  return ACTION_FILTERS.filter((f) => cfg.filters[f] && STRIKE_ACTIONS.has(actionOf(cfg, f)));
+}
+
+async function noteNoMod(engine, sid) {
+  if (engine.store.get(ID, sid, {}).noModNote) return;
+  engine.store.update(ID, sid, (d) => { d.noModNote = true; }, {});
+  const cfg = engine.settings.appConfig(sid, ID);
+  const list = strikeActionsInUse(cfg).map((f) => `**${FILTERS[f].label}** (${ACTIONS[actionOf(cfg, f)].label.toLowerCase()})`);
+  await postLog(engine, sid, dialog.warn('Automod needs the Mod app for strikes', `${list.length ? `${list.join(', ')} ${list.length === 1 ? 'is' : 'are'} set to do more than delete` : 'Some filters are set to warn, time out or kick'}, but the **Mod** app isn't installed here. Until it is, I only delete the message and log it.\n-# Install Mod with **/apps**, or change what each filter does in **/automod** → Actions & exemptions. I'll only say this once.`), { priority: 'normal' });
+}
+
+function clearNoModNote(engine, sid) {
+  if (engine.store.get(ID, sid, {}).noModNote) engine.store.update(ID, sid, (d) => { delete d.noModNote; }, {});
+}
+
+async function applyAction(engine, sid, uid, kind, action) {
+  if (!STRIKE_ACTIONS.has(action)) return 'Deleted only';
+  const mod = engine.service('mod');
+  if (!mod) {
+    await noteNoMod(engine, sid);
+    return `Deleted only (the Mod app isn't installed, so I couldn't ${STRIKE_VERBS[action]})`;
+  }
+  clearNoModNote(engine, sid);
+  const reason = `Automod: ${REASONS[kind]}`;
+  const actorId = engine.bot.me?.id;
+  try {
+    if (action === 'warn') {
+      if (!mod.warn) return "Deleted only (Mod can't warn right now)";
+      const out = await mod.warn(sid, uid, { actorId, reason, source: 'automod' });
+      const done = { timeout: 'timed out', kick: 'kicked', ban: 'banned', tempban: 'banned' }[out?.escalated?.action] || 'escalated';
+      const esc = out?.escalated ? `, then ${done}${out.escalated.durationMs ? ` for ${formatDuration(out.escalated.durationMs)}` : ''} by the warning rules` : '';
+      return `Warned${out?.count ? ` (warning ${out.count})` : ''}${esc}`;
+    }
+    if (action === 'timeout') {
+      if (!mod.timeout) return "Deleted only (Mod can't time people out right now)";
+      await mod.timeout(sid, uid, { actorId, durationMs: AUTO_TIMEOUT_MS, reason, source: 'automod' });
+      return `Timed out for ${formatDuration(AUTO_TIMEOUT_MS)}`;
+    }
+    const can = await engine.perms.canActOn(sid, uid, {});
+    if (!can.ok) return `Couldn't kick them: ${can.reason}`;
+    await engine.bot.kick(sid, uid);
+    engine.cache.invalidate(sid);
+    await Promise.resolve(mod.addCase?.(sid, { action: 'kick', targetId: uid, actorId, reason, durationMs: null, source: 'automod' })).catch((e) => engine.log.warn(`[automod] kick case failed in ${sid}: ${e?.message}`));
+    return 'Kicked';
+  } catch (e) {
+    engine.log.warn(`[automod] ${action} failed in ${sid}: ${e?.message}`);
+    return action === 'kick' ? "Couldn't kick them (my role may be missing Kick Members, or be too low)" : `Couldn't ${STRIKE_VERBS[action]}`;
+  }
+}
+
+function violationCard(uid, msg, hit, { deleted, outcome }) {
+  return card({
     title: `${ICONS.automod} Automod: ${REASONS[hit.kind]}`,
     body: `<@${uid}> in <#${msg.channel_id}>${hit.detail ? `\nMatched: \`${clip(hit.detail, 60)}\`` : ''}\n> ${clip(String(msg.content || '').replace(/\n/g, ' '), 200)}`,
     fields: [
-      { name: 'Deleted', value: deleted ? `${deleted} message${deleted === 1 ? '' : 's'}` : 'No', inline: true },
-      { name: 'Strike', value: strikeText || 'Already handled', inline: true },
+      { name: 'Deleted', value: deleted === null ? 'No (log only)' : deleted ? `${deleted} message${deleted === 1 ? '' : 's'}` : 'No', inline: true },
+      { name: 'Action', value: outcome, inline: true },
     ],
     color: 'automod',
   });
-  await postLog(engine, sid, embed);
+}
+
+async function handleViolation(engine, sid, msg, hit, cfg, uid) {
+  const action = actionOf(cfg, FILTER_OF[hit.kind]);
+  const fresh = freshStrike(engine, sid, uid, hit.kind);
+  if (action === 'log') {
+    if (fresh) await postLog(engine, sid, violationCard(uid, msg, hit, { deleted: null, outcome: 'Logged only' }));
+    return;
+  }
+  const items = hit.burst?.length ? hit.burst : [{ id: msg.id, channelId: msg.channel_id, deleted: false }];
+  const deleted = await deleteMessages(engine, sid, items);
+  const noticed = await postNotice(engine, sid, msg.channel_id, uid, hit.kind);
+  if (!noticed && !fresh) return;
+  const outcome = fresh ? await applyAction(engine, sid, uid, hit.kind, action) : 'Already handled';
+  await postLog(engine, sid, violationCard(uid, msg, hit, { deleted, outcome }));
 }
 
 async function onMessage(ctx, msg) {
@@ -393,7 +473,7 @@ async function onMessage(ctx, msg) {
   const cfg = ctx.config();
   if (await isExempt(engine, sid, uid, msg.channel_id, cfg)) return;
   const lim = limits(cfg);
-  const track = cfg.filters.spam && !msg.yaposLate ? trackMessage(engine, sid, uid, msg, lim) : null;
+  const track = activeHere(cfg, 'spam', msg.channel_id) && !msg.yaposLate ? trackMessage(engine, sid, uid, msg, lim) : null;
   if (msg.command) {
     const flood = track && track.recent.length > lim.floodMax ? { kind: 'flood', burst: track.recent } : null;
     if (flood) await handleViolation(engine, sid, msg, flood, cfg, uid);
@@ -601,20 +681,21 @@ function panelView(engine, sid, { canEdit = true } = {}) {
     words: cfg.words.list.length ? `${cfg.words.list.length} word${cfg.words.list.length === 1 ? '' : 's'}` : 'list is empty',
     raid: `more than ${cfg.raid.joins} joins in ${cfg.raid.seconds}s locks the server`,
   };
-  const fields = Object.entries(FILTERS).map(([k, f]) => ({ name: `${f.emoji} ${f.label}`, value: `${onOff(cfg.filters[k])}\n-# ${details[k]}`, inline: true }));
+  const fields = Object.entries(FILTERS).map(([k, f]) => ({ name: `${f.emoji} ${f.label}`, value: `${onOff(cfg.filters[k])}\n-# ${details[k]}${k === 'raid' ? '' : `\n-# ${filterExtra(cfg, k)}`}`, inline: true }));
   const lock = lockState(engine, sid);
   const exempt = [...cfg.exempt.channels.map((c) => `<#${c}>`), ...cfg.exempt.roles.map((r) => `<@&${r}>`)];
   const s = STRICTNESS[cfg.strictness] || STRICTNESS.normal;
   const body = [
     `Strictness: **${s.emoji} ${s.label}**`,
-    exempt.length ? `Exempt: ${exempt.join(' ')}` : 'Mods, admins and the owner are always exempt.',
+    exempt.length ? `Exempt from everything: ${exempt.join(' ')}` : 'Mods, admins and the owner are always exempt.',
     cfg.verify.enabled ? `Verification: on in <#${cfg.verify.channelId}>` : null,
     lock ? `${ICONS.lock} **Lockdown is on** (lifts <t:${Math.floor(lock.until / 1000)}:R>)` : null,
-    canEdit ? '-# Tap a filter to turn it on or off. Typed: `/automod words add …`, `/automod links allow …`, `/automod exempt #channel`' : '-# Only admins can change these.',
+    noModWarning(engine, cfg),
+    canEdit ? '-# Tap a filter to turn it on or off. Typed: `/automod words add …`, `/automod action links timeout`, `/automod exempt links #media`' : '-# Only admins can change these.',
   ].filter(Boolean).join('\n');
   const toggles = Object.entries(FILTERS).map(([k, f]) => button(f.label, cid('toggle', k), cfg.filters[k] ? 'success' : 'secondary', f.emoji, { disabled: !canEdit }));
   const strictOpts = Object.entries(STRICTNESS).map(([k, v]) => ({ label: v.label, value: k, emoji: v.emoji, default: k === cfg.strictness }));
-  const extra = [button('Refresh', cid('panel'), 'secondary', '🔄')];
+  const extra = [button('Actions & exemptions', cid('actions'), 'primary', '⚙️'), button('Refresh', cid('panel'), 'secondary', '🔄')];
   if (lock) extra.unshift(button('Lift lockdown', cid('lift'), 'success', ICONS.unlock));
   const base = {
     embeds: [card({ title: `${ICONS.automod} Automod`, body, fields, color: 'automod' })],
@@ -630,6 +711,88 @@ async function showPanel(ctx, how = 'ephemeral') {
   const canEdit = engine.perms.atLeast(await ctx.require('mod'), 'admin');
   const view = panelView(engine, sid, { canEdit });
   return engine.caps.attempt(sid, 'selects', () => ctx[how](view.withSelect), () => ctx[how](view.withButtons));
+}
+
+function filterExtra(cfg, k) {
+  const a = ACTIONS[actionOf(cfg, k)];
+  const off = exemptChannelsOf(cfg, k);
+  return `${a.emoji} ${a.label}${off.length ? ` · not in ${off.slice(0, 5).map((c) => `<#${c}>`).join(' ')}${off.length > 5 ? ` +${off.length - 5}` : ''}` : ''}`;
+}
+
+function noModWarning(engine, cfg) {
+  if (engine.service('mod') || !strikeActionsInUse(cfg).length) return null;
+  return `${ICONS.warn} Some filters warn, time out or kick, but the **Mod** app isn't installed, so for now they only delete and log.`;
+}
+
+async function viewerCanEdit(ctx) {
+  return ctx.engine.perms.atLeast(await ctx.require('mod'), 'admin');
+}
+
+function actionsView(engine, sid, { canEdit }) {
+  const cfg = engine.settings.appConfig(sid, ID);
+  const lines = ACTION_FILTERS.map((k) => `${FILTERS[k].emoji} **${FILTERS[k].label}** ${cfg.filters[k] ? '' : '(off) '}→ ${filterExtra(cfg, k)}`);
+  const body = [
+    ...lines,
+    '',
+    noModWarning(engine, cfg),
+    canEdit ? '-# Tap a filter to change what it does. Typed: `/automod action links timeout`, `/automod exempt links #media`, `/automod unexempt links #media`' : '-# Only admins can change these.',
+  ].filter((x) => x !== null).join('\n');
+  const btns = ACTION_FILTERS.map((k) => button(FILTERS[k].label, cid('filter', k), 'secondary', FILTERS[k].emoji));
+  return {
+    embeds: [card({ title: `${ICONS.automod} Automod actions & exemptions`, body, color: 'automod' })],
+    components: [row(btns.slice(0, 5)), row(btns.slice(5), button('Back', cid('panel'), 'secondary', '⬅️'))],
+  };
+}
+
+function filterView(engine, sid, key, { canEdit }) {
+  const cfg = engine.settings.appConfig(sid, ID);
+  const f = FILTERS[key];
+  const current = actionOf(cfg, key);
+  const off = exemptChannelsOf(cfg, key);
+  const body = [
+    `Filter: ${onOff(cfg.filters[key])}`,
+    `When it trips: **${ACTIONS[current].emoji} ${ACTIONS[current].label}**. ${ACTIONS[current].blurb}`,
+    off.length ? `Not checked in: ${off.map((c) => `<#${c}>`).join(' ')}` : 'Checked in every channel (except the ones exempt from everything).',
+    STRIKE_ACTIONS.has(current) && !engine.service('mod') ? `${ICONS.warn} The **Mod** app isn't installed, so for now this only deletes and logs.` : null,
+    canEdit ? `-# Exempt a channel: \`/automod exempt ${key} #channel\`. Kick can only be picked by admins.` : '-# Only admins can change this.',
+  ].filter(Boolean).join('\n');
+  const embeds = [card({ title: `${f.emoji} ${f.label}`, body, color: 'automod' })];
+  const nav = [button('Back', cid('actions'), 'secondary', '⬅️')];
+  if (canEdit && off.length) nav.push(button('Clear exemptions', cid('fxclear', key), 'danger', '🧹'));
+  const opts = Object.entries(ACTIONS).map(([k, a]) => ({ label: a.label, value: k, emoji: a.emoji, description: clip(a.blurb, 100), default: k === current }));
+  const withSelect = { embeds, components: [select(cid('actpick', key), opts, { placeholder: 'What should happen?', disabled: !canEdit }), row(nav)] };
+  const withButtons = { embeds, components: [row(Object.entries(ACTIONS).map(([k, a]) => button(a.label, cid('act', key, k), k === current ? 'primary' : 'secondary', a.emoji, { disabled: !canEdit }))), row(nav)] };
+  return { withSelect, withButtons };
+}
+
+function panelHow(ctx) {
+  return ctx.kind !== 'command' && ctx.kind !== 'message' && onOwnPanel(ctx) ? 'update' : 'ephemeral';
+}
+
+async function showActions(ctx, how = 'ephemeral') {
+  const canEdit = await viewerCanEdit(ctx);
+  return ctx[how](actionsView(ctx.engine, ctx.serverId, { canEdit }));
+}
+
+async function showFilter(ctx, key, how = 'ephemeral') {
+  const canEdit = await viewerCanEdit(ctx);
+  const view = filterView(ctx.engine, ctx.serverId, key, { canEdit });
+  return ctx.engine.caps.attempt(ctx.serverId, 'selects', () => ctx[how](view.withSelect), () => ctx[how](view.withButtons));
+}
+
+async function setAction(ctx, key, action) {
+  await ctx.require('admin');
+  const cfg = ctx.config();
+  ctx.patchConfig({ actions: { ...cleanActions(cfg), [key]: action } });
+  return null;
+}
+
+function cleanActions(cfg) {
+  return Object.fromEntries(ACTION_FILTERS.map((k) => [k, actionOf(cfg, k)]));
+}
+
+function cleanFilterExempt(cfg) {
+  return Object.fromEntries(ACTION_FILTERS.map((k) => [k, exemptChannelsOf(cfg, k)]));
 }
 
 function snapshot(ctx) {
@@ -744,6 +907,8 @@ async function exemptCommand(ctx, rest, forceRemove = false) {
   let tokens = rest;
   if (/^(remove|rm|del|delete|-|off)$/i.test(tokens[0] || '')) { remove = true; tokens = tokens.slice(1); }
   else if (/^(add|\+|on)$/i.test(tokens[0] || '')) tokens = tokens.slice(1);
+  const perFilter = filterKey(tokens[0]);
+  if (perFilter && !String(tokens[0]).startsWith('#')) return filterExemptCommand(ctx, perFilter, tokens.slice(1), remove);
   const cfg = ctx.config();
   if (!tokens.length) {
     const list = [...cfg.exempt.channels.map((c) => `<#${c}>`), ...cfg.exempt.roles.map((r) => `<@&${r}>`)];
@@ -764,6 +929,69 @@ async function exemptCommand(ctx, rest, forceRemove = false) {
   const before = snapshot(ctx);
   ctx.patchConfig({ exempt: { channels: [...channels].slice(0, 50), roles: [...roles].slice(0, 50) } });
   return changed(ctx, remove ? 'Exemption removed' : 'Exempt from automod', remove ? `${names.join(' ')} ${names.length === 1 ? 'is' : 'are'} checked by automod again.` : `Automod now ignores ${names.join(' ')}.`, before);
+}
+
+async function filterExemptCommand(ctx, key, rest, forceRemove) {
+  if (key === 'raid') return ctx.warn("The raid shield works server-wide", "It watches joins, not channels, so it can't skip a channel. Exempt channels from the message filters instead, like `/automod exempt links #media`.");
+  let remove = forceRemove;
+  let tokens = rest;
+  if (/^(remove|rm|del|delete|-|off)$/i.test(tokens[0] || '')) { remove = true; tokens = tokens.slice(1); }
+  else if (/^(add|\+|on)$/i.test(tokens[0] || '')) tokens = tokens.slice(1);
+  const f = FILTERS[key];
+  const cfg = ctx.config();
+  const current = exemptChannelsOf(cfg, key);
+  if (!tokens.length) {
+    return ctx.info(`${f.label}: exempt channels`, `${current.length ? current.map((c) => `<#${c}>`).join(' ') : 'None yet. The filter checks every channel.'}\n-# Add with \`/automod exempt ${key} #channel\`, remove with \`/automod unexempt ${key} #channel\`.`);
+  }
+  const next = new Set(current);
+  const names = [];
+  for (const t of tokens) {
+    const ch = await ctx.findChannel(t);
+    if (!ch) {
+      const looksRole = t.startsWith('@') || !!parseRoleId(t);
+      return ctx.warn(`I couldn't find ${clip(t, 60)}`, looksRole ? `Per-filter exemptions are for channels. To skip a role everywhere, use \`/automod exempt ${clip(t, 40)}\`.` : 'Mention a channel, like #media.');
+    }
+    if (remove) next.delete(ch.id); else next.add(ch.id);
+    names.push(`<#${ch.id}>`);
+  }
+  if (!remove && next.size > MAX_FILTER_EXEMPT) return ctx.warn('That is a lot of channels', `Each filter can skip up to ${MAX_FILTER_EXEMPT} channels. Remove a few first.`);
+  if (remove && next.size === current.length) return ctx.info('Nothing to remove', `${names.join(' ')} ${names.length === 1 ? "wasn't" : "weren't"} exempt from the ${f.label.toLowerCase()} filter.`);
+  const before = snapshot(ctx);
+  ctx.patchConfig({ filterExempt: { ...cleanFilterExempt(cfg), [key]: [...next] } });
+  return changed(ctx, remove ? `${f.label} checks ${names.length === 1 ? 'a channel' : 'channels'} again` : `${f.label} skips ${names.length === 1 ? 'a channel' : 'channels'}`,
+    remove ? `The ${f.label.toLowerCase()} filter checks ${names.join(' ')} again.` : `The ${f.label.toLowerCase()} filter now ignores ${names.join(' ')}. Every other filter still checks ${names.length === 1 ? 'it' : 'them'}.${cfg.filters[key] ? '' : `\n-# The ${f.label.toLowerCase()} filter is off right now: \`/automod ${key} on\`.`}`, before);
+}
+
+async function actionCommand(ctx, rest) {
+  const cfg = ctx.config();
+  const key = filterKey(rest[0]);
+  if (!rest.length) {
+    return ctx.info('What each filter does', `${ACTION_FILTERS.map((k) => `${FILTERS[k].emoji} **${FILTERS[k].label}**: ${filterExtra(cfg, k)}`).join('\n')}\n-# Change one with \`/automod action links timeout\`. Choices: ${Object.keys(ACTIONS).map((a) => `**${a}**`).join(', ')}.`);
+  }
+  if (!key) {
+    const guess = didYouMean(String(rest[0]).toLowerCase(), ACTION_FILTERS);
+    return ctx.warn('Which filter?', `Pick one of ${ACTION_FILTERS.map((k) => `**${k}**`).join(', ')}, like \`/automod action links timeout\`.${guess.length ? `\nDid you mean **${guess[0]}**?` : ''}`);
+  }
+  if (key === 'raid') return ctx.warn('The raid shield has no action', "It pauses chat for everyone instead of acting on one person's message.");
+  const words = rest.slice(1).filter((w) => !/^(\+|and|then|to|=)$/i.test(w));
+  if (!words.length) {
+    const a = ACTIONS[actionOf(cfg, key)];
+    return ctx.info(`${FILTERS[key].label}: ${a.label}`, `${a.blurb}\n-# Change it with \`/automod action ${key} warn\` (delete, warn, timeout, kick or log).`);
+  }
+  const action = actionFromWords(words);
+  if (!action) return ctx.warn("I didn't get that action", `Use **delete**, **warn**, **timeout**, **kick** or **log**, like \`/automod action ${key} timeout\`.`);
+  await ctx.require('admin');
+  const before = snapshot(ctx);
+  await setAction(ctx, key, action);
+  const a = ACTIONS[action];
+  const notes = [];
+  if (STRIKE_ACTIONS.has(action) && !ctx.engine.service('mod')) notes.push("-# The **Mod** app isn't installed, so for now I'll only delete and log. Install it with **/apps**.");
+  if (action === 'kick') {
+    const can = await ctx.engine.perms.botCan(ctx.serverId, 'kick_members').catch(() => ({ ok: true }));
+    if (!can.ok) notes.push(`-# My role needs **Kick Members** for this to work.`);
+  }
+  if (!cfg.filters[key]) notes.push(`-# The ${FILTERS[key].label.toLowerCase()} filter is off right now: \`/automod ${key} on\`.`);
+  return changed(ctx, `${FILTERS[key].label}: ${a.label}`, `${a.emoji} ${a.blurb}${notes.length ? `\n${notes.join('\n')}` : ''}`, before);
 }
 
 async function strictCommand(ctx, level) {
@@ -860,7 +1088,7 @@ async function manualLift(ctx) {
   return out.ok ? ctx.ok('Lockdown lifted', 'Everyone can chat again.') : ctx.error("I couldn't lift it", 'Please turn Send messages back on for everyone by hand.');
 }
 
-const SUBCOMMANDS = ['words', 'links', 'exempt', 'unexempt', 'strictness', 'preset', 'verify', 'lockdown', 'lift', 'on', 'off', 'panel', ...Object.keys(FILTERS)];
+const SUBCOMMANDS = ['words', 'links', 'exempt', 'unexempt', 'action', 'actions', 'strictness', 'preset', 'verify', 'lockdown', 'lift', 'on', 'off', 'panel', ...Object.keys(FILTERS)];
 
 async function runAutomod(ctx) {
   await ctx.require('mod');
@@ -873,6 +1101,7 @@ async function runAutomod(ctx) {
     await ctx.require('mod');
     return /^allow/.test(first) || first === 'whitelist' ? linksCommand(ctx, ['allow', ...rest]) : linksCommand(ctx, rest);
   }
+  if (/^(actions?|punish|punishment|punishments|response)$/.test(first)) return actionCommand(ctx, rest);
   if (/^(exempt|ignore|bypass)$/.test(first)) return exemptCommand(ctx, rest);
   if (/^(unexempt|unignore)$/.test(first)) return exemptCommand(ctx, rest, true);
   if (/^(strictness|strict|level|sensitivity)$/.test(first)) return strictCommand(ctx, rest[0] || (first === 'strict' ? 'strict' : ''));
@@ -920,7 +1149,7 @@ export const { setup, teardown, check } = defineApp({
 
   commands: {
     automod: {
-      description: 'Automod settings. Try /automod words add <word>, /automod raid on, /automod exempt #channel',
+      description: 'Automod settings. Try /automod words add <word>, /automod action links timeout, /automod exempt #ch',
       run: runAutomod,
     },
   },
@@ -955,6 +1184,48 @@ export const { setup, teardown, check } = defineApp({
         if (!own(STRICTNESS, v)) return ctx.warn('Pick a strictness', 'Choose relaxed, normal or strict.');
         ctx.patchConfig({ strictness: v });
         return showPanel(ctx, onOwnPanel(ctx) ? 'update' : 'ephemeral');
+      },
+    },
+    actions: { perm: 'mod', run: (ctx) => showActions(ctx, panelHow(ctx)) },
+    filter: {
+      perm: 'mod',
+      run: async (ctx) => {
+        const key = ctx.argv[0];
+        if (!ACTION_FILTERS.includes(key)) return ctx.warn('This button is from an older panel', 'Open `/automod` again.');
+        return showFilter(ctx, key, panelHow(ctx));
+      },
+    },
+    act: {
+      perm: 'admin',
+      run: async (ctx) => {
+        await ctx.require('admin');
+        const [key, action] = ctx.argv;
+        if (!ACTION_FILTERS.includes(key) || !own(ACTIONS, action)) return ctx.warn('This button is from an older panel', 'Open `/automod` again.');
+        await setAction(ctx, key, action);
+        return showFilter(ctx, key, panelHow(ctx));
+      },
+    },
+    actpick: {
+      perm: 'admin',
+      run: async (ctx) => {
+        await ctx.require('admin');
+        const key = ctx.argv[0];
+        const v = Array.isArray(ctx.values) ? ctx.values[0] : null;
+        if (!ACTION_FILTERS.includes(key)) return ctx.warn('This menu is from an older panel', 'Open `/automod` again.');
+        if (!own(ACTIONS, v)) return ctx.warn('Pick an action', 'Choose delete, warn, timeout, kick or log only.');
+        await setAction(ctx, key, v);
+        return showFilter(ctx, key, panelHow(ctx));
+      },
+    },
+    fxclear: {
+      perm: 'admin',
+      run: async (ctx) => {
+        await ctx.require('admin');
+        const key = ctx.argv[0];
+        if (!ACTION_FILTERS.includes(key)) return ctx.warn('This button is from an older panel', 'Open `/automod` again.');
+        const cfg = ctx.config();
+        ctx.patchConfig({ filterExempt: { ...cleanFilterExempt(cfg), [key]: [] } });
+        return showFilter(ctx, key, panelHow(ctx));
       },
     },
     lift: {
@@ -1011,6 +1282,7 @@ export const { setup, teardown, check } = defineApp({
 
   yap: [{ words: ['automod', 'filter', 'raid', 'lockdown'], run: runYap }],
 
+  panelPerm: 'mod',
   panel: (ctx) => showPanel(ctx),
 
   services: (engine) => ({
@@ -1027,6 +1299,8 @@ export const { setup, teardown, check } = defineApp({
 
   help: [
     'Mods, admins, the owner and anything you `/automod exempt` are never filtered.',
+    'Each filter can delete, warn, time out for 10 minutes, kick or only log: `/automod action links timeout` (warn, timeout and kick need the Mod app).',
+    '`/automod exempt links #media` lets links through in #media only; the other filters still check it.',
     'Word matching ignores caps, leetspeak and repeated letters but only matches whole words.',
     '`/automod raid on` pauses chat during a join flood; `/automod lockdown` and `/automod lift` do it by hand.',
     '`/automod verify setup #verify @Verified` posts a Verify button that gives the role.',

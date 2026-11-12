@@ -540,7 +540,7 @@ test('a role picked as a mod role in setup can use every action', async () => {
   assert.equal(h.fake.state.bans[S].length, 1);
 });
 const panelId = (ans) => ans.map((a) => a.message?.id).filter(Boolean).pop();
-const MOD_BUTTONS = ['home', 'cases', 'settings', 'lock', 'unlock', 'purge:10'];
+const MOD_BUTTONS = ['home', 'cases', 'settings', 'lock', 'unlock', 'purge:10', 'lookup', `uwarn:${IDS.member2}`, `uto:${IDS.member2}`, `uban:${IDS.member2}`, 'blen:x:perm'];
 const ADMIN_BUTTONS = ['dm', 'rules'];
 
 test('a plain member cannot open the Mod panel from the home screen or /yap', async () => {
@@ -724,10 +724,10 @@ test('every mod message with buttons is locked to the person who ran the command
 const S2 = '5e000000-0000-4000-8000-000000000002';
 const LOBBY = 'c0000000-0000-4000-8000-0000000000b1';
 const S2_BOT_ROLE = 'r0000000-0000-4000-8000-0000000000b6';
-const ALL_IDS = ['home', 'cases', 'settings', 'lock', 'unlock', 'purge:10', 'purge:100', 'dm', 'rules', 'rulesave'];
+const ALL_IDS = ['home', 'cases', 'settings', 'lock', 'unlock', 'purge:10', 'purge:100', 'dm', 'rules', 'rulesave', 'lookup', 'lookupsave', `uwarn:${IDS.member2}`, 'uwarnsave', `uto:${IDS.member2}`, `uban:${IDS.member2}`, 'blen:x:perm'];
 const COMMANDS = ['mod', 'warn', 'timeout', 'kick', 'ban', 'purge', 'lock', 'unlock', 'case'];
-const HOSTILE_FORM = { days: '0', steps: '1 ban' };
-const kindOf = (action) => (action === 'rulesave' ? 'modal_submit' : 'button');
+const HOSTILE_FORM = { days: '0', steps: '1 ban', who: 'riley', reason: 'forged' };
+const kindOf = (action) => (/save$/.test(action) ? 'modal_submit' : 'button');
 const punishments = (h) => h.fake.callsTo('POST', /\/(kick|bans|timeouts)$/).length;
 
 function addSecondServer(h) {
@@ -943,7 +943,8 @@ test('typed chat commands are refused for members just like the slash menu', asy
 test('members cannot read cases, warnings or settings through /yap words', async () => {
   const h = await make();
   await h.slash('warn', '@riley hush hush', { user: IDS.mod });
-  const words = ['timeout', 'mute', 'unmute', 'untimeout', 'kick', 'ban', 'unban', 'warn', 'warnings', 'purge', 'clear', 'slowmode', 'lock', 'unlock', 'case', 'mod', 'Mod', '/mod', 'cases', 'settings'];
+  await h.slash('mod', 'note @riley hush hush too', { user: IDS.mod });
+  const words = ['timeout', 'mute', 'unmute', 'untimeout', 'kick', 'ban', 'unban', 'warn', 'warnings', 'purge', 'clear', 'slowmode', 'lock', 'unlock', 'case', 'whois', 'mod', 'Mod', '/mod', 'cases', 'settings', 'notes', 'user'];
   for (const w of words) {
     for (const tail of ['', ' riley', ' 1', ` <@${IDS.member2}> 5`]) {
       const ans = await h.slash('yap', `${w}${tail}`, { user: IDS.member });
@@ -1156,4 +1157,423 @@ test('extra admin roles are for the server owner only and refuse silly roles', a
   assert.match(h.textOf(high[high.length - 1]), /at or above your highest role/);
   const list = await h.slash('mod', 'settings', { user: IDS.admin });
   assert.match(h.textOf(list[list.length - 1]), /Extra admin roles/);
+});
+const HOUR = 3600000;
+const DAY = 24 * HOUR;
+const clocked = (opts = {}) => make({ fakeClock: true, ...opts });
+const unbanJobs = (h) => h.engine.scheduler.list({ kind: 'mod.unban', serverId: S });
+const isBanned = (h, uid) => h.fake.state.bans[S].some((b) => b.user_id === uid);
+const modCases = (h) => h.engine.store.get('mod', S)?.cases || [];
+const logTexts = (h) => h.sent(IDS.channels.modlog).map((m) => h.textOf(m)).join('\n---\n');
+const sam = (h) => h.fake.memberOf(S, IDS.member);
+const rejoin = (h, id, username) => {
+  if (!h.fake.memberOf(S, id)) h.fake.state.members[S].push({ id, username, display_name: username, nickname: null, roles: [IDS.roles.member], joined_at: '2026-01-05T00:00:00Z' });
+  h.engine.cache.invalidate(S);
+};
+
+test('a temporary ban says when it ends and lifts itself on time', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  h.engine.settings.patchCore(S, { logChannel: IDS.channels.modlog });
+  const ans = await h.slash('ban', '@sam 7d spamming', { user: IDS.mod });
+  const text = lastText(h, ans);
+  assert.match(text, /Banned/);
+  assert.match(text, /@sam is banned until \*\*Sat 14 Nov, 12:00 UTC\*\* \(in 7 days\)/);
+  assert.match(text, /\*\*Reason:\*\* spamming/);
+  assert.match(text, /lift the ban by myself/);
+  assert.ok(isBanned(h, IDS.member));
+  const jobs = unbanJobs(h);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].key, IDS.member);
+  assert.equal(jobs[0].at, h.now() + 7 * DAY);
+  const dm = Object.keys(h.fake.state.dms).flatMap((cid) => h.sent(cid)).map((m) => h.textOf(m)).join('\n');
+  assert.match(dm, /banned from \*\*Test Town\*\* until Sat 14 Nov, 12:00 UTC \(7 days\)/);
+  const banCase = modCases(h).find((c) => c.action === 'ban');
+  assert.equal(banCase.durationMs, 7 * DAY);
+  await h.advance(7 * DAY - 60000);
+  assert.ok(isBanned(h, IDS.member), 'still banned a minute before the end');
+  await h.advance(60000);
+  await settle(10);
+  assert.ok(!isBanned(h, IDS.member), 'unbanned at the end');
+  assert.equal(unbanJobs(h).length, 0);
+  const unban = modCases(h).find((c) => c.action === 'unban');
+  assert.equal(unban.reason, 'Ban expired');
+  assert.equal(unban.targetName, '@sam');
+  assert.match(logTexts(h), /Unban[\s\S]*Ban expired/);
+  const shown = await h.slash('case', String(banCase.id), { user: IDS.mod });
+  assert.match(lastText(h, shown), /Ban ends/);
+});
+
+test('ban lengths: units, years, plain numbers stay in the reason, and limits', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  await h.slash('mod', 'ban @sam 2h30m flood', { user: IDS.mod });
+  assert.equal(unbanJobs(h)[0].at, h.now() + 2.5 * HOUR);
+  assert.equal(modCases(h).at(-1).reason, 'flood');
+  await h.slash('ban', '@riley 3 times spamming', { user: IDS.mod });
+  assert.equal(unbanJobs(h).filter((j) => j.key === IDS.member2).length, 0, 'a bare number is not a length');
+  assert.equal(modCases(h).at(-1).reason, '3 times spamming');
+  assert.equal(modCases(h).at(-1).durationMs, null);
+  h.fake.state.bans[S] = [];
+  rejoin(h, IDS.member2, 'riley');
+  await h.slash('ban', `<@${IDS.member2}> 1y`, { user: IDS.mod });
+  assert.equal(unbanJobs(h).find((j) => j.key === IDS.member2).at, h.now() + 365 * DAY);
+  rejoin(h, IDS.member, 'sam');
+  const before = h.fake.callsTo('POST', /bans$/).length;
+  for (const [line, re] of [['@sam 2y', /up to 1 year/], ['@sam 400d', /up to 1 year/], ['@sam 30s', /at least 1 minute/]]) {
+    const ans = await h.slash('ban', line, { user: IDS.mod });
+    assert.match(lastText(h, ans), re, line);
+  }
+  assert.equal(h.fake.callsTo('POST', /bans$/).length, before, 'refused lengths ban nobody');
+});
+
+test('"forever" and no length are permanent and cancel a pending unban', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  await h.slash('ban', '@sam 1d spam', { user: IDS.mod });
+  assert.equal(unbanJobs(h).length, 1);
+  const ans = await h.slash('ban', `${IDS.member} forever being rude`, { user: IDS.mod });
+  assert.match(lastText(h, ans), /Banned/);
+  assert.doesNotMatch(lastText(h, ans), /until/);
+  assert.equal(modCases(h).at(-1).reason, 'being rude');
+  assert.equal(unbanJobs(h).length, 0, 'the permanent ban replaced the temporary one');
+  await h.advance(2 * DAY);
+  assert.ok(isBanned(h, IDS.member));
+});
+
+test('a manual unban and Undo both cancel the pending unban', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  await h.slash('ban', '@sam 1d spam', { user: IDS.mod });
+  await h.slash('mod', `unban ${IDS.member}`, { user: IDS.mod });
+  assert.equal(unbanJobs(h).length, 0);
+  assert.ok(!isBanned(h, IDS.member));
+  rejoin(h, IDS.member, 'sam');
+  const again = await h.slash('ban', '@sam 2d spam', { user: IDS.mod });
+  assert.equal(unbanJobs(h).length, 1);
+  const undo = await h.clickButton('Undo', { user: IDS.mod, in: again });
+  assert.match(h.textOf(undo.at(-1)), /unbanned/);
+  assert.equal(unbanJobs(h).length, 0);
+  const casesBefore = modCases(h).length;
+  await h.advance(3 * DAY);
+  assert.equal(modCases(h).length, casesBefore, 'no "ban expired" case after an Undo');
+});
+
+test('a ban Yapin refuses leaves no unban job behind', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  h.fake.fail('POST', /bans$/, { status: 403 });
+  const ans = await h.slash('ban', '@sam 7d spam', { user: IDS.mod });
+  assert.doesNotMatch(lastText(h, ans), /Banned/);
+  assert.equal(unbanJobs(h).length, 0);
+});
+
+test('a ban that ends while the bot is off still lifts, and says so', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  h.engine.settings.patchCore(S, { logChannel: IDS.channels.modlog });
+  await h.slash('ban', '@sam 1h spam', { user: IDS.mod });
+  await h.skip(5 * HOUR);
+  await settle(10);
+  assert.ok(!isBanned(h, IDS.member));
+  assert.equal(modCases(h).at(-1).reason, 'Ban expired (I was offline when it ended)');
+  assert.match(logTexts(h), /I was offline when it ended/);
+});
+
+test('temporary bans survive a restart', async () => {
+  const a = await clocked();
+  giveModBan(a);
+  await a.slash('ban', '@sam 2d spam', { user: IDS.mod });
+  const banCase = modCases(a).at(-1);
+  a.engine.scheduler.stop();
+  const b = await clocked({ store: a.store });
+  b.fake.state.bans[S].push({ user_id: IDS.member, banned_by: IDS.bot, created_at: new Date(b.now()).toISOString(), user: null });
+  assert.equal(unbanJobs(b).length, 1);
+  b.clock.t = a.clock.t + 3 * DAY;
+  await b.runDue();
+  assert.ok(!isBanned(b, IDS.member));
+  const cases = modCases(b);
+  assert.equal(cases.at(-1).action, 'unban');
+  assert.match(cases.at(-1).reason, /offline/);
+  assert.equal(cases.at(-1).id, banCase.id + 1);
+  assert.equal(unbanJobs(b).length, 0);
+});
+
+test('an unban job skips people already unbanned by hand and waits while Mod is uninstalled', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  await h.slash('ban', '@sam 1h spam', { user: IDS.mod });
+  h.fake.state.bans[S] = [];
+  const n = modCases(h).length;
+  await h.advance(2 * HOUR);
+  assert.equal(modCases(h).length, n, 'nothing logged for someone already unbanned');
+  rejoin(h, IDS.member, 'sam');
+  await h.slash('ban', '@sam 1h spam', { user: IDS.mod });
+  h.engine.settings.setEnabled(S, 'mod', false);
+  await h.advance(2 * HOUR);
+  assert.ok(isBanned(h, IDS.member), 'nothing happens while uninstalled');
+  assert.equal(unbanJobs(h).length, 1, 'the job waits');
+  h.engine.settings.setEnabled(S, 'mod', true);
+  await h.advance(6 * HOUR);
+  assert.ok(!isBanned(h, IDS.member));
+  assert.match(modCases(h).at(-1).reason, /Mod was uninstalled when it ended/);
+});
+
+test('when Yapin keeps refusing the unban, the log channel is told what to do', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  h.engine.settings.patchCore(S, { logChannel: IDS.channels.modlog });
+  await h.slash('ban', '@sam 1h spam', { user: IDS.mod });
+  h.fake.fail('DELETE', /bans\//, { status: 403 });
+  await h.advance(3 * HOUR);
+  await settle(10);
+  assert.ok(isBanned(h, IDS.member));
+  assert.equal(unbanJobs(h).length, 0, 'gave up after the retries');
+  assert.equal(h.fake.callsTo('DELETE', /bans\//).length, 4);
+  const log = logTexts(h);
+  assert.match(log, /I couldn't lift a ban/);
+  assert.match(log, new RegExp(`/mod unban ${IDS.member}`));
+  assert.doesNotMatch(log, /403/);
+});
+
+test('private notes: add, list, show in lookup, never a warning or DM', async () => {
+  const h = await clocked();
+  const dmsBefore = Object.keys(h.fake.state.dms).length;
+  const saved = await h.slash('mod', 'note @sam keeps arguing in general', { user: IDS.mod });
+  assert.match(lastText(h, saved), /Note saved/);
+  assert.match(lastText(h, saved), /wasn't told/);
+  await h.slash('mod', 'note @sam second thing', { user: IDS.mod });
+  assert.equal(Object.keys(h.fake.state.dms).length, dmsBefore, 'no DM');
+  assert.equal(modCases(h).length, 0, 'not a case');
+  assert.equal((h.engine.store.get('mod', S).warns || []).length, 0, 'not a warning');
+  const list = await h.slash('mod', 'notes @sam', { user: IDS.mod });
+  const text = lastText(h, list);
+  assert.match(text, /Notes on @sam \(2\)/);
+  assert.ok(text.indexOf('second thing') < text.indexOf('keeps arguing'), 'newest first');
+  const look = await h.slash('mod', 'user @sam', { user: IDS.mod });
+  assert.match(lastText(h, look), /Notes\n2/);
+  const none = await h.slash('mod', 'notes @riley', { user: IDS.mod });
+  assert.match(lastText(h, none), /No notes on @riley/);
+  const empty = await h.slash('mod', 'note @sam', { user: IDS.mod });
+  assert.match(lastText(h, empty), /What should the note say/);
+  const member = await h.slash('mod', 'note @riley sneaky', { user: IDS.member });
+  assert.match(lastText(h, member), /Only moderators/);
+  const peek = await h.slash('mod', 'notes @sam', { user: IDS.member });
+  assert.doesNotMatch(lastText(h, peek), /keeps arguing/);
+});
+
+test('notes are bounded, long ones are cut, and only the writer or an admin removes one', async () => {
+  const h = await make();
+  for (let i = 1; i <= 26; i++) await h.slash('mod', `note @sam note number ${i}`, { user: IDS.mod });
+  const notes = h.engine.store.get('mod', S).notes;
+  assert.equal(notes.length, 25);
+  assert.ok(!notes.some((n) => n.text === 'note number 1'), 'the oldest went');
+  assert.match(lastText(h, await h.slash('mod', 'note @sam one more', { user: IDS.mod })), /let go of the oldest/);
+  const long = await h.slash('mod', `note @riley ${'x'.repeat(700)}`, { user: IDS.mod });
+  assert.match(lastText(h, long), /first 500 characters/);
+  const rileyNote = h.engine.store.get('mod', S).notes.find((n) => n.targetId === IDS.member2);
+  assert.equal(rileyNote.text.length, 500);
+  h.fake.state.members[S].find((m) => m.id === IDS.member2).roles.push(IDS.roles.mod);
+  h.engine.perms.invalidate();
+  const theirs = await h.slash('mod', `note remove ${rileyNote.id}`, { user: IDS.member2 });
+  assert.match(lastText(h, theirs), /only they or an admin/);
+  const own = await h.slash('mod', `note remove ${rileyNote.id}`, { user: IDS.mod });
+  assert.match(lastText(h, own), /Note removed/);
+  const samNote = h.engine.store.get('mod', S).notes[0];
+  const admin = await h.slash('mod', `note remove #${samNote.id}`, { user: IDS.admin });
+  assert.match(lastText(h, admin), /Note removed/);
+  assert.match(lastText(h, await h.slash('mod', 'note remove 9999', { user: IDS.mod })), /No note #9999/);
+});
+
+test('editing a case reason keeps history, updates warnings and the log message', async () => {
+  const h = await make();
+  h.engine.settings.patchCore(S, { logChannel: IDS.channels.modlog });
+  await h.slash('warn', '@sam spam', { user: IDS.mod });
+  await settle(10);
+  const stored = modCases(h)[0];
+  assert.ok(stored.log?.messageId, 'the log message id is kept');
+  const ans = await h.slash('case', '1 reason posted scam links', { user: IDS.mod });
+  assert.match(lastText(h, ans), /Reason updated/);
+  assert.match(lastText(h, ans), /updated the log message/);
+  await settle(10);
+  const logged = h.fake.state.messages[IDS.channels.modlog].find((m) => m.id === stored.log.messageId);
+  const logText = h.textOf(logged);
+  assert.match(logText, /posted scam links/);
+  assert.match(logText, /Was: spam \(edited by Mo/);
+  assert.match(logText, /active warning/, 'the warning count line is kept');
+  const view = await h.slash('case', '1', { user: IDS.mod });
+  assert.match(lastText(h, view), /Earlier reasons/);
+  assert.match(lastText(h, view), /edited by Mo/);
+  const warns = await h.slash('mod', 'warnings @sam', { user: IDS.mod });
+  assert.match(lastText(h, warns), /posted scam links/);
+  await h.slash('mod', 'case 1 reason third try', { user: IDS.admin });
+  assert.equal(modCases(h)[0].history.length, 2);
+  assert.equal(modCases(h)[0].reason, 'third try');
+  const blank = await h.slash('case', '1 reason', { user: IDS.mod });
+  assert.match(lastText(h, blank), /What should the new reason be/);
+});
+
+test('a deleted log message does not stop a reason edit', async () => {
+  const h = await make();
+  h.engine.settings.patchCore(S, { logChannel: IDS.channels.modlog });
+  await h.slash('kick', '@sam spam', { user: IDS.mod });
+  await settle(10);
+  const stored = modCases(h)[0];
+  h.fake.state.messages[IDS.channels.modlog].find((m) => m.id === stored.log.messageId).deleted = true;
+  const ans = await h.slash('case', '1 reason new words', { user: IDS.mod });
+  assert.match(lastText(h, ans), /Reason updated/);
+  assert.match(lastText(h, ans), /couldn't update the old log message/);
+  assert.equal(modCases(h)[0].reason, 'new words');
+});
+
+test('only the mod who made a case, or an admin, can change its reason', async () => {
+  const h = await make();
+  await h.slash('warn', '@sam spam', { user: IDS.admin });
+  await h.slash('warn', '@riley flood', { user: IDS.mod });
+  const svc = h.engine.service('mod');
+  const auto = await svc.addCase(S, { action: 'warn', targetId: IDS.member, actorId: IDS.bot, reason: 'caps', source: 'automod' });
+  const other = await h.slash('case', '1 reason mine now', { user: IDS.mod });
+  assert.match(lastText(h, other), /only they or an admin/);
+  const bot = await h.slash('case', `${auto.id} reason mine now`, { user: IDS.mod });
+  assert.match(lastText(h, bot), /only they or an admin/);
+  assert.equal(modCases(h)[0].reason, 'spam');
+  assert.match(lastText(h, await h.slash('case', '2 reason fixed', { user: IDS.mod })), /Reason updated/);
+  assert.match(lastText(h, await h.slash('case', `${auto.id} reason all caps`, { user: IDS.admin })), /Reason updated/);
+  const member = await h.slash('case', '2 reason hacked', { user: IDS.member });
+  assert.match(lastText(h, member), /Only moderators/);
+  assert.equal(modCases(h)[1].reason, 'fixed');
+  const nolog = await h.slash('case', '2 reason no log', { user: IDS.mod });
+  assert.doesNotMatch(lastText(h, nolog), /log message/, 'no log channel, nothing to update');
+});
+
+test('user lookup shows the whole picture with working buttons', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  Object.assign(sam(h), { invite_code: 'summer24', inviter_id: IDS.admin, nickname: 'Sammy' });
+  sam(h).roles.push(IDS.roles.vip, IDS.roles.gamer);
+  await h.slash('warn', '@sam spam', { user: IDS.mod });
+  await h.slash('timeout', '@sam 2h flood', { user: IDS.mod });
+  await h.slash('mod', 'note @sam watch this one', { user: IDS.mod });
+  const ans = await h.slash('mod', 'user @sam', { user: IDS.mod });
+  const text = lastText(h, ans);
+  assert.match(text, /🔎 @sam/);
+  assert.match(text, /Sammy \(@sam\)/);
+  assert.match(text, /5 Jan 2026 \(10 months ago\)/);
+  assert.match(text, /\*\*VIP\*\*, \*\*Gamer\*\*, \*\*Member\*\*/);
+  assert.match(text, /`summer24` from @alex/);
+  assert.match(text, /Until Sat 7 Nov, 14:00 UTC \(2 hours left\)/);
+  assert.match(text, /Active warnings\n1/);
+  assert.match(text, /Last cases \(2 in all\)/);
+  assert.doesNotMatch(text, /watch this one/);
+  assert.doesNotMatch(text, new RegExp(IDS.member), 'no raw ids');
+  for (const label of ['Warn', 'Timeout', 'Ban']) assert.ok(h.findButton(label, ans), label);
+  assert.equal(h.engine.router.panelOwner(panelId(ans)), IDS.mod);
+  const notYours = await h.clickButton('Ban', { user: IDS.member2, in: ans });
+  assert.match(lastText(h, notYours), /Not your panel/);
+
+  const warnForm = await h.clickButton('Warn', { user: IDS.mod, in: ans });
+  assert.equal(warnForm.at(-1).type, 'modal');
+  const warned = await h.submit('yo:mod:uwarnsave', { reason: 'from the lookup' }, { user: IDS.mod });
+  assert.match(lastText(h, warned), /now has \*\*2\*\* warnings/);
+  const stale = await h.submit('yo:mod:uwarnsave', { reason: 'again' }, { user: IDS.mod });
+  assert.match(lastText(h, stale), /expired/);
+
+  const asked = await h.clickButton('Timeout', { user: IDS.mod, in: ans });
+  assert.match(lastText(h, asked), /How long should @sam be timed out/);
+
+  const banAsk = await h.clickButton('Ban', { user: IDS.mod, in: ans });
+  assert.match(lastText(h, banAsk), /How long should @sam be banned/);
+  for (const label of ['Permanent', '1 day', '7 days', '30 days', 'Cancel']) assert.ok(h.findButton(label, banAsk), label);
+  const banned = await h.clickButton('7 days', { user: IDS.mod, in: banAsk });
+  assert.match(lastText(h, banned), /banned until \*\*Sat 14 Nov, 12:00 UTC\*\* \(in 7 days\)/);
+  assert.ok(isBanned(h, IDS.member));
+  assert.equal(unbanJobs(h).length, 1);
+
+  const gone = await h.slash('mod', `user ${IDS.member}`, { user: IDS.mod });
+  const goneText = lastText(h, gone);
+  assert.match(goneText, /Not in the server right now/);
+  assert.match(goneText, /Banned until Sat 14 Nov, 12:00 UTC/);
+  assert.equal(h.allButtons(gone).length, 0, 'no buttons for someone already banned');
+});
+
+test('lookup buttons keep every check', async () => {
+  const h = await clocked();
+  const onAdmin = await h.slash('mod', 'user @alex', { user: IDS.mod });
+  const ban = await h.clickButton('Ban', { user: IDS.mod, in: onAdmin });
+  assert.match(lastText(h, ban), /I can't ban @alex|Ban Members/);
+  const timeout = await h.clickButton('Timeout', { user: IDS.mod, in: onAdmin });
+  assert.match(lastText(h, timeout), /I can't time out @alex/);
+  const warn = await h.clickButton('Warn', { user: IDS.mod, in: onAdmin });
+  assert.notEqual(warn.at(-1).type, 'modal');
+  assert.equal(punishments(h), 0);
+  for (const action of ['uwarn', 'uto', 'uban']) {
+    const forged = await h.click(`yo:mod:${action}:${IDS.member2}`, { user: IDS.member });
+    assert.match(lastText(h, forged), /Only moderators/);
+  }
+  const forgedSave = await h.submit('yo:mod:uwarnsave', { reason: 'x' }, { user: IDS.member });
+  assert.match(lastText(h, forgedSave), /Only moderators/);
+  const badId = await h.click('yo:mod:uban:not-a-user', { user: IDS.mod });
+  assert.match(lastText(h, badId), /expired/);
+  const member = await h.slash('mod', 'user @riley', { user: IDS.member });
+  assert.match(lastText(h, member), /Only moderators/);
+  const nobody = await h.slash('mod', 'user nobodyatall', { user: IDS.mod });
+  assert.match(lastText(h, nobody), /couldn't find/);
+});
+
+test('the mod panel has a Look up button that asks for a name', async () => {
+  const h = await make();
+  const panel = await h.slash('mod', '', { user: IDS.mod });
+  assert.match(lastText(h, panel), /Temporary bans/);
+  const form = await h.clickButton('Look up', { user: IDS.mod, in: panel });
+  assert.equal(form.at(-1).type, 'modal');
+  assert.match(h.textOf(form.at(-1)), /Look someone up/);
+  const shown = await h.submit('yo:mod:lookupsave', { who: 'riley' }, { user: IDS.mod });
+  assert.match(lastText(h, shown), /🔎 @riley/);
+  const typo = await h.submit('yo:mod:lookupsave', { who: 'zzzzzz' }, { user: IDS.mod });
+  assert.match(lastText(h, typo), /couldn't find/);
+  const forged = await h.submit('yo:mod:lookupsave', { who: 'riley' }, { user: IDS.member });
+  assert.match(lastText(h, forged), /Only moderators/);
+  assert.equal(h.engine.apps.get('mod').def.panelPerm, 'mod');
+});
+
+test('a ban Yapin refuses puts back the earlier temporary ban instead of leaving them banned forever', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  await h.slash('ban', '@sam 1d spam', { user: IDS.mod });
+  const before = unbanJobs(h)[0];
+  h.fake.fail('POST', /bans$/, { status: 500, times: 1 });
+  await h.slash('ban', `${IDS.member} 7d spam again`, { user: IDS.mod });
+  const after = unbanJobs(h);
+  assert.equal(after.length, 1, 'the earlier unban is still waiting');
+  assert.equal(after[0].at, before.at);
+  await h.advance(2 * DAY);
+  assert.ok(!isBanned(h, IDS.member));
+});
+
+test('an unban that works on a retry does not claim Mod was uninstalled', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  await h.slash('ban', '@sam 1h spam', { user: IDS.mod });
+  h.fake.fail('DELETE', /bans\//, { status: 500, times: 2 });
+  await h.advance(2 * HOUR);
+  await settle(10);
+  assert.ok(!isBanned(h, IDS.member));
+  assert.equal(modCases(h).at(-1).reason, 'Ban expired');
+});
+
+test('temporary bans do not use up the banned person\'s own job allowance', async () => {
+  const h = await clocked();
+  giveModBan(h);
+  await h.slash('ban', '@sam 1d spam', { user: IDS.mod });
+  assert.equal(h.engine.scheduler.list({ userId: IDS.member }).length, 0);
+  assert.equal(unbanJobs(h).length, 1);
+});
+
+test('the lookup card is posted where others can see it, so it never shows note text', async () => {
+  const h = await make();
+  await h.slash('mod', 'note @sam secret thing about sam', { user: IDS.mod });
+  const look = await h.slash('mod', 'user @sam', { user: IDS.mod });
+  const text = lastText(h, look);
+  assert.match(text, /Notes\n1/);
+  assert.doesNotMatch(text, /secret thing/);
 });

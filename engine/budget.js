@@ -78,6 +78,7 @@ export function createBudget({ bot, verified = false, log, now = () => Date.now(
       pendingEdits.set(messageId, entry);
       const fire = () => {
         pendingEdits.delete(messageId);
+        trimEdits(minGap);
         stats.edits++;
         Promise.resolve().then(entry.job).then(
           (m) => entry.waiters.forEach((w) => w.resolve(m)),
@@ -85,16 +86,46 @@ export function createBudget({ bot, verified = false, log, now = () => Date.now(
         );
       };
       const t = setTimeout(fire, lastEdit.has(messageId) ? Math.max(0, lastEdit.get(messageId) + minGap - now()) : 0);
+      entry.timer = t;
       t.unref?.();
-      lastEdit.set(messageId, now());
+      rememberEdit(messageId, minGap);
     });
   }
   const lastEdit = new Map();
+  const MAX_EDIT_MEMORY = 2000;
+
+  function rememberEdit(messageId, minGap) {
+    lastEdit.delete(messageId);
+    lastEdit.set(messageId, now());
+    trimEdits(minGap);
+  }
+
+  function trimEdits(minGap) {
+    if (lastEdit.size <= MAX_EDIT_MEMORY) return;
+    const cut = now() - Math.max(minGap, 60_000);
+    for (const [id, at] of lastEdit) {
+      if (lastEdit.size <= MAX_EDIT_MEMORY / 2 && at > cut) break;
+      if (pendingEdits.has(id)) continue;
+      lastEdit.delete(id);
+    }
+  }
+
+  function cancelEdit(messageId) {
+    const cur = pendingEdits.get(messageId);
+    if (!cur) return false;
+    pendingEdits.delete(messageId);
+    clearTimeout(cur.timer);
+    stats.coalesced++;
+    cur.waiters.forEach((w) => w.resolve(null));
+    return true;
+  }
 
   return {
     send,
     edit,
+    cancelEdit,
     headroom,
+    get rememberedEdits() { return lastEdit.size; },
     get queued() { return queue.length; },
     get stats() { return { ...stats, queued: queue.length, globalLimit }; },
     _pump: pump,

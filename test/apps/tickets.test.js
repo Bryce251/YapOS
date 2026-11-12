@@ -1132,3 +1132,419 @@ test('in a transcript the bot is YapOS even with a server nickname, and cards an
   assert.doesNotMatch(file.text, /Helper Bot/);
   assert.doesNotMatch(file.text, /<@|<#|<:|<a:|e0000000-/);
 });
+
+const HOUR = 3_600_000;
+const dmOf = (user) => `d${user.slice(1)}`;
+const dmMessages = (h, user) => (h.fake.state.messages[dmOf(user)] || []).filter((m) => !m.deleted);
+const ratingCard = (h, user) => dmMessages(h, user).find((m) => /How did we do/.test(h.textOf(m)));
+const jobsOf = (h, kind) => h.engine.scheduler.list({ kind, serverId: S });
+const VIP = R.vip;
+
+async function makeClock({ features = {}, config = { logChannelId: LOG }, store } = {}) {
+  const h = await createHarness({ apps: ['tickets'], features, fakeClock: true, ...(store ? { store } : {}) });
+  if (config) h.engine.settings.patchApp(S, 'tickets', config);
+  return h;
+}
+
+async function rateClick(h, user, stars, { messageId = null, sid = S, num = 1 } = {}) {
+  return h.click(customId('tickets', 'rate', sid, num, stars), { user, server: null, channel: dmOf(user), messageId });
+}
+
+test('closing DMs the opener a 1 to 5 rating card; a rating and a comment reach the log', async () => {
+  const h = await make();
+  const { t } = await openTicketFor(h, IDS.member, 'printer');
+  await h.slash('ticket', 'claim', { user: IDS.mod, channel: t.channelId });
+  await closeWithTimers(h, t, { user: IDS.member });
+  const ask = ratingCard(h, IDS.member);
+  assert.ok(ask, 'rating card sent in DMs');
+  assert.match(h.textOf(ask), /ticket #0001 on \*\*Test Town\*\*/);
+  const stars = h.allButtons(ask);
+  assert.deepEqual(stars.map((b) => b.label), ['1', '2', '3', '4', '5']);
+  assert.ok(stars.every((b) => b.custom_id.length <= 100));
+  const summary = h.sent(LOG).find((m) => /Ticket #0001 closed/.test(h.textOf(m)));
+  assert.match(h.textOf(summary), /Asked <@[^>]+> to rate the help in DMs/);
+
+  const ans = await rateClick(h, IDS.member, 4, { messageId: ask.id });
+  assert.equal(ans[0].type, 'update');
+  assert.match(h.textOf(ask), /Thanks for rating[\s\S]*4\/5/);
+  assert.ok(h.findButton('Add a comment', ask));
+  assert.equal(ticketOf(h, IDS.member).rating.stars, 4);
+  const logged = h.sent(LOG).find((m) => /rated 4\/5/.test(h.textOf(m)));
+  assert.ok(logged, 'rating posted to the ticket log');
+  assert.match(h.textOf(logged), new RegExp(`<@${IDS.mod}>`), 'shows who claimed it');
+
+  const again = await rateClick(h, IDS.member, 1, { messageId: ask.id });
+  assert.match(h.textOf(again[0]), /4\/5/);
+  assert.equal(ticketOf(h, IDS.member).rating.stars, 4, 'one rating per ticket');
+  const elsewhere = await rateClick(h, IDS.member, 1);
+  assert.match(h.textOf(elsewhere[0]), /Already rated/);
+
+  const form = await h.click(h.findButton('Add a comment', ask).custom_id, { user: IDS.member, server: null, channel: dmOf(IDS.member), messageId: ask.id });
+  assert.equal(form[0].type, 'modal');
+  const saved = await h.submit(form[0].modal.custom_id, { comment: '  quick and kind  ' }, { user: IDS.member, server: null, channel: dmOf(IDS.member) });
+  assert.match(h.textOf(saved[0]), /Comment saved/);
+  await h.settle();
+  assert.equal(ticketOf(h, IDS.member).rating.comment, 'quick and kind');
+  assert.match(h.textOf(logged), /quick and kind/, 'the log card is edited in place');
+  assert.equal(h.sent(LOG).filter((m) => /rated 4\/5/.test(h.textOf(m))).length, 1);
+  assert.equal(h.allButtons(ask).length, 0, 'the DM card has no buttons left');
+  const twice = await h.submit(form[0].modal.custom_id, { comment: 'second' }, { user: IDS.member, server: null, channel: dmOf(IDS.member) });
+  assert.match(h.textOf(twice[0]), /already saved/);
+  assert.equal(ticketOf(h, IDS.member).rating.comment, 'quick and kind');
+  const setup = await h.slash('tickets', '', { user: IDS.admin });
+  assert.match(lastText(h, setup), /4\.0 average from 1 rating/);
+});
+
+test('only the opener can rate, and odd or forged rating buttons do nothing', async () => {
+  const h = await make();
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  const early = await rateClick(h, IDS.member, 5);
+  assert.match(h.textOf(early[0]), /still open/);
+  await closeWithTimers(h, t, { user: IDS.member });
+  for (const user of [IDS.member2, IDS.admin, IDS.owner]) {
+    const ans = await rateClick(h, user, 1);
+    assert.match(h.textOf(ans[0]), /Not your ticket/, user);
+  }
+  const inServer = await h.click(customId('tickets', 'rate', 'a0000000-0000-4000-8000-00000000abcd', 1, 5), { user: IDS.member });
+  assert.match(h.textOf(inServer[0]), /another server/);
+  for (const id of [customId('tickets', 'rate', S, 1, 9), customId('tickets', 'rate', S, 'x', 3), customId('tickets', 'rate', 'constructor', 1, 3), customId('tickets', 'rate', S, 1, '__proto__')]) {
+    const ans = await h.click(id, { user: IDS.member, server: null, channel: dmOf(IDS.member) });
+    assert.match(h.textOf(ans[0]), /too old/, id);
+  }
+  const gone = await rateClick(h, IDS.member, 3, { num: 99 });
+  assert.match(h.textOf(gone[0]), /gone/);
+  const comment = await h.submit(customId('tickets', 'ratesave', S, 1), { comment: 'sneaky' }, { user: IDS.member2, server: null, channel: dmOf(IDS.member2) });
+  assert.match(h.textOf(comment[0]), /Not your ticket/);
+  const noStars = await h.submit(customId('tickets', 'ratesave', S, 1), { comment: 'no stars yet' }, { user: IDS.member, server: null, channel: dmOf(IDS.member) });
+  assert.match(h.textOf(noStars[0]), /stars first/);
+  assert.equal(ticketOf(h, IDS.member).rating, null);
+});
+
+test('DMs off: no rating card, and the log says so', async () => {
+  const h = await make({ features: { dms: false } });
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  await closeWithTimers(h, t, { user: IDS.member });
+  const summary = h.sent(LOG).find((m) => /Ticket #0001 closed/.test(h.textOf(m)));
+  assert.match(h.textOf(summary), /Couldn't ask <@[^>]+> for a rating/);
+  assert.equal(ratingCard(h, IDS.member), undefined);
+  assert.equal(ticketOf(h, IDS.member).status, 'closed');
+});
+
+test('comments say so plainly when pop-up forms are off', async () => {
+  const h = await make({ features: { modals: false } });
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  await closeWithTimers(h, t, { user: IDS.member });
+  const ask = ratingCard(h, IDS.member);
+  await rateClick(h, IDS.member, 2, { messageId: ask.id });
+  const ans = await h.clickButton('Add a comment', { user: IDS.member, in: ask, server: null, channel: dmOf(IDS.member) });
+  assert.match(h.textOf(ans[ans.length - 1]), /Comments aren't available here/);
+  assert.equal(ticketOf(h, IDS.member).rating.stars, 2);
+});
+
+test('ratings stop working once Tickets is uninstalled', async () => {
+  const h = await make();
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  await closeWithTimers(h, t, { user: IDS.member });
+  h.engine.settings.setEnabled(S, 'tickets', false);
+  const ans = await rateClick(h, IDS.member, 5);
+  assert.match(h.textOf(ans[0]), /isn't installed there/);
+  assert.equal(ticketOf(h, IDS.member).rating, null);
+});
+
+test('a ticket type can have its own staff who see, claim and close only that type', async () => {
+  const h = await make({ config: { logChannelId: LOG, types: [SUPPORT, REPORT] } });
+  h.fake.memberOf(S, IDS.member2).roles.push(VIP);
+  h.engine.cache.invalidate(S);
+  const set = await h.slash('tickets', `type report staff <@&${VIP}>`, { user: IDS.admin });
+  assert.match(lastText(h, set), /Report: staff saved/);
+  const cfg = h.engine.settings.appConfig(S, 'tickets');
+  assert.deepEqual(cfg.types.find((x) => x.id === 'report').staffRoles, [VIP]);
+  assert.deepEqual(cfg.types.find((x) => x.id === 'support').staffRoles || [], []);
+
+  const form = await h.click(customId('tickets', 'open', 'report'), { user: IDS.member });
+  await h.submit(form[0].modal.custom_id, { q0: 'someone', q1: 'something' }, { user: IDS.member });
+  const report = ticketOf(h, IDS.member);
+  assert.ok(channel(h, report.channelId).role_ids.includes(VIP), 'report staff can see report tickets');
+  assert.ok(channel(h, report.channelId).role_ids.includes(R.mod), 'main staff still can');
+  await h.slash('ticket', 'support printer', { user: IDS.admin });
+  const support = ticketOf(h, IDS.admin);
+  assert.ok(!channel(h, support.channelId).role_ids.includes(VIP), 'not on other types');
+
+  const nope = await h.slash('ticket', 'claim', { user: IDS.member2, channel: support.channelId });
+  assert.match(lastText(h, nope), /Needs Staff/);
+  const claim = await h.slash('ticket', 'claim', { user: IDS.member2, channel: report.channelId });
+  assert.match(allTexts(h, claim), /claimed this ticket/);
+  assert.equal(ticketOf(h, IDS.member).claimedBy, IDS.member2);
+  const fromAfar = await h.slash('ticket', 'close #2', { user: IDS.member2 });
+  assert.match(lastText(h, fromAfar), /isn't a ticket channel/, 'cannot close another type from afar');
+  const closeAsk = await h.slash('ticket', `close #${report.number} sorted`, { user: IDS.member2 });
+  assert.ok(h.findButton('Close ticket', closeAsk), 'can close its own type from afar');
+});
+
+test('/tickets type: show, clear, typos, refusals and roles everyone has', async () => {
+  const h = await make({ config: { logChannelId: LOG, types: [SUPPORT, REPORT] } });
+  await h.slash('tickets', `type report staff <@&${VIP}> <@&${R.gamer}>`, { user: IDS.admin });
+  const show = await h.slash('tickets', 'type report', { user: IDS.admin });
+  assert.match(lastText(h, show), new RegExp(`Extra staff: <@&${VIP}> <@&${R.gamer}>`));
+  const typo = await h.slash('tickets', 'type reprot staff @VIP', { user: IDS.admin });
+  assert.match(lastText(h, typo), /Did you mean \*\*report\*\*/);
+  const member = await h.slash('tickets', `type report staff <@&${R.member}>`, { user: IDS.mod });
+  assert.match(lastText(h, member), /Needs Admin/);
+  const missing = await h.slash('tickets', 'type report staff @nobodyrole', { user: IDS.admin });
+  assert.match(lastText(h, missing), /couldn't find some roles/);
+  h.fake.state.roles[S].find((r) => r.id === R.member).auto = 'all';
+  h.engine.perms.invalidate();
+  const auto = await h.slash('tickets', `type report staff <@&${R.member}>`, { user: IDS.admin });
+  assert.match(lastText(h, auto), /given to everyone/);
+  const cfg = () => h.engine.settings.appConfig(S, 'tickets').types.find((x) => x.id === 'report');
+  assert.deepEqual(cfg().staffRoles, [VIP, R.gamer]);
+  await h.slash('tickets', 'type report staff off', { user: IDS.admin });
+  assert.deepEqual(cfg().staffRoles, []);
+  for (const text of ['type constructor staff @VIP', 'type __proto__', 'type report staff constructor']) {
+    const ans = await h.slash('tickets', text, { user: IDS.admin });
+    assert.doesNotMatch(allTexts(h, ans), /undefined/, text);
+  }
+});
+
+test('Staff per type panel and the types editor keep the staff roles', async () => {
+  const h = await make({ config: { logChannelId: LOG, types: [SUPPORT, REPORT] } });
+  const setup = await h.slash('tickets', '', { user: IDS.admin });
+  const view = await h.clickButton('Staff per type', { user: IDS.admin, in: setup });
+  const viewMsg = view[view.length - 1];
+  assert.match(h.textOf(viewMsg), /Staff per ticket type/);
+  const refused = await h.click(customId('tickets', 'tstaff', 'report'), { user: IDS.mod });
+  assert.match(allTexts(h, refused), /Needs Admin/);
+  const form = await h.clickButton('Report', { user: IDS.admin, in: viewMsg });
+  assert.equal(form[0].type, 'modal');
+  await h.submit(form[0].modal.custom_id, { value: 'VIP' }, { user: IDS.admin });
+  const types = () => h.engine.settings.appConfig(S, 'tickets').types;
+  assert.deepEqual(types().find((x) => x.id === 'report').staffRoles, [VIP]);
+  const stolen = await h.submit(form[0].modal.custom_id, { value: 'Gamer' }, { user: IDS.admin });
+  assert.match(allTexts(h, stolen), /expired/, 'a form only saves once');
+  const editor = await h.slash('tickets', 'types', { user: IDS.admin });
+  await h.submit(editor[0].modal.custom_id, { t1: '🎫 Support', t2: '🚩 Report: Who?; What?', t3: '❓ Question' }, { user: IDS.admin });
+  assert.deepEqual(types().find((x) => x.id === 'report').staffRoles, [VIP], 'kept after editing types');
+  assert.deepEqual(types().find((x) => x.id === 'question').staffRoles, []);
+  const after = await h.slash('tickets', '', { user: IDS.admin });
+  assert.match(lastText(h, after), new RegExp(`Extra staff: <@&${VIP}>`));
+});
+
+test('auto-close: warning after the quiet period, then a normal close with transcript', async () => {
+  const h = await makeClock();
+  const on = await h.slash('tickets', 'autoclose 48', { user: IDS.admin });
+  assert.match(lastText(h, on), /Auto-close on/);
+  const { t } = await openTicketFor(h, IDS.member, 'printer');
+  assert.equal(jobsOf(h, 'tickets.quietwarn').length, 1);
+  await h.advance(36 * HOUR - 60_000);
+  assert.ok(!h.sent(t.channelId).some((m) => /gone quiet/.test(h.textOf(m))), 'no warning yet');
+  await h.advance(60_000);
+  const warning = h.sent(t.channelId).find((m) => /gone quiet/.test(h.textOf(m)));
+  assert.ok(warning, 'warning posted');
+  assert.match(h.textOf(warning), /This ticket will close in 12 hours because it's been quiet/);
+  assert.ok(h.findButton('Keep open', warning));
+  assert.equal(jobsOf(h, 'tickets.quietclose').length, 1);
+  await h.advance(12 * HOUR);
+  const done = ticketOf(h, IDS.member);
+  assert.equal(done.status, 'closed');
+  assert.equal(done.closedBy, null);
+  assert.match(done.reason, /Closed automatically after 2 days with no messages/);
+  const logMsg = h.sent(LOG).find((m) => m.files?.length);
+  assert.ok(logMsg, 'transcript in the log');
+  assert.match(h.textOf(logMsg), /Closed by YapOS|YapOS/);
+  assert.equal(jobsOf(h, 'tickets.quietwarn').length + jobsOf(h, 'tickets.quietclose').length, 0);
+  assert.ok(ratingCard(h, IDS.member), 'still asks for a rating');
+});
+
+test('auto-close: a message pushes the warning back and a reply after it cancels the close', async () => {
+  const h = await makeClock();
+  await h.slash('tickets', 'autoclose 48', { user: IDS.admin });
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  await h.advance(30 * HOUR);
+  await h.message('still here', { user: IDS.member, channel: t.channelId });
+  assert.equal(ticketOf(h, IDS.member).lastActivityAt, h.now());
+  await h.advance(10 * HOUR);
+  assert.ok(!h.sent(t.channelId).some((m) => /gone quiet/.test(h.textOf(m))), 'pushed back');
+  await h.advance(26 * HOUR);
+  const warning = h.sent(t.channelId).find((m) => /gone quiet/.test(h.textOf(m)));
+  assert.ok(warning);
+  await h.advance(HOUR);
+  await h.message('sorry, still need help', { user: IDS.mod, channel: t.channelId });
+  await h.settle();
+  assert.match(h.textOf(warning), /Someone replied, so this ticket stays open/);
+  assert.equal(h.allButtons(warning).length, 0);
+  assert.equal(jobsOf(h, 'tickets.quietclose').length, 0);
+  assert.equal(jobsOf(h, 'tickets.quietwarn').length, 1, 'jobs are replaced, not stacked');
+  await h.advance(12 * HOUR);
+  assert.equal(ticketOf(h, IDS.member).status, 'open');
+});
+
+test('auto-close: messages are only saved once per 10 minutes but still count', async () => {
+  const h = await makeClock();
+  await h.slash('tickets', 'autoclose 48', { user: IDS.admin });
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  const opened = ticketOf(h, IDS.member).lastActivityAt;
+  await h.advance(5 * 60_000);
+  for (let i = 0; i < 5; i++) await h.message(`msg ${i}`, { user: IDS.member, channel: t.channelId });
+  assert.equal(ticketOf(h, IDS.member).lastActivityAt, opened, 'not written again within 10 minutes');
+  const lastMsgAt = h.now();
+  await h.advanceTo(opened + 36 * HOUR);
+  assert.ok(!h.sent(t.channelId).some((m) => /gone quiet/.test(h.textOf(m))), 'the unsaved message still counted');
+  await h.advanceTo(lastMsgAt + 36 * HOUR);
+  assert.ok(h.sent(t.channelId).some((m) => /gone quiet/.test(h.textOf(m))));
+  await h.advance(11 * 60_000);
+  await h.message('one more', { user: IDS.member, channel: t.channelId });
+  assert.equal(ticketOf(h, IDS.member).lastActivityAt, h.now(), 'saved straight away after a warning');
+});
+
+test('Keep open resets the timer; only the opener or staff may press it', async () => {
+  const h = await makeClock();
+  await h.slash('tickets', 'autoclose 24', { user: IDS.admin });
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  await h.advance(12 * HOUR);
+  const warning = h.sent(t.channelId).find((m) => /gone quiet/.test(h.textOf(m)));
+  assert.match(h.textOf(warning), /close in 12 hours/);
+  const stranger = await h.clickButton('Keep open', { user: IDS.member2, in: warning });
+  assert.match(allTexts(h, stranger), /Needs Staff/);
+  const ans = await h.clickButton('Keep open', { user: IDS.member, in: warning });
+  assert.equal(ans[0].type, 'update');
+  assert.match(h.textOf(warning), /kept this ticket open/);
+  assert.equal(jobsOf(h, 'tickets.quietclose').length, 0);
+  await h.advance(12 * HOUR);
+  assert.equal(ticketOf(h, IDS.member).status, 'open');
+  const second = h.sent(t.channelId).filter((m) => /gone quiet/.test(h.textOf(m)));
+  assert.equal(second.length, 1, 'warned again after another quiet stretch');
+  assert.notEqual(second[0].id, warning.id);
+  await h.advance(12 * HOUR);
+  assert.equal(ticketOf(h, IDS.member).status, 'closed');
+});
+
+test('auto-close survives a restart, and a long downtime still gives the full warning', async () => {
+  const a = await makeClock();
+  await a.slash('tickets', 'autoclose 48', { user: IDS.admin });
+  const { t } = await openTicketFor(a, IDS.member, 'help');
+  const ch = channel(a, t.channelId);
+  const role = a.fake.state.roles[S].find((r) => r.id === t.roleId);
+  const startedAt = a.now();
+  a.engine.scheduler.stop();
+
+  const b = await makeClock({ store: a.store, config: null });
+  b.fake.state.channels[S].push(structuredClone(ch));
+  b.fake.state.roles[S].push(structuredClone(role));
+  b.fake.clock.t = startedAt + 60 * HOUR;
+  await b.runDue();
+  const warning = b.sent(t.channelId).find((m) => /gone quiet/.test(b.textOf(m)));
+  assert.ok(warning, 'warning posted after the restart');
+  assert.match(b.textOf(warning), /close in 12 hours/);
+  assert.equal(ticketOf(b, IDS.member).status, 'open');
+  await b.advance(12 * HOUR);
+  assert.equal(ticketOf(b, IDS.member).status, 'closed');
+  assert.ok(b.sent(LOG).some((m) => m.files?.length), 'transcript saved');
+});
+
+test('auto-close off, uninstalled, channel gone and closed by hand leave nothing behind', async () => {
+  const h = await makeClock();
+  await h.slash('tickets', 'autoclose 48', { user: IDS.admin });
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  const off = await h.slash('tickets', 'autoclose off', { user: IDS.admin });
+  assert.match(lastText(h, off), /Auto-close off/);
+  assert.equal(jobsOf(h, 'tickets.quietwarn').length, 0);
+  await h.advance(60 * HOUR);
+  assert.equal(ticketOf(h, IDS.member).status, 'open');
+
+  await h.slash('tickets', 'autoclose 2d', { user: IDS.admin });
+  assert.equal(h.engine.settings.appConfig(S, 'tickets').autoCloseHours, 48);
+  const warned = () => h.sent(t.channelId).filter((m) => /gone quiet/.test(h.textOf(m))).length;
+  assert.equal(warned(), 1, 'an overdue open ticket is warned as soon as auto-close is turned on');
+  assert.equal(jobsOf(h, 'tickets.quietclose').length, 1);
+  h.engine.settings.setEnabled(S, 'tickets', false);
+  await h.advance(60 * HOUR);
+  assert.equal(ticketOf(h, IDS.member).status, 'open', 'nothing happens while uninstalled');
+  assert.equal(warned(), 1);
+  h.engine.settings.setEnabled(S, 'tickets', true);
+
+  h.fake.state.channels[S] = h.fake.state.channels[S].filter((c) => c.id !== t.channelId);
+  await h.slash('tickets', 'autoclose 48', { user: IDS.admin });
+  await h.settle();
+  const gone = ticketOf(h, IDS.member);
+  assert.equal(gone.status, 'closed', 'a ticket whose channel vanished is closed');
+  assert.match(gone.reason, /deleted by hand/);
+
+  await h.slash('ticket', 'second one', { user: IDS.member2 });
+  const t2 = ticketOf(h, IDS.member2);
+  assert.equal(jobsOf(h, 'tickets.quietwarn').length, 1);
+  await closeByHand(h, t2);
+  assert.equal(jobsOf(h, 'tickets.quietwarn').length + jobsOf(h, 'tickets.quietclose').length, 0);
+});
+
+async function closeByHand(h, t) {
+  const ask = await h.slash('ticket', 'close done', { user: t.openerId, channel: t.channelId });
+  const btn = h.findButton('Close ticket', ask);
+  await h.click(btn.custom_id, { user: t.openerId, channel: t.channelId, messageId: btn.messageId });
+}
+
+test('/tickets autoclose: bad values, the setup panel form and admins only', async () => {
+  const h = await makeClock();
+  for (const bad of ['0.5', 'soon', '9999', '-3']) {
+    const ans = await h.slash('tickets', `autoclose ${bad}`, { user: IDS.admin });
+    assert.match(lastText(h, ans), /didn't work/, bad);
+  }
+  assert.equal(h.engine.settings.appConfig(S, 'tickets').autoCloseHours, 0);
+  const show = await h.slash('tickets', 'autoclose', { user: IDS.admin });
+  assert.match(lastText(h, show), /Off/);
+  const mod = await h.slash('tickets', 'autoclose 24', { user: IDS.mod });
+  assert.match(lastText(h, mod), /Needs Admin/);
+  const setup = await h.slash('tickets', '', { user: IDS.admin });
+  const form = await h.clickButton('Auto-close', { user: IDS.admin, in: setup });
+  assert.equal(form[0].type, 'modal');
+  await h.submit(form[0].modal.custom_id, { value: '24' }, { user: IDS.admin });
+  assert.equal(h.engine.settings.appConfig(S, 'tickets').autoCloseHours, 24);
+  const forged = await h.submit(form[0].modal.custom_id, { value: '1' }, { user: IDS.member });
+  assert.match(allTexts(h, forged), /Needs Admin/);
+  assert.equal(h.engine.settings.appConfig(S, 'tickets').autoCloseHours, 24);
+  const after = await h.slash('tickets', '', { user: IDS.admin });
+  assert.match(lastText(h, after), /After 1 day with no messages/);
+  assert.equal(h.engine.apps.get('tickets').def.panelPerm, 'member');
+});
+
+test('turning auto-close off calms a warning that is already posted', async () => {
+  const h = await makeClock();
+  await h.slash('tickets', 'autoclose 24', { user: IDS.admin });
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  await h.advance(12 * HOUR);
+  const warning = h.sent(t.channelId).find((m) => /gone quiet/.test(h.textOf(m)));
+  assert.ok(h.findButton('Keep open', warning));
+  await h.slash('tickets', 'autoclose off', { user: IDS.admin });
+  await h.settle();
+  assert.match(h.textOf(warning), /Auto-close was turned off, so this ticket stays open/);
+  assert.equal(h.allButtons(warning).length, 0);
+  assert.equal(ticketOf(h, IDS.member).quietWarn, null);
+  await h.advance(48 * HOUR);
+  assert.equal(ticketOf(h, IDS.member).status, 'open');
+});
+
+test('quiet checks dropped while Tickets was uninstalled come back after it is reinstalled', async () => {
+  const h = await makeClock();
+  await h.slash('tickets', 'autoclose 24', { user: IDS.admin });
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  h.engine.settings.setEnabled(S, 'tickets', false);
+  await h.advance(13 * HOUR);
+  assert.equal(jobsOf(h, 'tickets.quietwarn').length + jobsOf(h, 'tickets.quietclose').length, 0, 'dropped while uninstalled');
+  h.engine.settings.setEnabled(S, 'tickets', true);
+  await h.message('anyone around?', { user: IDS.member2, channel: G });
+  await h.runDue();
+  assert.equal(jobsOf(h, 'tickets.quietwarn').length + jobsOf(h, 'tickets.quietclose').length, 1, 'picked up again on the next message anywhere');
+  const warning = h.sent(t.channelId).find((m) => /gone quiet/.test(h.textOf(m)));
+  assert.match(h.textOf(warning), /close in 12 hours/, 'overdue, so it warns now with the full lead time');
+  await h.advance(11 * HOUR);
+  assert.equal(ticketOf(h, IDS.member).status, 'open');
+  await h.advance(HOUR);
+  assert.equal(ticketOf(h, IDS.member).status, 'closed');
+});
+
+test('the setup panel keeps long staff lists per type short', async () => {
+  const h = await make({ config: { logChannelId: LOG, types: [SUPPORT, REPORT] } });
+  await h.slash('tickets', `type report staff <@&${R.vip}> <@&${R.gamer}> <@&${R.member}> <@&${R.mod}>`, { user: IDS.admin });
+  const setup = await h.slash('tickets', '', { user: IDS.admin });
+  const field = setup[setup.length - 1].embeds[0].fields.find((f) => /^Types/.test(f.name));
+  assert.match(field.value, /Extra staff: (<@&[^>]+> ){3}\+1 more/);
+});

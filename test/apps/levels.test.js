@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHarness, IDS, uuid } from '../harness.js';
-import { levelFor, xpForLevel, totalXpForLevel } from '../../apps/levels.js';
+import { levelFor, xpForLevel, totalXpForLevel, tierOf, progressBar, percentOf, avatarUrl, voiceText, shorten } from '../../apps/levels.js';
+import { COLORS } from '../../engine/ui.js';
 import { customId } from '../../engine/router.js';
 
 const S = IDS.server;
@@ -16,6 +17,9 @@ const userOf = (h, uid) => h.engine.service('levels').getUser(S, uid);
 const seed = (h, users) => h.engine.store.set('levels', S, { users: Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { xp: 0, level: levelFor(u.xp || 0), voiceSeconds: 0, messages: 0, lastXpAt: 0, ...u }])) });
 const levelUps = (h, ch) => h.sent(ch).filter((m) => /reached/.test(m.content || ''));
 const cfg = (h) => h.engine.settings.appConfig(S, 'levels');
+const embedOf = (ans) => (ans[ans.length - 1]?.embeds || [])[0] || {};
+const cardText = (h, ans) => [embedOf(ans).author?.name || '', lastText(h, ans)].join('\n');
+const fieldOf = (ans, name) => (embedOf(ans).fields || []).find((x) => x.name.includes(name))?.value;
 
 function clock(t) {
   t.mock.timers.enable({ apis: ['Date'], now: START });
@@ -333,26 +337,225 @@ test('a session from before a restart is not counted', async (t) => {
 
 test('/rank for yourself and for someone else', async () => {
   const h = await make();
-  seed(h, { [IDS.member]: { xp: 300, voiceSeconds: 3900 }, [IDS.member2]: { xp: 1200 } });
+  seed(h, { [IDS.member]: { xp: 300, voiceSeconds: 3900, messages: 42 }, [IDS.member2]: { xp: 1200 } });
   let ans = await h.slash('rank', '', { user: IDS.member });
-  let text = lastText(h, ans);
-  assert.match(text, /Sam/);
-  assert.match(text, /Level 2/);
-  assert.match(text, /Rank \*\*#2\*\* of 2/);
-  assert.match(text, /45 \/ 220 XP to level 3/);
-  assert.match(text, /[█░]{14}/);
-  assert.match(text, /1h 5m/);
+  let e = embedOf(ans);
+  assert.equal(e.author.name, 'Sam');
+  assert.equal(e.title, undefined);
+  assert.match(e.description, /^\*\*Level 2\*\*  ▸  Level 3$/m);
+  assert.match(e.description, /^🟦{2}⬛{8}  \*\*20%\*\*$/mu);
+  assert.match(e.description, /45 \/ 220 XP · \*\*175 XP\*\* to go/);
+  assert.doesNotMatch(e.description, /[█░]/);
+  assert.equal(e.color, COLORS.info);
+  assert.equal(fieldOf(ans, 'Rank'), '`#2 of 2`');
+  assert.equal(fieldOf(ans, 'Total XP'), '`300`');
+  assert.equal(fieldOf(ans, 'Messages'), '`42`');
+  assert.equal(fieldOf(ans, 'Voice'), '`1h 5m`');
+  assert.equal(fieldOf(ans, 'Next reward'), 'none set');
+  assert.equal(fieldOf(ans, 'Member since'), 'Jan 5, 2026');
+  assert.ok(e.fields.every((x) => x.inline));
+  assert.equal(e.footer.text, 'Chat to earn XP · keep the conversation going');
+  assert.deepEqual(h.allButtons(ans).map((b) => b.label), ['Leaderboard', 'Rewards']);
   ans = await h.slash('rank', '@riley', { user: IDS.member });
-  text = lastText(h, ans);
-  assert.match(text, /Riley/);
-  assert.match(text, /#1/);
-  ans = await h.slash('rank', '', { user: IDS.mod });
-  assert.match(lastText(h, ans), /Not ranked yet/);
+  assert.equal(embedOf(ans).author.name, 'Riley');
+  assert.equal(fieldOf(ans, 'Rank'), '`#1 of 2`');
+  assert.equal(fieldOf(ans, 'Voice'), 'none yet');
+  assert.equal(h.findButton('Rewards', ans).custom_id, customId('levels', 'rewards', IDS.member2));
   ans = await h.slash('rank', '@nobodyatall', { user: IDS.member });
   assert.match(lastText(h, ans), /couldn't find/);
   await h.slash('levels', 'reward 5 @VIP', { user: IDS.admin });
   ans = await h.slash('rank', '', { user: IDS.member });
-  assert.match(lastText(h, ans), /Next reward: \*\*@VIP\*\* at level 5/);
+  assert.equal(fieldOf(ans, 'Next reward'), 'Level 5 → **@VIP**');
+  await h.slash('levels', 'voice on', { user: IDS.admin });
+  ans = await h.slash('rank', '', { user: IDS.member });
+  assert.equal(embedOf(ans).footer.text, 'Chat to earn XP · voice counts too');
+});
+
+test('a member with no XP gets a friendly empty card', async () => {
+  const h = await make();
+  seed(h, { [IDS.member2]: { xp: 500 } });
+  let ans = await h.slash('rank', '', { user: IDS.mod });
+  const e = embedOf(ans);
+  assert.equal(e.author.name, 'Mo');
+  assert.match(e.description, /No XP yet\. Say hi in chat to get started!/);
+  assert.match(e.description, /⬛{10}/);
+  assert.doesNotMatch(e.description, /0%|0 \/ /);
+  assert.equal(fieldOf(ans, 'Rank'), undefined);
+  assert.equal(fieldOf(ans, 'Total XP'), undefined);
+  assert.equal(fieldOf(ans, 'Member since'), 'Jan 4, 2026');
+  ans = await h.slash('rank', '@sam', { user: IDS.mod });
+  assert.match(embedOf(ans).description, /No XP yet\. Sam shows up here/);
+  assert.doesNotMatch(cardText(h, ans), /undefined|NaN|null/);
+});
+
+test('rank cards show the avatar from avatar_path', async () => {
+  const h = await make();
+  seed(h, { [IDS.member]: { xp: 300 }, [IDS.member2]: { xp: 200 } });
+  h.fake.memberOf(S, IDS.member).avatar_path = 'ab12/cat.png';
+  h.fake.memberOf(S, IDS.member2).avatar_path = '/bots/yapper.png';
+  h.engine.perms.invalidate();
+  h.engine.cache.invalidate(S);
+  let e = embedOf(await h.slash('rank', '', { user: IDS.member }));
+  assert.equal(e.author.icon_url, 'https://files.yapper.website/avatars/ab12/cat.png');
+  assert.deepEqual(e.thumbnail, { url: 'https://files.yapper.website/avatars/ab12/cat.png' });
+  e = embedOf(await h.slash('rank', '@riley', { user: IDS.member }));
+  assert.equal(e.author.icon_url, 'https://www.yapin.gg/bots/yapper.png');
+  e = embedOf(await h.slash('rank', '', { user: IDS.admin }));
+  assert.equal(e.author.icon_url, undefined);
+  assert.equal(e.thumbnail, undefined);
+  assert.equal(e.author.name, 'Alex');
+});
+
+test('avatar URLs follow the handbook', () => {
+  assert.equal(avatarUrl('ab12/cat.png'), 'https://files.yapper.website/avatars/ab12/cat.png');
+  assert.equal(avatarUrl('/assets/bot.png'), 'https://www.yapin.gg/assets/bot.png');
+  assert.equal(avatarUrl(null), null);
+  assert.equal(avatarUrl(undefined), null);
+  assert.equal(avatarUrl(''), null);
+  assert.equal(avatarUrl('   '), null);
+  assert.equal(avatarUrl(42), null);
+  assert.equal(avatarUrl('javascript:alert(1)'), null);
+  assert.equal(avatarUrl('http://example.com/x.png'), null);
+});
+
+test('tier colours and squares by level', () => {
+  const at = (l) => [tierOf(l).color, tierOf(l).square];
+  for (const l of [0, 4]) assert.deepEqual(at(l), [COLORS.info, '🟦']);
+  for (const l of [5, 9]) assert.deepEqual(at(l), [COLORS.ok, '🟩']);
+  for (const l of [10, 19]) assert.deepEqual(at(l), [COLORS.roles, '🟪']);
+  for (const l of [20, 29]) assert.deepEqual(at(l), [COLORS.economy, '🟨']);
+  for (const l of [30, 999]) assert.deepEqual(at(l), [COLORS.error, '🟥']);
+  assert.deepEqual(at(-3), [COLORS.info, '🟦']);
+  assert.deepEqual(at('nope'), [COLORS.info, '🟦']);
+});
+
+test('the progress bar has 10 even segments', () => {
+  const count = (str, ch) => str.split(ch).length - 1;
+  const check = (frac, full, pct) => {
+    const b = progressBar(frac, '🟪');
+    assert.equal(count(b, '🟪'), full, String(frac));
+    assert.equal(count(b, '⬛'), 10 - full, String(frac));
+    assert.equal(percentOf(frac), pct, String(frac));
+  };
+  check(0, 0, 0);
+  check(0.5, 5, 50);
+  check(0.99, 9, 99);
+  check(0.999, 9, 99);
+  check(1, 10, 100);
+  check(1.7, 10, 100);
+  check(-1, 0, 0);
+  check(NaN, 0, 0);
+  check(0.3, 3, 30);
+  check(0.7, 7, 70);
+});
+
+test('the card at a level-up boundary starts a fresh bar', async () => {
+  const h = await make();
+  seed(h, { [IDS.member]: { xp: totalXpForLevel(5) }, [IDS.member2]: { xp: totalXpForLevel(5) - 1 } });
+  let e = embedOf(await h.slash('rank', '', { user: IDS.member }));
+  assert.match(e.description, /\*\*Level 5\*\*  ▸  Level 6/);
+  assert.match(e.description, /^⬛{10}  \*\*0%\*\*$/m);
+  assert.match(e.description, /0 \/ 475 XP · \*\*475 XP\*\* to go/);
+  assert.equal(e.color, COLORS.ok);
+  e = embedOf(await h.slash('rank', '', { user: IDS.member2 }));
+  assert.match(e.description, /\*\*Level 4\*\*/);
+  assert.match(e.description, /^🟦{9}⬛  \*\*99%\*\*$/mu);
+  assert.match(e.description, /\*\*1 XP\*\* to go/);
+  assert.equal(e.color, COLORS.info);
+});
+
+test('big numbers get thousands separators and hours of voice', async () => {
+  const h = await make();
+  seed(h, { [IDS.member]: { xp: totalXpForLevel(31) + 1234, voiceSeconds: 200 * 3600 + 15 * 60, messages: 12345 } });
+  const ans = await h.slash('rank', '', { user: IDS.member });
+  const e = embedOf(ans);
+  assert.equal(e.color, COLORS.error);
+  assert.match(e.description, /🟥/);
+  assert.match(e.description, /1,234 \/ 6,455 XP/);
+  assert.equal(fieldOf(ans, 'Messages'), '`12,345`');
+  assert.equal(fieldOf(ans, 'Voice'), '`200h 15m`');
+  assert.match(fieldOf(ans, 'Total XP'), /^`\d{1,3}(,\d{3})+`$/);
+  assert.equal(voiceText(0), 'none yet');
+  assert.equal(voiceText(30), 'under a minute');
+  assert.equal(voiceText(600), '10m');
+  assert.equal(voiceText(7200), '2h');
+  assert.equal(voiceText(9000), '2h 30m');
+});
+
+test('message counts stay backward compatible with older saved members', async (t) => {
+  clock(t);
+  const h = await make();
+  h.engine.store.set('levels', S, { users: { [IDS.member]: { xp: 300, level: 2, voiceSeconds: 0, lastXpAt: 0 }, [IDS.member2]: { xp: 120 } } });
+  let ans = await h.slash('rank', '', { user: IDS.member });
+  assert.equal(fieldOf(ans, 'Messages'), 'not counted yet');
+  assert.doesNotMatch(cardText(h, ans), /undefined|NaN/);
+  ans = await h.slash('rank', '@riley', { user: IDS.member });
+  assert.equal(fieldOf(ans, 'Voice'), 'none yet');
+  assert.doesNotMatch(cardText(h, ans), /undefined|NaN/);
+  await h.message('hello after the update');
+  assert.equal(userOf(h, IDS.member).messages, 1);
+  assert.equal(userOf(h, IDS.member).xp, 315);
+  ans = await h.slash('rank', '', { user: IDS.member });
+  assert.equal(fieldOf(ans, 'Messages'), '`1`');
+  await h.slash('levels', 'voice on', { user: IDS.admin });
+  await h.engine.service('levels').addXp(S, IDS.member2, 10, 'test');
+  assert.equal(userOf(h, IDS.member2).messages, 0);
+  assert.equal(userOf(h, IDS.member2).xp, 130);
+});
+
+test('the Rewards view shows what is unlocked and what is locked', async () => {
+  const h = await make();
+  seed(h, { [IDS.member]: { xp: totalXpForLevel(3) } });
+  await h.slash('levels', 'reward 2 @Gamer', { user: IDS.admin });
+  await h.slash('levels', 'reward 5 @VIP', { user: IDS.admin });
+  h.fake.memberOf(S, IDS.member).roles.push(IDS.roles.gamer);
+  h.engine.perms.invalidate();
+  const card = await h.slash('rank', '', { user: IDS.member });
+  assert.equal(fieldOf(card, 'Next reward'), 'Level 5 → **@VIP**');
+  const view = await h.clickButton('Rewards', { user: IDS.member, in: card });
+  assert.notEqual(view[0].type, 'update');
+  assert.equal(h.allButtons(view).length, 0);
+  const e = embedOf(view);
+  assert.equal(e.title, '🎁 Level rewards');
+  const lines = e.description.split('\n');
+  assert.equal(lines[0], '**Level 2** → **@Gamer**  ✅ you have it');
+  assert.equal(lines[1], `**Level 5** → **@VIP**  🔒 locked · ${(totalXpForLevel(5) - totalXpForLevel(3)).toLocaleString('en-US')} XP to go`);
+  assert.doesNotMatch(e.description, /reward 5 @Regular/);
+  assert.equal(e.footer.text, 'Every reward role you earn is yours to keep');
+  assert.match(lastText(h, await h.clickButton('Rewards', { user: IDS.member2, in: card })), /Not your panel/);
+  const other = await h.slash('rank', '@sam', { user: IDS.member2 });
+  const peek = embedOf(await h.clickButton('Rewards', { user: IDS.member2, in: other })).description;
+  assert.match(peek, /Showing progress for \*\*Sam\*\*/);
+  assert.match(peek, /✅ has it/);
+  await h.slash('levels', 'set @riley 6', { user: IDS.admin });
+  await h.settle();
+  h.fake.memberOf(S, IDS.member2).roles = [IDS.roles.member];
+  h.engine.perms.invalidate();
+  const riley = await h.slash('rank', '', { user: IDS.member2 });
+  const mine = embedOf(await h.clickButton('Rewards', { user: IDS.member2, in: riley })).description;
+  assert.match(mine, /Level 2\*\* → \*\*@Gamer\*\*  ✅ unlocked/);
+  assert.match(mine, /Level 5\*\* → \*\*@VIP\*\*  ✅ unlocked/);
+  assert.equal(fieldOf(riley, 'Next reward'), 'all unlocked 🎉');
+});
+
+test('the Rewards view with no rewards only shows the how-to to admins', async () => {
+  const h = await make();
+  seed(h, { [IDS.member]: { xp: 300 }, [IDS.admin]: { xp: 300 } });
+  const memberCard = await h.slash('rank', '', { user: IDS.member });
+  const forMember = embedOf(await h.clickButton('Rewards', { user: IDS.member, in: memberCard })).description;
+  assert.match(forMember, /^No level rewards yet\./);
+  assert.doesNotMatch(forMember, /\/levels reward/);
+  const adminCard = await h.slash('rank', '', { user: IDS.admin });
+  const forAdmin = embedOf(await h.clickButton('Rewards', { user: IDS.admin, in: adminCard })).description;
+  assert.match(forAdmin, /^No level rewards yet\./);
+  assert.match(forAdmin, /\/levels reward 5 @Regular/);
+  const modCard = await h.slash('rank', '', { user: IDS.mod });
+  assert.doesNotMatch(embedOf(await h.clickButton('Rewards', { user: IDS.mod, in: modCard })).description, /\/levels reward/);
+  for (const bad of ['', '__proto__', 'x'.repeat(70), uuid(1)]) {
+    const out = await h.click(customId('levels', 'rewards', bad), { user: IDS.member });
+    assert.match(lastText(h, out), /No level rewards yet/);
+    assert.doesNotMatch(lastText(h, out), /Showing progress|undefined/);
+  }
 });
 
 test('leaderboard pages with buttons and sorts by voice time', async () => {
@@ -364,7 +567,8 @@ test('leaderboard pages with buttons and sorts by voice time', async () => {
   seed(h, users);
   const ans = await h.slash('leaderboard', '', { user: IDS.member });
   let text = lastText(h, ans);
-  assert.match(text, /🥇 Sam/);
+  assert.match(text, /🥇 \*\*Sam\*\* · Level \d+ · 10,000 XP  ◂ you/);
+  assert.match(text, /🏆 Test Town leaderboard/);
   assert.match(text, /Page 1 of 3/);
   const prev = h.findButton('Prev', ans);
   assert.equal(prev.disabled, true);
@@ -378,19 +582,23 @@ test('leaderboard pages with buttons and sorts by voice time', async () => {
   assert.equal(page2[0].type, 'update');
   text = h.textOf(page2[0]);
   assert.match(text, /Page 2 of 3/);
-  assert.match(text, /\*\*11\.\*\*/);
+  assert.match(text, /`#11` \*\*/);
+  assert.match(text, /-# You: #1 · Level \d+/);
   const third = await h.slash('leaderboard', '3', { user: IDS.member });
   assert.match(lastText(h, third), /Page 3 of 3/);
   assert.match(lastText(h, third), /Riley/);
   assert.equal(h.findButton('Next', third).disabled, true);
   const voice = await h.slash('leaderboard', 'voice', { user: IDS.member });
   text = lastText(h, voice);
-  assert.match(text, /voice time/);
-  assert.match(text, /🥇 Riley · 2h 30m/);
+  assert.match(text, /🎙️ Test Town voice leaderboard/);
+  assert.match(text, /🥇 \*\*Riley\*\* · 2h 30m in voice/);
+  assert.match(text, /-# You're not on the board yet/);
   assert.match(text, /Page 1 of 1/);
+  assert.equal(h.findButton('Prev', voice), null);
+  assert.equal(h.findButton('Next', voice), null);
   const back = h.findButton('Sort by XP', voice);
   const xpView = await h.click(back.custom_id, { user: IDS.member });
-  assert.match(h.textOf(xpView[0]), /🥇 Sam/);
+  assert.match(h.textOf(xpView[0]), /🥇 \*\*Sam\*\*/);
 });
 
 test('settings are admin only, including old admin panels', async () => {
@@ -712,7 +920,7 @@ test('the Leaderboard button on panels opens a private board and leaves the pane
   const peek = await h.clickButton('Leaderboard', { user: IDS.admin, in: panel });
   assert.notEqual(peek[0].type, 'update');
   assert.equal(h.allButtons(peek).length, 0);
-  assert.match(lastText(h, peek), /Leaderboard/);
+  assert.match(lastText(h, peek), /Test Town leaderboard/);
   assert.match(lastText(h, peek), /Sam/);
 });
 
@@ -738,14 +946,14 @@ test('every settings button is locked to the admin who opened the panel', async 
   const board = h.findButton('Leaderboard', panel);
   const byOwner = await h.click(board.custom_id, { user: IDS.owner, messageId: board.messageId });
   assert.doesNotMatch(lastText(h, byOwner), /Not your panel/);
-  assert.match(lastText(h, byOwner), /Leaderboard/);
+  assert.match(lastText(h, byOwner), /leaderboard/i);
 });
 
 test('forged or leftover staff buttons are refused by role', async () => {
   const h = await make();
   seed(h, { [IDS.member]: { xp: 900 }, [IDS.member2]: { xp: 300 } });
   const before = structuredClone(cfg(h));
-  assert.deepEqual(Object.keys(h.engine.apps.get('levels').def.components).filter((k) => !['lb', 'lbpeek'].includes(k)).sort(), [...STAFF_ACTIONS].sort());
+  assert.deepEqual(Object.keys(h.engine.apps.get('levels').def.components).filter((k) => !['lb', 'lbpeek', 'rewards'].includes(k)).sort(), [...STAFF_ACTIONS].sort());
   for (const action of STAFF_ACTIONS) {
     for (const user of [IDS.member, IDS.mod]) {
       const id = action === 'ann' ? customId('levels', 'ann', 'off') : customId('levels', action);
@@ -854,7 +1062,7 @@ test('the home screen and /yap never show settings to non-admins', async () => {
 });
 
 const OTHER = '5e000000-0000-4000-8000-0000000000b2';
-const READ_ONLY = ['lb', 'lbpeek'];
+const READ_ONLY = ['lb', 'lbpeek', 'rewards'];
 const staffId = (action) => (action === 'ann' ? customId('levels', 'ann', 'off') : customId('levels', action));
 const HOSTILE = { rate: '5', cooldown: '0', user: 'riley' };
 
@@ -905,8 +1113,8 @@ test('a panel the member opened does not unlock staff buttons', async () => {
   const menuId = menu.find((a) => a.message)?.message.id ?? mine;
   const opened = await h.click(customId('system', 'open', 'levels'), { user: IDS.member, messageId: menuId });
   assert.doesNotMatch(lastText(h, opened), /Levels settings/);
-  assert.match(lastText(h, opened), /Sam/);
-  assert.deepEqual(h.allButtons(opened).map((b) => b.custom_id), [customId('levels', 'lbpeek'), customId('system', 'home')]);
+  assert.match(cardText(h, opened), /Sam/);
+  assert.deepEqual(h.allButtons(opened).map((b) => b.custom_id), [customId('levels', 'lbpeek'), customId('levels', 'rewards', IDS.member), customId('system', 'home')]);
   assert.deepEqual(cfg(h), before);
   assert.equal(userOf(h, IDS.member).xp, 900);
   assert.equal(userOf(h, IDS.member2).xp, 300);
@@ -1069,7 +1277,7 @@ test('leaderboard buttons never rewrite a message the presser does not own', asy
   const publicId = stored().id;
   const forged = await h.click(customId('levels', 'lb', 1, 'voice'), { user: IDS.member, messageId: publicId });
   assert.notEqual(forged[0].type, 'update');
-  assert.match(lastText(h, forged), /Leaderboard/);
+  assert.match(lastText(h, forged), /leaderboard/i);
   assert.ok(stored(), 'the public message kept its text');
   assert.equal(stored().embeds, null);
   assert.equal(h.findButton('Gamer', [stored()]).custom_id, 'yo:roles:pick:gamer');
@@ -1079,9 +1287,9 @@ test('leaderboard buttons never rewrite a message the presser does not own', asy
   h.engine.router.releasePanel(sort.messageId);
   const stranger = await h.click(sort.custom_id, { user: IDS.member2, messageId: sort.messageId });
   assert.notEqual(stranger[0].type, 'update');
-  assert.match(lastText(h, stranger), /Riley · 10m in voice/);
+  assert.match(lastText(h, stranger), /\*\*Riley\*\* · 10m in voice/);
   const original = h.fake.messagesIn(G).find((m) => m.id === sort.messageId);
-  assert.match(h.textOf(original), /🥇 Sam/);
+  assert.match(h.textOf(original), /🥇 \*\*Sam\*\*/);
   assert.doesNotMatch(h.textOf(original), /in voice/);
   const own = h.findButton('Sort by XP', stranger);
   assert.ok(own.messageId && own.messageId !== sort.messageId);
@@ -1167,6 +1375,165 @@ test('ordinary members can still use their own cards side by side', async () => 
   assert.equal((await h.click(sortB.custom_id, { user: IDS.member2, messageId: sortB.messageId }))[0].type, 'update');
   assert.equal((await h.click(sortA.custom_id, { user: IDS.member, messageId: sortA.messageId }))[0].type, 'update');
   const opened = await h.click(customId('system', 'open', 'levels'), { user: IDS.member2 });
-  assert.match(lastText(h, opened), /Riley/);
+  assert.match(cardText(h, opened), /Riley/);
   assert.match(lastText(h, await h.clickButton('Leaderboard', { user: IDS.member2, in: opened })), /Sam/);
+});
+
+test('leaderboard medals, own position and single pages', async () => {
+  const h = await make();
+  const users = {};
+  for (let i = 0; i < 14; i++) users[uuid(1)] = { xp: 90000 - i * 1000, voiceSeconds: (20 - i) * 3600 };
+  users[IDS.member] = { xp: 500, voiceSeconds: 120 };
+  seed(h, users);
+  let ans = await h.slash('leaderboard', '', { user: IDS.member });
+  let e = embedOf(ans);
+  const lines = e.description.split('\n');
+  assert.match(lines[0], /^🥇 \*\*someone who left\*\* · Level \d+ · 90,000 XP$/);
+  assert.match(lines[1], /^🥈 /);
+  assert.match(lines[2], /^🥉 /);
+  assert.match(lines[3], /^`#4` /);
+  assert.match(lines[9], /^`#10` /);
+  assert.equal(lines[11], `-# You: #15 · Level ${levelFor(500)}`);
+  assert.equal(e.footer.text, 'Page 1 of 2 · 15 ranked');
+  assert.equal(e.color, tierOf(levelFor(90000)).color);
+  assert.doesNotMatch(h.textOf(ans[ans.length - 1]), /undefined|NaN|null/);
+  ans = await h.slash('leaderboard', '2', { user: IDS.member });
+  e = embedOf(ans);
+  assert.match(e.description, /`#15` \*\*Sam\*\* · Level \d+ · 500 XP  ◂ you/);
+  assert.doesNotMatch(e.description, /-# You:/);
+  ans = await h.slash('leaderboard', 'voice', { user: IDS.member });
+  assert.match(embedOf(ans).description, /🥇 \*\*someone who left\*\* · 20h in voice/);
+  assert.match(embedOf(ans).description, /-# You: #15 · 2m in voice/);
+
+  const small = await make();
+  seed(small, { [IDS.member]: { xp: 900 }, [IDS.member2]: { xp: 300 } });
+  ans = await small.slash('leaderboard', '', { user: IDS.member });
+  assert.equal(small.findButton('Prev', ans), null);
+  assert.equal(small.findButton('Next', ans), null);
+  assert.deepEqual(small.allButtons(ans).map((b) => b.label), ['Sort by voice time']);
+  assert.equal(embedOf(ans).footer.text, 'Page 1 of 1 · 2 ranked');
+  assert.doesNotMatch(embedOf(ans).description, /-# You/);
+  ans = await small.slash('leaderboard', '', { user: IDS.mod });
+  assert.match(embedOf(ans).description, /-# You're not on the board yet\. Say hi in chat to join in!/);
+  const empty = await make();
+  ans = await empty.slash('leaderboard', '', { user: IDS.member });
+  assert.match(embedOf(ans).description, /Nobody has XP yet/);
+  assert.equal(embedOf(ans).color, COLORS.levels);
+});
+
+test('names cannot break the markdown or ping anyone', async () => {
+  const h = await make();
+  seed(h, { [IDS.member]: { xp: 900 } });
+  h.fake.memberOf(S, IDS.member).nickname = '**bold** `code` <@&x> @everyone';
+  h.engine.perms.invalidate();
+  h.engine.cache.invalidate(S);
+  const board = embedOf(await h.slash('leaderboard', '', { user: IDS.member })).description;
+  assert.match(board, /^🥇 \*\*bold code @​&x @\u200beveryone\*\*/);
+  const card = await h.slash('rank', '', { user: IDS.member });
+  assert.ok(embedOf(card).author.name.length <= 256);
+});
+
+test('rank, rewards and leaderboard fit Yapin embed and button limits', async () => {
+  const h = await make();
+  const users = {};
+  for (let i = 0; i < 40; i++) users[uuid(1)] = { xp: 5_000_000 - i, voiceSeconds: 9_999_999 };
+  users[IDS.member] = { xp: 5_000_000, voiceSeconds: 9_999_999, messages: 9_999_999 };
+  seed(h, users);
+  const long = 'L'.repeat(300);
+  h.fake.memberOf(S, IDS.member).nickname = long;
+  for (let i = 0; i < 20; i++) {
+    const id = uuid(7);
+    h.fake.state.roles[S].push({ id, name: `Reward role ${i} ${'x'.repeat(80)}`, color: null, position: 5, perms: {}, auto: null, mentionable: false });
+  }
+  const rewards = {};
+  h.fake.state.roles[S].filter((r) => r.name.startsWith('Reward role')).forEach((r, i) => { rewards[(i + 1) * 40] = r.id; });
+  h.engine.settings.patchApp(S, 'levels', { rewards });
+  h.engine.perms.invalidate();
+  h.engine.cache.invalidate(S);
+  const check = (ans) => {
+    for (const e of ans[ans.length - 1].embeds || []) {
+      assert.ok(!e.title || e.title.length <= 256);
+      assert.ok(!e.description || e.description.length <= 4096);
+      assert.ok((e.fields || []).length <= 10);
+      for (const f of e.fields || []) { assert.ok(f.name.length <= 256); assert.ok(f.value.length <= 1024 && f.value.length > 0); }
+      assert.ok(!e.author || e.author.name.length <= 256);
+      assert.ok(!e.footer || e.footer.text.length <= 2048);
+      const total = (e.title || '').length + (e.description || '').length + (e.footer?.text || '').length + (e.author?.name || '').length + (e.fields || []).reduce((n, f) => n + f.name.length + f.value.length, 0);
+      assert.ok(total <= 6000, String(total));
+    }
+    const rows = ans[ans.length - 1].components || [];
+    assert.ok(rows.length <= 5);
+    for (const r of rows) assert.ok(r.components.length <= 5);
+  };
+  const card = await h.slash('rank', '', { user: IDS.member });
+  check(card);
+  assert.equal(embedOf(card).author.name.length, 256);
+  check(await h.clickButton('Rewards', { user: IDS.member, in: card }));
+  check(await h.slash('leaderboard', '', { user: IDS.member }));
+  check(await h.slash('leaderboard', '5', { user: IDS.member }));
+  check(await h.slash('leaderboard', 'voice', { user: IDS.member }));
+});
+
+test('avatar links only point at Yapin picture hosts', () => {
+  assert.equal(avatarUrl('https://files.yapper.website/avatars/ab/c.png'), 'https://files.yapper.website/avatars/ab/c.png');
+  assert.equal(avatarUrl('https://www.yapin.gg/bots/yapper.png'), 'https://www.yapin.gg/bots/yapper.png');
+  assert.equal(avatarUrl('https://evil.example/x.png'), null);
+  assert.equal(avatarUrl('https://files.yapper.website.evil.example/x.png'), null);
+  assert.equal(avatarUrl('//evil.example/x.png'), null);
+  assert.equal(avatarUrl('ab/../../x.png'), null);
+  assert.equal(avatarUrl('ab/c.png?x=1'), null);
+  assert.equal(avatarUrl('ab/c d.png'), null);
+  assert.equal(avatarUrl('data:image/png;base64,AAAA'), null);
+});
+
+test('a refused rank card picture still sends the card without it', async () => {
+  const h = await make();
+  seed(h, { [IDS.member]: { xp: 300 } });
+  h.fake.memberOf(S, IDS.member).avatar_path = 'ab12/cat.png';
+  h.engine.perms.invalidate();
+  h.engine.cache.invalidate(S);
+  h.fake.fail('POST', /\/interactions\/[^/]+\/[^/]+\/callback$/, { status: 400, error: "That picture's host isn't allowed", times: 1 });
+  const ans = await h.slash('rank', '', { user: IDS.member });
+  const e = embedOf(ans);
+  assert.equal(e.author.name, 'Sam');
+  assert.equal(e.author.icon_url, undefined);
+  assert.equal(e.thumbnail, undefined);
+  assert.match(e.description, /\*\*Level 2\*\*/);
+  assert.equal(h.allButtons(ans).map((b) => b.label).join(','), 'Leaderboard,Rewards');
+});
+
+test('long emoji names are shortened cleanly without broken characters', async () => {
+  const long = '🌸✨ Sakura the Absolutely Unstoppable Midnight Snack Champion 👨‍👩‍👧 of Test Town 🍜🔥💯';
+  const brokenPair = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  for (let n = 3; n < 40; n++) {
+    const s = shorten(long, n);
+    assert.ok(s.length <= n, `${n}: ${s}`);
+    assert.doesNotMatch(s, brokenPair);
+    assert.ok(s.endsWith('…'));
+    assert.ok(!/‍…$/.test(s));
+  }
+  assert.equal(shorten('Sam', 32), 'Sam');
+  const h = await make();
+  seed(h, { [IDS.member]: { xp: 900 }, [IDS.member2]: { xp: 500 } });
+  h.fake.memberOf(S, IDS.member).nickname = long;
+  h.engine.perms.invalidate();
+  h.engine.cache.invalidate(S);
+  const board = embedOf(await h.slash('leaderboard', '', { user: IDS.member2 })).description;
+  const first = board.split('\n')[0];
+  const name = /^🥇 \*\*(.+?)\*\* · Level/.exec(first)[1];
+  assert.ok(name.length <= 32 && name.endsWith('…'), name);
+  assert.doesNotMatch(board, brokenPair);
+  const card = embedOf(await h.slash('rank', '', { user: IDS.member }));
+  assert.equal(card.author.name, long);
+});
+
+test('voice under a minute reads as plain text and the top level has no next level', async () => {
+  const h = await make();
+  seed(h, { [IDS.member]: { xp: 300, voiceSeconds: 30 }, [IDS.member2]: { xp: totalXpForLevel(1000) + 50 } });
+  const sam = await h.slash('rank', '', { user: IDS.member });
+  assert.equal(fieldOf(sam, 'Voice'), 'under a minute');
+  const top = embedOf(await h.slash('rank', '', { user: IDS.member2 }));
+  assert.match(top.description, /^\*\*Level 1,000\*\*  ▸  max level\n/);
+  assert.match(top.description, /(?:🟥){10}  \*\*100%\*\*/u);
+  assert.doesNotMatch(top.description, /1,001|0 XP\*\* to go/);
 });

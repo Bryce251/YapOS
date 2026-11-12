@@ -40,6 +40,8 @@ test('a late burst of old chat replayed after sleep does not trip the flood filt
   for (let i = 0; i < 8; i++) sent.push(await h.message(`old message ${i}`, { lateBy: HOURS - i * 1000 }));
   assert.equal(stub.calls.filter((c) => c.fn === 'timeout').length, 0);
   assert.ok(sent.every((m) => !h.fake.state.messages[G].find((x) => x.id === m.id)?.deleted));
+  const cfg = h.engine.settings.appConfig(S, 'automod');
+  h.engine.settings.patchApp(S,'automod', { actions: { ...cfg.actions, spam: 'timeout' } });
   for (let i = 0; i < 7; i++) await h.message(`fresh message ${i}`);
   assert.equal(stub.calls.filter((c) => c.fn === 'timeout').length, 1, 'fresh floods are still caught');
 });

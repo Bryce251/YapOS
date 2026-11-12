@@ -2,7 +2,7 @@
 
 The all-in-one operating system for your Yapin' server. Moderation, automod, welcomes, role menus and more, organised as **apps** that each server installs or uninstalls with `/apps`.
 
-**YapOS 1.0 "Boot"** · System, Mod, Automod, Welcome, Roles, Levels, Tickets, Studio.
+**YapOS 1.0 "Boot"** · System, Mod, Automod, Welcome, Roles, Levels, Tickets, Studio, Economy, Engage, Tools, Voice, Games, Pocket.
 
 ## Run it
 
@@ -32,12 +32,29 @@ Needs Node.js 18 or newer (22+ so the live gateway is used; older versions fall 
 | Levels | `/rank` `/leaderboard` `/levels` |
 | Tickets | `/ticket` `/tickets` |
 | Studio | `/caption` `/gif` (needs ffmpeg installed) |
+| Economy | `/daily` `/balance` `/shop` `/economy` |
+| Engage | `/poll` `/giveaway` |
+| Tools | `/tag` (or type `!name`) `/embed` `/schedule` |
+| Voice | `/voice` |
+| Games | `/game` `/trivia` |
+| Pocket | `/remind` `/afk` `/pocket` (also in DMs: `remind`, `note`, `todo`, `tz`, `afk`, `help`; react 🔖 to bookmark a message) |
 
-Every hub command opens a panel. Most also take typed shortcuts, like `/mod timeout @sam 10m spam`, and `/yap` understands plain words: `/yap timeout @sam 10m`.
+39 commands in all. Every hub command opens a panel. Most also take typed shortcuts, like `/mod timeout @sam 10m spam`, and `/yap` understands plain words: `/yap timeout @sam 10m`.
 
 ## Give the bot a role
 
 Put the bot's role **above** the roles it should manage or moderate, and tick what you use: Manage Messages, Kick, Ban, Timeout Members, Manage Roles, Manage Channels. If a permission is missing, the bot tells you which one in plain words.
+
+| App | Needs |
+|---|---|
+| Mod | Kick, Ban (temporary bans too), Timeout Members, Manage Messages (purge), Manage Channels (lock, slowmode) |
+| Automod | Manage Messages; Timeout Members and Kick for those actions; Manage Roles for the raid lockdown (it changes @everyone, a testing feature) |
+| Roles, Welcome, Levels | Manage Roles, with the bot's role above the roles it gives |
+| Tickets | Manage Channels and Manage Roles (private ticket channels) |
+| Economy | Manage Roles only for shop items that give a role |
+| Voice | Manage Channels, Manage Roles and Move Members, with the bot's role above the room roles |
+| Engage, Tools, Games | Send Messages and Embed Links in the channels they post to |
+| Pocket | Read Message History for 🔖 bookmarks; reminders arrive by DM |
 
 ## Tests
 

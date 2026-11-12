@@ -351,7 +351,7 @@ test('emoji and label are set through the form', async () => {
   const bad = await h.submit('yo:roles:itemsave', { emoji: 'notanemoji', label: 'Gamers' }, admin);
   assert.match(h.textOf(last(bad)), /doesn't look like one emoji/);
   await h.submit('yo:roles:itemsave', { emoji: '🎮', label: 'Gamers' }, admin);
-  assert.deepEqual({ ...menus(h)[mid].items[0] }, { roleId: R.gamer, emoji: '🎮', label: 'Gamers' });
+  assert.deepEqual({ ...menus(h)[mid].items[0] }, { roleId: R.gamer, emoji: '🎮', label: 'Gamers', style: 'secondary', note: null, pos: 0 });
 });
 
 test('a full 25 role menu fits 5 rows and every custom id is under 100 characters', async () => {
@@ -422,7 +422,8 @@ test('panel shows the editor to admins and a note to members', async () => {
   assert.equal(h.allButtons(mod).length, 0);
 });
 
-const staffButtons = (mid) => ['home', 'clear', 'new', 'created', `open:${mid}`, `add:${mid}:0`, 'addpg:zz:0', 'addsel:zz', 'addbtn:zz:0', `items:${mid}:0`, `item:${mid}:0`, `itemform:${mid}:0`, 'itemsave', `unitem:${mid}:0`, `text:${mid}`, 'textsave', `type:${mid}:reactions`, `mode:${mid}:add`, `preview:${mid}`, `post:${mid}`, `postsel:${mid}`, 'postch:zz:0', `del:${mid}`];
+const staffButtons = (mid) => ['home', 'clear', 'new', 'created', `open:${mid}`, `tab:${mid}:style`, `add:${mid}:0`, 'addpg:zz:0', 'addsel:zz', 'addbtn:zz:0', `items:${mid}:0`, `item:${mid}:0`, `itemsel:${mid}`, `itemform:${mid}:0`, 'itemsave', `itemstyle:${mid}:0:danger`, `itemmove:${mid}:0:down`, `unitem:${mid}:0`, `text:${mid}`, 'textsave', `imgform:${mid}`, 'imgsave', `imgkind:${mid}:none`, `footform:${mid}`, 'footsave', `showlist:${mid}:off`, `accform:${mid}`, 'accsave', `defstyle:${mid}:danger`, `allstyle:${mid}`, `type:${mid}:reactions`, `mode:${mid}:add`, `maxform:${mid}`, 'maxsave', `needform:${mid}`, 'needsave', `needclear:${mid}`, `preview:${mid}`, `post:${mid}`, `postsel:${mid}`, 'postch:zz:0', `del:${mid}`];
+const FORM_SAVES = [['created', { title: 'Sneaky' }], ['textsave', { title: 'Sneaky' }], ['itemsave', { emoji: '🎮', label: 'Sneaky' }], ['imgsave', { url: 'https://i.imgur.com/x.png' }], ['footsave', { footer: 'Sneaky' }], ['accsave', { color: 'red' }], ['maxsave', { max: '1' }], ['needsave', { role: '@VIP' }]];
 
 test('every editor button is locked to the admin who opened the panel and refused by role when forged', async () => {
   const h = await createHarness({ apps: ['roles'] });
@@ -482,6 +483,7 @@ test('form handlers and the yap route check the role themselves', async () => {
   await assert.rejects(handler('created').run(asMember({ title: 'Sneaky' })), /Only admins/);
   await assert.rejects(handler('textsave').run(asMember({ title: 'Sneaky' })), /Only admins/);
   await assert.rejects(handler('itemsave').run(asMember({ emoji: '🎮', label: 'Sneaky' })), /Only admins/);
+  for (const [action, values] of FORM_SAVES) await assert.rejects(handler(action).run(asMember(values)), /Only admins/, action);
   await assert.rejects(h.engine.yap.find('roles').run(asMember({})), /Only admins/);
   assert.deepEqual(Object.keys(menus(h)), [mid]);
   assert.equal(menus(h)[mid].title, 'Games');
@@ -606,11 +608,11 @@ test('a member pressing staff buttons on a panel they opened themselves is still
     assert.match(h.textOf(ans[0]), /Only admins/, `${action} on the member's own panel`);
     assert.ok(!/\b40[0-9]\b/.test(h.textOf(ans[0])));
   }
-  for (const [action, values] of [['created', { title: 'Sneaky' }], ['textsave', { title: 'Sneaky' }], ['itemsave', { emoji: '🎮', label: 'Sneaky' }]]) {
+  for (const [action, values] of FORM_SAVES) {
     const ans = await h.submit(`yo:roles:${action}`, values, { user: IDS.member, messageId: myPanel });
     assert.match(h.textOf(ans[0]), /Only admins/);
   }
-  for (const [action, values] of [['addsel:zz', ['0']], [`postsel:${mid}`, [CH.general]]]) {
+  for (const [action, values] of [['addsel:zz', ['0']], [`postsel:${mid}`, [CH.general]], [`itemsel:${mid}`, ['0']]]) {
     const ans = await h.pick(`yo:roles:${action}`, values, { user: IDS.member, messageId: myPanel });
     assert.match(h.textOf(ans[0]), /Only admins/);
   }
@@ -979,4 +981,523 @@ test('hostile form values are cut down and never break the editor', async () => 
   }
   assert.equal(menus(h)[mid].type, 'buttons');
   assert.equal(menus(h)[mid].mode, 'toggle');
+});
+
+const embedOf = (msg) => msg.embeds[0];
+const descOf = (msg) => embedOf(msg).description || '';
+
+async function gamerVipMenu(h, title = 'Verify!') {
+  const mid = await newMenu(h, title);
+  await h.slash('roles', `add ${mid} @Gamer 🎮`, admin);
+  await h.slash('roles', `add ${mid} @VIP ⭐`, admin);
+  return mid;
+}
+
+test('each button gets its own text, emoji, colour, description and place, and the post shows it', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  const roles = await h.slash('roles', `open ${mid}`, admin);
+  const sel = h.allButtons(last(roles)).find((b) => b.isSelect);
+  assert.equal(sel.custom_id, `yo:roles:itemsel:${mid}`);
+  assert.deepEqual(sel.options.map((o) => o.label), ['1. Gamer', '2. VIP']);
+  const opened = await h.pick(sel.custom_id, ['1'], admin);
+  const view = last(opened);
+  assert.match(h.textOf(view), /This is how the button looks/);
+  for (const label of ['Edit text & emoji', 'Up', 'Down', 'Remove', 'Blue', 'Grey', 'Green', 'Red', 'Back']) assert.ok(h.findButton(label, view), label);
+  assert.equal(h.findButton('Grey', view).emoji, '✅', 'the current colour is marked');
+  assert.equal(h.findButton('Down', view).disabled, true, 'the last role cannot move down');
+
+  const form = await h.click(`yo:roles:itemform:${mid}:1`, admin);
+  assert.equal(form[0].type, 'modal');
+  assert.deepEqual(form[0].modal.components.map((c) => c.custom_id), ['label', 'emoji', 'note']);
+  await h.submit('yo:roles:itemsave', { label: 'Big Spenders', emoji: '💎', note: 'Supporters only' }, admin);
+  const green = await h.click(`yo:roles:itemstyle:${mid}:1:success`, admin);
+  assert.equal(h.findButton('Green', last(green)).emoji, '✅');
+  assert.equal(last(green).components[0].components[0].style, 'success', 'the preview button shows the new colour');
+  await h.click(`yo:roles:itemmove:${mid}:1:up`, admin);
+  await h.click(`yo:roles:itemstyle:${mid}:0:danger`, admin);
+  const item = menus(h)[mid].items[1];
+  assert.deepEqual({ label: item.label, emoji: item.emoji, note: item.note, style: item.style, pos: item.pos }, { label: 'Big Spenders', emoji: '💎', note: 'Supporters only', style: 'success', pos: 0 });
+
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+  const btns = h.allButtons([msg]);
+  assert.deepEqual(btns.map((b) => [b.label, b.emoji, b.style, b.custom_id]), [
+    ['Big Spenders', '💎', 'success', `yo:roles:p:${mid}:1`],
+    ['Gamer', '🎮', 'danger', `yo:roles:p:${mid}:0`],
+  ]);
+  assert.equal(descOf(msg), `💎 **Big Spenders** → <@&${R.vip}> · Supporters only\n🎮 **Gamer** → <@&${R.gamer}>`);
+  assert.equal(embedOf(msg).title, 'Verify!');
+  assert.equal(embedOf(msg).footer.text, 'Click again to remove a role');
+  const on = await h.click(btns[0].custom_id, { user: IDS.member, channel: CH.roles, messageId: msg.id });
+  assert.match(on[0].content, /Added \*\*@VIP\*\*/, 'moving a button never changes the role behind it');
+});
+
+test('moving a role on a posted menu keeps the live buttons working until the post is updated', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+  await h.slash('roles', `item ${mid} 2 up`, admin);
+  assert.equal(menus(h)[mid].dirty, true);
+  const editor = await h.slash('roles', `open ${mid}`, admin);
+  assert.match(h.textOf(last(editor)), /changes not posted yet/);
+  const at = { user: IDS.member, channel: CH.roles, messageId: msg.id };
+  assert.match((await h.click(`yo:roles:p:${mid}:0`, at))[0].content, /Added \*\*@Gamer\*\*/);
+  await h.click(`yo:roles:post:${mid}`, admin);
+  const after = await postedMessage(h, mid);
+  assert.equal(after.id, msg.id);
+  assert.deepEqual(h.allButtons([after]).map((b) => b.label), ['VIP', 'Gamer']);
+  assert.doesNotMatch(h.textOf(last(await h.slash('roles', `open ${mid}`, admin))), /changes not posted yet/);
+});
+
+test('the posted list can be hidden, and the menu text comes first', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  await h.slash('roles', `set ${mid} text Grab a role below.`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  let msg = await postedMessage(h, mid);
+  assert.ok(descOf(msg).startsWith('Grab a role below.\n\n🎮 **Gamer** → '));
+  const tab = await h.click(`yo:roles:tab:${mid}:content`, admin);
+  const toggle = h.findButton('Role list: shown', last(tab));
+  assert.equal(toggle.custom_id, `yo:roles:showlist:${mid}:off`);
+  await h.click(toggle.custom_id, admin);
+  await h.click(`yo:roles:post:${mid}`, admin);
+  msg = await postedMessage(h, mid);
+  assert.equal(descOf(msg), 'Grab a role below.');
+  assert.ok(!descOf(msg).includes('<@&'));
+  await h.slash('roles', `set ${mid} list on`, admin);
+  assert.equal(menus(h)[mid].showList, true);
+});
+
+test('dropdown options carry the label, emoji and description', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h, 'Pings');
+  await h.slash('roles', `item ${mid} 1 desc Game night pings`, admin);
+  await h.slash('roles', `item ${mid} 1 label Gamers`, admin);
+  await h.slash('roles', `type ${mid} dropdown`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+  const sel = msg.components[0].components[0];
+  assert.deepEqual(sel.options, [
+    { label: 'Gamers', value: '0', emoji: '🎮', description: 'Game night pings' },
+    { label: 'VIP', value: '1', emoji: '⭐', description: 'Gives you @VIP' },
+  ]);
+  assert.equal(descOf(msg), `🎮 **Gamers** → <@&${R.gamer}> · Game night pings\n⭐ **VIP** → <@&${R.vip}>`);
+  assert.equal(embedOf(msg).footer.text, 'Pick a role again to remove it');
+});
+
+test('reaction menus list emoji to role, and footers follow the mode', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h, 'Pings');
+  await h.slash('roles', `item ${mid} 2 desc For supporters`, admin);
+  await h.slash('roles', `type ${mid} reactions`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  let msg = await postedMessage(h, mid);
+  assert.equal(descOf(msg), `🎮 → <@&${R.gamer}>\n⭐ → <@&${R.vip}> · For supporters`);
+  assert.equal(embedOf(msg).footer.text, 'Remove your reaction to drop a role');
+  await h.slash('roles', `mode ${mid} unique`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  msg = await postedMessage(h, mid);
+  assert.equal(embedOf(msg).footer.text, 'You can have one role from this menu');
+  await h.slash('roles', `mode ${mid} add`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  msg = await postedMessage(h, mid);
+  assert.equal(embedOf(msg).footer.text, 'Roles stay once you get them');
+  const noEmoji = await h.slash('roles', `item ${mid} 1 emoji none`, admin);
+  assert.match(h.textOf(last(noEmoji)), /need an emoji/);
+  assert.equal(menus(h)[mid].items[0].emoji, '🎮');
+});
+
+test('accent colour, picture and footer are set from the editor and show on the post', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  const style = await h.click(`yo:roles:tab:${mid}:style`, admin);
+  assert.ok(h.findButton('Accent colour', last(style)));
+  const accForm = await h.click(`yo:roles:accform:${mid}`, admin);
+  assert.equal(accForm[0].type, 'modal');
+  const badColour = await h.submit('yo:roles:accsave', { color: 'sparkly' }, admin);
+  assert.match(h.textOf(last(badColour)), /don't know the colour/);
+  assert.equal(menus(h)[mid].color, null);
+  await h.submit('yo:roles:accsave', { color: 'Blue' }, admin);
+  assert.equal(menus(h)[mid].color, 0x3498db);
+  await h.slash('roles', `set ${mid} accent #f80`, admin);
+  assert.equal(menus(h)[mid].color, 0xff8800);
+
+  await h.click(`yo:roles:imgform:${mid}`, admin);
+  for (const [url, why] of [['http://i.imgur.com/a.png', /https/], ['https://evil.example.com/a.png', /doesn't show pictures from \*\*evil\.example\.com\*\*/], ['not a link', /isn't a link/], ['https://user:pw@i.imgur.com/a.png', /login or port/], [`https://i.imgur.com/${'a'.repeat(600)}.png`, /too long/]]) {
+    const ans = await h.submit('yo:roles:imgsave', { url }, admin);
+    assert.match(h.textOf(last(ans)), why, url);
+    assert.equal(menus(h)[mid].image, null, url);
+  }
+  await h.submit('yo:roles:imgsave', { url: 'https://i.imgur.com/banner.png' }, admin);
+  assert.equal(menus(h)[mid].image, 'https://i.imgur.com/banner.png');
+  const typedBad = await h.slash('roles', `set ${mid} thumbnail https://cdn.example.org/x.png`, admin);
+  assert.match(h.textOf(last(typedBad)), /doesn't show pictures/);
+  await h.slash('roles', `set ${mid} thumbnail https://tr.rbxcdn.com/abc.png`, admin);
+  assert.equal(menus(h)[mid].imageKind, 'thumbnail');
+  const content = await h.click(`yo:roles:tab:${mid}:content`, admin);
+  assert.ok(h.findButton('Small corner picture', last(content)));
+
+  await h.click(`yo:roles:footform:${mid}`, admin);
+  await h.submit('yo:roles:footsave', { footer: 'Welcome aboard' }, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  let e = embedOf(await postedMessage(h, mid));
+  assert.equal(e.color, 0xff8800);
+  assert.deepEqual(e.thumbnail, { url: 'https://tr.rbxcdn.com/abc.png' });
+  assert.equal(e.image, undefined);
+  assert.equal(e.footer.text, 'Welcome aboard');
+
+  await h.click(`yo:roles:imgkind:${mid}:image`, admin);
+  await h.click(`yo:roles:footform:${mid}`, admin);
+  await h.submit('yo:roles:footsave', { footer: '' }, admin);
+  await h.slash('roles', `set ${mid} accent default`, admin);
+  await h.click(`yo:roles:post:${mid}`, admin);
+  e = embedOf(await postedMessage(h, mid));
+  assert.deepEqual(e.image, { url: 'https://tr.rbxcdn.com/abc.png' });
+  assert.equal(e.footer.text, 'Click again to remove a role');
+  assert.equal(e.color, 0x9b59b6);
+  await h.click(`yo:roles:imgkind:${mid}:none`, admin);
+  assert.equal(menus(h)[mid].image, null);
+});
+
+test('a cap on roles per person is checked when someone clicks', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  await h.click(`yo:roles:maxform:${mid}`, admin);
+  const bad = await h.submit('yo:roles:maxsave', { max: 'lots' }, admin);
+  assert.match(h.textOf(last(bad)), /Type a number/);
+  await h.submit('yo:roles:maxsave', { max: '1' }, admin);
+  assert.equal(menus(h)[mid].maxRoles, 1);
+  const settings = await h.click(`yo:roles:tab:${mid}:settings`, admin);
+  assert.ok(h.findButton('Max roles: 1', last(settings)));
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+  assert.match(embedOf(msg).footer.text, /Up to 1 role from this menu/);
+  const at = { user: IDS.member, channel: CH.roles, messageId: msg.id };
+  assert.match((await h.click(`yo:roles:p:${mid}:0`, at))[0].content, /Added \*\*@Gamer\*\*/);
+  const over = await h.click(`yo:roles:p:${mid}:1`, at);
+  assert.match(over[0].content, /You can have up to 1 role from this menu\. Remove one first\./);
+  assert.ok(!memberRoles(h).includes(R.vip));
+  await h.click(`yo:roles:p:${mid}:0`, at);
+  assert.match((await h.click(`yo:roles:p:${mid}:1`, at))[0].content, /Added \*\*@VIP\*\*/);
+
+  await h.slash('roles', `type ${mid} dropdown`, admin);
+  await h.slash('roles', `set ${mid} max 2`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  let dd = await postedMessage(h, mid);
+  assert.equal(dd.components[0].components[0].max_values, 2);
+  await h.slash('roles', `set ${mid} max 1`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  dd = await postedMessage(h, mid);
+  assert.equal(dd.components[0].components[0].max_values, 1);
+  const both = await h.pick(`yo:roles:d:${mid}`, ['0'], { user: IDS.member, channel: CH.roles, messageId: dd.id });
+  assert.match(both[0].content, /up to 1 role/);
+});
+
+test('a menu can need a role, and people without it get a plain reason', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h, 'Members area');
+  await h.slash('roles', `add ${mid} @Gamer 🎮`, admin);
+  await h.click(`yo:roles:needform:${mid}`, admin);
+  const unknown = await h.submit('yo:roles:needsave', { role: 'Nobody Has This' }, admin);
+  assert.match(h.textOf(last(unknown)), /can't find a role/);
+  await h.submit('yo:roles:needsave', { role: '@VIP' }, admin);
+  assert.equal(menus(h)[mid].needRole, R.vip);
+  const settings = await h.click(`yo:roles:tab:${mid}:settings`, admin);
+  assert.match(h.textOf(last(settings)), new RegExp(`Only people with <@&${R.vip}>`));
+  assert.ok(h.findButton('Let anyone use it', last(settings)));
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+  const at = { user: IDS.member, channel: CH.roles, messageId: msg.id };
+  const no = await h.click(`yo:roles:p:${mid}:0`, at);
+  assert.equal(no[0].type, 'ephemeral');
+  assert.match(h.textOf(no[0]), /Needs a role/);
+  assert.match(h.textOf(no[0]), /Only people with \*\*@VIP\*\* can use this menu/);
+  assert.ok(!memberRoles(h).includes(R.gamer));
+
+  h.fake.memberOf(IDS.server, IDS.member).roles.push(R.vip);
+  h.engine.perms.invalidate();
+  assert.match((await h.click(`yo:roles:p:${mid}:0`, at))[0].content, /Added \*\*@Gamer\*\*/);
+
+  await h.slash('roles', `type ${mid} reactions`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  await h.react(msg.id, '🎮', { user: IDS.member2, channel: CH.roles });
+  assert.ok(!memberRoles(h, IDS.member2).includes(R.gamer), 'reactions respect the needed role too');
+
+  h.fake.state.roles[IDS.server] = h.fake.state.roles[IDS.server].filter((r) => r.id !== R.vip);
+  h.engine.perms.invalidate();
+  await h.slash('roles', `type ${mid} buttons`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const gone = await h.click(`yo:roles:p:${mid}:0`, { ...at, user: IDS.member2 });
+  assert.match(h.textOf(gone[0]), /needs a role that was deleted/);
+
+  await h.click(`yo:roles:needclear:${mid}`, admin);
+  assert.equal(menus(h)[mid].needRole, null);
+  assert.match((await h.click(`yo:roles:p:${mid}:0`, { ...at, user: IDS.member2 }))[0].content, /Added \*\*@Gamer\*\*/);
+});
+
+test('tabs switch on the same message, highlight the open tab and stay locked to the opener', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  const editor = await h.slash('roles', `open ${mid}`, admin);
+  const panelId = last(editor).message.id;
+  const tabStyles = (comps) => comps[0].components.map((b) => [b.label, b.style]);
+  assert.deepEqual(tabStyles(last(editor).components), [['Content', 'secondary'], ['Roles', 'primary'], ['Style', 'secondary'], ['Settings', 'secondary']]);
+  const before = h.sent(CH.general).length;
+  for (const [tab, label, expect] of [['content', 'Content', /Title & text/], ['style', 'Style', /Accent colour/], ['settings', 'Settings', /Max roles/], ['roles', 'Roles', /Add roles/]]) {
+    const ans = await h.click(`yo:roles:tab:${mid}:${tab}`, { ...admin, messageId: panelId });
+    assert.equal(ans.length, 1);
+    assert.equal(ans[0].type, 'update', tab);
+    const panel = h.fake.messagesIn(CH.general).find((x) => x.id === panelId);
+    assert.ok(tabStyles(panel.components).find(([l, s]) => l === label && s === 'primary'), `${tab} highlighted`);
+    assert.equal(tabStyles(panel.components).filter(([, s]) => s === 'primary').length, 1);
+    assert.match(h.textOf(panel), expect);
+    assert.ok(panel.components.length <= 5);
+    const actions = panel.components.at(-1).components.map((b) => b.label);
+    assert.deepEqual(actions, ['Preview', 'Post', 'Delete', 'All menus']);
+  }
+  assert.equal(h.sent(CH.general).length, before, 'no new messages, the same panel changed');
+  h.addSecondAdmin();
+  const other = await h.click(`yo:roles:tab:${mid}:style`, { user: IDS.admin2, messageId: panelId });
+  assert.match(h.textOf(other[0]), /Not your panel/);
+  const forged = await h.click(`yo:roles:tab:${mid}:style`, { user: IDS.member });
+  assert.match(h.textOf(forged[0]), /Only admins/);
+  assert.equal(h.engine.router.panelOwner(panelId), IDS.admin);
+});
+
+test('the editor status line tells drafts, posts and unposted changes apart', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  assert.match(h.textOf(last(await h.slash('roles', `open ${mid}`, admin))), /Draft/);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const posted = h.textOf(last(await h.slash('roles', `open ${mid}`, admin)));
+  assert.match(posted, new RegExp(`Posted\\*\\* in <#${CH.roles}>`));
+  assert.doesNotMatch(posted, /changes not posted yet/);
+  await h.slash('roles', `item ${mid} 1 color blue`, admin);
+  assert.match(h.textOf(last(await h.slash('roles', `open ${mid}`, admin))), /• changes not posted yet/);
+  const home = h.textOf(last(await h.slash('roles', 'list', admin)));
+  assert.ok(home.includes(`\`${mid}\` **Verify!** · Buttons · Toggle · 2 roles · 📌 <#${CH.roles}> • changes not posted yet`), home);
+});
+
+test('typed item shortcuts change one button at a time', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  const it = (n) => menus(h)[mid].items[n];
+  await h.slash('roles', `item ${mid} 2 label Gamers Club`, admin);
+  assert.equal(it(1).label, 'Gamers Club');
+  await h.message(`/roles item ${mid} 2 color green`, admin);
+  assert.equal(it(1).style, 'success');
+  await h.slash('roles', `item ${mid} 2 emoji 🎲`, admin);
+  assert.equal(it(1).emoji, '🎲');
+  await h.slash('roles', `item ${mid} 1 desc Shows up in the list`, admin);
+  assert.equal(it(0).note, 'Shows up in the list');
+  const up = await h.slash('roles', `item ${mid} 2 up`, admin);
+  assert.match(h.textOf(last(up)), /Moved up/);
+  assert.deepEqual([it(0).pos, it(1).pos], [1, 0]);
+  const top = await h.slash('roles', `item ${mid} 1 up`, admin);
+  assert.match(h.textOf(last(top)), /already at the top/);
+  const badColour = await h.slash('roles', `item ${mid} 1 color plaid`, admin);
+  assert.match(h.textOf(last(badColour)), /Pick \*\*blue\*\*/);
+  const badEmoji = await h.slash('roles', `item ${mid} 1 emoji hello`, admin);
+  assert.match(h.textOf(last(badEmoji)), /doesn't look like one emoji/);
+  const badNum = await h.slash('roles', `item ${mid} 9 color red`, admin);
+  assert.match(h.textOf(last(badNum)), /Which role/);
+  const badWhat = await h.slash('roles', `item ${mid} 1 sparkle`, admin);
+  assert.match(h.textOf(last(badWhat)), /I can change/);
+  const open = await h.slash('roles', `item ${mid} 1`, admin);
+  assert.ok(h.findButton('Edit text & emoji', last(open)));
+  const gone = await h.slash('roles', `item ${mid} 1 remove`, admin);
+  assert.match(h.textOf(last(gone)), /Took \*\*Gamers Club\*\* off/);
+  assert.ok(h.findButton('Undo', last(gone)));
+  assert.equal(it(1), null);
+  for (const who of [{ user: IDS.member }, { user: IDS.mod }]) {
+    assert.match(h.textOf(last(await h.slash('roles', `item ${mid} 1 color red`, who))), /Only admins/);
+    assert.match(h.textOf(last(await h.slash('roles', `set ${mid} needs @Gamer`, who))), /Only admins/);
+  }
+  assert.equal(it(0).style, 'secondary');
+  assert.equal(menus(h)[mid].needRole, null);
+});
+
+test('new buttons use the menu colour, and it can be applied to every button', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  const style = await h.click(`yo:roles:defstyle:${mid}:primary`, admin);
+  assert.equal(h.findButton('Blue', last(style)).emoji, '✅');
+  await h.slash('roles', `add ${mid} @VIP`, admin);
+  assert.deepEqual(menus(h)[mid].items.map((i) => i.style), ['secondary', 'primary']);
+  await h.click(`yo:roles:allstyle:${mid}`, admin);
+  assert.deepEqual(menus(h)[mid].items.map((i) => i.style), ['primary', 'primary']);
+});
+
+test('menus saved before buttons could be customised still open, post and give roles', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  h.engine.store.set('roles', IDS.server, {
+    seq: 2,
+    notices: [],
+    menus: {
+      m1: { title: 'Old', description: 'From before', type: 'buttons', mode: 'toggle', channelId: null, messageId: null, postedAs: null, dirty: false, items: [{ roleId: R.gamer, emoji: '🎮', label: 'Gamer' }, null, { roleId: R.vip, emoji: null, label: 'VIP' }] },
+      m2: { title: 'Live', description: '', type: 'buttons', mode: 'unique', channelId: CH.roles, messageId: 'old-message', postedAs: 'buttons', dirty: false, items: [{ roleId: R.gamer, emoji: null, label: 'Gamer' }] },
+    },
+  });
+  const home = await h.slash('roles', 'list', admin);
+  assert.match(h.textOf(last(home)), /Old/);
+  for (const tab of ['content', 'roles', 'style', 'settings']) {
+    const ans = await h.slash('roles', `open m1 ${tab}`, admin);
+    assert.match(h.textOf(last(ans)), /Old/, tab);
+  }
+  const itemV = await h.click('yo:roles:item:m1:2', admin);
+  assert.match(h.textOf(last(itemV)), /Position/);
+  await h.slash('roles', 'post m1 #get-roles', admin);
+  const msg = await postedMessage(h, 'm1');
+  assert.deepEqual(h.allButtons([msg]).map((b) => [b.label, b.style, b.custom_id]), [['Gamer', 'secondary', 'yo:roles:p:m1:0'], ['VIP', 'secondary', 'yo:roles:p:m1:2']]);
+  assert.equal(descOf(msg), `From before\n\n🎮 **Gamer** → <@&${R.gamer}>\n**VIP** → <@&${R.vip}>`);
+  assert.match((await h.click('yo:roles:p:m1:2', { user: IDS.member, channel: CH.roles, messageId: msg.id }))[0].content, /Added \*\*@VIP\*\*/);
+  const live = await h.click('yo:roles:p:m2:0', { user: IDS.member2, channel: CH.roles, messageId: 'old-message' });
+  assert.match(live[0].content, /Added \*\*@Gamer\*\*/, 'a menu posted by the old version keeps working without a repost');
+  await h.slash('roles', 'item m1 1 color red', admin);
+  assert.equal(menus(h).m1.items[0].style, 'danger');
+  assert.equal(menus(h).m1.items[1], null);
+});
+
+test('a full menu with the longest text stays inside every Yapin limit', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  for (let i = 0; i < 25; i++) {
+    h.fake.state.roles[IDS.server].push({ id: `r0000000-0000-4000-8300-${String(i).padStart(12, '0')}`, name: `${'Role name '.repeat(9)}${i}`, color: null, position: 1, perms: {}, auto: null, mentionable: false });
+  }
+  const mid = await newMenu(h, 'T'.repeat(100));
+  await h.click(`yo:roles:text:${mid}`, admin);
+  await h.submit('yo:roles:textsave', { title: 'T'.repeat(300), description: 'D'.repeat(3000) }, admin);
+  const extra = h.fake.state.roles[IDS.server].filter((r) => r.id.includes('-8300-'));
+  for (const [i, r] of extra.entries()) await h.slash('roles', `add ${mid} <@&${r.id}> <:longemojiname_that_is_long:e0000000-0000-4000-8000-${String(i).padStart(12, '0')}> ${'L'.repeat(120)}`, admin);
+  assert.equal(menus(h)[mid].items.length, 25);
+  for (let n = 1; n <= 25; n++) await h.slash('roles', `item ${mid} ${n} desc ${'N'.repeat(150)}`, admin);
+  await h.slash('roles', `set ${mid} image https://i.imgur.com/${'p'.repeat(400)}.png`, admin);
+  await h.slash('roles', `set ${mid} footer ${'F'.repeat(400)}`, admin);
+  await h.slash('roles', `set ${mid} max 3`, admin);
+  await h.slash('roles', `set ${mid} needs @Gamer`, admin);
+  const m = menus(h)[mid];
+  assert.ok(m.items.every((i) => i.label.length <= 80 && i.note.length <= 100 && i.emoji.startsWith('<:')));
+  assert.ok(m.title.length <= 100 && m.description.length <= 1000 && m.footer.length <= 200);
+  assert.ok(m.image && m.maxRoles === 3 && m.needRole === R.gamer);
+
+  const checkEmbed = (e) => {
+    assert.ok(!e.title || e.title.length <= 256);
+    assert.ok(!e.description || e.description.length <= 4096, `description ${e.description?.length}`);
+    assert.ok((e.fields || []).length <= 10);
+    for (const f of e.fields || []) assert.ok(f.name.length <= 256 && f.value.length <= 1024);
+    const total = (e.title || '').length + (e.description || '').length + (e.footer?.text || '').length + (e.fields || []).reduce((s, f) => s + f.name.length + f.value.length, 0);
+    assert.ok(total <= 6000, `embed total ${total}`);
+  };
+  const checkMessage = (x, where) => {
+    const comps = x.components || [];
+    assert.ok(comps.length <= 5, `${where}: ${comps.length} rows`);
+    for (const r of comps) {
+      assert.ok(r.components.length <= 5, `${where}: row of ${r.components.length}`);
+      for (const c of r.components) {
+        if (c.custom_id) assert.ok(Buffer.byteLength(c.custom_id, 'utf8') <= 100, `${where}: ${c.custom_id}`);
+        if (c.type === 'button') assert.ok((c.label || '').length <= 80, `${where}: button label`);
+        if (c.type === 'select') {
+          assert.ok(c.options.length <= 25);
+          for (const o of c.options) assert.ok(o.label.length <= 100 && (o.description || '').length <= 100 && String(o.value).length <= 100);
+        }
+      }
+    }
+    for (const e of x.embeds || []) checkEmbed(e);
+  };
+
+  for (const type of ['buttons', 'dropdown', 'reactions']) {
+    await h.slash('roles', `type ${mid} ${type}`, admin);
+    const ans = await h.slash('roles', `post ${mid} #get-roles`, admin);
+    assert.match(h.textOf(last(ans)), /Posted|Updated the post/, type);
+    const msg = await postedMessage(h, mid);
+    checkMessage(msg, `posted ${type}`);
+    assert.ok(descOf(msg).startsWith('D'.repeat(100)));
+    assert.ok(descOf(msg).includes(`<@&${extra[24].id}>`), `${type} still names every role`);
+  }
+  await h.slash('roles', `type ${mid} buttons`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+  assert.equal(msg.components.length, 5);
+  assert.ok(msg.components.every((r) => r.components.length === 5));
+
+  for (const tab of ['content', 'roles', 'style', 'settings']) await h.click(`yo:roles:tab:${mid}:${tab}`, admin);
+  await h.click(`yo:roles:item:${mid}:24`, admin);
+  await h.click(`yo:roles:preview:${mid}`, admin);
+  await h.slash('roles', 'list', admin);
+  h.fake.features.selects = false;
+  h.engine.caps.mark(IDS.server, 'selects', false);
+  for (const page of [0, 1, 2]) {
+    const ans = await h.click(`yo:roles:tab:${mid}:roles:${page}`, admin);
+    assert.ok(!JSON.stringify(last(ans).components).includes('"select"'), 'falls back to buttons');
+    assert.ok(h.findButton(`${page * 10 + 1}. `, last(ans)), `page ${page}`);
+  }
+  for (const a of h.fake.answers) checkMessage(a, `answer ${a.type}`);
+  for (const s of h.sent()) checkMessage(s, 'sent');
+});
+
+const menuRoles = (h, uid) => memberRoles(h, uid).filter((r) => r === R.gamer || r === R.vip);
+
+test('fast clicks on two buttons at once still respect max roles and pick one', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  await h.slash('roles', `set ${mid} max 1`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+  const at = (user) => ({ user, channel: CH.roles, messageId: msg.id });
+  const [a, b] = await Promise.all([h.click(`yo:roles:p:${mid}:0`, at(IDS.member)), h.click(`yo:roles:p:${mid}:1`, at(IDS.member))]);
+  assert.equal(menuRoles(h, IDS.member).length, 1, 'only one role from the menu');
+  assert.match(`${a[0].content}\n${b[0].content}`, /You can have up to 1 role from this menu\. Remove one first\./);
+
+  await h.slash('roles', `set ${mid} max 0`, admin);
+  await h.slash('roles', `mode ${mid} unique`, admin);
+  await h.click(`yo:roles:post:${mid}`, admin);
+  h.fake.memberOf(IDS.server, IDS.member2).roles = h.fake.memberOf(IDS.server, IDS.member2).roles.filter((r) => r !== R.gamer && r !== R.vip);
+  await Promise.all([h.click(`yo:roles:p:${mid}:0`, at(IDS.member2)), h.click(`yo:roles:p:${mid}:1`, at(IDS.member2))]);
+  assert.equal(menuRoles(h, IDS.member2).length, 1, 'pick one keeps a single role');
+});
+
+test('fast reactions at once still respect max roles', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  await h.slash('roles', `set ${mid} max 1`, admin);
+  await h.slash('roles', `type ${mid} reactions`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+  await Promise.all([h.react(msg.id, '🎮', { channel: CH.roles }), h.react(msg.id, '⭐', { channel: CH.roles })]);
+  assert.equal(menuRoles(h, IDS.member).length, 1);
+});
+
+test('changing a reaction emoji keeps the posted one working until the post is updated', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  await h.slash('roles', `type ${mid} reactions`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+  const view = await h.slash('roles', `item ${mid} 1 emoji 🕹️`, admin);
+  assert.match(h.textOf(last(view)), /People react with 🕹️ to get this role/);
+  await h.react(msg.id, '🕹️', { channel: CH.roles });
+  assert.ok(!memberRoles(h).includes(R.gamer), 'the new emoji is not on the post yet');
+  await h.react(msg.id, '🎮', { channel: CH.roles });
+  assert.ok(memberRoles(h).includes(R.gamer), 'the emoji people see on the post still works');
+  await h.react(msg.id, '🎮', { channel: CH.roles, remove: true });
+  assert.ok(!memberRoles(h).includes(R.gamer));
+  await h.click(`yo:roles:post:${mid}`, admin);
+  await h.react(msg.id, '🎮', { channel: CH.roles });
+  assert.ok(!memberRoles(h).includes(R.gamer), 'the old emoji stops after the update');
+  await h.react(msg.id, '🕹️', { channel: CH.roles });
+  assert.ok(memberRoles(h).includes(R.gamer));
+});
+
+test('undoing a removal never puts the same role on the menu twice', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await gamerVipMenu(h);
+  const removed = await h.slash('roles', `item ${mid} 1 remove`, admin);
+  const undo = h.findButton('Undo', last(removed));
+  assert.ok(undo);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  const ans = await h.click(undo.custom_id, { user: IDS.admin, messageId: last(removed).id });
+  assert.match(h.textOf(last(ans)), /already on/);
+  assert.equal(menus(h)[mid].items.filter((i) => i && i.roleId === R.gamer).length, 1);
 });

@@ -10,6 +10,7 @@ import { createRouter } from './router.js';
 import { createPrompts } from './prompts.js';
 import { createContext } from './context.js';
 import { createFreshness } from './freshness.js';
+import { createScheduler } from './scheduler.js';
 import { createAppRegistry, createYap } from './apps.js';
 import { dialog } from './ui.js';
 import { normalizeName } from './parse.js';
@@ -43,7 +44,7 @@ export function detectChannels(channels) {
   return found;
 }
 
-export function createEngine({ bot, config = {}, store = createMemoryStore(), log = createLogger(), appsDir = path.join(ROOT, 'apps'), freshness: freshnessOptions = {} } = {}) {
+export function createEngine({ bot, config = {}, store = createMemoryStore(), log = createLogger(), appsDir = path.join(ROOT, 'apps'), freshness: freshnessOptions = {}, scheduler: schedulerOptions = {} } = {}) {
   const apps = createAppRegistry();
   const settings = createSettings({ store, apps });
   const isBotOwner = (uid) => !!uid && uid === (config.ownerId || bot.me?.bot?.owner_id);
@@ -86,13 +87,14 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
     bot, config, store, log, apps, settings, perms, caps, budget, prompts, yap, services, cache, stats, startedAt, VERSION,
     router: null,
     freshness: null,
+    scheduler: null,
     dmRoutes: [],
     contextFor: (source, opts) => createContext(engine, source, opts),
     service: (id) => services.get(id) || null,
     isBotOwner,
     detectChannels: async (sid) => detectChannels(await cache.channels(sid)),
 
-    async chatForm(ctx, { title, fields, action }) {
+    async chatForm(ctx, { title, fields, action, args = [] }) {
       if (ctx.source.ack && !ctx.answered) {
         await ctx.ephemeral({ embeds: [dialog.info(title, `Let's do this in chat. I'll ask ${fields.length} question${fields.length === 1 ? '' : 's'}; type **cancel** to stop.`)] }).catch(() => {});
       }
@@ -109,8 +111,19 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
       }
       const h = engine.router.handlers.get(`${ctx.app}:${action}`);
       if (!h) throw new Error(`No handler ${ctx.app}:${action} for chat form`);
-      const source = { server_id: ctx.serverId, channel_id: ctx.channelId, user_id: ctx.userId, username: ctx.username, values };
-      const formCtx = createContext(engine, source, { app: ctx.app, kind: 'modal_submit', values, args: [] });
+      const source = { server_id: ctx.serverId, channel_id: ctx.channelId, user_id: ctx.userId, username: ctx.username, values, ...(ctx.serverId ? {} : { dm: true, reply: (content, o = {}) => budget.send({ channelId: ctx.channelId, content, opts: { embeds: o.embeds, components: o.components, files: o.files }, priority: 'high' }) }) };
+      const formArgs = [].concat(args ?? []).map((a) => String(a ?? ''));
+      const formCtx = createContext(engine, source, { app: ctx.app, kind: 'modal_submit', values, args: formArgs });
+      if (ctx.serverId && !settings.isEnabled(ctx.serverId, ctx.app)) {
+        const meta = apps.get(ctx.app)?.meta;
+        await formCtx.warn(`${meta?.name || ctx.app} isn't installed here`, 'An admin can install it with **/apps**.');
+        return 'chat';
+      }
+      if (h.perm && ctx.serverId) await perms.require(ctx.serverId, ctx.userId, h.perm);
+      if (h.owner && ctx.userId !== formArgs[h.ownerArg ?? 0]) {
+        await formCtx.ephemeral({ embeds: [dialog.denied(null, { title: 'Not your form', body: 'Run the command yourself to get your own.' })] });
+        return 'chat';
+      }
       await h.run(formCtx);
       return 'chat';
     },
@@ -119,6 +132,7 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
       if (only) for (const id of only) await bot.load(path.join(appsDir, `${id}.js`));
       else await bot.loadCogs(appsDir);
       log.info(`${VERSION.full}: ${apps.size} apps loaded (${apps.list().map((a) => a.meta.id).join(', ')})`);
+      engine.scheduler.start();
     },
 
     gatewayState() {
@@ -129,6 +143,7 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
   };
 
   bot.yapos = engine;
+  engine.scheduler = createScheduler({ store, log, engine, ...schedulerOptions });
   engine.freshness = createFreshness({ bot, engine, log, ...freshnessOptions });
   engine.freshness.install();
   engine.router = createRouter({ bot, engine, log });
@@ -145,7 +160,7 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
       } catch (e) {
         caps.mark(ctx.serverId, 'modals', false, e?.message);
         const appCtx = createContext(engine, ctx.source, { app: s.app, kind: 'button', args: [] });
-        await engine.chatForm(appCtx, { title: s.modal.title, fields: s.fields, action: s.action });
+        await engine.chatForm(appCtx, { title: s.modal.title, fields: s.fields, action: s.action, args: s.args || [] });
       }
     },
   });
@@ -154,6 +169,10 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
     stats.events++;
     if (!msg.yaposLate && prompts.offer(msg)) return;
     if (msg.command) stats.commands++;
+  });
+  bot.on('dm_message', (msg) => {
+    if (!msg || msg.yaposLate) return;
+    if (prompts.offer({ ...msg, channel_id: msg.channel_id ?? msg.dm_channel_id })) msg.yaposPrompt = true;
   });
   bot.on('command', () => { stats.commands++; });
   bot.on('interaction', () => { stats.interactions++; });

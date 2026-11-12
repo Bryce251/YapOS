@@ -19,8 +19,25 @@ export function defineApp(def) {
     if (!NAME_RE.test(name)) throw new Error(`App ${meta.id}: bad command name "${name}"`);
     if (String(c.description || '').length > 100) throw new Error(`App ${meta.id}: /${name} description is over 100 characters`);
   }
+  for (const hook of ['onInstall', 'onUninstall']) {
+    if (def[hook] !== undefined && typeof def[hook] !== 'function') throw new Error(`App ${meta.id}: ${hook} must be a function`);
+  }
+  for (const [name, fn] of Object.entries(def.jobs || {})) {
+    if (!NAME_RE.test(name)) throw new Error(`App ${meta.id}: bad job name "${name}"`);
+    if (typeof fn !== 'function') throw new Error(`App ${meta.id}: job "${name}" needs a handler function`);
+  }
 
   let engine = null;
+  let stopToggles = null;
+
+  function onToggle(sid, appId, on) {
+    if (appId !== meta.id) return;
+    const hook = on ? def.onInstall : def.onUninstall;
+    if (!hook || !engine) return;
+    Promise.resolve()
+      .then(() => hook(engine, sid))
+      .catch((e) => engine.log.error(`[${meta.id}] ${on ? 'install' : 'uninstall'} hook failed:`, e));
+  }
 
   function setup(bot) {
     engine = bot.yapos;
@@ -55,9 +72,11 @@ export function defineApp(def) {
       });
     }
 
+    for (const [name, fn] of Object.entries(def.jobs || {})) engine.scheduler?.register(`${meta.id}.${name}`, fn);
     if (def.yap) for (const y of [].concat(def.yap)) engine.yap.add(meta.id, y);
     if (def.dm) engine.dmRoutes.push({ app: meta.id, match: def.dm.match, run: def.dm.run });
     if (def.services) engine.services.set(meta.id, def.services(engine));
+    if ((def.onInstall || def.onUninstall) && engine.settings.onToggle) stopToggles = engine.settings.onToggle(onToggle);
     if (def.init) return def.init(engine);
     return undefined;
   }
@@ -65,10 +84,13 @@ export function defineApp(def) {
   async function teardown() {
     if (!engine) return;
     try { await def.dispose?.(engine); } finally {
+      stopToggles?.();
+      stopToggles = null;
       engine.router.unregisterApp(meta.id);
       engine.yap.removeApp(meta.id);
       for (let i = engine.dmRoutes.length - 1; i >= 0; i--) if (engine.dmRoutes[i].app === meta.id) engine.dmRoutes.splice(i, 1);
       engine.services.delete(meta.id);
+      for (const [name, fn] of Object.entries(def.jobs || {})) engine.scheduler?.unregister(`${meta.id}.${name}`, fn);
       engine.apps.unregister(meta.id);
     }
   }

@@ -129,6 +129,8 @@ export function createContext(engine, source, { app = null, kind, args, values }
       const p = normalize(payload, opts);
       answered = true;
       if (isInteraction) {
+        const whole = !!p.layout || (p.embeds !== undefined && p.components !== undefined);
+        if (whole && source.message_id) budget.cancelEdit?.(source.message_id);
         if (p.layout) return source.update({ layout: p.layout });
         const changes = {};
         for (const k of ['content', 'embeds', 'components']) if (p[k] !== undefined) changes[k] = p[k];
@@ -155,9 +157,10 @@ export function createContext(engine, source, { app = null, kind, args, values }
       try { await ctx.ephemeral({ embeds: [embed || dialog.error(title, body)] }); } catch (e) { log.debug('could not show error dialog', e?.message); }
     },
 
-    async form({ id, title, fields, action }) {
+    async form({ id, title, fields, action, args: formArgs = [] }) {
+      const extra = [].concat(formArgs ?? []).map((a) => String(a ?? ''));
       const modal = {
-        custom_id: engine.router.customId(app, action),
+        custom_id: engine.router.customId(app, action, ...extra),
         title: String(title).slice(0, 45),
         components: fields.slice(0, 5).map((f) => ({
           type: 'text_input', custom_id: f.id, label: String(f.label).slice(0, 45), style: f.style || 'short',
@@ -179,11 +182,11 @@ export function createContext(engine, source, { app = null, kind, args, values }
         }
       }
       if (!isInteraction && !isCommandEvent && caps.state(serverId, 'modals') !== false) {
-        const sid = engine.router.session({ modal, app, action, fields, userId });
+        const sid = engine.router.session({ modal, app, action, fields, userId, args: extra });
         await ctx.reply({ embeds: [dialog.info(title, 'Press the button to fill in the form.')], components: [row(button('Open form', engine.router.customId('sys', 'form', sid), 'primary', '📝'))] });
         return 'button';
       }
-      return engine.chatForm(ctx, { title, fields, action });
+      return engine.chatForm(ctx, { title, fields, action, args: extra });
     },
   };
   return ctx;

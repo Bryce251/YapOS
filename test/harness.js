@@ -358,7 +358,7 @@ export function eventStamp({ createdAt = null, lateBy = 0 } = {}) {
   return new Date(Date.now() - (Number(lateBy) || 0)).toISOString();
 }
 
-export async function createHarness({ verified = false, store = createMemoryStore(), appsDir = APPS_DIR, loadApps = true, apps = null, features = {}, freshness = {} } = {}) {
+export async function createHarness({ verified = false, store = createMemoryStore(), appsDir = APPS_DIR, loadApps = true, apps = null, features = {}, freshness = {}, fakeClock = false, scheduler = {} } = {}) {
   const fake = createFakeYapin();
   Object.assign(fake.features, features);
   const bot = new Bot('yb_test_token_not_real', { log: false, gateway: false });
@@ -366,7 +366,13 @@ export async function createHarness({ verified = false, store = createMemoryStor
   bot.me = await fake.api('GET', '/me');
   const lines = [];
   const log = createLogger({ level: process.env.YAPOS_TEST_LOG || 'warn', sink: (lvl, line) => { lines.push(line); if (process.env.YAPOS_TEST_LOG) console.log(line); } });
-  const engine = createEngine({ bot, config: { verified }, store, log, appsDir, freshness });
+  const timers = [];
+  const fakeTimers = {
+    now: () => fake.clock.t,
+    setTimeout: (fn, ms) => { const t = { fn, ms, at: fake.clock.t + ms, unref() { return t; } }; timers.push(t); return t; },
+    clearTimeout: (t) => { const i = timers.indexOf(t); if (i >= 0) timers.splice(i, 1); },
+  };
+  const engine = createEngine({ bot, config: { verified }, store, log, appsDir, freshness, scheduler: fakeClock ? { ...fakeTimers, ...scheduler } : scheduler });
   if (loadApps) await engine.load(apps ? [...new Set(['system', ...apps])] : null);
 
   let evId = 1000;
@@ -376,6 +382,43 @@ export async function createHarness({ verified = false, store = createMemoryStor
   const h = {
     bot, engine, fake, store, log, lines, IDS,
     settle,
+    clock: fake.clock,
+    fakeClock,
+    schedulerTimers: timers,
+    now: () => (fakeClock ? fake.clock.t : Date.now()),
+
+    async runDue() {
+      await engine.scheduler.runDue();
+      await settle();
+    },
+
+    async advance(ms) {
+      if (!fakeClock) throw new Error('h.advance needs createHarness({ fakeClock: true })');
+      await h.advanceTo(fake.clock.t + (Number(ms) || 0));
+    },
+
+    async advanceTo(when) {
+      if (!fakeClock) throw new Error('h.advanceTo needs createHarness({ fakeClock: true })');
+      const target = when instanceof Date ? when.getTime() : typeof when === 'string' ? Date.parse(when) : Number(when);
+      if (!Number.isFinite(target)) throw new Error('h.advanceTo needs a time');
+      const s = engine.scheduler;
+      await h.runDue();
+      for (let step = 0; step < 10_000; step++) {
+        let next = null;
+        for (const job of s.list()) if (s.has(job.kind) && job.at > fake.clock.t && job.at <= target && (next === null || job.at < next)) next = job.at;
+        if (next === null) break;
+        fake.clock.t = next;
+        await h.runDue();
+      }
+      if (target > fake.clock.t) fake.clock.t = target;
+      await h.runDue();
+    },
+
+    async skip(ms) {
+      if (!fakeClock) throw new Error('h.skip needs createHarness({ fakeClock: true })');
+      fake.clock.t += Number(ms) || 0;
+      await h.runDue();
+    },
 
     async message(content, { user = IDS.member, channel = IDS.channels.general, server = S, replyTo = null, authorAsString = false, authorBot = false, attachment = null, createdAt = null, lateBy = 0 } = {}) {
       const stored = fake.addUserMessage(channel, user, content);

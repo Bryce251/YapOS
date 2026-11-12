@@ -261,6 +261,7 @@ export const { setup, teardown, check } = defineApp({
 
   events: {
     dm_message: async (ctx, msg) => {
+      if (msg.yaposPrompt) return;
       for (const route of ctx.engine.dmRoutes) {
         let claimed = false;
         try { claimed = !!(await route.match(msg)); } catch { claimed = false; }
@@ -269,8 +270,13 @@ export const { setup, teardown, check } = defineApp({
         try { await route.run(appCtx, msg); } catch (e) { await appCtx.fail(e); }
         return;
       }
-      if (ctx.engine.services.get('pocket')) return;
-      await msg.reply(`👋 Hi! I'm ${VERSION.full}. **YapOS Pocket**, your personal assistant here in DMs, is coming soon. In a server, try **/menu**.`).catch(() => {});
+      const pocket = ctx.engine.service('pocket');
+      const help = typeof pocket?.dmHelp === 'function' ? pocket.dmHelp(msg.author_id) : null;
+      if (help) {
+        await msg.reply(help.content || '', { embeds: help.embeds }).catch(() => {});
+        return;
+      }
+      await msg.reply(`👋 Hi! I'm ${VERSION.full}. **YapOS Pocket**, my DM assistant, isn't switched on right now. In a server, try **/menu**.`).catch(() => {});
     },
   },
 
