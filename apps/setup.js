@@ -479,6 +479,11 @@ function undoButton(ctx, label, snap, after) {
   const u = ctx.engine.router.addUndo({
     serverId: ctx.serverId, actorId: ctx.userId, label, perm: 'admin',
     run: async (i) => {
+      await ctx.engine.perms.require(ctx.serverId, i.user_id, 'admin');
+      if (!ctx.engine.settings.isEnabled(ctx.serverId, ID)) {
+        await i.ephemeral('', { embeds: [dialog.warn("Setup isn't installed here", 'Nothing was undone. An admin can install Setup again with **/apps**.')] });
+        return;
+      }
       restore(ctx, snap);
       await i.ephemeral('', { embeds: [dialog.ok('Undone', after)] });
     },
@@ -552,9 +557,18 @@ async function boot(ctx, s) {
   return lines;
 }
 
+const adminOnly = (fn) => ({
+  perm: 'admin',
+  run: async (ctx) => {
+    await ctx.require('admin');
+    return fn(ctx);
+  },
+});
+
 const wiz = (fn) => ({
   perm: 'admin',
   run: async (ctx) => {
+    await ctx.require('admin');
     const s = ctx.engine.router.getSession(ctx.argv[0]);
     if (!s || s.kind !== 'setup') return ctx.warn('This setup panel expired', 'Run **/setup** again to start fresh.');
     if (s.userId !== ctx.userId || s.sid !== ctx.serverId) return ctx.warn("That's someone else's setup", 'Run **/setup** to open your own.');
@@ -614,6 +628,7 @@ async function channelShortcut(ctx, rest) {
 }
 
 async function runSetup(ctx) {
+  await ctx.require('admin');
   const [first, ...rest] = ctx.argv;
   const word = normalizeName(first);
   if (!word) {
@@ -721,23 +736,20 @@ export const { setup, teardown, check } = defineApp({
         components: [row(button('Open menu', cid('menu'), 'primary', ICONS.system), undo)],
       });
     }),
-    again: { perm: 'admin', run: (ctx) => startWizard(ctx, 'update') },
-    reset: { perm: 'admin', run: (ctx) => ctx.update(resetConfirmView()) },
-    resetno: { perm: 'admin', run: (ctx) => ctx.update({ embeds: [dialog.info('Kept your settings', 'Nothing changed.')], components: [] }) },
-    resetyes: {
-      perm: 'admin',
-      run: async (ctx) => {
-        const snap = snapshot(ctx);
-        const caps = snap.settings?.core?.caps || {};
-        ctx.engine.store.set('settings', ctx.serverId, { core: { caps }, apps: {} });
-        ctx.store.delete(ctx.serverId);
-        const undo = undoButton(ctx, 'reset', snap, 'Your settings from before the reset are back.');
-        return ctx.update({
-          embeds: [dialog.ok('Reset done', 'Everything is back to defaults. Run **/setup** to boot again.')],
-          components: [row(button('Start setup', cid('again'), 'primary', '🔁'), undo)],
-        });
-      },
-    },
+    again: adminOnly((ctx) => startWizard(ctx, 'update')),
+    reset: adminOnly((ctx) => ctx.update(resetConfirmView())),
+    resetno: adminOnly((ctx) => ctx.update({ embeds: [dialog.info('Kept your settings', 'Nothing changed.')], components: [] })),
+    resetyes: adminOnly(async (ctx) => {
+      const snap = snapshot(ctx);
+      const caps = snap.settings?.core?.caps || {};
+      ctx.engine.store.set('settings', ctx.serverId, { core: { caps }, apps: {} });
+      ctx.store.delete(ctx.serverId);
+      const undo = undoButton(ctx, 'reset', snap, 'Your settings from before the reset are back.');
+      return ctx.update({
+        embeds: [dialog.ok('Reset done', 'Everything is back to defaults. Run **/setup** to boot again.')],
+        components: [row(button('Start setup', cid('again'), 'primary', '🔁'), undo)],
+      });
+    }),
     menu: { run: openMenu },
   },
 
@@ -751,6 +763,7 @@ export const { setup, teardown, check } = defineApp({
   }],
 
   panel: async (ctx) => {
+    if (!ctx.serverId) return ctx.warn('Setup works in servers', 'Open it from a server you help run.');
     if (!ctx.engine.perms.atLeast(await ctx.level(), 'admin')) return ctx.warn('Setup is for admins', 'Ask an admin to run **/setup**.');
     return ctx.ephemeral({ ...(await statusView(ctx)), ttl: PANEL_TTL_MS });
   },

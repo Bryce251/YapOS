@@ -4,6 +4,8 @@ import { dialog, v2ToEmbed, row, button } from './ui.js';
 
 const EPHEMERAL_FALLBACK_MS = 20_000;
 const PANEL_TTL_MS = 10 * 60_000;
+const LOCK_GRACE_MS = 10 * 60_000;
+const KEPT_PANEL_LOCK_MS = 24 * 3600_000;
 
 function normalize(payload, opts = {}) {
   if (payload == null) return { content: '', ...opts };
@@ -22,6 +24,10 @@ export function createContext(engine, source, { app = null, kind, args, values }
   const argText = typeof args === 'string' ? args : typeof source.args === 'string' ? source.args : '';
 
   let answered = false;
+  const claim = (sent, p) => {
+    if (!sent?.id || p.open || !serverId || !userId) return;
+    engine.router.claimPanel(sent.id, userId, p.keep ? KEPT_PANEL_LOCK_MS : (p.ttl ?? PANEL_TTL_MS) + LOCK_GRACE_MS);
+  };
   const cleanUp = (sent, ttl, keep) => {
     if (!sent?.id || keep || !channelId) return;
     const t = setTimeout(() => bot.delete(channelId, sent.id).catch(() => {}), ttl);
@@ -61,10 +67,21 @@ export function createContext(engine, source, { app = null, kind, args, values }
     async reply(payload, opts) {
       const p = normalize(payload, opts);
       answered = true;
-      if (isInteraction) return p.layout ? source.reply('', { layout: p.layout }) : source.reply(p.content, p);
-      if (isCommandEvent) return source.reply(p.content, p);
+      const clickable = (Array.isArray(p.components) && p.components.length > 0) || !!p.layout;
+      if (isInteraction) {
+        const out = await (p.layout ? source.reply('', { layout: p.layout }) : source.reply(p.content, p));
+        if (clickable) claim(out?.message, { ...p, keep: true });
+        return out;
+      }
+      if (isCommandEvent) {
+        const sent = await source.reply(p.content, p);
+        if (clickable) claim(sent, { ...p, keep: true });
+        return sent;
+      }
       if (!channelId) return null;
-      return budget.send({ serverId, channelId, content: p.content, layout: p.layout, opts: { embeds: p.embeds, components: p.components, files: p.files, replyTo: source.dm ? undefined : source.id }, priority: 'high' });
+      const sent = await budget.send({ serverId, channelId, content: p.content, layout: p.layout, opts: { embeds: p.embeds, components: p.components, files: p.files, replyTo: source.dm ? undefined : source.id }, priority: 'high' });
+      if (clickable) claim(sent, { ...p, keep: true });
+      return sent;
     },
 
     async ephemeral(payload, opts) {
@@ -94,6 +111,7 @@ export function createContext(engine, source, { app = null, kind, args, values }
       } else {
         sent = await budget.send({ serverId, channelId, content: p.content, opts: { embeds: p.embeds, components: p.components, replyTo: source.id }, priority: 'high' });
       }
+      claim(sent, { ...p, ttl });
       cleanUp(sent, ttl, p.keep);
       return sent;
     },

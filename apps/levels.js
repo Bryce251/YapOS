@@ -2,7 +2,7 @@ import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row, bar, onOff, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
 import { tokenize, formatDuration, didYouMean, fillTemplate, clip, normalizeName, parseBool, channelId as channelMention, roleId as roleMention } from '../engine/parse.js';
-import { permName, explain } from '../engine/errors.js';
+import { permName, explain, friendly } from '../engine/errors.js';
 
 const ID = 'levels';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -79,6 +79,15 @@ const readDoc = (engine, sid) => {
 const readUser = (engine, sid, uid) => ({ ...blankUser(), ...(readDoc(engine, sid).users[uid] || {}) });
 const botId = (engine) => engine.bot.me?.id;
 const cfgOf = (engine, sid) => engine.settings.appConfig(sid, ID);
+const plainName = (name) => String(name ?? '').replace(/[<>]/g, '').replace(/@/g, '@\u200b');
+const ownsPanel = (ctx) => {
+  const messageId = ctx.source?.message_id;
+  return !!messageId && ctx.engine.router.panelOwner(messageId) === ctx.userId;
+};
+const typedNumber = (value, unit) => {
+  const text = typeof value === 'string' ? value.trim().replace(unit, '') : '';
+  return text ? Number(text) : NaN;
+};
 
 function pruneTrackers(st, now) {
   if (st.lastXp.size <= TRACKER_LIMIT && ++st.seen % 500) return;
@@ -185,7 +194,7 @@ async function announce(engine, sid, uid, level, { channelId } = {}) {
   const mode = cfg.announce || 'here';
   if (mode === 'off') return;
   const [server, username] = await Promise.all([engine.perms.server(sid).catch(() => null), nameOf(engine, sid, uid)]);
-  const text = clip(fillTemplate(cfg.message || DEFAULT_MESSAGE, { user: `<@${uid}>`, username, level, server: server?.name || 'the server' }), 2000);
+  const text = clip(fillTemplate(cfg.message || DEFAULT_MESSAGE, { user: `<@${uid}>`, username: plainName(username), level, server: server?.name || 'the server' }), 2000);
   const key = `levels:up:${sid}:${uid}`;
   const here = channelId || cfg.channelId;
   if (mode === 'channel' && cfg.channelId) return void queueSend(engine, sid, cfg.channelId, text, key);
@@ -484,7 +493,22 @@ async function settingsView(ctx) {
   };
 }
 
-const showSettings = async (ctx) => ctx.ephemeral(await settingsView(ctx));
+const showSettings = async (ctx) => {
+  await ctx.require('admin');
+  return ctx.ephemeral(await settingsView(ctx));
+};
+
+function adminUndo(ctx, label, revert) {
+  const { engine, serverId: sid } = ctx;
+  return engine.router.addUndo({
+    serverId: sid, actorId: ctx.userId, label, perm: 'admin',
+    run: async (i) => {
+      if (i?.server_id && i.server_id !== sid) throw friendly('That Undo button belongs to another server.', { title: 'Not allowed' });
+      if (i?.user_id) await engine.perms.require(sid, i.user_id, 'admin');
+      return revert();
+    },
+  });
+}
 
 function snapshotUser(engine, sid, uid) {
   const u = readDoc(engine, sid).users[uid];
@@ -507,17 +531,19 @@ function restoreUsers(engine, sid, saved, { additive = true } = {}) {
 }
 
 async function resetUser(ctx, target) {
+  await ctx.require('admin');
   const { engine, serverId: sid } = ctx;
   const name = target.nickname || target.display_name || target.username || 'them';
   const saved = snapshotUser(engine, sid, target.id);
   if (!saved || !(saved.xp || saved.voiceSeconds)) return ctx.info('Nothing to reset', `**${name}** has no XP yet.`);
   engine.store.update(ID, sid, (d) => { d ||= { users: {} }; d.users ||= {}; delete d.users[target.id]; return d; }, { users: {} });
   stateOf(engine).lastXp.delete(`${sid}:${target.id}`);
-  const undo = engine.router.addUndo({ serverId: sid, actorId: ctx.userId, label: `reset of ${name}`, perm: 'admin', run: async () => restoreUsers(engine, sid, { [target.id]: saved }) });
+  const undo = adminUndo(ctx, `reset of ${name}`, async () => restoreUsers(engine, sid, { [target.id]: saved }));
   return ctx.ok('XP reset', `**${name}** is back to level 0 (was level ${saved.level}, ${saved.xp} XP). Reward roles they already have stay.`, { components: [row(undo.button)] });
 }
 
-function resetAllConfirm(ctx) {
+async function resetAllConfirm(ctx) {
+  await ctx.require('admin');
   const count = ranked(ctx.engine, ctx.serverId).length;
   if (!count) return ctx.info('Nothing to reset', 'Nobody has XP yet.');
   return ctx.ephemeral({
@@ -527,6 +553,7 @@ function resetAllConfirm(ctx) {
 }
 
 async function resetAll(ctx) {
+  await ctx.require('admin');
   const { engine, serverId: sid } = ctx;
   const saved = readDoc(engine, sid).users;
   const count = Object.keys(saved).length;
@@ -534,7 +561,7 @@ async function resetAll(ctx) {
   engine.store.update(ID, sid, (d) => ({ ...(d || {}), users: {} }), { users: {} });
   const st = stateOf(engine);
   for (const k of [...st.lastXp.keys()]) if (k.startsWith(`${sid}:`)) st.lastXp.delete(k);
-  const undo = engine.router.addUndo({ serverId: sid, actorId: ctx.userId, label: 'reset of everyone', perm: 'admin', run: async () => restoreUsers(engine, sid, saved) });
+  const undo = adminUndo(ctx, 'reset of everyone', async () => restoreUsers(engine, sid, saved));
   const embeds = [dialog.ok('Everyone reset', `${count} member${count === 1 ? '' : 's'} went back to level 0. Changed your mind? Press Undo within 10 minutes.`)];
   return ctx.update({ embeds, components: [row(undo.button)] });
 }
@@ -559,7 +586,7 @@ async function setLevel(ctx, tokens) {
     return d;
   }, { users: {} });
   const name = target.nickname || target.display_name || target.username || 'them';
-  const undo = engine.router.addUndo({ serverId: sid, actorId: ctx.userId, label: `level of ${name}`, perm: 'admin', run: async () => restoreUsers(engine, sid, { [target.id]: saved }, { additive: false }) });
+  const undo = adminUndo(ctx, `level of ${name}`, async () => restoreUsers(engine, sid, { [target.id]: saved }, { additive: false }));
   const out = await ctx.ok('Level set', `**${name}** is now level ${level} (${xp.toLocaleString('en-US')} XP). Any rewards up to level ${level} are on their way.`, { components: [row(undo.button)] });
   grantRewards(engine, sid, target.id, level).catch((e) => engine.log.debug('[levels] rewards after set failed', e?.message));
   return out;
@@ -584,13 +611,10 @@ async function addReward(ctx, tokens) {
   rewards[level] = role.id;
   ctx.patchConfig({ rewards });
   forgetLogged(engine, sid);
-  const undo = engine.router.addUndo({
-    serverId: sid, actorId: ctx.userId, label: `level ${level} reward`, perm: 'admin',
-    run: async () => {
-      const cur = { ...(cfgOf(engine, sid).rewards || {}) };
-      if (prev) cur[level] = prev; else delete cur[level];
-      engine.settings.patchApp(sid, ID, { rewards: cur });
-    },
+  const undo = adminUndo(ctx, `level ${level} reward`, async () => {
+    const cur = { ...(cfgOf(engine, sid).rewards || {}) };
+    if (prev) cur[level] = prev; else delete cur[level];
+    engine.settings.patchApp(sid, ID, { rewards: cur });
   });
   return ctx.ok('Reward saved', `Reaching **level ${level}** now gives **@${role.name}**.${prev ? ' (It replaced the old reward for that level.)' : ''}\nPeople already past level ${level} get it the next time they level up.`, { components: [row(undo.button)] });
 }
@@ -604,13 +628,10 @@ async function removeReward(ctx, tokens) {
   delete rewards[level];
   ctx.patchConfig({ rewards });
   const { engine, serverId: sid } = ctx;
-  const undo = engine.router.addUndo({
-    serverId: sid, actorId: ctx.userId, label: `level ${level} reward removal`, perm: 'admin',
-    run: async () => {
-      const cur = { ...(cfgOf(engine, sid).rewards || {}) };
-      if (!cur[level] && Object.keys(cur).length < MAX_REWARDS) cur[level] = prev;
-      engine.settings.patchApp(sid, ID, { rewards: cur });
-    },
+  const undo = adminUndo(ctx, `level ${level} reward removal`, async () => {
+    const cur = { ...(cfgOf(engine, sid).rewards || {}) };
+    if (!cur[level] && Object.keys(cur).length < MAX_REWARDS) cur[level] = prev;
+    engine.settings.patchApp(sid, ID, { rewards: cur });
   });
   return ctx.ok('Reward removed', `Level ${level} no longer gives a role. Nobody loses the role they already have.`, { components: [row(undo.button)] });
 }
@@ -656,7 +677,8 @@ async function toggleNoXp(ctx, tokens) {
 }
 
 function numberSetting(ctx, tokens, { key, min, max, label, unit = '', integer = false }) {
-  const n = Number(String(tokens[0] ?? '').replace(/^x|x$/i, ''));
+  const typed = String(tokens[0] ?? '').replace(/^x|x$/i, '');
+  const n = typed ? Number(typed) : NaN;
   if (!Number.isFinite(n) || n < min || n > max || (integer && !Number.isInteger(n))) return ctx.warn(`That ${label} didn't work`, `Use a ${integer ? 'whole ' : ''}number from ${min} to ${max}.`);
   ctx.patchConfig({ [key]: n });
   return ctx.ok('Saved', `${label[0].toUpperCase()}${label.slice(1)} is now **${n}${unit}**.`);
@@ -673,6 +695,7 @@ function boolSetting(ctx, tokens, key, label) {
 const SUBS = ['reward', 'rewards', 'channel', 'noxp', 'rate', 'cooldown', 'voice', 'voicerate', 'xp', 'stack', 'message', 'set', 'reset', 'settings'];
 
 async function runLevels(ctx) {
+  await ctx.require('admin');
   const tokens = ctx.argv.length ? ctx.argv : tokenize(ctx.args);
   const sub = (tokens[0] || '').toLowerCase();
   const rest = tokens.slice(1);
@@ -715,7 +738,7 @@ async function runLevels(ctx) {
   return ctx.warn("I didn't get that", `I don't know **${clip(sub, 30)}**.${guess.length ? ` Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?` : ''}\nTry \`/levels\` on its own for the settings panel.`);
 }
 
-const admin = (run) => ({ perm: 'admin', run });
+const admin = (run) => ({ perm: 'admin', run: async (ctx) => { await ctx.require('admin'); return run(ctx); } });
 const refresh = async (ctx) => ctx.update(await settingsView(ctx));
 
 export const { setup, teardown, check } = defineApp({
@@ -747,7 +770,12 @@ export const { setup, teardown, check } = defineApp({
   },
 
   components: {
-    lb: { run: async (ctx) => ctx.update(await leaderboardView(ctx, ctx.argv[0], ctx.argv[1])) },
+    lb: {
+      run: async (ctx) => {
+        const view = await leaderboardView(ctx, ctx.argv[0], ctx.argv[1]);
+        return ownsPanel(ctx) ? ctx.update(view) : ctx.reply(view);
+      },
+    },
     lbpeek: {
       run: async (ctx) => {
         const view = await leaderboardView(ctx, 1, 'xp');
@@ -775,9 +803,8 @@ export const { setup, teardown, check } = defineApp({
       });
     }),
     ratesave: admin(async (ctx) => {
-      await ctx.require('admin');
-      const rate = Number(String(ctx.values?.rate ?? '').trim().replace(/x$/i, ''));
-      const cooldown = Number(String(ctx.values?.cooldown ?? '').trim().replace(/s$/i, ''));
+      const rate = typedNumber(ctx.values?.rate, /x$/i);
+      const cooldown = typedNumber(ctx.values?.cooldown, /s$/i);
       if (!Number.isFinite(rate) || rate < 0 || rate > 5) return ctx.warn("That rate didn't work", 'Use a number from 0 to 5, like 1 or 1.5.');
       if (!Number.isInteger(cooldown) || cooldown < 0 || cooldown > 3600) return ctx.warn("That cooldown didn't work", 'Use whole seconds from 0 to 3600, like 60.');
       ctx.patchConfig({ rate, cooldownSeconds: cooldown });
@@ -789,7 +816,6 @@ export const { setup, teardown, check } = defineApp({
       fields: [{ id: 'user', label: 'Who? (@name or username)', style: 'short', placeholder: '@sam', max: 100 }],
     })),
     resetuser: admin(async (ctx) => {
-      await ctx.require('admin');
       const q = String(ctx.values?.user ?? '').trim();
       const target = q ? await ctx.findUser(q) : null;
       if (!target?.id) return ctx.warn("I couldn't find them", `Nobody here matches **${clip(q || '?', 40)}**.`);

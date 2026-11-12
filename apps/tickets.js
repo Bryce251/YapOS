@@ -38,15 +38,16 @@ const PRESET_TYPES = {
   roleplay: [TYPES.support, TYPES.character],
 };
 
-const SUBS = {
+const lookup = (entries) => Object.assign(Object.create(null), entries);
+const SUBS = lookup({
   open: 'open', new: 'open', create: 'open',
   close: 'close', claim: 'claim', unclaim: 'unclaim',
   add: 'add', remove: 'remove', rename: 'rename', transcript: 'transcript',
-};
-const ADMIN_SUBS = {
+});
+const ADMIN_SUBS = lookup({
   panel: 'panel', post: 'panel', category: 'category', cat: 'category', staff: 'staff', log: 'log', logs: 'log',
   types: 'types', type: 'types', limit: 'limit', ping: 'ping', tidy: 'tidy', cleanup: 'tidy', settings: 'home', home: 'home',
-};
+});
 const OFF_WORDS = /^(off|none|clear|reset|default|no)$/i;
 
 const runtimes = new WeakMap();
@@ -179,6 +180,45 @@ async function isStaff(engine, sid, uid) {
 async function isAdmin(engine, sid, uid) {
   return engine.perms.atLeast(await engine.perms.level(sid, uid), 'admin');
 }
+
+async function adminGate(ctx) {
+  if (await isAdmin(ctx.engine, ctx.serverId, ctx.userId)) return true;
+  await ctx.warn('Not allowed', 'Only admins can change the ticket setup.');
+  return false;
+}
+
+async function channelHere(ctx) {
+  const inServer = async () => (await ctx.channels('text').catch(() => [])).find((c) => c.id === ctx.channelId) || null;
+  let ch = await inServer();
+  if (!ch) {
+    ctx.engine.cache.invalidate(ctx.serverId);
+    ch = await inServer();
+  }
+  return ch ? { id: ch.id, name: 'this channel' } : null;
+}
+
+const notHere = (ctx) => ctx.warn("I can't post here", 'This channel is not a text channel of this server. Try `/tickets panel #channel`.');
+
+function guarded(components) {
+  const out = {};
+  for (const [action, spec] of Object.entries(components)) {
+    out[action] = {
+      ...spec,
+      run: async (ctx) => {
+        if (!ctx.serverId) return ctx.warn('Servers only', 'Tickets work inside a server.');
+        if (!ctx.engine.settings.isEnabled(ctx.serverId, ID)) return ctx.warn("Tickets isn't installed here", 'An admin can install it with **/apps**.');
+        return spec.run(ctx);
+      },
+    };
+  }
+  return out;
+}
+
+function adminOnly(run) {
+  return { perm: 'admin', run: async (ctx) => ((await adminGate(ctx)) ? run(ctx) : null) };
+}
+
+const notYourConfirm = (ctx) => ctx.warn('Not your panel', 'Someone else asked to close this ticket. Run `/ticket close` yourself to get your own buttons.');
 
 async function canManage(ctx, t) {
   return t.openerId === ctx.userId || isStaff(ctx.engine, ctx.serverId, ctx.userId);
@@ -639,7 +679,7 @@ function confirmRows(sess) {
 
 async function askClose(ctx, t, reason) {
   if (!(await canManage(ctx, t))) return ctx.warn('Not allowed', 'Only staff or the person who opened this ticket can close it.');
-  const sess = ctx.engine.router.session({ num: t.number, reason: clip(reason || '', 500), sid: ctx.serverId });
+  const sess = ctx.engine.router.session({ num: t.number, reason: clip(reason || '', 500), sid: ctx.serverId, userId: ctx.userId });
   const body = `${reason ? `**Reason:** ${clip(reason, 300)}\n` : ''}I'll save a transcript, then delete the channel. This can't be undone.`;
   return ctx.ephemeral({ embeds: [card({ title: `${ICONS.lock} Close ticket #${pad(t.number)}?`, body, color: 'warn' })], components: confirmRows(sess) });
 }
@@ -651,6 +691,7 @@ async function confirmClose(ctx) {
   const t = getTicket(ctx.engine, ctx.serverId, s.num);
   if (!t || t.status !== 'open') return ctx.info('Already closed', 'This ticket is already closed.');
   if (!(await canManage(ctx, t))) return ctx.warn('Not allowed', 'Only staff or the person who opened this ticket can close it.');
+  if (s.userId !== ctx.userId) return notYourConfirm(ctx);
   ctx.engine.router.dropSession(sess);
   await ctx.update({ embeds: [card({ title: `${ICONS.lock} Closing ticket #${pad(t.number)}…`, body: 'Saving the transcript.', color: 'tickets' })], components: freeze(confirmRows(sess), ctx.source.custom_id) });
   const out = await closeTicket(ctx.engine, ctx.serverId, t, { by: ctx.userId, reason: s.reason });
@@ -682,8 +723,9 @@ async function claimTicket(ctx, t) {
 
 async function unclaimTicket(ctx, stale) {
   const t = getTicket(ctx.engine, ctx.serverId, stale.number) || stale;
-  if (!t.claimedBy) return ctx.info('Not claimed', 'Nobody has claimed this ticket yet.');
-  if (t.claimedBy !== ctx.userId && !(await isAdmin(ctx.engine, ctx.serverId, ctx.userId))) {
+  const staff = await isStaff(ctx.engine, ctx.serverId, ctx.userId);
+  if (staff && !t.claimedBy) return ctx.info('Not claimed', 'Nobody has claimed this ticket yet.');
+  if (!staff || (t.claimedBy !== ctx.userId && !(await isAdmin(ctx.engine, ctx.serverId, ctx.userId)))) {
     return ctx.warn('Not allowed', 'Only the person who claimed this ticket, or an admin, can unclaim it.');
   }
   const updated = patchTicket(ctx.engine, ctx.serverId, t.number, { claimedBy: null });
@@ -1019,6 +1061,7 @@ function typesForm(ctx) {
 }
 
 async function saveTypes(ctx) {
+  if (!(await adminGate(ctx))) return null;
   const lines = Array.from({ length: MAX_TYPES }, (_, i) => ctx.values?.[`t${i + 1}`] || '');
   const types = parseTypes(lines);
   if (!types.length) return ctx.warn('I need at least one type', 'Write it like `🎫 Support` or `🚩 Report: Who are you reporting?; What happened?`.');
@@ -1027,14 +1070,15 @@ async function saveTypes(ctx) {
   return ctx.ok('Ticket types saved', `${types.map((t) => `${formatTypeLine(t)}`).join('\n')}\n-# Up to ${MAX_QUESTIONS} questions each, split with ;`);
 }
 
-const EDIT_FORMS = {
+const EDIT_FORMS = lookup({
   staff: (cfg) => ({ title: 'Ticket staff roles', label: 'Staff roles (names, space separated)', value: '', placeholder: 'Moderator Helpers, or "default"' }),
   log: () => ({ title: 'Ticket log channel', label: 'Log channel name', value: '', placeholder: 'ticket-logs, or "off"' }),
   category: (cfg) => ({ title: 'Ticket category', label: 'Category name', value: cfg.categoryName || '', placeholder: 'Support, or "none"' }),
   limit: (cfg) => ({ title: 'Tickets per person', label: `Open tickets per person (1-${MAX_LIMIT})`, value: String(clampLimit(cfg.limit)), placeholder: '1' }),
-};
+});
 
 async function saveEdit(ctx, what) {
+  if (!(await adminGate(ctx))) return null;
   const text = String(ctx.values?.value || '').trim();
   if (what === 'staff') return setStaff(ctx, tokenize(text));
   if (what === 'log') return setLog(ctx, text);
@@ -1060,6 +1104,7 @@ async function runTickets(ctx, tokensIn) {
   const first = String(tokens[0] || '').toLowerCase();
   const rest = tokens.slice(1);
   try {
+    if (!(await adminGate(ctx))) return null;
     if (!first) return await ctx.ephemeral(await setupView(ctx));
     const sub = ADMIN_SUBS[first];
     if (!sub) {
@@ -1069,8 +1114,9 @@ async function runTickets(ctx, tokensIn) {
     if (sub === 'home') return await ctx.ephemeral(await setupView(ctx));
     if (sub === 'panel') {
       if (!rest.length) return await askPanelChannel(ctx);
-      const ch = /^here$/i.test(rest[0]) ? { id: ctx.channelId, name: 'this channel' } : await ctx.findChannel(rest[0]);
-      if (!ch) return await ctx.warn("I couldn't find that channel", 'Mention it, like `/tickets panel #support`.');
+      const here = /^here$/i.test(rest[0]);
+      const ch = here ? await channelHere(ctx) : await ctx.findChannel(rest[0]);
+      if (!ch) return here ? await notHere(ctx) : await ctx.warn("I couldn't find that channel", 'Mention it, like `/tickets panel #support`.');
       return await postPanel(ctx, ch);
     }
     if (sub === 'category') return await setCategory(ctx, rest.join(' '));
@@ -1137,7 +1183,7 @@ export const { setup, teardown, check } = defineApp({
     tickets: { description: 'Ticket setup (admins): /tickets panel #channel, staff @role, log #channel, types, limit 1', perm: 'admin', run: (ctx) => runTickets(ctx) },
   },
 
-  components: {
+  components: guarded({
     open: {
       run: async (ctx) => {
         const topic = topicFromSession(ctx, ctx.argv[1]);
@@ -1170,9 +1216,11 @@ export const { setup, teardown, check } = defineApp({
     closeno: {
       run: async (ctx) => {
         const s = ctx.engine.router.getSession(ctx.argv[0]);
-        const t = s && getTicket(ctx.engine, ctx.serverId, s.num);
+        if (!s || s.sid !== ctx.serverId) return ctx.warn('This button expired', 'Nothing was closed. Run `/ticket close` again if you still want to.');
+        const t = getTicket(ctx.engine, ctx.serverId, s.num);
         if (t && !(await canManage(ctx, t))) return ctx.warn('Not allowed', 'Only staff or the person who opened this ticket can decide.');
-        if (s) ctx.engine.router.dropSession(ctx.argv[0]);
+        if (s.userId !== ctx.userId) return notYourConfirm(ctx);
+        ctx.engine.router.dropSession(ctx.argv[0]);
         return ctx.update({ embeds: [card({ title: `${ICONS.tickets} Ticket stays open`, body: 'Nothing was closed.', color: 'tickets' })], components: freeze(confirmRows(ctx.argv[0]), ctx.source.custom_id) });
       },
     },
@@ -1191,30 +1239,28 @@ export const { setup, teardown, check } = defineApp({
     readd: ticketComponent(async (ctx, t) => addPerson(ctx, t, ctx.argv[1])),
     unrename: ticketComponent(async (ctx, t) => renameTicket(ctx, t, ctx.argv[1]), { staffOnly: true }),
 
-    home: { perm: 'admin', run: async (ctx) => ctx.ephemeral(await setupView(ctx)) },
-    postpanel: { perm: 'admin', run: (ctx) => askPanelChannel(ctx) },
-    panelhere: { perm: 'admin', run: (ctx) => postPanel(ctx, { id: ctx.channelId, name: 'this channel' }) },
-    panelto: {
-      perm: 'admin',
-      run: async (ctx) => {
-        const ch = await ctx.findChannel(ctx.argv[0]);
-        if (!ch) return ctx.warn("I can't find that channel", 'It may have been deleted. Open the setup again with `/tickets`.');
-        return postPanel(ctx, ch);
-      },
-    },
-    panelpick: {
-      perm: 'admin',
-      run: async (ctx) => {
-        const ch = await ctx.findChannel(ctx.values?.[0]);
-        if (!ch) return ctx.warn("I can't find that channel", 'It may have been deleted. Open the setup again with `/tickets`.');
-        return postPanel(ctx, ch);
-      },
-    },
-    types: { perm: 'admin', run: (ctx) => typesForm(ctx) },
+    home: adminOnly(async (ctx) => ctx.ephemeral(await setupView(ctx))),
+    postpanel: adminOnly((ctx) => askPanelChannel(ctx)),
+    panelhere: adminOnly(async (ctx) => {
+      const ch = await channelHere(ctx);
+      return ch ? postPanel(ctx, ch) : notHere(ctx);
+    }),
+    panelto: adminOnly(async (ctx) => {
+      const ch = await ctx.findChannel(ctx.argv[0]);
+      if (!ch) return ctx.warn("I can't find that channel", 'It may have been deleted. Open the setup again with `/tickets`.');
+      return postPanel(ctx, ch);
+    }),
+    panelpick: adminOnly(async (ctx) => {
+      const ch = await ctx.findChannel(ctx.values?.[0]);
+      if (!ch) return ctx.warn("I can't find that channel", 'It may have been deleted. Open the setup again with `/tickets`.');
+      return postPanel(ctx, ch);
+    }),
+    types: adminOnly((ctx) => typesForm(ctx)),
     savetypes: { perm: 'admin', run: saveTypes },
     edit: {
       perm: 'admin',
-      run: (ctx) => {
+      run: async (ctx) => {
+        if (!(await adminGate(ctx))) return null;
         const what = ctx.argv[0];
         const make = EDIT_FORMS[what];
         if (!make) return ctx.warn('This button is from an older panel', 'Open the setup again with `/tickets`.');
@@ -1226,15 +1272,12 @@ export const { setup, teardown, check } = defineApp({
     savelog: { perm: 'admin', run: (ctx) => saveEdit(ctx, 'log') },
     savecategory: { perm: 'admin', run: (ctx) => saveEdit(ctx, 'category') },
     savelimit: { perm: 'admin', run: (ctx) => saveEdit(ctx, 'limit') },
-    ping: {
-      perm: 'admin',
-      run: async (ctx) => {
-        ctx.patchConfig({ pingStaff: !ctx.config().pingStaff });
-        return ctx.update(await setupView(ctx));
-      },
-    },
-    tidy: { perm: 'admin', run: (ctx) => tidyUp(ctx) },
-  },
+    ping: adminOnly(async (ctx) => {
+      ctx.patchConfig({ pingStaff: !ctx.config().pingStaff });
+      return ctx.update(await setupView(ctx));
+    }),
+    tidy: adminOnly((ctx) => tidyUp(ctx)),
+  }),
 
   yap: [{
     words: ['ticket', 'tickets', 'support', 'help-desk'],

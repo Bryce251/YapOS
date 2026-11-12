@@ -76,14 +76,17 @@ const TRACK_MS = 60_000;
 const MAX_TRACKED = 5000;
 const LIFT_RETRY_MS = 5 * 60_000;
 const RESUME_DELAY_MS = 15_000;
-const ELEVATED_PERMS = ['administrator', 'manage_server', 'manage_roles', 'manage_channels', 'manage_messages', 'kick_members', 'ban_members', 'timeout_members', 'mention_everyone'];
+const VERIFY_ALERT_GAP_MS = 10 * 60_000;
+const MAX_ALERTS = 200;
+const ELEVATED_PERMS = ['administrator', 'manage_server', 'manage_roles', 'manage_channels', 'manage_messages', 'manage_webhooks', 'manage_nicknames', 'manage_threads', 'manage_emojis', 'manage_events', 'kick_members', 'ban_members', 'timeout_members', 'move_members', 'mute_members', 'deafen_members', 'mention_everyone'];
+const own = (table, key) => typeof key === 'string' && Object.hasOwn(table, key);
 
 const memories = new WeakMap();
 
 function mem(engine) {
   let m = memories.get(engine);
   if (!m) {
-    m = { tracker: new Map(), noticeAt: new Map(), strikeAt: new Map(), joins: new Map(), liftTimers: new Map(), warnedNoDelete: new Set(), busy: new Set(), pruneTimer: null };
+    m = { tracker: new Map(), noticeAt: new Map(), strikeAt: new Map(), joins: new Map(), liftTimers: new Map(), warnedNoDelete: new Set(), busy: new Set(), verifyAlertAt: new Map(), alerts: new Set(), pruneTimer: null };
     memories.set(engine, m);
   }
   return m;
@@ -266,8 +269,8 @@ async function postLog(engine, sid, embed, { components, content, priority = 'lo
   if (!channelId && fallbackToGeneral) channelId = await generalChannelId(engine, sid);
   if (!channelId) return false;
   try {
-    await engine.budget.send({ serverId: sid, channelId, content: content || '', opts: { embeds: [embed], components }, priority });
-    return true;
+    const sent = await engine.budget.send({ serverId: sid, channelId, content: content || '', opts: { embeds: [embed], components }, priority });
+    return sent || true;
   } catch (e) {
     engine.log.warn(`[automod] could not post to the log channel in ${sid}: ${e?.message}`);
     return false;
@@ -474,12 +477,46 @@ async function lockdownNow(engine, sid, { reason = 'raid', by = null, joinCount 
   setLockState(engine, sid, state);
   scheduleLift(engine, sid, until);
   const scope = state.mode === 'everyone' ? 'Nobody without a role that allows it can send messages right now.' : `Server-wide lock wasn't available here, so I locked <#${state.channelId}> instead.`;
-  await postLog(engine, sid, card({
+  const alert = await postLog(engine, sid, card({
     title: `${ICONS.lock} Lockdown on`,
     body: `${reason === 'raid' ? '**Raid shield:** ' : ''}${who}\n${scope}\nIt lifts by itself <t:${Math.floor(until / 1000)}:R>, or press the button.`,
     color: 'error',
   }), { components: [row(button('Lift lockdown', cid('lift'), 'success', ICONS.unlock))], content: ping || undefined, priority: 'high', fallbackToGeneral: true });
+  rememberAlert(engine, sid, alert?.id);
   return { ok: true, state };
+}
+
+function rememberAlert(engine, sid, messageId) {
+  if (!messageId) return;
+  const { alerts } = mem(engine);
+  alerts.add(messageId);
+  while (alerts.size > MAX_ALERTS) alerts.delete(alerts.values().next().value);
+  if (lockState(engine, sid)) engine.store.update(ID, sid, (d) => { if (d.lockdown) d.lockdown.alertId = messageId; }, {});
+}
+
+function clickedMessageId(ctx) {
+  return ctx.source?.message_id || null;
+}
+
+function onOwnPanel(ctx) {
+  const messageId = clickedMessageId(ctx);
+  return !!messageId && ctx.engine.router.panelOwner(messageId) === ctx.userId;
+}
+
+function onLockdownAlert(ctx) {
+  const messageId = clickedMessageId(ctx);
+  if (!messageId) return false;
+  return mem(ctx.engine).alerts.has(messageId) || lockState(ctx.engine, ctx.serverId)?.alertId === messageId;
+}
+
+async function verifyAlert(engine, sid, kind, embed) {
+  const { verifyAlertAt } = mem(engine);
+  const key = `${sid}:${kind}`;
+  const last = verifyAlertAt.get(key);
+  if (last && now() - last < VERIFY_ALERT_GAP_MS) return;
+  verifyAlertAt.set(key, now());
+  capMap(verifyAlertAt);
+  await postLog(engine, sid, embed, { content: modPing(engine, sid) || undefined, priority: 'normal' });
 }
 
 function scheduleLift(engine, sid, until) {
@@ -590,7 +627,7 @@ function panelView(engine, sid, { canEdit = true } = {}) {
 
 async function showPanel(ctx, how = 'ephemeral') {
   const { engine, serverId: sid } = ctx;
-  const canEdit = engine.perms.atLeast(await ctx.level(), 'admin');
+  const canEdit = engine.perms.atLeast(await ctx.require('mod'), 'admin');
   const view = panelView(engine, sid, { canEdit });
   return engine.caps.attempt(sid, 'selects', () => ctx[how](view.withSelect), () => ctx[how](view.withButtons));
 }
@@ -604,6 +641,11 @@ async function changed(ctx, title, body, before) {
   const u = engine.router.addUndo({
     serverId: ctx.serverId, actorId: ctx.userId, label: title, perm: 'admin',
     run: async (i) => {
+      await engine.perms.require(ctx.serverId, i.user_id, 'admin');
+      if (!engine.settings.isEnabled(ctx.serverId, ID)) {
+        await i.ephemeral('', { embeds: [dialog.warn("Automod isn't installed here", 'An admin can install it with **/apps**.')] });
+        return;
+      }
       engine.settings.patchApp(ctx.serverId, ID, before);
       await i.ephemeral('', { embeds: [dialog.ok('Undone', `Automod is back to how it was before: ${title.toLowerCase()}.`)] });
     },
@@ -727,7 +769,7 @@ async function exemptCommand(ctx, rest, forceRemove = false) {
 async function strictCommand(ctx, level) {
   const key = String(level || '').toLowerCase();
   const alias = { low: 'relaxed', light: 'relaxed', chill: 'relaxed', lenient: 'relaxed', medium: 'normal', default: 'normal', high: 'strict', tough: 'strict', hard: 'strict' };
-  const k = STRICTNESS[key] ? key : alias[key];
+  const k = own(STRICTNESS, key) ? key : own(alias, key) ? alias[key] : null;
   if (!k) return ctx.warn('Pick a strictness', 'Use **relaxed**, **normal** or **strict**, like `/automod strictness strict`.');
   await ctx.require('admin');
   const before = snapshot(ctx);
@@ -737,7 +779,7 @@ async function strictCommand(ctx, level) {
 }
 
 function applyPresetConfig(engine, sid, preset) {
-  const p = PRESETS[preset];
+  const p = own(PRESETS, preset) ? PRESETS[preset] : null;
   if (!p) return null;
   const cfg = engine.settings.appConfig(sid, ID);
   engine.settings.patchApp(sid, ID, { filters: { ...cfg.filters, ...p.filters }, strictness: p.strictness });
@@ -746,7 +788,7 @@ function applyPresetConfig(engine, sid, preset) {
 
 async function presetCommand(ctx, name) {
   const key = String(name || '').toLowerCase();
-  if (!PRESETS[key]) return ctx.warn('Which preset?', `Pick one of ${Object.keys(PRESETS).map((k) => `**${k}**`).join(', ')}.`);
+  if (!own(PRESETS, key)) return ctx.warn('Which preset?', `Pick one of ${Object.keys(PRESETS).map((k) => `**${k}**`).join(', ')}.`);
   await ctx.require('admin');
   const before = snapshot(ctx);
   const line = applyPresetConfig(ctx.engine, ctx.serverId, key);
@@ -821,6 +863,7 @@ async function manualLift(ctx) {
 const SUBCOMMANDS = ['words', 'links', 'exempt', 'unexempt', 'strictness', 'preset', 'verify', 'lockdown', 'lift', 'on', 'off', 'panel', ...Object.keys(FILTERS)];
 
 async function runAutomod(ctx) {
+  await ctx.require('mod');
   const tokens = ctx.argv?.length ? ctx.argv : tokenize(ctx.args);
   const first = (tokens[0] || '').toLowerCase();
   const rest = tokens.slice(1);
@@ -833,9 +876,9 @@ async function runAutomod(ctx) {
   if (/^(exempt|ignore|bypass)$/.test(first)) return exemptCommand(ctx, rest);
   if (/^(unexempt|unignore)$/.test(first)) return exemptCommand(ctx, rest, true);
   if (/^(strictness|strict|level|sensitivity)$/.test(first)) return strictCommand(ctx, rest[0] || (first === 'strict' ? 'strict' : ''));
-  if (STRICTNESS[first]) return strictCommand(ctx, first);
+  if (own(STRICTNESS, first)) return strictCommand(ctx, first);
   if (first === 'preset') return presetCommand(ctx, rest[0]);
-  if (PRESETS[first]) return presetCommand(ctx, first);
+  if (own(PRESETS, first)) return presetCommand(ctx, first);
   if (/^(verify|verification|gate)$/.test(first)) return verifyCommand(ctx, rest);
   if (/^(lockdown|lock)$/.test(first)) return manualLockdown(ctx);
   if (/^(lift|unlock|unlockdown)$/.test(first)) return manualLift(ctx);
@@ -855,6 +898,7 @@ async function runAutomod(ctx) {
 }
 
 async function runYap(ctx) {
+  await ctx.require('mod');
   if (/^(raid|lockdown)$/.test(ctx.word)) {
     const a = (ctx.argv[0] || '').toLowerCase();
     if (ctx.word === 'lockdown' && (!a || /^(on|now|start)$/.test(a))) return manualLockdown(ctx);
@@ -882,40 +926,45 @@ export const { setup, teardown, check } = defineApp({
   },
 
   components: {
-    panel: { perm: 'mod', run: (ctx) => showPanel(ctx, ctx.kind === 'button' ? 'update' : 'ephemeral') },
+    panel: { perm: 'mod', run: (ctx) => showPanel(ctx, ctx.kind === 'button' && onOwnPanel(ctx) ? 'update' : 'ephemeral') },
     toggle: {
       perm: 'admin',
       run: async (ctx) => {
+        await ctx.require('admin');
         const key = ctx.argv[0];
-        if (!FILTERS[key]) return ctx.warn('This button is from an older panel', 'Open `/automod` again.');
+        if (!own(FILTERS, key)) return ctx.warn('This button is from an older panel', 'Open `/automod` again.');
         const cfg = ctx.config();
         ctx.patchConfig({ filters: { ...cfg.filters, [key]: !cfg.filters[key] } });
-        return showPanel(ctx, 'update');
+        return showPanel(ctx, onOwnPanel(ctx) ? 'update' : 'ephemeral');
       },
     },
     strict: {
       perm: 'admin',
       run: async (ctx) => {
-        if (!STRICTNESS[ctx.argv[0]]) return ctx.warn('This button is from an older panel', 'Open `/automod` again.');
+        await ctx.require('admin');
+        if (!own(STRICTNESS, ctx.argv[0])) return ctx.warn('This button is from an older panel', 'Open `/automod` again.');
         ctx.patchConfig({ strictness: ctx.argv[0] });
-        return showPanel(ctx, 'update');
+        return showPanel(ctx, onOwnPanel(ctx) ? 'update' : 'ephemeral');
       },
     },
     strictpick: {
       perm: 'admin',
       run: async (ctx) => {
-        const v = ctx.values?.[0];
-        if (!STRICTNESS[v]) return ctx.warn('Pick a strictness', 'Choose relaxed, normal or strict.');
+        await ctx.require('admin');
+        const v = Array.isArray(ctx.values) ? ctx.values[0] : null;
+        if (!own(STRICTNESS, v)) return ctx.warn('Pick a strictness', 'Choose relaxed, normal or strict.');
         ctx.patchConfig({ strictness: v });
-        return showPanel(ctx, 'update');
+        return showPanel(ctx, onOwnPanel(ctx) ? 'update' : 'ephemeral');
       },
     },
     lift: {
       perm: 'mod',
       run: async (ctx) => {
+        await ctx.require('mod');
         const { engine, serverId: sid } = ctx;
-        if (!lockState(engine, sid)) return ctx.update({ content: `${ICONS.unlock} This lockdown was already lifted.`, components: [] });
-        await ctx.update({ content: `${ICONS.unlock} <@${ctx.userId}> is lifting the lockdown.`, components: [] });
+        const how = onLockdownAlert(ctx) || onOwnPanel(ctx) ? 'update' : 'ephemeral';
+        if (!lockState(engine, sid)) return ctx[how]({ content: `${ICONS.unlock} This lockdown was already lifted.`, components: [] });
+        await ctx[how]({ content: `${ICONS.unlock} <@${ctx.userId}> is lifting the lockdown.`, components: [] });
         const out = await liftLockdown(engine, sid, { by: ctx.userId });
         if (!out.ok && !out.notLocked && !out.busy) await ctx.error("I couldn't lift the lockdown", 'Please turn **Send messages** back on for everyone by hand.');
         return null;
@@ -924,6 +973,7 @@ export const { setup, teardown, check } = defineApp({
     verify: {
       run: async (ctx) => {
         const { engine, serverId: sid, userId: uid } = ctx;
+        if (!sid || !uid) return ctx.warn('Verification only works in a server', 'Press the Verify button in the server you want to join.');
         const cfg = ctx.config();
         if (!cfg.verify.enabled || !cfg.verify.roleId) return ctx.warn('Verification is off', 'Ask a mod for help getting in.');
         const member = await engine.perms.member(sid, uid).catch(() => null);
@@ -931,12 +981,12 @@ export const { setup, teardown, check } = defineApp({
         const can = await engine.perms.canManageRole(sid, cfg.verify.roleId);
         if (!can.ok) {
           await ctx.warn("I can't verify you right now", 'A mod has been told. Please try again a bit later.');
-          await postLog(engine, sid, dialog.warn('Verification is stuck', `<@${uid}> pressed Verify but I can't give the role: ${can.reason}`), { content: modPing(engine, sid) || undefined, priority: 'normal' });
+          await verifyAlert(engine, sid, 'stuck', dialog.warn('Verification is stuck', `<@${uid}> pressed Verify but I can't give the role: ${can.reason}`));
           return null;
         }
         if (riskyVerifyRole(engine, sid, can.role)) {
           await ctx.warn("I can't verify you right now", 'A mod has been told. Please try again a bit later.');
-          await postLog(engine, sid, dialog.warn('Verification paused', `<@${uid}> pressed Verify, but **${can.role.name}** now has moderator-level permissions, so I didn't hand it out. Pick a plain member role with \`/automod verify setup\`.`), { content: modPing(engine, sid) || undefined, priority: 'normal' });
+          await verifyAlert(engine, sid, 'paused', dialog.warn('Verification paused', `<@${uid}> pressed Verify, but **${can.role.name}** now has moderator-level permissions, so I didn't hand it out. Pick a plain member role with \`/automod verify setup\`.`));
           return null;
         }
         try {
@@ -944,10 +994,11 @@ export const { setup, teardown, check } = defineApp({
         } catch (e) {
           if (looksLikeFeatureOff(e)) engine.caps.mark(sid, 'roles', false, e?.message);
           await ctx.warn("I couldn't verify you", 'Something went wrong giving you the role. A mod has been told.');
-          await postLog(engine, sid, dialog.warn('Verification failed', `I couldn't give **${can.role.name}** to <@${uid}>. Role changes may not be available on this server yet, so please give it by hand.`), { content: modPing(engine, sid) || undefined, priority: 'normal' });
+          await verifyAlert(engine, sid, 'failed', dialog.warn('Verification failed', `I couldn't give **${can.role.name}** to <@${uid}>. Role changes may not be available on this server yet, so please give it by hand.`));
           return null;
         }
         engine.perms.invalidate(`m:${sid}:${uid}`);
+        for (const kind of ['stuck', 'paused', 'failed']) mem(engine).verifyAlertAt.delete(`${sid}:${kind}`);
         return ctx.ok("You're verified", `Welcome in! You now have **${can.role.name}**.`);
       },
     },

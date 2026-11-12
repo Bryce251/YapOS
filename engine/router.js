@@ -77,8 +77,24 @@ export function createRouter({ bot, engine, log }) {
     return { id, button: { type: 'button', style: 'secondary', label: `Undo${label ? `: ${label}` : ''}`.slice(0, 80), custom_id: customId('sys', 'undo', id), emoji: '↩️' } };
   }
 
+  const panelOwners = new Map();
+  const MAX_PANEL_LOCKS = 5000;
+  function claimPanel(messageId, userId, ttlMs) {
+    if (!messageId || !userId) return;
+    if (panelOwners.size >= MAX_PANEL_LOCKS) panelOwners.delete(panelOwners.keys().next().value);
+    panelOwners.set(messageId, { userId, expires: Date.now() + ttlMs });
+  }
+  function releasePanel(messageId) { panelOwners.delete(messageId); }
+  function panelOwner(messageId) {
+    const p = messageId && panelOwners.get(messageId);
+    if (!p) return null;
+    if (Date.now() > p.expires) { panelOwners.delete(messageId); return null; }
+    return p.userId;
+  }
+
   setInterval(() => {
     const t = Date.now();
+    for (const [k, v] of panelOwners) if (t > v.expires) panelOwners.delete(k);
     for (const [k, v] of sessions) if (t > v.expires) sessions.delete(k);
     for (const [k, v] of undos) if (t > v.expires) undos.delete(k);
   }, 60_000).unref?.();
@@ -99,6 +115,11 @@ export function createRouter({ bot, engine, log }) {
     if (!parsed) return;
     const i = guardInteraction(raw, { log });
     try {
+      const owner = panelOwner(raw.message_id);
+      if (owner && owner !== raw.user_id) {
+        await i.ephemeral('', { embeds: [dialog.warn('Not your panel', `<@${owner}> opened this one, so only they can use it. Run the command yourself to get your own.`)] });
+        return;
+      }
       if (parsed.app === 'sys' && parsed.action === 'undo') return await runUndo(i, parsed.args[0]);
       const h = handlers.get(`${parsed.app}:${parsed.action}`);
       if (!h) {
@@ -139,5 +160,5 @@ export function createRouter({ bot, engine, log }) {
     bot.onModal(/^yo:/, dispatch);
   }
 
-  return { register, unregisterApp, customId, parseCustomId, session, getSession, dropSession, addUndo, dispatch, attach, handlers };
+  return { claimPanel, releasePanel, panelOwner, register, unregisterApp, customId, parseCustomId, session, getSession, dropSession, addUndo, dispatch, attach, handlers };
 }

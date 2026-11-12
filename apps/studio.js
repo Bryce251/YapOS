@@ -674,7 +674,8 @@ async function findImage(ctx) {
   if (!list.length && src.reply_to_id && ctx.channelId) {
     replied = true;
     const target = await ctx.bot.message(ctx.channelId, src.reply_to_id).catch(() => null);
-    if (target?.attachment_path) list = [{ path: target.attachment_path, name: target.attachment_name || null }];
+    const sameChannel = !target?.channel_id || target.channel_id === ctx.channelId;
+    if (target?.attachment_path && sameChannel && !target.deleted) list = [{ path: target.attachment_path, name: target.attachment_name || null }];
   }
   const image = list.find((a) => IMAGE_TYPES.includes(extensionOf(a))) || list[0] || null;
   return { image, replied };

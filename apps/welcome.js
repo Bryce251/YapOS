@@ -2,7 +2,7 @@ import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row, rows, select, onOff } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
 import { tokenize, fillTemplate, ordinal, clip, parseBool, didYouMean, levenshtein, resolveChannel, resolveRole } from '../engine/parse.js';
-import { explain, looksLikeFeatureOff } from '../engine/errors.js';
+import { explain, friendly, looksLikeFeatureOff, permName } from '../engine/errors.js';
 
 const ID = 'welcome';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -14,6 +14,8 @@ const BURST_QUIET_MS = 4_000;
 const BURST_MAX_WAIT_MS = 20_000;
 const BURST_NAMES = 3;
 const ISSUE_KEEP = 3;
+const NAME_MAX = 64;
+const STAFF_PERMS = ['administrator', 'manage_server', 'manage_roles', 'manage_channels', 'manage_messages', 'manage_webhooks', 'kick_members', 'ban_members', 'timeout_members', 'mention_everyone', 'move_members'];
 
 const DEFAULT_JOIN = "Welcome {user} to **{server}**! You're our {count_ord} member.";
 const DEFAULT_LEAVE = '**{username}** left **{server}**. We are now {count} members.';
@@ -149,8 +151,13 @@ async function leaveChannel(engine, sid, cfg) {
   return joinChannel(engine, sid, cfg);
 }
 
+function safeName(name) {
+  const cleaned = String(name ?? '').replace(/[<>[\]`\r\n]/g, '').replace(/@/g, '@\u200b').replace(/:\/\//g, ':\u200b//').trim();
+  return clip(cleaned, NAME_MAX) || 'someone';
+}
+
 function vars({ userId, username, server, count }) {
-  return { user: `<@${userId}>`, username: username || 'someone', server, count, count_ord: ordinal(count) };
+  return { user: `<@${userId}>`, username: safeName(username), server, count, count_ord: ordinal(count) };
 }
 
 function joinMessage(cfg, v) {
@@ -252,6 +259,7 @@ async function flushBurst(engine, sid) {
   const total = b.total;
   b.total = 0;
   b.firstAt = 0;
+  if (!engine.settings.isEnabled(sid, ID)) return null;
   const cfg = engine.settings.appConfig(sid, ID);
   if (!cfg.join) return null;
   const ch = await joinChannel(engine, sid, cfg);
@@ -411,6 +419,7 @@ async function show(ctx, view) {
 }
 
 async function openPanel(ctx) {
+  if (!ctx.serverId) return ctx.warn('Servers only', 'Welcome settings live in a server. Run **/welcome** there.');
   if (!(await isAdmin(ctx))) return ctx.ephemeral(await previewView(ctx));
   const view = await panelView(ctx);
   if (ctx.kind === 'message') return ctx.reply(view);
@@ -449,7 +458,9 @@ function undoFor(ctx, label, restore) {
   const { engine, serverId } = ctx;
   return engine.router.addUndo({
     serverId, actorId: ctx.userId, label, perm: 'admin',
-    run: async () => {
+    run: async (i) => {
+      await engine.perms.require(serverId, i?.user_id, 'admin');
+      if (!engine.settings.isEnabled(serverId, ID)) throw friendly("Welcome isn't installed here anymore, so there is nothing to undo. An admin can install it with **/apps**.", { title: "Welcome isn't installed here" });
       engine.settings.patchApp(serverId, ID, restore);
       if ('autoroles' in restore) forgetLogged(engine, serverId, 'role:');
     },
@@ -461,13 +472,35 @@ async function manageableRoles(ctx) {
   return all.filter((r) => !/^@?everyone$/i.test(r.name) && r.id !== ctx.serverId && !(r.auto && r.auto !== 'none'));
 }
 
+async function outranks(ctx, role) {
+  if ((await ctx.level()) === 'owner') return true;
+  if (typeof role?.position !== 'number') return true;
+  return (await ctx.engine.perms.topPosition(ctx.serverId, ctx.userId)) > role.position;
+}
+
+async function extraPower(ctx, role) {
+  if ((await ctx.level()) === 'owner') return null;
+  const mine = await ctx.engine.perms.permsOf(ctx.serverId, ctx.userId).catch(() => ({}));
+  if (mine.administrator) return null;
+  return STAFF_PERMS.find((p) => role?.perms?.[p] && !mine[p]) || null;
+}
+
+async function roleProblem(ctx, id) {
+  const r = await ctx.engine.perms.canManageRole(ctx.serverId, id);
+  if (!r.ok) return r.reason;
+  if (!(await outranks(ctx, r.role))) return `**${r.role.name}** is not below your own highest role, so you can't hand it out. Ask someone with a higher role.`;
+  const power = await extraPower(ctx, r.role);
+  if (power) return `**${r.role.name}** comes with **${permName(power)}**, which you don't have yourself, so you can't hand it to everyone who joins. Ask the server owner.`;
+  return null;
+}
+
 async function checkRoles(ctx, ids) {
   const ok = [];
   const refused = [];
   for (const id of ids) {
-    const r = await ctx.engine.perms.canManageRole(ctx.serverId, id);
-    if (r.ok) ok.push(id);
-    else refused.push(r.reason);
+    const problem = await roleProblem(ctx, id);
+    if (problem) refused.push(problem);
+    else ok.push(id);
   }
   return { ok, refused };
 }
@@ -502,6 +535,7 @@ async function rolePicker(ctx, note) {
 }
 
 async function openForm(ctx) {
+  await ctx.require('admin');
   const cfg = ctx.config();
   return ctx.form({
     title: 'Welcome messages',
@@ -545,6 +579,7 @@ async function saveForm(ctx) {
 }
 
 async function testJoin(ctx) {
+  await ctx.require('admin');
   const { engine } = ctx;
   const cfg = ctx.config();
   const ch = await joinChannel(engine, ctx.serverId, cfg);
@@ -639,8 +674,8 @@ async function typedAutorole(ctx, tokens) {
   }
   if (cur.includes(role.id)) return ctx.info('Already there', `New members already get **${role.name}**.`);
   if (cur.length >= MAX_AUTOROLES) return ctx.warn('That is the limit', `You can have up to ${MAX_AUTOROLES} starter roles. Remove one first.`);
-  const check = await ctx.engine.perms.canManageRole(ctx.serverId, role.id);
-  if (!check.ok) return ctx.warn(`I can't give out ${role.name}`, check.reason);
+  const problem = await roleProblem(ctx, role.id);
+  if (problem) return ctx.warn(`I can't give out ${role.name}`, problem);
   const res = await saveRoles(ctx, [...cur, role.id]);
   return ctx.ok('Starter role added', `New members now get **${role.name}** when they join.`, { components: [row(res.undo.button)] });
 }
@@ -669,6 +704,7 @@ function skipTokens(raw, n) {
 }
 
 async function runArgs(ctx, tokens, raw) {
+  if (!ctx.serverId) return ctx.warn('Servers only', 'Welcome settings live in a server. Run **/welcome** there.');
   if (!tokens.length) return openPanel(ctx);
   const [first, ...rest] = tokens;
   if (looksLikeChannel(first)) { await ctx.require('admin'); return typedChannel(ctx, 'join', tokens); }
@@ -713,6 +749,14 @@ async function runArgs(ctx, tokens, raw) {
 
 const TOGGLES = { join: 'join', leave: 'leave', card: 'card', dm: 'dm' };
 
+const adminOnly = (run) => ({
+  perm: 'admin',
+  run: async (ctx) => {
+    await ctx.require('admin');
+    return run(ctx);
+  },
+});
+
 export const { setup, teardown, check } = defineApp({
   id: ID,
   name: 'Welcome',
@@ -742,77 +786,61 @@ export const { setup, teardown, check } = defineApp({
   },
 
   components: {
-    home: { perm: 'admin', run: async (ctx) => ctx.update(await panelView(ctx)) },
-    toggle: {
-      perm: 'admin',
+    home: adminOnly(async (ctx) => ctx.update(await panelView(ctx))),
+    toggle: adminOnly(async (ctx) => {
+      const key = Object.hasOwn(TOGGLES, ctx.argv[0]) ? TOGGLES[ctx.argv[0]] : null;
+      if (!key) return ctx.warn('Old button', 'Open **/welcome** again.');
+      const on = !ctx.config()[key];
+      ctx.patchConfig({ [key]: on });
+      let note;
+      if (key === 'dm' && on) note = dialog.info('Welcome DMs on', "DMs from bots are a testing feature on Yapin'. If they don't work here, I'll pause them and show it right here.");
+      return ctx.update(await panelView(ctx, { note }));
+    }),
+    pick: adminOnly((ctx) => channelPicker(ctx, ctx.argv[0] === 'leave' ? 'leave' : 'join')),
+    chanpick: adminOnly(async (ctx) => {
+      const which = ctx.argv[0] === 'leave' ? 'leave' : 'join';
+      const ch = (await textChannels(ctx.engine, ctx.serverId)).find((c) => c.id === ctx.values?.[0]);
+      if (!ch) return ctx.warn("I can't find that channel", 'It may have been deleted. Open the picker again.');
+      const res = await setChannel(ctx, which, ch);
+      return ctx.update(await panelView(ctx, res));
+    }),
+    chan: adminOnly(async (ctx) => {
+      const which = ctx.argv[0] === 'leave' ? 'leave' : 'join';
+      const ch = (await textChannels(ctx.engine, ctx.serverId)).find((c) => c.id === ctx.argv[1]);
+      if (!ch) return ctx.warn("I can't find that channel", 'It may have been deleted. Open the picker again.');
+      const res = await setChannel(ctx, which, ch);
+      return ctx.update(await panelView(ctx, res));
+    }),
+    chanreset: adminOnly(async (ctx) => ctx.update(await panelView(ctx, await setChannel(ctx, 'leave', null)))),
+    roles: adminOnly((ctx) => rolePicker(ctx)),
+    rolepick: adminOnly(async (ctx) => {
+      const all = (await manageableRoles(ctx)).map((r) => r.id);
+      const shown = new Set(all.slice(0, 25));
+      const offList = (ctx.config().autoroles || []).filter((id) => all.includes(id) && !shown.has(id));
+      const res = await saveRoles(ctx, [...offList, ...(ctx.values || []).map(String)]);
+      return ctx.update(await panelView(ctx, { note: res.note, extraRow: row(res.undo.button) }));
+    }),
+    role: adminOnly(async (ctx) => {
+      const id = ctx.argv[0];
+      const cur = [...(ctx.config().autoroles || [])];
+      const next = cur.includes(id) ? cur.filter((r) => r !== id) : [...cur, id];
+      if (next.length > MAX_AUTOROLES) return ctx.warn('That is the limit', `You can have up to ${MAX_AUTOROLES} starter roles. Turn one off first.`);
+      const res = await saveRoles(ctx, next);
+      return rolePicker(ctx, res.note);
+    }),
+    roleclear: adminOnly(async (ctx) => {
+      const res = await saveRoles(ctx, []);
+      return ctx.update(await panelView(ctx, { note: dialog.ok('Starter roles cleared', 'New members no longer get roles when they join.'), extraRow: row(res.undo.button) }));
+    }),
+    edit: adminOnly((ctx) => openForm(ctx)),
+    save: adminOnly(saveForm),
+    preview: {
       run: async (ctx) => {
-        const key = TOGGLES[ctx.argv[0]];
-        if (!key) return ctx.warn('Old button', 'Open **/welcome** again.');
-        const on = !ctx.config()[key];
-        ctx.patchConfig({ [key]: on });
-        let note;
-        if (key === 'dm' && on) note = dialog.info('Welcome DMs on', "DMs from bots are a testing feature on Yapin'. If they don't work here, I'll pause them and show it right here.");
-        return ctx.update(await panelView(ctx, { note }));
+        if (!ctx.serverId) return ctx.warn('Servers only', 'Run **/welcome preview** in a server.');
+        return ctx.ephemeral(await previewView(ctx));
       },
     },
-    pick: { perm: 'admin', run: (ctx) => channelPicker(ctx, ctx.argv[0] === 'leave' ? 'leave' : 'join') },
-    chanpick: {
-      perm: 'admin',
-      run: async (ctx) => {
-        const which = ctx.argv[0] === 'leave' ? 'leave' : 'join';
-        const ch = (await textChannels(ctx.engine, ctx.serverId)).find((c) => c.id === ctx.values?.[0]);
-        if (!ch) return ctx.warn("I can't find that channel", 'It may have been deleted. Open the picker again.');
-        const res = await setChannel(ctx, which, ch);
-        return ctx.update(await panelView(ctx, res));
-      },
-    },
-    chan: {
-      perm: 'admin',
-      run: async (ctx) => {
-        const which = ctx.argv[0] === 'leave' ? 'leave' : 'join';
-        const ch = (await textChannels(ctx.engine, ctx.serverId)).find((c) => c.id === ctx.argv[1]);
-        if (!ch) return ctx.warn("I can't find that channel", 'It may have been deleted. Open the picker again.');
-        const res = await setChannel(ctx, which, ch);
-        return ctx.update(await panelView(ctx, res));
-      },
-    },
-    chanreset: {
-      perm: 'admin',
-      run: async (ctx) => ctx.update(await panelView(ctx, await setChannel(ctx, 'leave', null))),
-    },
-    roles: { perm: 'admin', run: (ctx) => rolePicker(ctx) },
-    rolepick: {
-      perm: 'admin',
-      run: async (ctx) => {
-        const all = (await manageableRoles(ctx)).map((r) => r.id);
-        const shown = new Set(all.slice(0, 25));
-        const offList = (ctx.config().autoroles || []).filter((id) => all.includes(id) && !shown.has(id));
-        const res = await saveRoles(ctx, [...offList, ...(ctx.values || []).map(String)]);
-        return ctx.update(await panelView(ctx, { note: res.note, extraRow: row(res.undo.button) }));
-      },
-    },
-    role: {
-      perm: 'admin',
-      run: async (ctx) => {
-        const id = ctx.argv[0];
-        const cur = [...(ctx.config().autoroles || [])];
-        const next = cur.includes(id) ? cur.filter((r) => r !== id) : [...cur, id];
-        if (next.length > MAX_AUTOROLES) return ctx.warn('That is the limit', `You can have up to ${MAX_AUTOROLES} starter roles. Turn one off first.`);
-        const res = await saveRoles(ctx, next);
-        return rolePicker(ctx, res.note);
-      },
-    },
-    roleclear: {
-      perm: 'admin',
-      run: async (ctx) => {
-        const res = await saveRoles(ctx, []);
-        return ctx.update(await panelView(ctx, { note: dialog.ok('Starter roles cleared', 'New members no longer get roles when they join.'), extraRow: row(res.undo.button) }));
-      },
-    },
-    edit: { perm: 'admin', run: (ctx) => openForm(ctx) },
-    save: { perm: 'admin', run: saveForm },
-    preview: { run: async (ctx) => ctx.ephemeral(await previewView(ctx)) },
-    test: { perm: 'admin', run: testJoin },
+    test: adminOnly(testJoin),
   },
 
   events: {

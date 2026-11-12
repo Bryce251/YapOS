@@ -1044,6 +1044,311 @@ test('uninstalling Studio in a server stops its commands there', async () => {
   assert.equal(filesIn(G).length, 1);
 });
 
+test('Studio posts no buttons, so there is nothing of someone else to press', async () => {
+  const { h, state, say, dm, filesIn } = await make();
+  assert.deepEqual([...h.engine.router.handlers.keys()].filter((k) => k.startsWith('studio:')), []);
+  const answers = [];
+  for (const user of [IDS.member, IDS.member2, IDS.mod]) {
+    const opened = await h.click(customId('system', 'open', 'studio'), { user });
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].type, 'ephemeral');
+    assert.match(h.textOf(opened[0]), /Turn a picture into a captioned GIF/);
+    answers.push(...opened);
+  }
+  answers.push(...await h.slash('caption', 'hello', { user: IDS.member }));
+  answers.push(...await h.slash('gif', '', { user: IDS.member2 }));
+  answers.push(...await h.slash('yap', 'studio', { user: IDS.member }));
+  answers.push(...await h.slash('yap', 'caption hi', { user: IDS.member2 }));
+  for (const a of answers) {
+    assert.equal(a.type, 'ephemeral');
+    assert.equal(h.allButtons([a]).length, 0);
+  }
+  await say('!caption hello there', { attachment: 'abc/pic.png', user: IDS.member });
+  await say('!gif', { user: IDS.member2 });
+  await say('!yap studio', { user: IDS.mod });
+  await dm('studio help', { user: IDS.member2 });
+  await dm('caption', { user: IDS.member2, attachments: [pic()] });
+  assert.equal(filesIn(G).length, 1);
+  const posted = [...h.sent(G), ...h.sent(dmOf(IDS.member2))];
+  assert.ok(posted.length >= 4);
+  assert.equal(h.allButtons(posted).length, 0);
+  for (const m of posted) assert.ok(!m.components?.length);
+});
+
+test('a forged Studio button does nothing, with or without a message behind it', async () => {
+  const { h, state, say, svc, filesIn } = await make();
+  await say('!caption hello there', { attachment: 'abc/pic.png', user: IDS.member });
+  const gif = filesIn(G)[0];
+  const before = { urls: state.urls.length, jobs: state.jobs.length, sent: h.sent(G).length, done: svc.stats().done };
+  const forged = [customId('studio', 'caption', IDS.member), customId('studio', 'gif'), customId('studio', 'panel'), customId('studio', 'produce', 'abc/pic.png')];
+  for (const user of [IDS.member2, IDS.mod, IDS.owner]) {
+    for (const id of forged) {
+      for (const messageId of [null, gif.id]) {
+        const ans = await h.click(id, { user, messageId });
+        assert.equal(ans.length, 1);
+        assert.equal(ans[0].type, 'ephemeral');
+        assert.match(h.textOf(ans[0]), /older panel/);
+        assert.equal(h.allButtons(ans).length, 0);
+      }
+    }
+  }
+  await svc.idle();
+  await h.settle();
+  assert.deepEqual({ urls: state.urls.length, jobs: state.jobs.length, sent: h.sent(G).length, done: svc.stats().done }, before);
+});
+
+test('a reply only ever reads a picture from the channel the command was typed in', async () => {
+  const { h, state, say, filesIn, lastText } = await make();
+  const elsewhere = await h.message('staff only picture', { attachment: 'zzz/secret.png', user: IDS.mod, channel: IDS.channels.modlog });
+  await say('!gif', { replyTo: elsewhere.id, user: IDS.member });
+  assert.match(lastText(G), /That message has no picture/);
+  assert.equal(state.urls.length, 0);
+  assert.equal(filesIn(G).length, 0);
+});
+
+function addServer(h) {
+  const B = uuid();
+  const ch = uuid(5);
+  const botRole = uuid(7);
+  const memberRole = uuid(7);
+  const st = h.fake.state;
+  st.servers[B] = { id: B, name: 'Other Town', icon_path: null, owner_id: IDS.member2, member_count: 3, online_count: 1 };
+  st.roles[B] = [
+    { id: botRole, name: 'YapOS', color: null, position: 6, perms: { send_messages: true, embed_links: true, manage_messages: true }, auto: null, mentionable: false },
+    { id: memberRole, name: 'Member', color: null, position: 1, perms: { send_messages: true }, auto: null, mentionable: false },
+  ];
+  st.members[B] = [
+    { id: IDS.member2, username: 'riley', display_name: 'Riley', nickname: null, roles: [memberRole], joined_at: '2026-02-01T00:00:00Z' },
+    { id: IDS.bot, username: 'yapos', display_name: 'YapOS', nickname: null, roles: [botRole], joined_at: '2026-02-02T00:00:00Z' },
+    { id: IDS.member, username: 'sam', display_name: 'Sam', nickname: null, roles: [memberRole], joined_at: '2026-02-03T00:00:00Z' },
+  ];
+  st.channels[B] = [{ id: ch, name: 'general', type: 'text', kind: 'text', server_id: B, position: 0, category: null, category_id: null, private: false, read_only: false, slowmode: 0 }];
+  st.bans[B] = [];
+  st.everyone[B] = { send_messages: true, view_channel: true };
+  return { B, ch };
+}
+
+const HOW_TO = /Turn a picture into a captioned GIF/;
+const OPEN_STUDIO = customId('system', 'open', 'studio');
+const TILE = /^yo:system:open:studio$/;
+
+test('the Studio tile answers only the person whose home screen it is, and staff see nothing more than a member', async () => {
+  const { h, state } = await make();
+  const menu = await h.slash('menu', '', { user: IDS.member });
+  const tile = h.findButton(TILE, menu);
+  assert.ok(tile?.messageId, 'the home screen has a Studio tile');
+  assert.equal(tile.custom_id, OPEN_STUDIO);
+  const own = await h.click(tile.custom_id, { user: IDS.member, messageId: tile.messageId });
+  assert.equal(own.length, 1);
+  assert.equal(own[0].type, 'ephemeral');
+  assert.match(h.textOf(own[0]), HOW_TO);
+  assert.equal(h.allButtons(own).length, 0);
+  for (const user of [IDS.member2, IDS.mod, IDS.admin, IDS.owner]) {
+    const other = await h.click(tile.custom_id, { user, messageId: tile.messageId });
+    assert.equal(other.length, 1);
+    assert.equal(other[0].type, 'ephemeral');
+    assert.match(h.textOf(other[0]), /Not your panel/);
+    assert.doesNotMatch(h.textOf(other[0]), HOW_TO);
+  }
+
+  await h.message('!menu', { user: IDS.member2 });
+  const typedTile = h.findButton(TILE, [h.lastSent(G)]);
+  assert.ok(typedTile?.messageId, 'the typed home screen has a Studio tile');
+  const barged = await h.click(typedTile.custom_id, { user: IDS.member, messageId: typedTile.messageId });
+  assert.match(h.textOf(barged[0]), /Not your panel/);
+  const second = await h.click(typedTile.custom_id, { user: IDS.member2, messageId: typedTile.messageId });
+  assert.match(h.textOf(second[0]), HOW_TO);
+
+  const ownerMenu = await h.slash('menu', '', { user: IDS.owner });
+  const ownerTile = h.findButton(TILE, ownerMenu);
+  const ownerView = await h.click(ownerTile.custom_id, { user: IDS.owner, messageId: ownerTile.messageId });
+  assert.equal(h.textOf(ownerView[0]), h.textOf(own[0]));
+  assert.equal(h.allButtons(ownerView).length, 0);
+  assert.equal(state.urls.length, 0);
+});
+
+test('ids and values pasted onto the Studio tile change nothing', async () => {
+  const { h, state, svc } = await make();
+  const menu = await h.slash('menu', '', { user: IDS.member });
+  const tile = h.findButton(TILE, menu);
+  const plainView = h.textOf((await h.click(OPEN_STUDIO, { user: IDS.member }))[0]);
+  assert.match(plainView, HOW_TO);
+  const sentBefore = h.sent().length;
+  const hostile = { text: 'x'.repeat(5000), path: '../../secret.png', user: IDS.owner, server: uuid(), role: IDS.roles.top, kind: 'admin' };
+  for (const extra of [IDS.owner, IDS.member2, IDS.mod, IDS.roles.top, IDS.roles.admin, IDS.bot, uuid(), 'admin', 'owner']) {
+    for (const messageId of [null, tile.messageId]) {
+      const pressed = await h.click(customId('system', 'open', 'studio', extra), { user: IDS.member, messageId });
+      assert.equal(pressed.length, 1);
+      assert.equal(pressed[0].type, 'ephemeral');
+      assert.equal(h.textOf(pressed[0]), plainView);
+    }
+  }
+  const picked = await h.pick(OPEN_STUDIO, [IDS.owner, 'admin', 'mod'], { user: IDS.member, messageId: tile.messageId });
+  assert.equal(h.textOf(picked[0]), plainView);
+  const submitted = await h.submit(OPEN_STUDIO, hostile, { user: IDS.member });
+  assert.equal(h.textOf(submitted[0]), plainView);
+  for (const name of ['studio/../mod', 'STUDIO', '__proto__', 'constructor', 'studio mod', '']) {
+    const odd = await h.click(customId('system', 'open', name), { user: IDS.member, messageId: tile.messageId });
+    assert.equal(odd.length, 1);
+    assert.equal(odd[0].type, 'ephemeral');
+    assert.match(h.textOf(odd[0]), /Nothing to open/);
+  }
+  await svc.idle();
+  assert.equal(h.sent().length, sentBefore);
+  assert.deepEqual([state.urls.length, state.jobs.length], [0, 0]);
+});
+
+test('forged undo, form and Studio ids from a member do nothing, whatever values ride along', async () => {
+  const { h, state, say, svc, filesIn } = await make();
+  await say('!caption hello there', { attachment: 'abc/pic.png', user: IDS.member });
+  const gif = filesIn(G)[0];
+  const menu = await h.slash('menu', '', { user: IDS.member });
+  const tile = h.findButton(TILE, menu);
+  const before = { urls: state.urls.length, jobs: state.jobs.length, sent: h.sent().length, done: svc.stats().done, refused: svc.stats().refused };
+  const hostile = { text: 'pwn', caption: 'pwn', path: 'zzz/secret.png', attachment: 'zzz/secret.png', reply_to_id: gif.id, user: IDS.owner };
+  const ids = [
+    customId('sys', 'undo', 'abc123'), customId('sys', 'undo', IDS.owner), customId('sys', 'form', 'abc123'), customId('sys', 'form', IDS.member2),
+    customId('studio', 'caption'), customId('studio', 'gif', IDS.owner), customId('studio', 'request', 'caption', 'zzz/secret.png'), customId('studio', 'setLimits'), customId('studio', 'setRenderer'),
+  ];
+  for (const id of ids) {
+    for (const messageId of [null, gif.id, tile.messageId]) {
+      for (const press of [h.click, h.submit, h.pick]) {
+        const ans = press === h.click ? await h.click(id, { user: IDS.member, messageId }) : await press(id, press === h.pick ? Object.values(hostile) : hostile, { user: IDS.member, messageId });
+        assert.equal(ans.length, 1, id);
+        assert.equal(ans[0].type, 'ephemeral', id);
+        assert.match(h.textOf(ans[0]), /Too late to undo|This form expired|older panel/, id);
+        assert.doesNotMatch(h.textOf(ans[0]), /\b[45]\d\d\b|Error|undefined/);
+      }
+    }
+  }
+  await svc.idle();
+  await h.settle();
+  assert.deepEqual({ urls: state.urls.length, jobs: state.jobs.length, sent: h.sent().length, done: svc.stats().done, refused: svc.stats().refused }, before);
+});
+
+test('a home screen opened before Studio was uninstalled cannot be replayed afterwards', async () => {
+  const { h, state, say, filesIn, lastText } = await make();
+  const picture = await say('look at my cat', { attachment: 'zzz/cat.jpg', user: IDS.member2 });
+  const menu = await h.slash('menu', '', { user: IDS.member });
+  const tile = h.findButton(TILE, menu);
+  h.engine.settings.setEnabled(S, 'studio', false);
+  for (const messageId of [tile.messageId, null]) {
+    const replay = await h.click(tile.custom_id, { user: IDS.member, messageId });
+    assert.equal(replay.length, 1);
+    assert.match(h.textOf(replay[0]), /Studio isn't installed here/);
+    assert.doesNotMatch(h.textOf(replay[0]), HOW_TO);
+  }
+  await say('!gif', { replyTo: picture.id, user: IDS.member });
+  assert.match(lastText(G), /Studio isn't installed here/);
+  await say('!yap gif', { replyTo: picture.id, user: IDS.member });
+  assert.match(lastText(G), /Studio isn't installed here/);
+  await say('!yap studio', { user: IDS.member });
+  assert.match(lastText(G), /Studio isn't installed here/);
+  const viaName = await h.slash('yap', 'Studio', { user: IDS.member });
+  assert.match(h.textOf(viaName[0]), /isn't installed here/);
+  assert.equal(state.urls.length, 0);
+  assert.equal(filesIn(G).length, 0);
+});
+
+test('installing or removing Studio in one server changes nothing in another', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: START });
+  const { h, state, say, filesIn, lastText } = await make();
+  const { B, ch } = addServer(h);
+  h.engine.settings.setEnabled(B, 'studio', false);
+  for (const id of [OPEN_STUDIO, customId('system', 'open', 'studio', S)]) {
+    const pressed = await h.click(id, { user: IDS.member, server: B, channel: ch });
+    assert.match(h.textOf(pressed[0]), /Studio isn't installed here/);
+  }
+  await say('!caption hi', { attachment: 'abc/pic.png', user: IDS.member, server: B, channel: ch });
+  assert.match(lastText(ch), /Studio isn't installed here/);
+  assert.equal(state.urls.length, 0);
+  await say('!caption hi', { attachment: 'abc/pic.png', user: IDS.member });
+  assert.equal(filesIn(G).length, 1);
+
+  h.engine.settings.setEnabled(S, 'studio', false);
+  h.engine.settings.setEnabled(B, 'studio', true);
+  await say('!gif', { attachment: 'abc/pic.png', user: IDS.member2, server: B, channel: ch });
+  assert.equal(filesIn(ch).length, 1);
+  await say('!gif', { attachment: 'abc/pic.png', user: IDS.member2 });
+  assert.match(lastText(G), /Studio isn't installed here/);
+  assert.equal(filesIn(G).length, 1);
+
+  t.mock.timers.tick(10_001);
+  const secret = await h.message('staff only picture', { attachment: 'zzz/secret.png', user: IDS.mod, channel: IDS.channels.modlog });
+  const urls = state.urls.length;
+  await say('!gif', { replyTo: secret.id, user: IDS.member, server: B, channel: ch });
+  assert.match(lastText(ch), /That message has no picture/);
+  assert.equal(state.urls.length, urls);
+  assert.equal(filesIn(ch).length, 1);
+});
+
+test('a reply that resolves to a message from another channel is never used as the picture', async () => {
+  const { h, state, say, filesIn, lastText } = await make();
+  const elsewhere = await h.message('staff only picture', { attachment: 'zzz/secret.png', user: IDS.mod, channel: IDS.channels.modlog });
+  const stored = h.fake.state.messages[IDS.channels.modlog].find((m) => m.id === elsewhere.id);
+  const real = h.bot.message.bind(h.bot);
+  h.bot.message = async () => ({ ...stored });
+  await say('!gif', { replyTo: elsewhere.id, user: IDS.member });
+  assert.match(lastText(G), /That message has no picture/);
+  await say('!caption got it', { replyTo: elsewhere.id, user: IDS.member2 });
+  assert.match(lastText(G), /That message has no picture/);
+  h.bot.message = async () => ({ ...stored, channel_id: G, deleted: true });
+  await say('!gif', { replyTo: elsewhere.id, user: IDS.mod });
+  assert.match(lastText(G), /That message has no picture/);
+  assert.equal(state.urls.length, 0);
+  assert.equal(filesIn(G).length, 0);
+
+  h.bot.message = real;
+  const here = await say('look at my cat', { attachment: 'zzz/cat.jpg', user: IDS.member2 });
+  await say('!gif', { replyTo: here.id, user: IDS.admin });
+  assert.deepEqual(state.urls, ['https://files.yapper.website/attachments/zzz/cat.jpg']);
+  assert.equal(filesIn(G).length, 1);
+});
+
+test('a path or link typed as text is never downloaded, from chat or from the slash menu', async () => {
+  const { h, state, say, filesIn, lastText } = await make();
+  await say('!gif zzz/secret.png', { user: IDS.member });
+  assert.match(lastText(G), /I need a picture/);
+  await say(`!caption <@${IDS.owner}> https://files.yapper.website/attachments/zzz/secret.png`, { user: IDS.member2 });
+  assert.match(lastText(G), /I need a picture/);
+  await say('!yap gif /bots/default.png', { user: IDS.mod });
+  assert.match(lastText(G), /I need a picture/);
+  for (const [name, args] of [['caption', 'zzz/secret.png'], ['gif', 'https://files.yapper.website/attachments/zzz/secret.png'], ['yap', 'caption zzz/secret.png']]) {
+    const ans = await h.slash(name, args, { user: IDS.member });
+    assert.equal(ans.length, 1);
+    assert.equal(ans[0].type, 'ephemeral');
+    assert.match(h.textOf(ans[0]), /can't carry a picture/);
+  }
+  assert.equal(state.urls.length, 0);
+  assert.equal(state.jobs.length, 0);
+  assert.equal(filesIn(G).length, 0);
+});
+
+test('a DM reply cannot pull a picture out of a server channel', async () => {
+  const { h, state, dm, say, filesIn, lastText } = await make();
+  const cid = dmOf(IDS.member);
+  const secret = await h.message('staff only picture', { attachment: 'zzz/secret.png', user: IDS.mod, channel: IDS.channels.modlog });
+  const open = await say('look at my cat', { attachment: 'zzz/cat.jpg', user: IDS.member2 });
+  const dmReply = async (text, replyTo) => {
+    h.fake.state.dms[cid] = IDS.member;
+    await h.bot.handle({ id: 900000 + h.sent().length, type: 'dm_message', data: { id: uuid(4), channel_id: cid, dm_channel_id: cid, server_id: null, is_dm: true, dm: true, author_id: IDS.member, author: 'sam', author_name: 'sam', content: text, attachment: null, attachments: [], reply_to_id: replyTo, created_at: new Date().toISOString(), author_bot: false } });
+    await h.engine.service('studio').idle();
+    await h.settle();
+  };
+  await dmReply('gif', secret.id);
+  assert.match(lastText(cid), /That message has no picture/);
+  await dmReply('caption mine now', open.id);
+  assert.match(lastText(cid), /That message has no picture/);
+  const stored = h.fake.state.messages[IDS.channels.modlog].find((m) => m.id === secret.id);
+  h.bot.message = async () => ({ ...stored });
+  await dmReply('gif', secret.id);
+  assert.match(lastText(cid), /That message has no picture/);
+  assert.equal(state.urls.length, 0);
+  assert.equal(state.jobs.length, 0);
+  assert.equal(filesIn(cid).length, 0);
+  assert.equal(filesIn(G).length, 0);
+});
+
 const FFMPEG = await findFfmpeg();
 const FONT = findFont();
 const noFfmpeg = !FFMPEG && 'ffmpeg is not installed';

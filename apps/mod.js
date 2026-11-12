@@ -13,6 +13,8 @@ const DAY_MS = 864e5;
 const MAX_CASES = 2000;
 const MAX_WARNS = 2000;
 const STEPS_MAX = 1000;
+const STEPS_COUNT_MAX = 20;
+const PURGE_BUTTON_DEFAULT = 10;
 
 const DEFAULT_ESCALATION = [
   { at: 3, action: 'timeout', durationMs: 3600000 },
@@ -200,15 +202,53 @@ function createService(engine) {
 
 const svc = (ctx) => ctx.engine.service(ID) || createService(ctx.engine);
 
+function refreshRoles(engine, serverId, userId) {
+  if (!serverId || !userId) return;
+  engine.perms.invalidate(`m:${serverId}:${userId}`);
+  engine.perms.invalidate(`r:${serverId}`);
+}
+
+const freshlyChecked = new WeakSet();
+
+async function requireFresh(ctx, need) {
+  if (!freshlyChecked.has(ctx)) {
+    refreshRoles(ctx.engine, ctx.serverId, ctx.userId);
+    freshlyChecked.add(ctx);
+  }
+  return ctx.require(need);
+}
+
+async function checkRank(engine, serverId, actorId, targetId, def, label) {
+  refreshRoles(engine, serverId, targetId);
+  const title = `I can't ${def.verb} ${label}`;
+  const can = await engine.perms.canActOn(serverId, targetId, { actorId });
+  if (!can.ok) throw friendly(can.reason, { title });
+  const { LEVELS } = engine.perms;
+  const [mine, theirs] = await Promise.all([engine.perms.level(serverId, actorId), engine.perms.level(serverId, targetId)]);
+  if (LEVELS.indexOf(theirs) > LEVELS.indexOf(mine)) {
+    throw friendly(`${label} is an admin here, so only admins or the server owner can ${def.verb} them.`, { title });
+  }
+}
+
+async function channelIsHere(ctx, channelId) {
+  if (!ctx.serverId || !channelId) return false;
+  const known = await ctx.channels().catch(() => []);
+  if (known.some((c) => c.id === channelId)) return true;
+  const ch = await ctx.bot.channel(channelId).catch(() => null);
+  return !!ch && (ch.server_id ?? ctx.serverId) === ctx.serverId;
+}
+
+async function needChannelHere(ctx, channelId) {
+  if (await channelIsHere(ctx, channelId)) return;
+  throw friendly("That channel isn't part of this server, so I left it alone.", { title: 'Wrong place' });
+}
+
 async function checkCanAct(ctx, targetId, def, label) {
   const { engine, serverId } = ctx;
   if (def.perm && !(await engine.perms.actorCan(serverId, ctx.userId, def.perm))) {
     throw friendly(`You need **${permName(def.perm)}** to ${def.verb} people. Ask an admin to tick it on your role, or to add your role as a mod role in **/setup**.`, { title: 'Not allowed' });
   }
-  if (!def.skipHierarchy) {
-    const can = await engine.perms.canActOn(serverId, targetId, { actorId: ctx.userId });
-    if (!can.ok) throw friendly(can.reason, { title: `I can't ${def.verb} ${label}` });
-  }
+  if (!def.skipHierarchy) await checkRank(engine, serverId, ctx.userId, targetId, def, label);
   if (targetId === ctx.userId) throw friendly("You can't do that to yourself.", { title: `I can't ${def.verb} ${label}` });
   await needBotPerm(ctx, def.perm, `${def.verb} ${label}`);
 }
@@ -264,6 +304,31 @@ async function actorName(ctx) {
 
 async function undoReply(i, embed) {
   await i.ephemeral('', { embeds: [embed] });
+}
+
+async function refuseUnless(ctx, need) {
+  try {
+    await requireFresh(ctx, need);
+    return false;
+  } catch (e) {
+    await ctx.fail(e);
+    return true;
+  }
+}
+
+const staff = (need, fn) => async (ctx) => ((await refuseUnless(ctx, need)) ? undefined : fn(ctx));
+
+async function undoGate(ctx, i, def = {}, targetId = null, label = 'them') {
+  const { engine, serverId } = ctx;
+  if (!engine.settings.isEnabled(serverId, ID)) {
+    throw friendly('Undo buttons from Mod are switched off while it is uninstalled. An admin can install it again with **/apps**.', { title: "Mod isn't installed here" });
+  }
+  refreshRoles(engine, serverId, i.user_id);
+  await engine.perms.require(serverId, i.user_id, 'mod');
+  if (def.perm && !(await engine.perms.actorCan(serverId, i.user_id, def.perm))) {
+    throw friendly(`You need **${permName(def.perm)}** to ${def.verb} people, so you can't undo this one.`, { title: 'Not allowed' });
+  }
+  if (targetId && !def.skipHierarchy && i.user_id !== ctx.userId) await checkRank(engine, serverId, i.user_id, targetId, def, label);
 }
 
 async function runAction(ctx, kind, tokens) {
@@ -365,6 +430,7 @@ async function guardedUndo(i, explainCtx, work) {
 
 async function undoBan(ctx, i, user, label, c) {
   await guardedUndo(i, { action: 'unban', perm: 'ban_members', target: label }, async () => {
+    await undoGate(ctx, i, ACTIONS.unban, user.id, label);
     await ctx.bot.unban(ctx.serverId, user.id);
     markUndone(ctx.engine, ctx.serverId, c.id);
     const service = svc(ctx);
@@ -376,6 +442,7 @@ async function undoBan(ctx, i, user, label, c) {
 
 async function undoTimeout(ctx, i, user, label, c) {
   await guardedUndo(i, { action: 'remove the timeout for', perm: 'timeout_members', target: label }, async () => {
+    await undoGate(ctx, i, ACTIONS.untimeout, user.id, label);
     const u = await svc(ctx).timeout(ctx.serverId, user.id, { actorId: i.user_id, durationMs: 0, reason: `Undo of case #${c.id}`, targetName: label });
     markUndone(ctx.engine, ctx.serverId, c.id);
     await undoReply(i, dialog.ok('Timeout cleared', `${label} can talk again.\n-# Case #${u.id}`));
@@ -384,10 +451,13 @@ async function undoTimeout(ctx, i, user, label, c) {
 
 async function undoWarn(ctx, i, user, label, out) {
   await guardedUndo(i, { action: 'undo the warning for', target: label }, async () => {
+    await undoGate(ctx, i);
+    const esc = out.escalated;
+    const reverses = esc?.ok && (esc.action === 'ban' ? ACTIONS.unban : esc.action === 'timeout' ? ACTIONS.untimeout : null);
+    if (reverses && i.user_id !== ctx.userId) await undoGate(ctx, i, reverses, user.id, label);
     writeData(ctx.engine, ctx.serverId, (d) => { d.warns = d.warns.filter((w) => w.caseId !== out.case.id); });
     markUndone(ctx.engine, ctx.serverId, out.case.id);
     const notes = [];
-    const esc = out.escalated;
     if (esc?.ok && (esc.action === 'timeout' || esc.action === 'ban')) {
       const isBan = esc.action === 'ban';
       const reversed = await (isBan ? ctx.bot.unban(ctx.serverId, user.id) : ctx.bot.timeout(ctx.serverId, user.id, 0)).then(() => true, () => false);
@@ -417,6 +487,10 @@ async function runPurge(ctx, tokens) {
   count = Math.max(1, Math.min(100, count));
   const label = user ? tag(user) : null;
   try {
+    if (!(await ctx.engine.perms.actorCan(ctx.serverId, ctx.userId, 'manage_messages'))) {
+      throw friendly(`You need **${permName('manage_messages')}** to clear messages. Ask an admin to tick it on your role, or to add your role as a mod role in **/setup**.`, { title: 'Not allowed' });
+    }
+    await needChannelHere(ctx, ctx.channelId);
     await needBotPerm(ctx, 'manage_messages', 'delete messages');
   } catch (e) {
     return ctx.fail(e, { action: 'delete messages', perm: 'manage_messages' });
@@ -447,6 +521,7 @@ async function pickChannel(ctx, tokens) {
     if (!ch) throw friendly(`I couldn't find the channel **${clip(first, 40)}**.`, { title: 'Which channel?' });
     return { channel: ch, rest: tokens.slice(1) };
   }
+  await needChannelHere(ctx, ctx.channelId);
   const all = await ctx.channels().catch(() => []);
   return { channel: all.find((c) => c.id === ctx.channelId) || { id: ctx.channelId, name: 'this channel' }, rest: tokens };
 }
@@ -545,6 +620,7 @@ async function runLock(ctx, tokens, locking) {
       const undo = ctx.engine.router.addUndo({
         serverId: ctx.serverId, actorId: ctx.userId, label: `lock of #${channel.name || 'channel'}`,
         run: (i) => guardedUndo(i, { action: 'unlock', perm: 'manage_channels', target: chName }, async () => {
+          await undoGate(ctx, i);
           const u = await doUnlock(ctx, channel, `Undo of case #${c.id}`, i.user_id);
           markUndone(ctx.engine, ctx.serverId, c.id);
           if (!u) return undoReply(i, dialog.info('Already unlocked', `${chName} was already open again, so there was nothing to undo.`));
@@ -602,6 +678,7 @@ async function runSlowmode(ctx, tokens) {
     const undo = ctx.engine.router.addUndo({
       serverId: ctx.serverId, actorId: ctx.userId, label: `slowmode back to ${prev ? formatDuration(prev * 1000) : 'off'}`,
       run: (i) => guardedUndo(i, { action: `change slowmode in ${chName}`, perm: 'manage_channels' }, async () => {
+        await undoGate(ctx, i);
         await ctx.bot.editChannel(channel.id, { slowmode: prev });
         markUndone(ctx.engine, ctx.serverId, c.id);
         await undoReply(i, dialog.ok('Slowmode restored', `${chName} is back to ${prev ? `**${formatDuration(prev * 1000)}**` : 'no slowmode'}.`));
@@ -649,13 +726,19 @@ async function showCases(ctx, tokens) {
   return ctx.ephemeral({ embeds: [card({ title, body: `${body}\n\n-# Open one with \`/case 12\`.`, color: 'mod' })], components: [row(button('Mod panel', cid('home'), 'secondary', ICONS.mod))] });
 }
 
+function buttonCount(raw) {
+  const n = Math.trunc(Number(raw));
+  return Number.isFinite(n) && n >= 1 ? Math.min(100, n) : PURGE_BUTTON_DEFAULT;
+}
+
 function formatSteps(steps) {
   return [].concat(steps || []).slice().sort((a, b) => a.at - b.at)
     .map((s) => `${s.at} ${s.action}${s.action === 'timeout' ? ` ${formatDuration(s.durationMs || 3600000)}` : ''}`).join(', ');
 }
 
 function parseSteps(text) {
-  const parts = String(text || '').split(/[,\n;]+/).map((p) => p.trim()).filter(Boolean);
+  const parts = String(text || '').slice(0, STEPS_MAX * 4).split(/[,\n;]+/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length > STEPS_COUNT_MAX) return { error: `That's ${parts.length} steps. Keep it to ${STEPS_COUNT_MAX} or fewer.` };
   const steps = [];
   for (const p of parts) {
     const m = /^(\d+)\s*(?:warns?|warnings?)?\s*[:=→>-]*\s*(timeout|mute|kick|ban)(?:\s+(.+))?$/i.exec(p);
@@ -727,11 +810,13 @@ async function panelView(ctx) {
 }
 
 async function showPanel(ctx) {
+  if (await refuseUnless(ctx, 'mod')) return undefined;
   return ctx.ephemeral(await panelView(ctx));
 }
 
 async function route(ctx, sub, tokens) {
   try {
+    await requireFresh(ctx, 'mod');
     if (sub === 'timeout' || sub === 'untimeout' || sub === 'kick' || sub === 'ban' || sub === 'unban' || sub === 'warn') {
       if (sub === 'untimeout') {
         if (!tokens.length) return await ctx.warn('Whose timeout should I remove?', `Try ${USAGE.untimeout}.`);
@@ -754,6 +839,7 @@ async function route(ctx, sub, tokens) {
 }
 
 async function runHub(ctx) {
+  if (await refuseUnless(ctx, 'mod')) return undefined;
   const tokens = ctx.argv.length ? ctx.argv : tokenize(ctx.args);
   const first = (tokens[0] || '').toLowerCase();
   if (!first) return showPanel(ctx);
@@ -794,22 +880,22 @@ export const { setup, teardown, check } = defineApp({
   },
 
   components: {
-    home: { perm: 'mod', run: async (ctx) => ctx.ephemeral(await panelView(ctx)) },
-    cases: { perm: 'mod', run: (ctx) => showCases(ctx, []) },
-    settings: { perm: 'mod', run: (ctx) => ctx.ephemeral(settingsView(ctx)) },
-    lock: { perm: 'mod', run: (ctx) => runLock(ctx, [], true) },
-    unlock: { perm: 'mod', run: (ctx) => runLock(ctx, [], false) },
-    purge: { perm: 'mod', run: (ctx) => runPurge(ctx, [String(ctx.argv[0] || 10)]) },
+    home: { perm: 'mod', run: showPanel },
+    cases: { perm: 'mod', run: staff('mod', (ctx) => showCases(ctx, [])) },
+    settings: { perm: 'mod', run: staff('mod', (ctx) => ctx.ephemeral(settingsView(ctx))) },
+    lock: { perm: 'mod', run: staff('mod', (ctx) => runLock(ctx, [], true)) },
+    unlock: { perm: 'mod', run: staff('mod', (ctx) => runLock(ctx, [], false)) },
+    purge: { perm: 'mod', run: staff('mod', (ctx) => runPurge(ctx, [String(buttonCount(ctx.argv[0]))])) },
     dm: {
       perm: 'admin',
-      run: (ctx) => {
+      run: staff('admin', (ctx) => {
         ctx.patchConfig({ dmOnAction: !ctx.config().dmOnAction });
         return ctx.update(settingsView(ctx));
-      },
+      }),
     },
     rules: {
       perm: 'admin',
-      run: (ctx) => {
+      run: staff('admin', (ctx) => {
         const cfg = ctx.config();
         return ctx.form({
           title: 'Warning rules',
@@ -819,14 +905,15 @@ export const { setup, teardown, check } = defineApp({
             { id: 'steps', label: 'Steps, like: 3 timeout 1h, 5 kick, 7 ban', style: 'paragraph', value: clip(formatSteps(cfg.escalation), STEPS_MAX), required: false, max: STEPS_MAX },
           ],
         });
-      },
+      }),
     },
     rulesave: {
       perm: 'admin',
       run: async (ctx) => {
-        await ctx.require('admin');
-        const days = Number(String(ctx.values?.days ?? '').trim());
-        if (!Number.isInteger(days) || days < 0 || days > 3650) return ctx.warn("That number didn't work", 'Use a whole number of days, like 30, or 0 to keep warnings forever.');
+        if (await refuseUnless(ctx, 'admin')) return undefined;
+        const typedDays = String(ctx.values?.days ?? '').trim();
+        const days = Number(typedDays);
+        if (!/^\d{1,4}$/.test(typedDays) || days > 3650) return ctx.warn("That number didn't work", 'Use a whole number of days, like 30, or 0 to keep warnings forever.');
         const parsed = parseSteps(ctx.values?.steps || '');
         if (parsed.error) return ctx.warn("Those steps didn't work", `${parsed.error}\nWrite them like: \`3 timeout 1h, 5 kick, 7 ban\`.`);
         ctx.patchConfig({ warnDecayDays: days, escalation: parsed.steps });
@@ -838,11 +925,7 @@ export const { setup, teardown, check } = defineApp({
   yap: [{
     words: YAP_WORDS,
     run: async (ctx) => {
-      try {
-        await ctx.require('mod');
-      } catch (e) {
-        return ctx.fail(e);
-      }
+      if (await refuseUnless(ctx, 'mod')) return undefined;
       return route(ctx, SUB_ALIASES[ctx.word] || 'panel', ctx.argv);
     },
   }],

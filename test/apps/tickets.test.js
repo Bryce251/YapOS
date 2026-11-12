@@ -240,7 +240,13 @@ test('add and remove people changes the ticket role, with an undo', async () => 
   assert.match(lastText(h, outsider), /Only staff or the person who opened/);
   const removed = await h.slash('ticket', 'remove riley', { user: IDS.mod, channel: t.channelId });
   assert.ok(!hasRole(h, IDS.member2, t.roleId), 'riley removed');
-  await h.clickButton('Undo', { user: IDS.member, in: removed, channel: t.channelId });
+  const notMine = await h.clickButton('Undo', { user: IDS.member2, in: removed, channel: t.channelId });
+  assert.match(lastText(h, notMine), /Not your panel/);
+  const undoBtn = h.findButton('Undo', removed);
+  const forged = await h.click(undoBtn.custom_id, { user: IDS.member2, channel: t.channelId });
+  assert.match(lastText(h, forged), /Only staff or the person who opened/);
+  assert.ok(!hasRole(h, IDS.member2, t.roleId), 'still removed');
+  await h.clickButton('Undo', { user: IDS.mod, in: removed, channel: t.channelId });
   assert.ok(hasRole(h, IDS.member2, t.roleId), 'undo added riley back');
 
   const opener = await h.slash('ticket', 'remove sam', { user: IDS.mod, channel: t.channelId });
@@ -295,7 +301,16 @@ test('close needs staff or the opener, and Keep it open cancels', async () => {
   assert.match(lastText(h, nope), /Only staff or the person who opened/);
   const ask = await h.slash('ticket', 'close', { user: IDS.member, channel: t.channelId });
   const stranger = await h.clickButton('Close ticket', { user: IDS.member2, in: ask, channel: t.channelId });
-  assert.match(lastText(h, stranger), /Only staff or the person who opened/);
+  assert.match(lastText(h, stranger), /Not your panel/);
+  const yes = h.findButton('Close ticket', ask);
+  const no = h.findButton('Keep it open', ask);
+  for (const b of [yes, no]) {
+    const forged = await h.click(b.custom_id, { user: IDS.member2, channel: t.channelId });
+    assert.match(lastText(h, forged), /Only staff or the person who opened/);
+    const borrowed = await h.click(b.custom_id, { user: IDS.mod, channel: t.channelId });
+    assert.match(lastText(h, borrowed), /Not your panel/);
+  }
+  assert.equal(ticketOf(h, IDS.member).status, 'open');
   await h.clickButton('Keep it open', { user: IDS.member, in: ask, channel: t.channelId });
   assert.equal(ticketOf(h, IDS.member).status, 'open');
   assert.ok(channel(h, t.channelId));
@@ -416,13 +431,25 @@ test('admin setup is refused for members, including old panel buttons', async ()
   assert.match(lastText(h, refused), /Only admins/);
   const panel = await h.slash('tickets', '', { user: IDS.admin });
   assert.match(lastText(h, panel), /Ticket setup/);
-  for (const label of ['Edit types', 'Post panel', 'Tidy up', 'Staff roles']) {
-    const ans = await h.clickButton(label, { user: IDS.member, in: panel });
-    assert.match(lastText(h, ans), /Only admins/, label);
+  const labels = ['Post panel', 'Edit types', 'Staff roles', 'Log channel', 'Category', 'Limit', 'Ping staff', 'Tidy up', 'Refresh'];
+  for (const label of labels) {
+    for (const user of [IDS.member, IDS.mod]) {
+      const onPanel = await h.clickButton(label, { user, in: panel });
+      assert.match(lastText(h, onPanel), /Not your panel/, label);
+      const forged = await h.click(h.findButton(label, panel).custom_id, { user });
+      assert.match(lastText(h, forged), /Only admins/, label);
+    }
   }
-  assert.equal(h.engine.settings.appConfig(S, 'tickets').pingStaff, false);
-  await h.clickButton('Ping staff', { user: IDS.member, in: panel });
-  assert.equal(h.engine.settings.appConfig(S, 'tickets').pingStaff, false);
+  for (const action of ['panelhere', 'savetypes', 'savestaff', 'savelog', 'savecategory', 'savelimit']) {
+    const forged = await h.click(customId('tickets', action), { user: IDS.member });
+    assert.match(lastText(h, forged), /Only admins/, action);
+  }
+  const forgedTo = await h.click(customId('tickets', 'panelto', G), { user: IDS.member });
+  assert.match(lastText(h, forgedTo), /Only admins/);
+  const cfg = h.engine.settings.appConfig(S, 'tickets');
+  assert.equal(cfg.pingStaff, false);
+  assert.equal(cfg.panelChannelId, null);
+  assert.equal(cfg.limit, 1);
 });
 
 test('admin settings: staff, log, limit, category, types and the panel picker', async () => {
@@ -515,10 +542,13 @@ test('menu panel: admins get setup, members get an open prompt; yap words route'
   assert.match(lastText(h, admin), /Ticket setup/);
   const member = await h.click(customId('system', 'open', 'tickets'), { user: IDS.member });
   assert.match(lastText(h, member), /Open a ticket/);
-  await h.clickButton('Open a ticket', { user: IDS.member2, in: member });
-  assert.equal(ticketOf(h, IDS.member2)?.status, 'open');
+  const other = await h.clickButton('Open a ticket', { user: IDS.member2, in: member });
+  assert.match(lastText(h, other), /Not your panel/);
+  assert.equal(ticketOf(h, IDS.member2), null);
   await h.slash('yap', 'support my stuff broke', { user: IDS.member });
   assert.equal(ticketOf(h, IDS.member)?.topic, 'my stuff broke');
+  const modMenu = await h.click(customId('system', 'open', 'tickets'), { user: IDS.mod });
+  assert.doesNotMatch(lastText(h, modMenu), /Ticket setup/);
   const yapAdmin = await h.slash('yap', 'tickets', { user: IDS.admin });
   assert.match(lastText(h, yapAdmin), /Ticket setup/);
 });
@@ -625,4 +655,415 @@ test('roles API off: a second ticket is refused without a link the member cannot
   const text = allTexts(h, again);
   assert.match(text, /still handling your earlier ticket/);
   assert.doesNotMatch(text, new RegExp(`<#${t.channelId}>`));
+});
+
+test('the posted panel and the ticket card are open to everyone who should use them', async () => {
+  const h = await make();
+  await h.slash('tickets', `panel <#${G}>`, { user: IDS.admin });
+  const panelMsg = h.lastSent(G);
+  await h.clickButton('Open a ticket', { user: IDS.member, in: panelMsg });
+  await h.clickButton('Open a ticket', { user: IDS.member2, in: panelMsg });
+  assert.equal(ticketOf(h, IDS.member)?.status, 'open');
+  assert.equal(ticketOf(h, IDS.member2)?.status, 'open');
+  assert.notEqual(ticketOf(h, IDS.member).channelId, ticketOf(h, IDS.member2).channelId);
+
+  const t = ticketOf(h, IDS.member);
+  const cardMsg = h.sent(t.channelId)[0];
+  await h.clickButton('Claim', { user: IDS.mod, in: cardMsg, channel: t.channelId });
+  assert.equal(ticketOf(h, IDS.member).claimedBy, IDS.mod);
+  const ask = await h.clickButton('Close', { user: IDS.member, in: cardMsg, channel: t.channelId });
+  assert.ok(h.findButton('Close ticket', ask), 'the opener gets a confirmation after staff used the card');
+  const staffAsk = await h.clickButton('Close', { user: IDS.admin, in: cardMsg, channel: t.channelId });
+  assert.ok(h.findButton('Close ticket', staffAsk), 'staff get their own confirmation');
+});
+
+test('ticket card buttons only do what the presser may do', async () => {
+  const h = await make();
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  const cardMsg = h.sent(t.channelId)[0];
+  await h.slash('ticket', `add <@${IDS.member2}>`, { user: IDS.member, channel: t.channelId });
+  const outsider = { user: IDS.member2, in: cardMsg, channel: t.channelId };
+  assert.match(lastText(h, await h.clickButton('Claim', outsider)), /Only staff/);
+  assert.match(lastText(h, await h.clickButton('Close', outsider)), /Only staff or the person who opened/);
+  assert.match(lastText(h, await h.clickButton('Add person', outsider)), /Only staff or the person who opened/);
+  const forgedAdd = await h.submit(customId('tickets', 'addsave'), { who: 'morgan' }, { user: IDS.member2, channel: t.channelId });
+  assert.match(lastText(h, forgedAdd), /Only staff or the person who opened/);
+  for (const action of ['claim', 'close', 'addp']) {
+    const forged = await h.click(customId('tickets', action, t.number), { user: IDS.member2 });
+    assert.match(lastText(h, forged), /Only staff/, action);
+  }
+  const readd = await h.click(customId('tickets', 'readd', t.number, IDS.owner), { user: IDS.member2 });
+  assert.match(lastText(h, readd), /Only staff or the person who opened/);
+  const unclaimEarly = await h.click(customId('tickets', 'unclaim', t.number), { user: IDS.member2 });
+  assert.match(lastText(h, unclaimEarly), /Only the person who claimed/);
+
+  await h.clickButton('Claim', { user: IDS.mod, in: cardMsg, channel: t.channelId });
+  for (const user of [IDS.member, IDS.member2]) {
+    const forged = await h.click(customId('tickets', 'unclaim', t.number), { user, channel: t.channelId });
+    assert.match(lastText(h, forged), /Only the person who claimed/);
+  }
+  const open = ticketOf(h, IDS.member);
+  assert.equal(open.status, 'open');
+  assert.equal(open.claimedBy, IDS.mod);
+  assert.deepEqual(open.members, [IDS.member2]);
+});
+
+test('rename undo is locked to the staff member and staff only when forged', async () => {
+  const h = await make();
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  const ok = await h.slash('ticket', 'rename billing', { user: IDS.mod, channel: t.channelId });
+  const onPanel = await h.clickButton('Undo', { user: IDS.member, in: ok, channel: t.channelId });
+  assert.match(lastText(h, onPanel), /Not your panel/);
+  const forged = await h.click(h.findButton('Undo', ok).custom_id, { user: IDS.member, channel: t.channelId });
+  assert.match(lastText(h, forged), /Only staff/);
+  assert.equal(channel(h, t.channelId).name, 'billing');
+});
+
+test('the type picker belongs to the person who asked for it', async () => {
+  const h = await make({ features: { selects: false }, config: { logChannelId: LOG, types: [SUPPORT, REPORT] } });
+  const ans = await h.slash('ticket', 'my secret topic', { user: IDS.member });
+  const other = await h.clickButton('Support', { user: IDS.member2, in: ans });
+  assert.match(lastText(h, other), /Not your panel/);
+  assert.equal(ticketOf(h, IDS.member2), null);
+  await h.click(h.findButton('Support', ans).custom_id, { user: IDS.member2 });
+  assert.equal(ticketOf(h, IDS.member2)?.topic, '', 'a copied button never carries the topic of someone else');
+});
+
+test('settings handlers refuse non-admins even when called without the router', async () => {
+  const h = await make();
+  const run = (action, user, values) => h.engine.router.handlers.get(`tickets:${action}`).run(
+    h.engine.contextFor({ id: 'm-direct', server_id: S, channel_id: G, user_id: user, username: 'x', content: '' }, { app: 'tickets', kind: 'modal_submit', args: [], values }),
+  );
+  for (const user of [IDS.member, IDS.mod]) {
+    await run('savelimit', user, { value: '7' });
+    await run('savestaff', user, { value: 'Member' });
+    await run('savelog', user, { value: 'general' });
+    await run('savetypes', user, { t1: 'Hacked' });
+    await run('ping', user, null);
+    await run('panelhere', user, null);
+    await run('tidy', user, null);
+    await run('edit', user, null);
+  }
+  const cfg = h.engine.settings.appConfig(S, 'tickets');
+  assert.equal(cfg.limit, 1);
+  assert.deepEqual(cfg.staffRoles, []);
+  assert.equal(cfg.logChannelId, LOG);
+  assert.deepEqual(cfg.types.map((x) => x.name), ['Support']);
+  assert.equal(cfg.pingStaff, false);
+  assert.equal(cfg.panelChannelId, null);
+  assert.ok(h.sent(G).some((m) => /Only admins/.test(h.textOf(m))));
+  await run('savelimit', IDS.admin, { value: '3' });
+  assert.equal(h.engine.settings.appConfig(S, 'tickets').limit, 3);
+});
+
+const B = '5e000000-0000-4000-8000-0000000000b2';
+const LOBBY = 'c0000000-0000-4000-8000-0000000000b1';
+const BOSS = 'f0000000-0000-4000-8000-0000000000b9';
+const BOT_B = 'f0000000-0000-4000-8000-0000000000b6';
+
+function addSecondServer(h) {
+  const st = h.fake.state;
+  st.servers[B] = { id: B, name: 'Elsewhere', icon_path: null, owner_id: IDS.member, member_count: 2, online_count: 1 };
+  st.roles[B] = [
+    { id: BOSS, name: 'Boss', color: null, position: 9, perms: { administrator: true }, auto: null, mentionable: false },
+    { id: BOT_B, name: 'YapOS', color: null, position: 6, perms: { manage_roles: true, manage_channels: true, send_messages: true, read_history: true }, auto: null, mentionable: false },
+  ];
+  st.members[B] = [
+    { id: IDS.member, username: 'sam', display_name: 'Sam', nickname: null, roles: [BOSS], joined_at: '2026-01-05T00:00:00Z' },
+    { id: IDS.bot, username: 'yapos', display_name: 'YapOS', nickname: null, roles: [BOT_B], joined_at: '2026-01-02T00:00:00Z' },
+  ];
+  st.channels[B] = [{ id: LOBBY, name: 'lobby', type: 'text', kind: 'text', server_id: B, position: 0, category: null, category_id: null, private: false, read_only: false, slowmode: 0 }];
+  st.bans[B] = [];
+  st.everyone[B] = { send_messages: true, view_channel: true };
+}
+
+const ADMIN_ACTIONS = ['home', 'postpanel', 'panelhere', 'types', 'ping', 'tidy', 'savetypes', 'savestaff', 'savelog', 'savecategory', 'savelimit'];
+const HOSTILE = { value: '9', t1: 'Hacked', who: 'sam' };
+const isForm = (action) => /^(save|answers|addsave)/.test(action);
+const formOpts = (action) => (isForm(action) ? { type: 'modal_submit', values: HOSTILE } : {});
+
+function assertSetupUntouched(h, server = S) {
+  const cfg = h.engine.settings.appConfig(server, 'tickets');
+  assert.equal(cfg.limit, 1);
+  assert.deepEqual(cfg.staffRoles, []);
+  assert.equal(cfg.pingStaff, false);
+  assert.equal(cfg.panelChannelId, null);
+  assert.equal(cfg.categoryId, null);
+  assert.deepEqual(cfg.types.map((x) => x.name), ['Support']);
+}
+
+async function ownPanel(h, t, user = IDS.member) {
+  const ask = await h.slash('ticket', 'close', { user, channel: t.channelId });
+  const btn = h.findButton('Close ticket', ask);
+  assert.equal(h.engine.router.panelOwner(btn.messageId), user, 'the presser really owns this panel');
+  return btn.messageId;
+}
+
+test('holding a panel of your own does not unlock staff or admin buttons', async () => {
+  const h = await make();
+  const { t: mine } = await openTicketFor(h, IDS.member, 'mine');
+  const { t: theirs } = await openTicketFor(h, IDS.member2, 'private matter');
+  const mid = await ownPanel(h, mine);
+  const press = (id, extra = {}) => h.click(id, { user: IDS.member, channel: mine.channelId, messageId: mid, ...extra });
+
+  for (const action of ADMIN_ACTIONS) {
+    const ans = await press(customId('tickets', action), formOpts(action));
+    assert.match(lastText(h, ans), /Only admins/, action);
+    assert.ok(!ans.some((a) => a.type === 'modal'), `${action} shows no form`);
+  }
+  for (const what of ['staff', 'log', 'category', 'limit', 'constructor', '__proto__']) {
+    const ans = await press(customId('tickets', 'edit', what));
+    assert.match(lastText(h, ans), /Only admins/, what);
+    assert.ok(!ans.some((a) => a.type === 'modal'));
+  }
+  assert.match(lastText(h, await press(customId('tickets', 'panelto', G))), /Only admins/);
+  assert.match(lastText(h, await press(customId('tickets', 'panelpick'), { type: 'select', values: [G] })), /Only admins/);
+  assertSetupUntouched(h);
+  assert.equal(h.sent(G).filter((m) => /Need help/.test(h.textOf(m))).length, 0, 'no panel was posted');
+
+  for (const num of [mine.number, theirs.number]) {
+    assert.match(lastText(h, await press(customId('tickets', 'claim', num))), /Only staff/);
+    assert.match(lastText(h, await press(customId('tickets', 'unrename', num, 'pwned'))), /Only staff/);
+    assert.match(lastText(h, await press(customId('tickets', 'unclaim', num))), /Only the person who claimed/);
+  }
+  assert.match(lastText(h, await press(customId('tickets', 'close', theirs.number))), /Only staff or the person who opened/);
+  assert.match(lastText(h, await press(customId('tickets', 'addp', theirs.number))), /Only staff or the person who opened/);
+  assert.match(lastText(h, await press(customId('tickets', 'readd', theirs.number, IDS.member))), /Only staff or the person who opened/);
+  const sneak = await h.submit(customId('tickets', 'addsave'), { who: 'sam' }, { user: IDS.member, channel: theirs.channelId, messageId: mid });
+  assert.match(lastText(h, sneak), /Only staff or the person who opened/);
+  await h.message(`!ticket add <@${IDS.member}>`, { user: IDS.member, channel: theirs.channelId });
+  await h.message('!ticket transcript', { user: IDS.member, channel: theirs.channelId });
+  await h.message('!ticket close', { user: IDS.member, channel: theirs.channelId });
+
+  assert.ok(!hasRole(h, IDS.member, theirs.roleId), 'no way into the other ticket');
+  const victim = ticketOf(h, IDS.member2);
+  assert.equal(victim.status, 'open');
+  assert.equal(victim.claimedBy, null);
+  assert.deepEqual(victim.members, []);
+  assert.equal(channel(h, theirs.channelId).name, 'ticket-0002-riley');
+  assert.equal(channel(h, mine.channelId).name, 'ticket-0001-sam');
+  assert.ok(!h.sent(theirs.channelId).some((m) => m.files?.length || h.findButton('Close ticket', m)), 'no transcript and no close prompt for the intruder');
+});
+
+test('typed chat commands get the same refusals as the slash menu', async () => {
+  const h = await make({ features: { selects: false }, config: { logChannelId: LOG, types: [SUPPORT, REPORT] } });
+  const { t } = await openTicketFor(h, IDS.member2, 'support help');
+  for (const text of ['!tickets', '!tickets limit 9', '!tickets staff @Member', '!tickets panel here', '!tickets ping on', '!tickets tidy']) {
+    for (const user of [IDS.member, IDS.mod]) {
+      await h.message(text, { user });
+      assert.match(h.textOf(h.lastSent(G)), /Only admins/, text);
+    }
+  }
+  const cfg = h.engine.settings.appConfig(S, 'tickets');
+  assert.equal(cfg.limit, 1);
+  assert.deepEqual(cfg.staffRoles, []);
+  assert.equal(cfg.pingStaff, false);
+  assert.equal(cfg.panelChannelId, null);
+
+  await h.message('!ticket close 1', { user: IDS.member });
+  assert.match(h.textOf(h.lastSent(G)), /This isn't a ticket channel/);
+  for (const text of ['!ticket claim', '!ticket rename pwned']) {
+    for (const user of [IDS.member, IDS.member2]) {
+      await h.message(text, { user, channel: t.channelId });
+      assert.match(h.textOf(h.lastSent(t.channelId)), /Only staff/, text);
+    }
+  }
+  for (const text of ['!ticket close', '!ticket remove riley', '!ticket add morgan', '!ticket transcript']) {
+    await h.message(text, { user: IDS.member, channel: t.channelId });
+    assert.match(h.textOf(h.lastSent(t.channelId)), /Only staff or the person who opened/, text);
+  }
+  const still = ticketOf(h, IDS.member2);
+  assert.equal(still.status, 'open');
+  assert.equal(still.claimedBy, null);
+  assert.deepEqual(still.members, []);
+  assert.equal(channel(h, t.channelId).name, 'ticket-0001-riley');
+
+  await h.message('!ticket my private topic', { user: IDS.mod });
+  const picker = h.lastSent(G);
+  assert.ok(h.findButton('Support', picker), 'typed command shows the picker');
+  const other = await h.clickButton('Support', { user: IDS.member, in: picker });
+  assert.match(lastText(h, other), /Not your panel/);
+  assert.equal(ticketOf(h, IDS.member), null);
+});
+
+test('yap words and the home tile give a member nothing the commands refuse', async () => {
+  const h = await make();
+  for (const text of ['tickets limit 9', 'tickets staff @Member', 'tickets panel here', 'tickets ping on', 'tickets constructor']) {
+    await h.slash('yap', text, { user: IDS.member });
+    await h.slash('yap', text, { user: IDS.mod });
+  }
+  assertSetupUntouched(h);
+  assert.equal(h.sent(G).filter((m) => /Need help/.test(h.textOf(m))).length, 0);
+  const menu = await h.slash('menu', '', { user: IDS.member });
+  const mid = menu.find((a) => a.message)?.message.id;
+  assert.ok(mid, 'the member has a home screen of their own');
+  const tile = await h.click(customId('system', 'open', 'tickets'), { user: IDS.member, messageId: mid });
+  assert.doesNotMatch(allTexts(h, tile), /Ticket setup/);
+  assert.ok(!h.findButton('Post panel', tile));
+  const yapMenu = await h.slash('yap', 'tickets', { user: IDS.mod });
+  assert.doesNotMatch(allTexts(h, yapMenu), /Ticket setup/);
+});
+
+test('words like constructor are just a topic, never a hidden subcommand', async () => {
+  const h = await make();
+  const ans = await h.slash('ticket', 'constructor', { user: IDS.member });
+  assert.match(lastText(h, ans), /Your ticket is open/);
+  assert.equal(ticketOf(h, IDS.member).topic, 'constructor');
+  const admin = await h.slash('tickets', 'constructor', { user: IDS.admin });
+  assert.match(lastText(h, admin), /I didn't get that/);
+});
+
+test('being the owner of another server gives nothing here', async () => {
+  const h = await make();
+  addSecondServer(h);
+  const there = { user: IDS.member, server: B, channel: LOBBY };
+  const { t: victim } = await openTicketFor(h, IDS.member2, 'private matter');
+
+  await h.slash('tickets', `log <#${LOG}>`, there);
+  assert.equal(h.engine.settings.appConfig(B, 'tickets').logChannelId, null, 'a channel of another server is not accepted');
+  await h.slash('tickets', `panel <#${G}>`, there);
+  await h.click(customId('tickets', 'panelto', G), there);
+  await h.pick(customId('tickets', 'panelpick'), [G], there);
+  await h.click(customId('tickets', 'panelhere'), { ...there, channel: G });
+  await h.slash('tickets', 'panel here', { ...there, channel: G });
+  assert.equal(h.sent(G).filter((m) => /Need help/.test(h.textOf(m))).length, 0, 'no panel lands in the other server');
+  assert.equal(h.engine.settings.appConfig(B, 'tickets').panelChannelId, null);
+  await h.slash('tickets', `staff <@&${R.mod}>`, there);
+  assert.deepEqual(h.engine.settings.appConfig(B, 'tickets').staffRoles, []);
+  await h.slash('tickets', 'limit 5', there);
+  assert.equal(h.engine.settings.appConfig(B, 'tickets').limit, 5);
+  await h.slash('tickets', 'panel here', there);
+  assert.equal(h.engine.settings.appConfig(B, 'tickets').panelChannelId, LOBBY, 'posting in their own server still works');
+  assertSetupUntouched(h);
+
+  for (const action of ADMIN_ACTIONS) {
+    const ans = await h.click(customId('tickets', action), { user: IDS.member, ...formOpts(action) });
+    assert.match(lastText(h, ans), /Only admins/, action);
+  }
+  assertSetupUntouched(h);
+
+  await h.slash('ticket', 'mine over there', there);
+  const mine = Object.values(h.store.get('tickets', B, { tickets: {} }).tickets)[0];
+  assert.equal(mine.number, victim.number, 'same ticket number in both servers');
+  const ask = await h.slash('ticket', 'close', { ...there, channel: mine.channelId });
+  const yes = h.findButton('Close ticket', ask);
+  const replay = await h.click(yes.custom_id, { user: IDS.member, channel: G });
+  assert.match(lastText(h, replay), /expired/);
+  await h.click(customId('tickets', 'claim', mine.number), { ...there, channel: mine.channelId });
+  assert.equal(h.store.get('tickets', B).tickets[mine.number].claimedBy, IDS.member, 'they are staff in their own server');
+  assert.match(lastText(h, await h.click(customId('tickets', 'claim', victim.number), { user: IDS.member })), /Only staff/);
+  assert.match(lastText(h, await h.click(customId('tickets', 'readd', victim.number, IDS.member), { user: IDS.member })), /Only staff or the person who opened/);
+  const here = ticketOf(h, IDS.member2);
+  assert.equal(here.status, 'open');
+  assert.equal(here.claimedBy, null);
+  assert.ok(!hasRole(h, IDS.member, victim.roleId));
+});
+
+test('ticket buttons do nothing outside a server', async () => {
+  const h = await make();
+  for (const action of [...ADMIN_ACTIONS, 'open', 'answers', 'addsave', 'closeyes', 'closeno']) {
+    const ans = await h.click(customId('tickets', action, 'support'), { user: IDS.admin, server: null, ...formOpts(action) });
+    assert.match(lastText(h, ans), /Servers only/, action);
+  }
+  assert.deepEqual(h.store.keys('tickets').filter((k) => k !== S), []);
+  assertSetupUntouched(h);
+  assert.equal(tickets(h).length, 0);
+});
+
+test('after Tickets is uninstalled every old button, command and form is dead', async () => {
+  const h = await make({ features: { modals: false }, config: { logChannelId: LOG, types: [SUPPORT, REPORT] } });
+  await h.slash('tickets', `panel <#${G}>`, { user: IDS.admin });
+  const panelMsg = h.lastSent(G);
+  const { t } = await openTicketFor(h, IDS.member2, 'support help');
+  const cardMsg = h.sent(t.channelId)[0];
+  const ask = await h.slash('ticket', 'close', { user: IDS.member2, channel: t.channelId });
+  const setupPanel = await h.slash('tickets', '', { user: IDS.admin });
+
+  const form = h.click(customId('tickets', 'open', 'report'), { user: IDS.member });
+  const asked = () => h.sent(G).filter((m) => m.content.startsWith(`<@${IDS.member}>`)).length;
+  assert.ok(await waitFor(() => asked() === 1), 'first question asked');
+  h.engine.settings.setEnabled(S, 'tickets', false);
+  await h.message('riley', { user: IDS.member });
+  assert.ok(await waitFor(() => asked() === 2), 'second question asked');
+  await h.message('was rude', { user: IDS.member });
+  await form;
+  await h.settle();
+  assert.equal(ticketOf(h, IDS.member), null, 'a form started before the uninstall opens nothing');
+  assert.ok(h.sent(G).some((m) => /isn't installed here/.test(h.textOf(m))));
+
+  const dead = (ans, what) => assert.match(allTexts(h, ans), /isn't installed here/, what);
+  dead(await h.clickButton('Support', { user: IDS.member, in: panelMsg }), 'posted panel');
+  dead(await h.clickButton('Claim', { user: IDS.mod, in: cardMsg, channel: t.channelId }), 'claim');
+  dead(await h.clickButton('Close ticket', { user: IDS.member2, in: ask, channel: t.channelId }), 'close confirm');
+  dead(await h.clickButton('Ping staff', { user: IDS.admin, in: setupPanel }), 'setup panel');
+  dead(await h.slash('ticket', 'hello', { user: IDS.member }), '/ticket');
+  dead(await h.slash('tickets', 'limit 4', { user: IDS.admin }), '/tickets');
+  dead(await h.slash('yap', 'support hello', { user: IDS.member }), 'yap');
+  dead(await h.click(customId('system', 'open', 'tickets'), { user: IDS.member }), 'home tile');
+  await h.message('!ticket hello', { user: IDS.member });
+  await h.message('!ticket claim', { user: IDS.mod, channel: t.channelId });
+
+  assert.equal(ticketOf(h, IDS.member), null);
+  const kept = ticketOf(h, IDS.member2);
+  assert.equal(kept.status, 'open');
+  assert.equal(kept.claimedBy, null);
+  const cfg = h.engine.settings.appConfig(S, 'tickets');
+  assert.equal(cfg.limit, 1);
+  assert.equal(cfg.pingStaff, false);
+});
+
+test('staff who lose their role lose their open buttons too', async () => {
+  const h = await make();
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  await h.slash('ticket', `add <@${IDS.member2}>`, { user: IDS.member, channel: t.channelId });
+  const asMod = { user: IDS.mod, channel: t.channelId };
+  const renamed = await h.slash('ticket', 'rename billing', asMod);
+  const removed = await h.slash('ticket', 'remove riley', asMod);
+  const ask = await h.slash('ticket', 'close', asMod);
+  await h.clickButton('Claim', { ...asMod, in: h.sent(t.channelId)[0] });
+
+  const m = h.fake.memberOf(S, IDS.mod);
+  m.roles = m.roles.filter((r) => r !== R.mod);
+  h.engine.cache.invalidate(S);
+
+  assert.match(lastText(h, await h.clickButton('Undo: back', { ...asMod, in: renamed })), /Only staff/);
+  assert.match(lastText(h, await h.clickButton('Undo: add', { ...asMod, in: removed })), /Only staff or the person who opened/);
+  assert.match(lastText(h, await h.clickButton('Close ticket', { ...asMod, in: ask })), /Only staff or the person who opened/);
+  assert.match(lastText(h, await h.clickButton('Keep it open', { ...asMod, in: ask })), /Only staff or the person who opened/);
+  assert.match(lastText(h, await h.click(customId('tickets', 'unclaim', t.number), asMod)), /Only the person who claimed/);
+  const now = ticketOf(h, IDS.member);
+  assert.equal(now.status, 'open');
+  assert.equal(now.claimedBy, IDS.mod);
+  assert.deepEqual(now.members, []);
+  assert.equal(channel(h, t.channelId).name, 'billing');
+});
+
+test('hostile text in forms and topics stays harmless', async () => {
+  const h = await make({ config: { logChannelId: LOG, types: [REPORT] } });
+  const loud = `@everyone <@&${R.mod}> <@${IDS.owner}>`;
+  const started = await h.slash('ticket', loud, { user: IDS.member });
+  assert.equal(started[0].type, 'modal');
+  const stolen = await h.submit(started[0].modal.custom_id, { q0: 'x', q1: 'y' }, { user: IDS.member2 });
+  assert.match(lastText(h, stolen), /form expired/);
+  assert.equal(tickets(h).length, 0, 'a form answer only counts for the person who started it');
+  await h.submit(started[0].modal.custom_id, { q0: `${loud} ${'z'.repeat(5000)}`, q1: [loud, loud] }, { user: IDS.member });
+  const t = ticketOf(h, IDS.member);
+  assert.ok(t, 'ticket opened');
+  assert.ok(t.answers.every((a) => a.a.length <= 1000));
+  const cardMsg = h.sent(t.channelId)[0];
+  assert.equal(cardMsg.content, `<@${IDS.member}>`, 'only the opener is mentioned in plain text');
+  for (const m of h.sent(LOG)) assert.equal(m.content, '', 'log notes carry no plain-text mentions');
+
+  const inTicket = { user: IDS.member, channel: t.channelId };
+  for (const who of ['@everyone', `<@&${R.mod}>`, `<@${IDS.bot}>`, '', '   ', 'x'.repeat(300), ['riley', 'morgan']]) {
+    await h.submit(customId('tickets', 'addsave'), { who }, inTicket);
+  }
+  await h.submit(customId('tickets', 'addsave'), null, inTicket);
+  assert.deepEqual(ticketOf(h, IDS.member).members, []);
+  for (const m of h.fake.state.members[S]) {
+    if (m.id !== IDS.member) assert.ok(!m.roles.includes(t.roleId), `${m.username} was not let in`);
+  }
+  const ownerIn = await h.click(customId('tickets', 'readd', t.number, IDS.owner), { user: IDS.member2, channel: t.channelId });
+  assert.match(lastText(h, ownerIn), /Only staff or the person who opened/);
+  assert.deepEqual(h.fake.memberOf(S, IDS.member).roles.filter((r) => Object.values(R).includes(r)), [R.member], 'the opener gained no server role');
 });

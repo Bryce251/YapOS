@@ -43,8 +43,12 @@ const make = (opts = {}) => createHarness({ apps: ['setup'], ...opts });
 async function clickLabel(h, ans, label, opts = ADMIN) {
   const b = h.findButton(label, ans);
   assert.ok(b, `button "${label}" missing. Have: ${h.allButtons(ans).map((x) => x.label).join(', ')}`);
-  return h.click(b.custom_id, opts);
+  return h.click(b.custom_id, { messageId: b.messageId, ...opts });
 }
+
+const MEMBER = { user: IDS.member };
+const panelOf = (ans) => ans.find((a) => a.message)?.message.id;
+const memberCtx = (h, user = IDS.member) => h.engine.contextFor({ id: 'forged', server_id: S, channel_id: C.general, author_id: user, author: { id: user, username: 'sam' }, content: '' }, { app: 'setup' });
 
 test('full first boot wizard by clicks', async () => {
   const h = await make();
@@ -432,4 +436,464 @@ test('boot still finishes when the panel can no longer be edited', async () => {
   assert.match(h.textOf(last(ans)), /Boot complete/);
   assert.equal(h.engine.settings.core(S).setupDone, true);
   assert.equal(h.engine.settings.appConfig(S, 'greeter').greeting, 'gg');
+});
+
+const wizardIds = (sid) => [
+  `yo:setup:step:${sid}:review`, `yo:setup:preset:${sid}:study`, `yo:setup:slot:${sid}:logs`, `yo:setup:pickch:${sid}:logs:${C.general}`,
+  `yo:setup:skipch:${sid}:welcome`, `yo:setup:app:${sid}:plain`, `yo:setup:modrole:${sid}:${R.member}`, `yo:setup:recheck:${sid}`,
+  `yo:setup:boot:${sid}`, `yo:setup:cancel:${sid}`,
+];
+
+test("a member pressing an admin's wizard gets Not your panel, and so does another admin", async () => {
+  const h = await make();
+  addDummies(h);
+  const ans = await h.slash('setup', 'preset gaming', ADMIN);
+  const mid = panelOf(ans);
+  assert.ok(mid, 'the wizard is a real message');
+  assert.equal(h.engine.router.panelOwner(mid), IDS.admin);
+  const sid = sessionOf(h, ans);
+  for (const id of [...wizardIds(sid), 'yo:setup:menu']) {
+    for (const user of [IDS.member, IDS.mod, IDS.owner]) {
+      const out = await h.click(id, { user, messageId: mid });
+      assert.match(h.textOf(out[0]), /Not your panel/, `${id} pressed by ${user}`);
+      assert.equal(out.length, 1);
+    }
+  }
+  const s = h.engine.router.getSession(sid);
+  assert.equal(s.preset, 'gaming');
+  assert.equal(s.channels.logs, C.modlog);
+  assert.equal(s.channels.welcome, C.welcome);
+  assert.equal(s.apps.plain, false);
+  assert.deepEqual(s.modRoles, []);
+  assert.equal(h.engine.settings.core(S).setupDone, false);
+  const mine = await h.click(`yo:setup:step:${sid}:review`, { ...ADMIN, messageId: mid });
+  assert.match(h.textOf(last(mine)), /Review and boot/, 'the opener can still use it');
+});
+
+test('forged or leftover wizard buttons are refused by role', async () => {
+  const h = await make();
+  addDummies(h);
+  const ans = await h.slash('setup', 'preset gaming', ADMIN);
+  const sid = sessionOf(h, ans);
+  const ids = [...wizardIds(sid), 'yo:setup:again', 'yo:setup:reset', 'yo:setup:resetno', 'yo:setup:resetyes'];
+  for (const id of ids) {
+    for (const user of [IDS.member, IDS.mod]) {
+      const out = await h.click(id, { user });
+      assert.match(h.textOf(out[0]), /Only admins/, `${id} pressed by ${user}`);
+      assert.ok(!/403/.test(h.textOf(out[0])));
+    }
+  }
+  const s = h.engine.router.getSession(sid);
+  assert.ok(s, 'the session survives forged cancel and boot clicks');
+  assert.equal(s.preset, 'gaming');
+  assert.equal(s.channels.logs, C.modlog);
+  assert.deepEqual(s.modRoles, []);
+  assert.equal(h.engine.settings.core(S).setupDone, false);
+  for (const id of wizardIds(sid)) {
+    const out = await h.click(id, { user: IDS.owner });
+    assert.match(h.textOf(out[0]), /someone else's setup/, `${id} pressed by another admin`);
+  }
+  assert.equal(h.engine.router.getSession(sid).preset, 'gaming');
+  assert.equal(h.engine.settings.core(S).setupDone, false);
+});
+
+test('status and reset panels: locked to the opener, and refused by role without the lock', async () => {
+  const h = await make();
+  addDummies(h);
+  let ans = await h.slash('setup', 'preset gaming', ADMIN);
+  ans = await h.click(`yo:setup:step:${sessionOf(h, ans)}:review`, ADMIN);
+  await clickLabel(h, ans, 'Boot');
+  const status = await h.slash('setup', '', ADMIN);
+  const mid = panelOf(status);
+  assert.equal(h.engine.router.panelOwner(mid), IDS.admin);
+  for (const label of ['Run again', 'Reset to defaults', 'Open menu']) {
+    const b = h.findButton(label, status);
+    const out = await h.click(b.custom_id, { ...MEMBER, messageId: mid });
+    assert.match(h.textOf(out[0]), /Not your panel/, label);
+  }
+  const confirm = await clickLabel(h, status, 'Reset to defaults', { ...ADMIN, messageId: mid });
+  assert.match(h.textOf(last(confirm)), /Reset YapOS to defaults\?/);
+  for (const id of ['yo:setup:resetyes', 'yo:setup:resetno']) {
+    const locked = await h.click(id, { ...MEMBER, messageId: mid });
+    assert.match(h.textOf(locked[0]), /Not your panel/);
+    const forged = await h.click(id, { user: IDS.mod });
+    assert.match(h.textOf(forged[0]), /Only admins/);
+  }
+  assert.equal(h.engine.settings.core(S).setupDone, true, 'nothing was reset');
+  assert.equal(h.engine.settings.core(S).preset, 'gaming');
+  const done = await h.click('yo:setup:resetyes', { ...ADMIN, messageId: mid });
+  assert.match(h.textOf(last(done)), /Reset done/);
+  assert.equal(h.engine.settings.core(S).setupDone, false);
+});
+
+test('undo buttons: only the opener on the panel, only admins anywhere', async () => {
+  const h = await make();
+  addDummies(h);
+  let ans = await h.slash('setup', 'preset study', ADMIN);
+  ans = await h.click(`yo:setup:step:${sessionOf(h, ans)}:review`, ADMIN);
+  ans = await clickLabel(h, ans, 'Boot');
+  const undo = h.findButton('Undo', last(ans));
+  assert.ok(undo.messageId, 'the boot result is its own message');
+  assert.equal(h.engine.router.panelOwner(undo.messageId), IDS.admin);
+  let out = await h.click(undo.custom_id, { ...MEMBER, messageId: undo.messageId });
+  assert.match(h.textOf(out[0]), /Not your panel/);
+  out = await h.click(undo.custom_id, { user: IDS.owner, messageId: undo.messageId });
+  assert.match(h.textOf(out[0]), /Not your panel/);
+  out = await h.click(undo.custom_id, MEMBER);
+  assert.match(h.textOf(out[0]), /Only admins/);
+  out = await h.click(undo.custom_id, { user: IDS.mod });
+  assert.match(h.textOf(out[0]), /Only admins/);
+  assert.equal(h.engine.settings.core(S).setupDone, true, 'still booted');
+  assert.equal(h.engine.settings.isEnabled(S, 'greeter'), false);
+  out = await h.click(undo.custom_id, { ...ADMIN, messageId: undo.messageId });
+  assert.match(h.textOf(last(out)), /Undone/);
+  assert.equal(h.engine.settings.core(S).setupDone, false);
+
+  const saved = await h.slash('setup', 'channel logs #general', ADMIN);
+  const undo2 = h.findButton('Undo', last(saved));
+  assert.equal(h.engine.router.panelOwner(undo2.messageId), IDS.admin);
+  out = await h.click(undo2.custom_id, { ...MEMBER, messageId: undo2.messageId });
+  assert.match(h.textOf(out[0]), /Not your panel/);
+  out = await h.click(undo2.custom_id, MEMBER);
+  assert.match(h.textOf(out[0]), /Only admins/);
+  assert.equal(h.engine.store.get('setup', S, {}).channels.logs, C.general);
+});
+
+test('home screen tile and plain words never show setup to non-admins', async () => {
+  const h = await make();
+  for (const user of [IDS.member, IDS.mod]) {
+    const tile = await h.click('yo:system:open:setup', { user });
+    assert.match(h.textOf(last(tile)), /Setup is for admins/);
+    assert.equal(h.allButtons(tile).length, 0, 'no setup buttons are shown');
+    for (const words of ['setup', 'boot', 'preset gaming', 'setup reset', 'setup channel logs #general']) {
+      const out = await h.slash('yap', words, { user });
+      assert.match(h.textOf(last(out)), /Only admins/, words);
+      assert.equal(h.allButtons(out).length, 0);
+    }
+  }
+  assert.equal(h.engine.settings.core(S).preset, null);
+  assert.equal(h.engine.store.get('setup', S, null), null);
+  const tile = await h.click('yo:system:open:setup', ADMIN);
+  assert.match(h.textOf(last(tile)), /First boot has not run yet/);
+  const mid = panelOf(tile);
+  assert.equal(h.engine.router.panelOwner(mid), IDS.admin, 'the opened panel belongs to whoever clicked the tile');
+  const poke = await h.click('yo:setup:again', { ...MEMBER, messageId: mid });
+  assert.match(h.textOf(poke[0]), /Not your panel/);
+});
+
+test('handlers check the role themselves, not only the router', async () => {
+  const h = await make();
+  addDummies(h);
+  const ans = await h.slash('setup', 'preset gaming', ADMIN);
+  const sid = sessionOf(h, ans);
+  const handlers = h.engine.router.handlers;
+  for (const action of ['preset', 'step', 'recheck', 'slot', 'pickch', 'skipch', 'app', 'modrole', 'cancel', 'boot', 'again', 'reset', 'resetno', 'resetyes']) {
+    const ctx = memberCtx(h);
+    ctx.argv = [sid, 'review'];
+    await assert.rejects(() => handlers.get(`setup:${action}`).run(ctx), /Only admins/, action);
+  }
+  const route = h.engine.yap.find('setup');
+  const yapCtx = memberCtx(h, IDS.mod);
+  yapCtx.argv = ['reset'];
+  yapCtx.word = 'setup';
+  await assert.rejects(() => route.run(yapCtx), /Only admins/);
+  const cmd = h.engine.apps.get('setup').def.commands.setup;
+  const cmdCtx = memberCtx(h);
+  cmdCtx.argv = ['channel', 'logs', '#general'];
+  await assert.rejects(() => cmd.run(cmdCtx), /Only admins/);
+  assert.ok(h.engine.router.getSession(sid), 'the admin session is untouched');
+  assert.equal(h.engine.settings.core(S).setupDone, false);
+  assert.equal(h.engine.store.get('setup', S, null), null);
+});
+
+test('the menu button gives each person their own home screen', async () => {
+  const h = await make();
+  const out = await h.click('yo:setup:menu', MEMBER);
+  assert.ok(out.length);
+  assert.ok(!/Only admins|Not your panel/.test(h.textOf(last(out))));
+  const mid = panelOf(out);
+  assert.ok(mid, 'the home screen is a message');
+  assert.equal(h.engine.router.panelOwner(mid), IDS.member);
+  assert.equal(h.engine.settings.core(S).setupDone, false);
+});
+
+const S2 = '5e000000-0000-4000-8000-000000000002';
+const C2 = 'c0000000-0000-4000-8000-0000000000b1';
+const HELPER = 'r0000000-0000-4000-8000-0000000000aa';
+const THERE = { user: IDS.member, server: S2, channel: C2 };
+const staffIds = ['yo:setup:again', 'yo:setup:reset', 'yo:setup:resetno', 'yo:setup:resetyes'];
+
+function addSecondServer(h) {
+  const st = h.fake.state;
+  st.servers[S2] = { ...st.servers[S], id: S2, name: 'Other Town', owner_id: IDS.member };
+  st.roles[S2] = structuredClone(st.roles[S]);
+  st.members[S2] = structuredClone(st.members[S]);
+  st.channels[S2] = [{ id: C2, name: 'general', type: 'text', kind: 'text', server_id: S2, position: 0, category: null, category_id: null, private: false, read_only: false, slowmode: 0 }];
+  st.bans[S2] = [];
+  st.everyone[S2] = { send_messages: true, view_channel: true };
+  st.roles[S].push({ id: HELPER, name: 'Helper', color: null, position: 2, perms: {}, auto: null, mentionable: false });
+}
+
+async function bootAs(h, preset = 'gaming') {
+  let ans = await h.slash('setup', `preset ${preset}`, ADMIN);
+  ans = await h.click(`yo:setup:step:${sessionOf(h, ans)}:review`, ADMIN);
+  return clickLabel(h, ans, 'Boot');
+}
+
+test('a member cannot press setup buttons through a panel they opened themselves', async () => {
+  const h = await make();
+  addDummies(h);
+  const ans = await h.slash('setup', 'preset gaming', ADMIN);
+  const sid = sessionOf(h, ans);
+  for (const user of [IDS.member, IDS.mod]) {
+    const own = await h.slash('menu', '', { user });
+    const mid = panelOf(own);
+    assert.equal(h.engine.router.panelOwner(mid), user, 'their own home screen is theirs');
+    for (const id of [...wizardIds(sid), ...staffIds]) {
+      const asButton = await h.click(id, { user, messageId: mid });
+      assert.match(h.textOf(asButton[0]), /Only admins/, `${id} as a button`);
+      const asSelect = await h.pick(id, [C.general, 'gaming', R.member], { user, messageId: mid });
+      assert.match(h.textOf(asSelect[0]), /Only admins/, `${id} as a select`);
+      const asForm = await h.submit(id, { 0: 'gaming', preset: 'gaming', channel: C.general, role: R.member }, { user, messageId: mid });
+      assert.match(h.textOf(asForm[0]), /Only admins/, `${id} as a form`);
+      assert.equal(h.allButtons([...asButton, ...asSelect, ...asForm]).length, 0);
+    }
+    const tile = await h.click('yo:system:open:setup', { user, messageId: mid });
+    assert.match(h.textOf(last(tile)), /Setup is for admins/);
+    assert.equal(h.allButtons(tile).length, 0);
+  }
+  const s = h.engine.router.getSession(sid);
+  assert.ok(s);
+  assert.equal(s.preset, 'gaming');
+  assert.equal(s.step, 'channels');
+  assert.equal(s.channels.logs, C.modlog);
+  assert.deepEqual(s.modRoles, []);
+  assert.equal(h.engine.settings.core(S).setupDone, false);
+  assert.equal(h.engine.store.get('setup', S, null), null);
+  const second = await h.click('yo:setup:menu', { user: IDS.member2 });
+  assert.ok(!/Only admins|Not your panel/.test(h.textOf(last(second))));
+  assert.equal(h.engine.router.panelOwner(panelOf(second)), IDS.member2, 'a second ordinary person gets their own home screen too');
+});
+
+test('running another server does not open this one', async () => {
+  const h = await make();
+  addDummies(h);
+  addSecondServer(h);
+  assert.equal(await h.engine.perms.level(S2, IDS.member), 'owner');
+  assert.equal(await h.engine.perms.level(S, IDS.member), 'member');
+  const mine = await h.slash('setup', 'preset gaming', THERE);
+  assert.match(h.textOf(last(mine)), /Step 2 of 6/);
+  const sid2 = sessionOf(h, mine);
+  const myPanel = panelOf(mine);
+  const theirs = await h.slash('setup', 'preset study', ADMIN);
+  const sid1 = sessionOf(h, theirs);
+
+  for (const id of wizardIds(sid1)) {
+    const out = await h.click(id, { ...THERE, messageId: myPanel });
+    assert.match(h.textOf(out[0]), /someone else's setup/, `${id} pressed from the other server`);
+  }
+  for (const id of [...wizardIds(sid2), ...wizardIds(sid1), ...staffIds]) {
+    const out = await h.click(id, MEMBER);
+    assert.match(h.textOf(out[0]), /Only admins/, `${id} pressed here with an id from there`);
+    const viaPanel = await h.click(id, { ...MEMBER, messageId: myPanel });
+    assert.match(h.textOf(viaPanel[0]), /Only admins/);
+  }
+  assert.equal(h.engine.router.getSession(sid1).preset, 'study');
+  assert.ok(h.engine.router.getSession(sid2), 'their own session is still there');
+
+  let out = await h.click(`yo:setup:pickch:${sid2}:logs:${C.modlog}`, THERE);
+  assert.match(h.textOf(last(out)), /couldn't use that channel/);
+  out = await h.pick(`yo:setup:pickch:${sid2}:logs`, [C.modlog], THERE);
+  assert.match(h.textOf(last(out)), /couldn't use that channel/);
+  out = await h.click(`yo:setup:modrole:${sid2}:${HELPER}`, THERE);
+  assert.match(h.textOf(last(out)), /can't use that role/);
+  assert.equal(h.engine.router.getSession(sid2).channels.logs, null);
+  assert.deepEqual(h.engine.router.getSession(sid2).modRoles, []);
+  await h.message(`/setup channel logs <#${C.modlog}>`, THERE);
+  assert.match(h.textOf(h.lastSent(C2)), /couldn't find that channel/);
+  await h.message(`/setup channel logs ${C.modlog}`, THERE);
+  assert.match(h.textOf(h.lastSent(C2)), /couldn't find that channel/);
+  assert.equal(h.engine.store.get('setup', S2, null), null);
+
+  let booted = await h.click(`yo:setup:step:${sid1}:review`, ADMIN);
+  booted = await clickLabel(h, booted, 'Boot');
+  const undo = h.findButton('Undo', last(booted));
+  for (const opts of [THERE, { ...THERE, messageId: myPanel }, MEMBER, { ...MEMBER, messageId: myPanel }]) {
+    out = await h.click(undo.custom_id, opts);
+    assert.match(h.textOf(out[0]), /Only admins/);
+  }
+  assert.equal(h.engine.settings.core(S).setupDone, true);
+  assert.equal(h.engine.settings.core(S).preset, 'study');
+
+  out = await h.click(`yo:setup:boot:${sid2}`, { ...THERE, messageId: myPanel });
+  assert.match(h.textOf(last(out)), /Boot complete/);
+  assert.equal(h.engine.settings.core(S2).preset, 'gaming');
+  assert.equal(h.engine.settings.core(S).preset, 'study', 'this server keeps its own settings');
+  assert.equal(h.engine.settings.isEnabled(S, 'greeter'), false);
+  const myUndo = h.findButton('Undo', last(out));
+  out = await h.click(myUndo.custom_id, { ...MEMBER, messageId: myUndo.messageId });
+  assert.match(h.textOf(last(out)), /Undone/);
+  assert.equal(h.engine.settings.core(S2).setupDone, false);
+  assert.equal(h.engine.settings.core(S).setupDone, true, 'an undo earned there only touches that server');
+  out = await h.click('yo:setup:resetyes', THERE);
+  assert.match(h.textOf(last(out)), /Reset done/);
+  assert.equal(h.engine.settings.core(S).setupDone, true);
+  assert.equal(h.engine.settings.core(S).preset, 'study');
+});
+
+test('an admin who loses the role or leaves loses the wizard, reset and undo', async () => {
+  const h = await make();
+  addDummies(h);
+  const ans = await h.slash('setup', 'preset gaming', ADMIN);
+  const sid = sessionOf(h, ans);
+  const mid = panelOf(ans);
+  const saved = await h.slash('setup', 'channel logs #general', ADMIN);
+  const undo = h.findButton('Undo', last(saved));
+  h.fake.memberOf(S, IDS.admin).roles = [R.member];
+  h.engine.perms.invalidate();
+  const refused = async () => {
+    for (const id of [...wizardIds(sid), ...staffIds]) {
+      const out = await h.click(id, { ...ADMIN, messageId: mid });
+      assert.match(h.textOf(out[0]), /Only admins/, id);
+    }
+    const u = await h.click(undo.custom_id, { ...ADMIN, messageId: undo.messageId });
+    assert.match(h.textOf(u[0]), /Only admins/);
+    const tile = await h.click('yo:system:open:setup', ADMIN);
+    assert.match(h.textOf(last(tile)), /Setup is for admins/);
+    const cmd = await h.slash('setup', 'reset', ADMIN);
+    assert.match(h.textOf(cmd[0]), /Only admins/);
+    assert.equal(h.allButtons(cmd).length, 0);
+  };
+  await refused();
+  h.fake.state.members[S] = h.fake.state.members[S].filter((m) => m.id !== IDS.admin);
+  h.engine.perms.invalidate();
+  await refused();
+  assert.equal(h.engine.settings.core(S).setupDone, false);
+  assert.equal(h.engine.store.get('setup', S, {}).channels.logs, C.general, 'the saved channel was not undone');
+});
+
+test('setup buttons pressed outside a server do nothing', async () => {
+  const h = await make();
+  addDummies(h);
+  await bootAs(h);
+  const ans = await h.slash('setup', 'start', ADMIN);
+  const sid = sessionOf(h, ans);
+  for (const user of [IDS.member, IDS.admin, IDS.owner]) {
+    for (const id of [...wizardIds(sid), ...staffIds]) {
+      const out = await h.click(id, { user, server: null });
+      assert.match(h.textOf(out[0]), /Only admins/, id);
+      assert.ok(!/403|undefined|null/.test(h.textOf(out[0])));
+    }
+    const tile = await h.click('yo:system:open:setup', { user, server: null });
+    assert.equal(h.allButtons(tile).length, 0);
+    assert.ok(!/First boot|Run again/.test(h.textOf(last(tile))));
+  }
+  assert.ok(h.engine.router.getSession(sid));
+  assert.equal(h.engine.settings.core(S).setupDone, true);
+  assert.equal(h.engine.settings.core(S).preset, 'gaming');
+});
+
+test('after Setup is uninstalled every way in is closed, Undo included', async () => {
+  const h = await make();
+  addDummies(h);
+  const booted = await bootAs(h, 'study');
+  const undo = h.findButton('Undo', last(booted));
+  const status = await h.slash('setup', '', ADMIN);
+  const mid = panelOf(status);
+  const wizard = await h.slash('setup', 'start', ADMIN);
+  const sid = sessionOf(h, wizard);
+  h.engine.settings.setEnabled(S, 'setup', false);
+  const before = JSON.stringify(h.engine.settings.raw(S));
+  for (const user of [IDS.admin, IDS.owner, IDS.member]) {
+    for (const id of [...wizardIds(sid), ...staffIds, 'yo:setup:menu']) {
+      const out = await h.click(id, { user });
+      assert.match(h.textOf(out[0]), /isn't installed here/, `${id} by ${user}`);
+    }
+    const tile = await h.click('yo:system:open:setup', { user });
+    assert.match(h.textOf(last(tile)), /isn't installed here/);
+    for (const words of ['setup', 'setup reset', 'preset gaming', 'boot']) {
+      const out = await h.slash('yap', words, { user });
+      assert.equal(h.allButtons(out).length, 0, words);
+      assert.ok(!/First boot|Reset YapOS|Server type set/.test(h.textOf(last(out))), words);
+    }
+    const cmd = await h.slash('setup', 'reset', { user });
+    assert.equal(h.allButtons(cmd).length, 0);
+    assert.ok(!/Reset YapOS/.test(h.textOf(last(cmd))));
+    await h.message('!setup channel logs #general', { user });
+    assert.equal(h.allButtons(h.lastSent(C.general)).length, 0);
+  }
+  const onPanel = await h.click('yo:setup:resetyes', { ...ADMIN, messageId: mid });
+  assert.match(h.textOf(onPanel[0]), /isn't installed here/);
+  let out = await h.click(undo.custom_id, MEMBER);
+  assert.match(h.textOf(out[0]), /Only admins/);
+  out = await h.click(undo.custom_id, { ...ADMIN, messageId: undo.messageId });
+  assert.match(h.textOf(last(out)), /Setup isn't installed here/);
+  assert.ok(!/Undone/.test(h.textOf(last(out))));
+  assert.equal(JSON.stringify(h.engine.settings.raw(S)), before, 'nothing changed while Setup was uninstalled');
+  assert.equal(h.engine.settings.core(S).setupDone, true);
+  assert.equal(h.engine.settings.isEnabled(S, 'greeter'), false);
+  assert.equal(h.engine.settings.isEnabled(S, 'setup'), false);
+});
+
+test('typed chat commands refuse members and mods the same way the slash menu does', async () => {
+  const h = await make();
+  addDummies(h);
+  const lines = ['!setup', '/setup', '!setup reset', '!setup status', '!setup start', '!setup preset gaming', '!setup gaming', '!setup channel logs #general', '!setup logs #general', '!yap setup reset', '!yap boot', '!yap preset gaming', '/yap setup channel logs #general'];
+  for (const user of [IDS.member, IDS.mod]) {
+    for (const line of lines) {
+      await h.message(line, { user });
+      const m = h.lastSent(C.general);
+      assert.match(h.textOf(m), /Only admins/, line);
+      assert.equal(h.allButtons(m).length, 0, line);
+      const [cmd, ...rest] = line.slice(1).split(' ');
+      const viaSlash = await h.slash(cmd, rest.join(' '), { user });
+      assert.match(h.textOf(last(viaSlash)), /Only admins/, line);
+      assert.equal(h.allButtons(viaSlash).length, 0, line);
+    }
+    await h.message('!setup reset', { user, authorAsString: true });
+    assert.match(h.textOf(h.lastSent(C.general)), /Only admins/);
+  }
+  assert.equal(h.engine.settings.core(S).preset, null);
+  assert.equal(h.engine.settings.core(S).setupDone, false);
+  assert.equal(h.engine.store.get('setup', S, null), null);
+  assert.equal(h.allButtons(h.sent()).length, 0, 'no setup panel was ever posted');
+});
+
+test('hostile ids and values in an admin wizard are checked against real things', async () => {
+  const h = await make();
+  addDummies(h);
+  const ans = await h.slash('setup', 'preset gaming', ADMIN);
+  const sid = sessionOf(h, ans);
+  const press = async (id, values) => h.textOf(last(values ? await h.pick(id, values, ADMIN) : await h.click(id, ADMIN)));
+  for (const word of ['__proto__', 'constructor', 'toString', '']) {
+    assert.match(await press(`yo:setup:preset:${sid}`, [word]), /Pick a server type/, word);
+    assert.match(await press(`yo:setup:step:${sid}:${word}`), /Unknown step/, word);
+    assert.match(await press(`yo:setup:slot:${sid}:${word}`), /Unknown channel slot/, word);
+    assert.match(await press(`yo:setup:pickch:${sid}:${word}:${C.general}`), /couldn't use that channel/, word);
+    assert.match(await press(`yo:setup:app:${sid}:${word}`), /That app is gone/, word);
+    assert.match(await press(`yo:setup:modrole:${sid}:${word}`), /can't use that role/, word);
+    await h.click(`yo:setup:skipch:${sid}:${word}`, ADMIN);
+  }
+  for (const app of ['system', 'setup', 'sys']) assert.match(await press(`yo:setup:app:${sid}:${app}`), /That app is gone/, app);
+  for (const role of [R.top, R.admin, R.mod, R.bot, S, 'everyone', IDS.owner, IDS.member]) assert.match(await press(`yo:setup:modrole:${sid}:${role}`), /can't use that role/, role);
+  for (const ch of [C.voice, IDS.member, 'everyone']) {
+    assert.match(await press(`yo:setup:pickch:${sid}:logs:${ch}`), /couldn't use that channel/, ch);
+    assert.match(await press(`yo:setup:pickch:${sid}:logs`, [ch]), /couldn't use that channel/, ch);
+  }
+  const typed = await h.slash('setup', 'channel constructor #general', ADMIN);
+  assert.match(h.textOf(last(typed)), /don't know the "constructor" slot/);
+  const odd = await h.slash('setup', 'constructor #general', ADMIN);
+  assert.ok(!/Saved/.test(h.textOf(last(odd))));
+  const s = h.engine.router.getSession(sid);
+  assert.equal(s.preset, 'gaming');
+  assert.deepEqual(s.modRoles, []);
+  assert.deepEqual(Object.keys(s.channels).sort(), ['announcements', 'general', 'logs', 'roles', 'rules', 'verify', 'welcome']);
+  assert.equal(s.channels.logs, C.modlog);
+  assert.deepEqual(Object.keys(s.apps).sort(), ['greeter', 'plain', 'rolekit']);
+  assert.equal(h.engine.store.get('setup', S, null), null);
+  const done = await h.click(`yo:setup:boot:${sid}`, ADMIN);
+  assert.match(h.textOf(last(done)), /Boot complete/);
+  assert.deepEqual(h.engine.settings.core(S).modRoles, []);
+  assert.equal(h.engine.settings.isEnabled(S, 'setup'), true);
+  assert.equal(h.engine.settings.core(S).logChannel, C.modlog);
 });

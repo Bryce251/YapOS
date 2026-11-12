@@ -417,4 +417,562 @@ test('panel shows the editor to admins and a note to members', async () => {
   assert.ok(h.findButton('New menu', last(ans)));
   const m = await h.click('yo:system:open:roles', { user: IDS.member });
   assert.match(h.textOf(last(m)), /Admins post role menus/);
+  assert.equal(h.allButtons(m).length, 0);
+  const mod = await h.click('yo:system:open:roles', { user: IDS.mod });
+  assert.equal(h.allButtons(mod).length, 0);
+});
+
+const staffButtons = (mid) => ['home', 'clear', 'new', 'created', `open:${mid}`, `add:${mid}:0`, 'addpg:zz:0', 'addsel:zz', 'addbtn:zz:0', `items:${mid}:0`, `item:${mid}:0`, `itemform:${mid}:0`, 'itemsave', `unitem:${mid}:0`, `text:${mid}`, 'textsave', `type:${mid}:reactions`, `mode:${mid}:add`, `preview:${mid}`, `post:${mid}`, `postsel:${mid}`, 'postch:zz:0', `del:${mid}`];
+
+test('every editor button is locked to the admin who opened the panel and refused by role when forged', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  const editor = await h.slash('roles', `open ${mid}`, admin);
+  const panelId = last(editor).message.id;
+  assert.ok(panelId);
+  const actions = staffButtons(mid);
+  const registered = [...h.engine.router.handlers.keys()].filter((k) => k.startsWith('roles:')).map((k) => k.split(':')[1]).filter((a) => a !== 'p' && a !== 'd');
+  assert.deepEqual([...new Set(actions.map((a) => a.split(':')[0]))].sort(), registered.sort(), 'every staff action is covered');
+  const before = JSON.stringify(menus(h));
+  for (const action of actions) {
+    const id = `yo:roles:${action}`;
+    for (const user of [IDS.member, IDS.mod]) {
+      const locked = await h.click(id, { user, messageId: panelId });
+      assert.match(h.textOf(locked[0]), /Not your panel/, `${action} on a panel someone else opened`);
+      const forged = await h.click(id, { user });
+      assert.equal(forged[0].type, 'ephemeral');
+      assert.match(h.textOf(forged[0]), /Only admins/, `${action} forged`);
+    }
+  }
+  assert.equal(JSON.stringify(menus(h)), before);
+  assert.equal(h.sent(CH.roles).length, 0);
+});
+
+test('another admin cannot press buttons on a panel they did not open', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h);
+  const editor = await h.slash('roles', `open ${mid}`, admin);
+  const ans = await h.clickButton('Delete', { user: IDS.owner, in: last(editor) });
+  assert.match(h.textOf(ans[0]), /Not your panel/);
+  assert.ok(menus(h)[mid]);
+  const mine = await h.clickButton('Delete', { user: IDS.admin, in: last(editor) });
+  assert.equal(menus(h)[mid], undefined);
+  const panel = h.fake.messagesIn(CH.general).find((x) => x.id === last(editor).message.id);
+  const undo = h.findButton('Undo', [panel]);
+  assert.ok(undo, 'the result with Undo replaced the same panel');
+  assert.ok(mine.length >= 1);
+  const peek = await h.click(undo.custom_id, { user: IDS.member, messageId: panel.id });
+  assert.match(h.textOf(peek[0]), /Not your panel/);
+  const forged = await h.click(undo.custom_id, { user: IDS.mod });
+  assert.match(h.textOf(forged[0]), /Only admins/);
+  assert.equal(menus(h)[mid], undefined);
+});
+
+test('form handlers and the yap route check the role themselves', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h);
+  const asMember = (values) => h.engine.contextFor({ server_id: IDS.server, channel_id: CH.general, user_id: IDS.member, username: 'sam', values }, { app: 'roles', kind: 'modal_submit', values, args: [] });
+  const handler = (action) => h.engine.router.handlers.get(`roles:${action}`);
+  h.engine.store.set('roles', `form:${IDS.server}:${IDS.member}`, { kind: 'text', mid, at: Date.now() });
+  await assert.rejects(handler('created').run(asMember({ title: 'Sneaky' })), /Only admins/);
+  await assert.rejects(handler('textsave').run(asMember({ title: 'Sneaky' })), /Only admins/);
+  await assert.rejects(handler('itemsave').run(asMember({ emoji: '🎮', label: 'Sneaky' })), /Only admins/);
+  await assert.rejects(h.engine.yap.find('roles').run(asMember({})), /Only admins/);
+  assert.deepEqual(Object.keys(menus(h)), [mid]);
+  assert.equal(menus(h)[mid].title, 'Games');
+});
+
+test('pickers only work for the admin who opened them', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h);
+  const picker = await h.click(`yo:roles:add:${mid}:0`, admin);
+  const sel = h.allButtons(last(picker)).find((b) => b.isSelect);
+  const gamer = sel.options.find((o) => o.label === 'Gamer').value;
+  const other = await h.pick(sel.custom_id, [gamer], { user: IDS.owner });
+  assert.match(h.textOf(last(other)), /expired/);
+  assert.equal(menus(h)[mid].items.length, 0);
+  await h.pick(sel.custom_id, [gamer], admin);
+  assert.equal(menus(h)[mid].items.length, 1);
+
+  h.fake.features.selects = false;
+  const chans = await h.click(`yo:roles:post:${mid}`, admin);
+  const quick = h.findButton('get-roles', last(chans));
+  assert.match(quick.custom_id, /^yo:roles:postch:/);
+  const stolen = await h.click(quick.custom_id, { user: IDS.owner });
+  assert.match(h.textOf(last(stolen)), /expired/);
+  assert.equal(menus(h)[mid].messageId, null);
+  await h.click(quick.custom_id, admin);
+  assert.equal(menus(h)[mid].channelId, CH.roles);
+});
+
+test('a channel that is not in this server is refused when posting', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  const foreign = 'c0000000-0000-4000-8000-0000000000ff';
+  const ans = await h.pick(`yo:roles:postsel:${mid}`, [foreign], admin);
+  assert.match(h.textOf(last(ans)), /can't find that channel/);
+  assert.equal(menus(h)[mid].messageId, null);
+  assert.equal(h.fake.callsTo('POST', new RegExp(`/channels/${foreign}/messages`)).length, 0);
+});
+
+test('posted menus are open to everyone but drafts, previews and old ids give nothing', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  const draft = await h.click(`yo:roles:p:${mid}:0`, { user: IDS.member });
+  assert.match(draft[0].content, /isn't posted/);
+  assert.ok(!memberRoles(h).includes(R.gamer));
+  const odd = await h.click('yo:roles:p:constructor:0', { user: IDS.member });
+  assert.match(odd[0].content, /deleted/);
+
+  const preview = await h.click(`yo:roles:preview:${mid}`, admin);
+  const previewId = last(preview).message.id;
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+  const onPreview = await h.click(`yo:roles:p:${mid}:0`, { user: IDS.member, messageId: previewId });
+  assert.match(h.textOf(onPreview[0]), /Not your panel/);
+  const ownPreview = await h.click(`yo:roles:p:${mid}:0`, { user: IDS.admin, messageId: previewId });
+  assert.match(ownPreview[0].content, /old copy/);
+  const wrongKind = await h.pick(`yo:roles:d:${mid}`, ['0'], { user: IDS.member, channel: CH.roles, messageId: msg.id });
+  assert.match(wrongKind[0].content, /isn't posted/);
+  assert.ok(!memberRoles(h).includes(R.gamer));
+
+  const first = await h.click(`yo:roles:p:${mid}:0`, { user: IDS.member, channel: CH.roles, messageId: msg.id });
+  assert.match(first[0].content, /Added \*\*@Gamer\*\*/);
+  const second = await h.click(`yo:roles:p:${mid}:0`, { user: IDS.member2, channel: CH.roles, messageId: msg.id });
+  assert.match(second[0].content, /Added \*\*@Gamer\*\*/);
+  assert.ok(memberRoles(h).includes(R.gamer) && memberRoles(h, IDS.member2).includes(R.gamer));
+  assert.equal(h.engine.router.panelOwner(msg.id), null);
+
+  await h.slash('roles', `type ${mid} reactions`, admin);
+  h.engine.store.update('roles', IDS.server, (d) => { d.menus[mid].items[0].emoji = '🎮'; return d; });
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const late = await h.click(`yo:roles:p:${mid}:0`, { user: IDS.member, channel: CH.roles, messageId: msg.id });
+  assert.match(late[0].content, /isn't posted/);
+  await h.react(msg.id, '🎮', { user: IDS.member2, channel: CH.roles, remove: true });
+  assert.ok(!memberRoles(h, IDS.member2).includes(R.gamer));
+  await h.react(msg.id, '🎮', { user: IDS.mod, channel: CH.roles });
+  assert.ok(memberRoles(h, IDS.mod).includes(R.gamer));
+});
+
+const SERVER_B = '5e000000-0000-4000-8000-0000000000b2';
+const B_CHANNEL = 'c0000000-0000-4000-8000-0000000000b1';
+const B_BOT_ROLE = 'r0000000-0000-4000-8000-0000000000b6';
+const B_FUN_ROLE = 'r0000000-0000-4000-8000-0000000000b2';
+const plainRole = (n, name, position = 2) => ({ id: `r0000000-0000-4000-8200-${String(n).padStart(12, '0')}`, name, color: null, position, perms: {}, auto: null, mentionable: false });
+
+function addSecondServer(h) {
+  const s = h.fake.state;
+  s.servers[SERVER_B] = { id: SERVER_B, name: 'Other Place', icon_path: null, owner_id: IDS.member, member_count: 2, online_count: 2 };
+  s.roles[SERVER_B] = [
+    { id: B_BOT_ROLE, name: 'YapOS', color: null, position: 6, perms: { manage_roles: true, send_messages: true }, auto: null, mentionable: false },
+    { id: B_FUN_ROLE, name: 'Fun', color: null, position: 2, perms: {}, auto: null, mentionable: false },
+  ];
+  s.members[SERVER_B] = [
+    { id: IDS.member, username: 'sam', display_name: 'Sam', nickname: null, roles: [], joined_at: '2026-01-05T00:00:00Z' },
+    { id: IDS.bot, username: 'yapos', display_name: 'YapOS', nickname: null, roles: [B_BOT_ROLE], joined_at: '2026-01-02T00:00:00Z' },
+  ];
+  s.channels[SERVER_B] = [{ id: B_CHANNEL, name: 'lobby', type: 'text', kind: 'text', server_id: SERVER_B, position: 0, category: null, category_id: null, private: false, read_only: false, slowmode: 0 }];
+  s.bans[SERVER_B] = [];
+  s.everyone[SERVER_B] = { send_messages: true, view_channel: true };
+}
+
+async function postedGamerMenu(h) {
+  const mid = await newMenu(h);
+  await h.slash('roles', `add ${mid} @Gamer 🎮`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  return { mid, msg: await postedMessage(h, mid) };
+}
+
+test('a member pressing staff buttons on a panel they opened themselves is still refused by role', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  const mine = await h.slash('menu', '', { user: IDS.member });
+  const myPanel = mine.find((a) => a.message)?.message.id;
+  assert.ok(myPanel, 'the member has a panel of their own');
+  assert.equal(h.engine.router.panelOwner(myPanel), IDS.member);
+  const before = JSON.stringify(menus(h));
+  for (const action of staffButtons(mid)) {
+    const ans = await h.click(`yo:roles:${action}`, { user: IDS.member, messageId: myPanel });
+    assert.equal(ans.length, 1, `${action} gives one answer`);
+    assert.equal(ans[0].type, 'ephemeral');
+    assert.match(h.textOf(ans[0]), /Only admins/, `${action} on the member's own panel`);
+    assert.ok(!/\b40[0-9]\b/.test(h.textOf(ans[0])));
+  }
+  for (const [action, values] of [['created', { title: 'Sneaky' }], ['textsave', { title: 'Sneaky' }], ['itemsave', { emoji: '🎮', label: 'Sneaky' }]]) {
+    const ans = await h.submit(`yo:roles:${action}`, values, { user: IDS.member, messageId: myPanel });
+    assert.match(h.textOf(ans[0]), /Only admins/);
+  }
+  for (const [action, values] of [['addsel:zz', ['0']], [`postsel:${mid}`, [CH.general]]]) {
+    const ans = await h.pick(`yo:roles:${action}`, values, { user: IDS.member, messageId: myPanel });
+    assert.match(h.textOf(ans[0]), /Only admins/);
+  }
+  assert.equal(JSON.stringify(menus(h)), before);
+  assert.equal(h.sent(CH.roles).length, 0);
+
+  const tile = await h.click('yo:system:open:roles', { user: IDS.member, messageId: myPanel });
+  assert.match(h.textOf(last(tile)), /Admins post role menus/);
+  assert.equal(h.allButtons(tile).length, 0);
+  const shown = h.fake.messagesIn(CH.general).find((x) => x.id === myPanel);
+  assert.ok(!h.allButtons([shown]).some((b) => b.custom_id.startsWith('yo:roles:')), 'no editor buttons leak onto the home screen');
+});
+
+test('typed chat commands and yap words refuse a member the same way the slash menu does', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  const before = JSON.stringify(menus(h));
+  const tries = ['!roles', '!roles new Sneaky', `!roles add ${mid} @VIP`, `!roles post ${mid} #general`, `!roles delete ${mid}`, `!roles type ${mid} reactions`, `/roles remove ${mid} @Gamer`, '!yap roles new Sneaky', `!yap rolemenu delete ${mid}`, `!yap reactionroles post ${mid} #general`];
+  for (const text of tries) {
+    const count = h.sent(CH.general).length;
+    await h.message(text, { user: IDS.member });
+    const reply = h.sent(CH.general).slice(count);
+    assert.equal(reply.length, 1, text);
+    assert.match(h.textOf(reply[0]), /Only admins/, text);
+    assert.equal(h.allButtons(reply).length, 0, text);
+  }
+  for (const args of ['new Sneaky', `delete ${mid}`, `post ${mid} #general`, `mode ${mid} add`]) {
+    assert.match(h.textOf(last(await h.slash('roles', args, { user: IDS.mod }))), /Only admins/);
+    assert.match(h.textOf(last(await h.slash('yap', `roles ${args}`, { user: IDS.member }))), /Only admins/);
+  }
+  assert.equal(JSON.stringify(menus(h)), before);
+  assert.equal(h.sent(CH.roles).length, 0);
+});
+
+test('the Open form button from a typed command cannot be borrowed', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  await h.message('!roles new', admin);
+  const prompt = h.lastSent(CH.general);
+  const open = h.findButton('Open form', [prompt]);
+  assert.ok(open);
+  const locked = await h.click(open.custom_id, { user: IDS.member, messageId: prompt.id });
+  assert.match(h.textOf(locked[0]), /Not your panel/);
+  const forged = await h.click(open.custom_id, { user: IDS.member });
+  assert.ok(!forged.some((a) => a.type === 'modal'));
+  assert.match(h.textOf(forged[0]), /Not your form/);
+  const sneak = await h.submit('yo:roles:created', { title: 'Sneaky' }, { user: IDS.member });
+  assert.match(h.textOf(sneak[0]), /Only admins/);
+  assert.equal(Object.keys(menus(h)).length, 0);
+});
+
+test('a pending form, a picker or an Undo that belongs to an admin is useless to a member', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const mid = await newMenu(h);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  await h.click(`yo:roles:itemform:${mid}:0`, admin);
+  const stolenForm = await h.submit('yo:roles:itemsave', { emoji: '💀', label: 'Hacked' }, { user: IDS.member });
+  assert.match(h.textOf(stolenForm[0]), /Only admins/);
+  const otherAdmin = await h.submit('yo:roles:itemsave', { emoji: '💀', label: 'Hacked' }, { user: IDS.owner });
+  assert.match(h.textOf(last(otherAdmin)), /form expired/);
+  assert.equal(menus(h)[mid].items[0].label, 'Gamer');
+
+  const picker = await h.click(`yo:roles:add:${mid}:0`, admin);
+  const sel = h.allButtons(last(picker)).find((b) => b.isSelect);
+  const sess = sel.custom_id.split(':')[3];
+  for (const user of [IDS.member, IDS.mod]) {
+    assert.match(h.textOf((await h.pick(sel.custom_id, ['0', '1'], { user }))[0]), /Only admins/);
+    assert.match(h.textOf((await h.click(`yo:roles:addbtn:${sess}:0`, { user }))[0]), /Only admins/);
+    assert.match(h.textOf((await h.click(`yo:roles:postch:${sess}:0`, { user }))[0]), /Only admins/);
+  }
+  assert.equal(menus(h)[mid].items.length, 1);
+
+  const removed = await h.click(`yo:roles:unitem:${mid}:0`, admin);
+  const undoItem = h.findButton('Undo', removed);
+  const del = await h.click(`yo:roles:del:${mid}`, admin);
+  const undoMenu = h.findButton('Undo', del);
+  const mine = await h.slash('menu', '', { user: IDS.member });
+  const myPanel = mine.find((a) => a.message).message.id;
+  for (const undo of [undoItem, undoMenu]) {
+    for (const user of [IDS.member, IDS.mod]) {
+      assert.match(h.textOf((await h.click(undo.custom_id, { user }))[0]), /Only admins/);
+    }
+    assert.match(h.textOf((await h.click(undo.custom_id, { user: IDS.member, messageId: myPanel }))[0]), /Only admins/);
+  }
+  assert.equal(menus(h)[mid], undefined);
+  const real = await h.click(undoMenu.custom_id, admin);
+  assert.match(h.textOf(real[0]), /Menu restored/);
+  assert.equal(menus(h)[mid].items[0], null);
+});
+
+test('a session of the wrong kind is treated as expired instead of breaking', async () => {
+  const h = await createHarness({ apps: ['roles'], features: { selects: false } });
+  const mid = await newMenu(h);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  const chans = await h.click(`yo:roles:post:${mid}`, admin);
+  const chanSess = h.findButton('get-roles', last(chans)).custom_id.split(':')[3];
+  const picker = await h.click(`yo:roles:add:${mid}:0`, admin);
+  const roleSess = h.findButton('VIP', last(picker)).custom_id.split(':')[3];
+  for (const id of [`yo:roles:addbtn:${chanSess}:0`, `yo:roles:addpg:${chanSess}:0`, `yo:roles:postch:${roleSess}:0`]) {
+    const ans = await h.click(id, admin);
+    assert.match(h.textOf(last(ans)), /expired/, id);
+  }
+  const sel = await h.pick(`yo:roles:addsel:${chanSess}`, ['0'], admin);
+  assert.match(h.textOf(last(sel)), /expired/);
+  assert.equal(menus(h)[mid].items.length, 1);
+  assert.equal(menus(h)[mid].messageId, null);
+});
+
+test('being in charge of another server gives nothing in this one', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  addSecondServer(h);
+  const { mid, msg } = await postedGamerMenu(h);
+  const inB = { user: IDS.member, server: SERVER_B, channel: B_CHANNEL };
+  await h.slash('roles', 'new Mine', inB);
+  const menusB = () => h.engine.store.get('roles', SERVER_B, { menus: {} }).menus;
+  const midB = Object.keys(menusB()).at(-1);
+  assert.ok(midB, 'the member really is an admin in the other server');
+
+  await h.slash('roles', `add ${midB} <@&${R.vip}>`, inB);
+  await h.slash('roles', `add ${midB} ${R.admin}`, inB);
+  assert.equal(menusB()[midB].items.length, 0, 'roles from another server cannot be added');
+  await h.slash('roles', `add ${midB} @Fun`, inB);
+  assert.equal(menusB()[midB].items.length, 1);
+
+  const foreignPost = await h.pick(`yo:roles:postsel:${midB}`, [CH.roles], inB);
+  assert.match(h.textOf(last(foreignPost)), /can't find that channel/);
+  await h.slash('roles', `post ${midB} <#${CH.general}>`, inB);
+  assert.equal(menusB()[midB].messageId, null);
+  assert.equal(h.sent(CH.roles).length, 1);
+  assert.equal(h.sent(CH.general).filter((m) => /Mine/.test(h.textOf(m))).length, 0);
+
+  const picker = await h.click(`yo:roles:add:${mid}:0`, admin);
+  const sel = h.allButtons(last(picker)).find((b) => b.isSelect);
+  const borrowed = await h.pick(sel.custom_id, ['0'], inB);
+  assert.match(h.textOf(last(borrowed)), /expired/);
+  assert.equal(menusB()[midB].items.length, 1);
+
+  const removed = await h.click(`yo:roles:unitem:${mid}:0`, admin);
+  const undo = h.findButton('Undo', removed);
+  const undoFromB = await h.click(undo.custom_id, inB);
+  assert.match(h.textOf(undoFromB[0]), /Only admins/);
+  assert.equal(menus(h)[mid].items[0], null);
+  await h.click(undo.custom_id, admin);
+  assert.equal(menus(h)[mid].items[0].roleId, R.gamer);
+  const before = JSON.stringify(menus(h));
+
+  for (const action of [`del:${mid}`, `type:${mid}:reactions`, `mode:${mid}:add`, `text:${mid}`, `post:${mid}`]) {
+    const here = await h.click(`yo:roles:${action}`, { user: IDS.member });
+    assert.match(h.textOf(here[0]), /Only admins/);
+  }
+  assert.equal(JSON.stringify(menus(h)), before);
+
+  const wrongServer = await h.click(`yo:roles:p:${mid}:0`, { ...inB, messageId: msg.id });
+  assert.ok(!/Added/.test(wrongServer[0].content));
+  assert.ok(!memberRoles(h).includes(R.gamer));
+  assert.deepEqual(h.fake.memberOf(SERVER_B, IDS.member).roles, []);
+  await h.react(msg.id, '🎮', inB);
+  assert.ok(!memberRoles(h).includes(R.gamer));
+});
+
+test('roles that carry staff powers inside YapOS never go on a menu and are refused at click time', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const helper = plainRole(1, 'Helper');
+  const lead = plainRole(2, 'Lead');
+  const support = plainRole(3, 'Support');
+  const ticket = plainRole(4, 'ticket-0001', 5);
+  const trusted = plainRole(5, 'Trusted');
+  const guarded = [helper, lead, support, ticket, trusted];
+  h.fake.state.roles[IDS.server].push(...guarded);
+
+  const mid = await newMenu(h, 'Open to all');
+  for (const r of guarded) await h.slash('roles', `add ${mid} <@&${r.id}>`, admin);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  assert.equal(menus(h)[mid].items.length, 6);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const msg = await postedMessage(h, mid);
+
+  h.engine.settings.patchCore(IDS.server, { modRoles: [helper.id], adminRoles: [lead.id] });
+  h.engine.settings.patchApp(IDS.server, 'tickets', { staffRoles: [support.id] });
+  h.engine.store.set('tickets', IDS.server, { seq: 1, tickets: { 1: { number: 1, status: 'open', openerId: IDS.member2, roleId: ticket.id } } });
+  h.engine.settings.patchApp(IDS.server, 'automod', { exempt: { channels: [], roles: [trusted.id] } });
+  h.engine.perms.invalidate();
+
+  const at = { user: IDS.member, channel: CH.roles, messageId: msg.id };
+  for (let idx = 0; idx < 5; idx++) {
+    const ans = await h.click(`yo:roles:p:${mid}:${idx}`, at);
+    assert.equal(ans[0].type, 'ephemeral');
+    assert.match(ans[0].content, /won't hand it out/, `item ${idx}`);
+    assert.ok(!/\b40[0-9]\b/.test(ans[0].content));
+  }
+  assert.deepEqual(memberRoles(h), [R.member]);
+  assert.equal(await h.engine.perms.level(IDS.server, IDS.member), 'member');
+  const fine = await h.click(`yo:roles:p:${mid}:5`, at);
+  assert.match(fine[0].content, /Added \*\*@Gamer\*\*/);
+  const other = await h.click(`yo:roles:p:${mid}:5`, { ...at, user: IDS.member2 });
+  assert.match(other[0].content, /Added \*\*@Gamer\*\*/);
+  const home = await h.slash('roles', '', admin);
+  assert.match(h.textOf(home[0]), /stopped handing it out/);
+
+  const second = await newMenu(h, 'Later');
+  for (const r of guarded) {
+    const typed = await h.slash('roles', `add ${second} <@&${r.id}>`, admin);
+    assert.match(h.textOf(last(typed)), /can't go on a menu/, r.name);
+  }
+  assert.equal(menus(h)[second].items.length, 0);
+  const picker = await h.click(`yo:roles:add:${second}:0`, admin);
+  const labels = h.allButtons(last(picker)).find((b) => b.isSelect).options.map((o) => o.label);
+  assert.ok(labels.includes('VIP'));
+  for (const r of guarded) assert.ok(!labels.includes(r.name), `${r.name} hidden from the picker`);
+});
+
+test('guarded roles are also refused on dropdown and reaction menus, and unique mode never strips them', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const helper = plainRole(1, 'Helper');
+  h.fake.state.roles[IDS.server].push(helper);
+  const mid = await newMenu(h, 'Pick');
+  await h.slash('roles', `add ${mid} <@&${helper.id}> 🛟`, admin);
+  await h.slash('roles', `add ${mid} @Gamer 🎮`, admin);
+  await h.slash('roles', `type ${mid} dropdown`, admin);
+  await h.slash('roles', `mode ${mid} unique`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  h.engine.settings.patchCore(IDS.server, { modRoles: [helper.id] });
+  h.fake.memberOf(IDS.server, IDS.mod).roles.push(helper.id);
+  h.engine.perms.invalidate();
+  let msg = await postedMessage(h, mid);
+  const picked = await h.pick(`yo:roles:d:${mid}`, ['0'], { user: IDS.member, channel: CH.roles, messageId: msg.id });
+  assert.match(picked[0].content, /won't hand it out/);
+  assert.deepEqual(memberRoles(h), [R.member]);
+  await h.pick(`yo:roles:d:${mid}`, ['1'], { user: IDS.mod, channel: CH.roles, messageId: msg.id });
+  assert.ok(memberRoles(h, IDS.mod).includes(helper.id), 'a guarded role someone already holds is left alone');
+  assert.ok(memberRoles(h, IDS.mod).includes(R.gamer));
+
+  await h.slash('roles', `mode ${mid} toggle`, admin);
+  await h.slash('roles', `type ${mid} reactions`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  msg = await postedMessage(h, mid);
+  await h.react(msg.id, '🛟', { user: IDS.member, channel: CH.roles });
+  assert.deepEqual(memberRoles(h), [R.member]);
+  await h.react(msg.id, '🛟', { user: IDS.mod, channel: CH.roles, remove: true });
+  assert.ok(memberRoles(h, IDS.mod).includes(helper.id));
+  await h.react(msg.id, '🎮', { user: IDS.member2, channel: CH.roles });
+  assert.ok(memberRoles(h, IDS.member2).includes(R.gamer));
+});
+
+test('a role added to the editor but not yet published cannot be taken from the live post', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const { mid, msg } = await postedGamerMenu(h);
+  await h.slash('roles', `add ${mid} @VIP ⭐`, admin);
+  assert.equal(menus(h)[mid].dirty, true);
+  const at = { user: IDS.member, channel: CH.roles, messageId: msg.id };
+  const early = await h.click(`yo:roles:p:${mid}:1`, at);
+  assert.match(early[0].content, /isn't on the posted menu yet/);
+  assert.ok(!memberRoles(h).includes(R.vip));
+  assert.match((await h.click(`yo:roles:p:${mid}:0`, at))[0].content, /Added \*\*@Gamer\*\*/);
+  await h.click(`yo:roles:post:${mid}`, admin);
+  assert.match((await h.click(`yo:roles:p:${mid}:1`, at))[0].content, /Added \*\*@VIP\*\*/);
+  assert.match((await h.click(`yo:roles:p:${mid}:1`, { ...at, user: IDS.member2 }))[0].content, /Added \*\*@VIP\*\*/);
+
+  await h.slash('roles', `type ${mid} reactions`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  const live = await postedMessage(h, mid);
+  const extra = plainRole(9, 'Early');
+  h.fake.state.roles[IDS.server].push(extra);
+  h.engine.perms.invalidate();
+  await h.slash('roles', `add ${mid} <@&${extra.id}> 🚀`, admin);
+  assert.equal(menus(h)[mid].items.length, 3);
+  await h.react(live.id, '🚀', { user: IDS.member, channel: CH.roles });
+  assert.ok(!memberRoles(h).includes(extra.id));
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  await h.react(live.id, '🚀', { user: IDS.member, channel: CH.roles });
+  assert.ok(memberRoles(h).includes(extra.id));
+});
+
+test('public buttons only ever change the clicker, with whatever ids are pasted in', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const { mid, msg } = await postedGamerMenu(h);
+  const at = { user: IDS.member, channel: CH.roles, messageId: msg.id };
+  const odd = [`p:${mid}:-1`, `p:${mid}:1`, `p:${mid}:0.5`, `p:${mid}:length`, `p:${mid}:constructor`, `p:${mid}:${IDS.owner}`, `p:${mid}`, 'p', 'p:__proto__:0', 'p:m999:0', `p:${R.admin}:0`];
+  for (const action of odd) {
+    const ans = await h.click(`yo:roles:${action}`, at);
+    assert.equal(ans.length, 1, action);
+    assert.equal(ans[0].type, 'ephemeral', action);
+    assert.ok(!/Added/.test(h.textOf(ans[0])), action);
+    assert.ok(!/\b(40[0-9]|500)\b|TypeError|undefined|Something went wrong/.test(h.textOf(ans[0])), action);
+  }
+  assert.deepEqual(memberRoles(h), [R.member]);
+  const extraArg = await h.click(`yo:roles:p:${mid}:0:${IDS.member2}`, at);
+  assert.match(extraArg[0].content, /Added \*\*@Gamer\*\*/);
+  assert.ok(memberRoles(h).includes(R.gamer));
+  assert.ok(!memberRoles(h, IDS.member2).includes(R.gamer), 'a pasted user id changes nobody else');
+  const strange = await h.pick(`yo:roles:d:${mid}`, ['0', 'constructor', '-1', IDS.owner], at);
+  assert.match(strange[0].content, /isn't posted/);
+  assert.equal(h.fake.callsTo('PUT', new RegExp(`/members/(?!${IDS.member})[^/]+/roles/`)).length, 0);
+  assert.equal(await h.engine.perms.level(IDS.server, IDS.member), 'member');
+});
+
+test('after the app is uninstalled old buttons, reactions and commands do nothing', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const { mid, msg } = await postedGamerMenu(h);
+  const editor = await h.slash('roles', `open ${mid}`, admin);
+  const reactMid = await newMenu(h, 'Pings');
+  await h.slash('roles', `add ${reactMid} @VIP ⭐`, admin);
+  await h.slash('roles', `type ${reactMid} reactions`, admin);
+  await h.slash('roles', `post ${reactMid} #general`, admin);
+  const reactMsg = await postedMessage(h, reactMid);
+  h.engine.settings.setEnabled(IDS.server, 'roles', false);
+  const before = JSON.stringify(menus(h));
+
+  const click = await h.click(`yo:roles:p:${mid}:0`, { user: IDS.member, channel: CH.roles, messageId: msg.id });
+  assert.match(h.textOf(click[0]), /isn't installed here/);
+  await h.react(reactMsg.id, '⭐', { user: IDS.member });
+  assert.deepEqual(memberRoles(h), [R.member]);
+  const staff = await h.clickButton('Delete', { user: IDS.admin, in: last(editor) });
+  assert.match(h.textOf(staff[0]), /isn't installed here/);
+  for (const user of [IDS.member, IDS.admin]) {
+    const slash = await h.slash('roles', 'new Again', { user });
+    assert.ok(!/Made \*\*/.test(h.textOf(last(slash))));
+    await h.message('!roles new Again', { user });
+    const yap = await h.slash('yap', 'roles new Again', { user });
+    assert.match(h.textOf(last(yap)), /isn't installed here/);
+    const tile = await h.click('yo:system:open:roles', { user });
+    assert.match(h.textOf(last(tile)), /isn't installed here/);
+  }
+  assert.equal(JSON.stringify(menus(h)), before);
+
+  h.engine.settings.setEnabled(IDS.server, 'roles', true);
+  const back = await h.click(`yo:roles:p:${mid}:0`, { user: IDS.member2, channel: CH.roles, messageId: msg.id });
+  assert.match(back[0].content, /Added \*\*@Gamer\*\*/);
+});
+
+test('an admin who lost the role cannot keep using the panel they opened', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const { mid } = await postedGamerMenu(h);
+  const editor = await h.slash('roles', `open ${mid}`, admin);
+  const m = h.fake.memberOf(IDS.server, IDS.admin);
+  m.roles = m.roles.filter((r) => r !== R.admin);
+  h.engine.perms.invalidate();
+  const ans = await h.clickButton('Delete', { user: IDS.admin, in: last(editor) });
+  assert.match(h.textOf(ans[0]), /Only admins/);
+  assert.ok(menus(h)[mid]);
+});
+
+test('hostile form values are cut down and never break the editor', async () => {
+  const h = await createHarness({ apps: ['roles'] });
+  const made = await h.submit('yo:roles:created', { title: `@everyone ${'x'.repeat(5000)}`, description: 'y'.repeat(9000) }, admin);
+  assert.ok(last(made));
+  const mid = lastMenuId(h);
+  assert.ok(menus(h)[mid].title.length <= 100);
+  assert.ok(menus(h)[mid].description.length <= 1000);
+  await h.submit('yo:roles:created', ['not', 'a', 'form'], admin);
+  await h.slash('roles', `add ${mid} @Gamer`, admin);
+  await h.click(`yo:roles:itemform:${mid}:0`, admin);
+  const bad = await h.submit('yo:roles:itemsave', { emoji: '<@&everyone> 🎮🎮 <script>', label: 'z'.repeat(900) }, admin);
+  assert.match(h.textOf(last(bad)), /doesn't look like one emoji/);
+  await h.submit('yo:roles:itemsave', { emoji: '', label: 'z'.repeat(900) }, admin);
+  assert.ok(menus(h)[mid].items[0].label.length <= 80);
+  assert.equal(menus(h)[mid].items[0].roleId, R.gamer);
+  await h.click(`yo:roles:text:${mid}`, admin);
+  await h.submit('yo:roles:textsave', { title: '', description: 'd'.repeat(5000), mid: 'm999', roleId: R.admin }, admin);
+  assert.ok(menus(h)[mid].title.length > 0);
+  assert.ok(menus(h)[mid].description.length <= 1000);
+  for (const id of [`type:${mid}:constructor`, `mode:${mid}:__proto__`, `type:${mid}`, `item:${mid}:abc`, `unitem:${mid}:-1`, `itemform:${mid}:99`, 'open:constructor', 'del:__proto__', 'open', 'add']) {
+    const ans = await h.click(`yo:roles:${id}`, admin);
+    assert.ok(ans.length >= 1, id);
+    assert.ok(!/Something went wrong|TypeError/.test(h.textOf(last(ans))), id);
+  }
+  assert.equal(menus(h)[mid].type, 'buttons');
+  assert.equal(menus(h)[mid].mode, 'toggle');
 });

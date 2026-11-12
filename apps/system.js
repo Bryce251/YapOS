@@ -8,6 +8,34 @@ import { VERSION as SDK_VERSION } from '../engine/sdk.js';
 const ID = 'system';
 const cid = (action, ...args) => customId(ID, action, ...args);
 
+const plain = (text) => String(text ?? '').replace(/[^a-z0-9_-]/gi, '').slice(0, 32);
+const exact = (text) => (plain(text) === String(text ?? '') ? plain(text) : '');
+
+async function adminHere(ctx) {
+  if (!ctx.serverId) {
+    await ctx.warn('Servers only', 'Apps are installed per server, so use **/apps** inside a server.');
+    return false;
+  }
+  for (const key of [`m:${ctx.serverId}:${ctx.userId}`, `r:${ctx.serverId}`, `s:${ctx.serverId}`]) ctx.engine.perms.invalidate(key);
+  await ctx.require('admin');
+  return true;
+}
+
+async function showApps(ctx) {
+  if (!(await adminHere(ctx))) return null;
+  return ctx.ephemeral(appsView(ctx.engine, ctx.serverId));
+}
+
+async function toggleApp(ctx) {
+  if (!(await adminHere(ctx))) return null;
+  const id = exact(ctx.argv[0]);
+  const a = ctx.engine.apps.get(id);
+  if (!a || a.meta.core) return ctx.warn("Can't change that", 'System apps are always on.');
+  const wanted = ctx.argv[1] === 'on' ? true : ctx.argv[1] === 'off' ? false : !ctx.engine.settings.isEnabled(ctx.serverId, id);
+  ctx.engine.settings.setEnabled(ctx.serverId, id, wanted);
+  return ctx.update(appsView(ctx.engine, ctx.serverId));
+}
+
 function appTiles(engine, sid) {
   return engine.apps.list().filter((a) => a.meta.id !== ID && a.def.panel && engine.settings.isEnabled(sid, a.meta.id));
 }
@@ -49,10 +77,11 @@ async function showHome(ctx) {
   return ctx.engine.caps.attempt(ctx.serverId, 'v2', async () => ctx.reply({ layout: await homeLayout(ctx) }), fallback);
 }
 
-function helpView(engine, sid, appId) {
-  if (appId) {
+function helpView(engine, sid, asked) {
+  const appId = plain(asked).toLowerCase();
+  if (asked) {
     const a = engine.apps.get(appId);
-    if (!a) return { embeds: [dialog.warn('No such app', `I don't know **${appId}**.`)] };
+    if (!a) return { embeds: [dialog.warn('No such app', `I don't know ${appId ? `**${appId}**` : 'that app'}. Run **/help** to see every app.`)] };
     const cmds = Object.entries(a.def.commands || {}).map(([n, c]) => `**/${n}**: ${c.description}${c.perm && c.perm !== 'member' ? ` *(${c.perm})*` : ''}`);
     const extra = (a.def.help || []).map((l) => `• ${l}`);
     return { embeds: [card({ title: `${a.meta.icon} ${a.meta.name}`, body: [a.meta.description, '', ...cmds, ...(extra.length ? ['', ...extra] : [])].join('\n'), color: a.meta.id })], components: [row(button('All apps', cid('help'), 'secondary', '⬅️'))] };
@@ -109,7 +138,7 @@ function appsView(engine, sid) {
   const lines = list.map((a) => `${a.meta.core ? '🔒' : engine.settings.isEnabled(sid, a.meta.id) ? '🟢' : '⚪'} ${a.meta.icon} **${a.meta.name}**: ${a.meta.description}`);
   const toggles = list.filter((a) => !a.meta.core).map((a) => {
     const on = engine.settings.isEnabled(sid, a.meta.id);
-    return button(`${on ? 'Uninstall' : 'Install'} ${a.meta.name}`, cid('toggle', a.meta.id), on ? 'secondary' : 'success', a.meta.icon);
+    return button(`${on ? 'Uninstall' : 'Install'} ${a.meta.name}`, cid('toggle', a.meta.id, on ? 'off' : 'on'), on ? 'secondary' : 'success', a.meta.icon);
   });
   return {
     embeds: [card({ title: '🧩 Apps', body: `${lines.join('\n')}\n\n-# 🔒 system apps are always on. Uninstalling keeps the app's settings, so you can install it again later.`, color: 'system' })],
@@ -128,6 +157,7 @@ async function runYap(ctx) {
       const meta = engine.apps.get(route.app)?.meta;
       return ctx.warn(`${meta?.name || route.app} isn't installed here`, 'An admin can install it with **/apps**.');
     }
+    if (!engine.apps.get(route.app)) return ctx.warn("I didn't get that", 'That app is not loaded right now. Try **/help** for everything I can do.');
     const sub = engine.contextFor(ctx.source, { app: route.app, args: tokens.slice(1).join(' ') });
     sub.argv = tokens.slice(1);
     sub.word = first;
@@ -137,13 +167,16 @@ async function runYap(ctx) {
   if (app?.def.panel) return openApp(ctx, app.meta.id);
   const words = [...engine.yap.words(), ...engine.apps.list().map((a) => a.meta.id)];
   const guess = didYouMean(first, words);
-  return ctx.warn("I didn't get that", `I don't know **${first}**.${guess.length ? ` Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?` : ''}\nTry **/help** for everything I can do.`);
+  const shown = plain(first);
+  return ctx.warn("I didn't get that", `I don't know ${shown ? `**${shown}**` : 'that'}.${guess.length ? ` Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?` : ''}\nTry **/help** for everything I can do.`);
 }
 
-async function openApp(ctx, appId) {
+async function openApp(ctx, asked) {
+  const appId = exact(asked);
   const a = ctx.engine.apps.get(appId);
-  if (!a?.def.panel) return ctx.warn('Nothing to open', 'That app has no panel.');
-  if (ctx.serverId && !ctx.engine.settings.isEnabled(ctx.serverId, appId)) return ctx.warn(`${a.meta.name} isn't installed here`, 'An admin can install it with **/apps**.');
+  if (!a?.def.panel || appId === ID) return ctx.warn('Nothing to open', 'That app has no panel.');
+  if (!ctx.serverId) return ctx.warn('Servers only', 'App panels open inside a server. Try **/menu** there.');
+  if (!ctx.engine.settings.isEnabled(ctx.serverId, appId)) return ctx.warn(`${a.meta.name} isn't installed here`, 'An admin can install it with **/apps**.');
   const appCtx = ctx.engine.contextFor(ctx.source, { app: appId, args: '' });
   return a.def.panel(appCtx);
 }
@@ -160,28 +193,18 @@ export const { setup, teardown, check } = defineApp({
     menu: { description: 'Open the YapOS home screen', run: showHome },
     help: { description: 'What YapOS can do. Try /help mod', serverOnly: false, run: (ctx) => sendWithSelectFallback(ctx, helpView(ctx.engine, ctx.serverId, ctx.argv[0]?.toLowerCase())) },
     status: { description: 'System monitor: latency, connection, message budget (bot owner only)', serverOnly: false, run: (ctx) => showStatus(ctx) },
-    apps: { description: 'Install or uninstall YapOS apps (admins)', perm: 'admin', run: (ctx) => ctx.ephemeral(appsView(ctx.engine, ctx.serverId)) },
+    apps: { description: 'Install or uninstall YapOS apps (admins)', perm: 'admin', run: showApps },
     yap: { description: 'Do anything in plain words: /yap timeout @sam 10m, /yap welcome', run: runYap },
   },
 
   components: {
     open: { run: (ctx) => openApp(ctx, ctx.argv[0]) },
-    help: { run: (ctx) => sendWithSelectFallback(ctx, helpView(ctx.engine, ctx.serverId), ctx.kind === 'button' ? 'ephemeral' : 'ephemeral') },
-    helppick: { run: (ctx) => ctx.ephemeral(helpView(ctx.engine, ctx.serverId, ctx.values?.[0])) },
-    helpapp: { run: (ctx) => ctx.ephemeral(helpView(ctx.engine, ctx.serverId, ctx.argv[0])) },
+    help: { run: (ctx) => sendWithSelectFallback(ctx, helpView(ctx.engine, ctx.serverId)) },
+    helppick: { run: (ctx) => sendWithSelectFallback(ctx, helpView(ctx.engine, ctx.serverId, Array.isArray(ctx.values) ? ctx.values[0] : null)) },
+    helpapp: { run: (ctx) => sendWithSelectFallback(ctx, helpView(ctx.engine, ctx.serverId, ctx.argv[0])) },
     status: { run: (ctx) => showStatus(ctx) },
-    apps: { perm: 'admin', run: (ctx) => ctx.ephemeral(appsView(ctx.engine, ctx.serverId)) },
-    toggle: {
-      perm: 'admin',
-      run: async (ctx) => {
-        const id = ctx.argv[0];
-        const a = ctx.engine.apps.get(id);
-        if (!a || a.meta.core) return ctx.warn("Can't change that", 'System apps are always on.');
-        const on = !ctx.engine.settings.isEnabled(ctx.serverId, id);
-        ctx.engine.settings.setEnabled(ctx.serverId, id, on);
-        return ctx.update(appsView(ctx.engine, ctx.serverId));
-      },
-    },
+    apps: { perm: 'admin', run: showApps },
+    toggle: { perm: 'admin', run: toggleApp },
   },
 
   events: {

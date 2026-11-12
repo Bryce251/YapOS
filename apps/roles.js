@@ -18,7 +18,8 @@ const EMOJI_RE = /^(?:<a?:\w+:[\w-]+>|(?:\p{Extended_Pictographic}|\p{Regional_I
 
 const blank = () => ({ menus: {}, seq: 0, notices: [] });
 const data = (engine, sid) => engine.store.get(ID, sid, blank());
-const getMenu = (engine, sid, mid) => (mid && data(engine, sid).menus?.[mid]) || null;
+const own = (obj, key) => (obj && typeof key === 'string' && Object.hasOwn(obj, key) ? obj[key] : undefined);
+const getMenu = (engine, sid, mid) => own(data(engine, sid).menus, mid) || null;
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const isEmoji = (t) => EMOJI_RE.test(String(t ?? '').trim());
 const liveItems = (menu) => (menu?.items || []).map((item, idx) => ({ item, idx })).filter((x) => x.item);
@@ -68,6 +69,19 @@ const STAFF_PERMS = ['administrator', 'manage_server', 'manage_roles', 'manage_c
 const staffPerms = (r) => STAFF_PERMS.filter((k) => r?.perms?.[k] || r?.[k] === true);
 const staffList = (r) => staffPerms(r).map((k) => permName(k)).join(', ');
 
+function guardReason(engine, sid, roleId) {
+  const core = engine.settings.core(sid);
+  if ((core.adminRoles || []).includes(roleId)) return 'makes people a YapOS admin here';
+  if ((core.modRoles || []).includes(roleId)) return 'makes people a YapOS moderator here';
+  const tickets = engine.settings.appConfig(sid, 'tickets') || {};
+  if ((tickets.staffRoles || []).includes(roleId)) return 'lets people into every ticket as ticket staff';
+  const open = engine.store.get('tickets', sid, null)?.tickets || {};
+  if (Object.values(open).some((t) => t && t.roleId === roleId)) return "opens someone's private ticket";
+  const automod = engine.settings.appConfig(sid, 'automod') || {};
+  if ((automod.exempt?.roles || []).includes(roleId)) return 'is skipped by Automod';
+  return null;
+}
+
 async function actorTop(engine, sid, actorId) {
   if (!actorId) return Infinity;
   const s = await engine.perms.server(sid).catch(() => null);
@@ -84,8 +98,26 @@ async function manageableRoles(engine, sid, actorId) {
   const all = await engine.perms.roles(sid);
   const top = Math.min(await engine.perms.topPosition(sid, botId(engine)), await actorTop(engine, sid, actorId));
   return all
-    .filter((r) => !isEveryone(r, sid) && !isAuto(r) && !staffPerms(r).length && typeof r.position === 'number' && r.position < top)
+    .filter((r) => !isEveryone(r, sid) && !isAuto(r) && !staffPerms(r).length && !guardReason(engine, sid, r.id) && typeof r.position === 'number' && r.position < top)
     .sort((a, b) => b.position - a.position);
+}
+
+function openSession(ctx, payload) {
+  return ctx.engine.router.session({ ...payload, sid: ctx.serverId, uid: ctx.userId });
+}
+
+function ownSession(ctx, id, list) {
+  const s = ctx.engine.router.getSession(id);
+  return s && s.sid === ctx.serverId && s.uid === ctx.userId && Array.isArray(s[list]) ? s : null;
+}
+
+function postedProblem(ctx, mid, as) {
+  const menu = getMenu(ctx.engine, ctx.serverId, mid);
+  if (!menu) return null;
+  if (!menu.messageId || menu.postedAs !== as) return "This role menu isn't posted right now, so it can't give out roles. Ask an admin if you need one.";
+  const from = ctx.source?.message_id;
+  if (from && from !== menu.messageId) return `This is an old copy of the menu. Use the newest one in <#${menu.channelId}>.`;
+  return null;
 }
 
 async function textChannels(engine, sid) {
@@ -222,7 +254,8 @@ async function postMenu(engine, sid, mid, channelId) {
     if (failed.length) notes.add(`I couldn't add these reactions: ${failed.join(' ')}. Custom emojis must come from a server I'm in. People can still add them themselves.`);
   }
 
-  Object.assign(menu, { channelId, messageId: message.id, postedAs: as, dirty: false, reacted });
+  const live = liveItems(menu).slice(0, as === 'reactions' ? menu.items.length : MAX_ITEMS).map(({ idx }) => idx);
+  Object.assign(menu, { channelId, messageId: message.id, postedAs: as, dirty: false, reacted, live });
   saveMenu(engine, sid, mid, menu);
   const where = await channelName(engine, sid, channelId);
   return { as, note: [`${ICONS.ok} ${sameSpot && message.id === old.messageId ? 'Updated the post' : 'Posted'} in **${where}**.`, ...notes].join('\n') };
@@ -231,6 +264,7 @@ async function postMenu(engine, sid, mid, channelId) {
 function refusal(check, roleName, botRole) {
   const r = String(check.reason || '');
   if (check.kind === 'feature') return { kind: 'feature', text: "Giving out roles isn't turned on for this server yet (it's still in testing on Yapin'), so I couldn't change your roles. I've let the admins know." };
+  if (check.kind === 'guard') return { kind: 'guard', text: `**@${roleName}** ${check.why}, so I won't hand it out from a menu. I've let the admins know.` };
   if (check.kind === 'staff') return { kind: 'staff', text: `**@${roleName}** has staff permissions, so I won't hand it out from a menu. I've let the admins know.` };
   if (/exist/i.test(r)) return { kind: 'deleted', text: 'That role was deleted, so I can\'t give it out. I\'ve let the admins know.' };
   if (/automatic/i.test(r)) return { kind: 'auto', text: `**@${roleName}** is given out automatically, so it can't be picked here.` };
@@ -254,6 +288,8 @@ async function refuse(engine, sid, mid, idx, item, check) {
     notify('perm', `My role (**${botRole}**) is missing **Manage Roles**, so role menus can't give out roles.`);
   } else if (kind === 'feature') {
     notify('feature', "Yapin' turned down a role change because role management is still in testing for this server, so role menus can't give out roles yet. They'll start working once it's turned on.");
+  } else if (kind === 'guard') {
+    notify(`guard:${item.roleId}`, `**@${roleName}** on the **${title}** menu ${check.why}, so I stopped handing it out. Take it off the menu.`);
   } else if (kind === 'staff') {
     notify(`staff:${item.roleId}`, `**@${roleName}** on the **${title}** menu has staff permissions (${staffList(check.role)}), so I stopped handing it out. Take it off the menu, or remove those permissions from the role.`);
   }
@@ -274,10 +310,13 @@ async function changeRole(engine, sid, uid, mid, idx, intent) {
   if (!menu) return { problem: 'This role menu was deleted. Ask an admin if you need a role.' };
   const item = menu.items[idx];
   if (!item) return { problem: 'This button is out of date. An admin can press **Update post** in **/roles** to refresh it.' };
+  if (Array.isArray(menu.live) && !menu.live.includes(idx)) return { problem: "That role isn't on the posted menu yet. An admin needs to press **Update post** in **/roles** first." };
   const check = await checkRole(engine, sid, item.roleId);
   if (!check.ok) return refuse(engine, sid, mid, idx, item, check);
   const role = check.role;
   if (staffPerms(role).length) return refuse(engine, sid, mid, idx, item, { kind: 'staff', role });
+  const why = guardReason(engine, sid, role.id);
+  if (why) return refuse(engine, sid, mid, idx, item, { kind: 'guard', role, why });
   let member;
   try { member = await engine.bot.member(sid, uid); } catch (e) { if (e?.status === 404) return { problem: "I couldn't find you in this server." }; throw e; }
   const mine = new Set(member?.roles || []);
@@ -291,7 +330,7 @@ async function changeRole(engine, sid, uid, mid, idx, intent) {
       for (const other of menu.items) {
         if (!other || other.roleId === role.id || !mine.has(other.roleId)) continue;
         const ok = await engine.perms.canManageRole(sid, other.roleId);
-        if (!ok.ok || staffPerms(ok.role).length) continue;
+        if (!ok.ok || staffPerms(ok.role).length || guardReason(engine, sid, other.roleId)) continue;
         await engine.bot.removeRole(sid, uid, other.roleId);
         removed.push(ok.role.name);
       }
@@ -405,7 +444,8 @@ async function editorView(engine, sid, mid, note, extra = []) {
 }
 
 async function pickerView(engine, sid, sess, page = 0, note) {
-  const s = engine.router.getSession(sess);
+  const found = engine.router.getSession(sess);
+  const s = found && found.sid === sid && Array.isArray(found.roleIds) ? found : null;
   if (!s) return { embeds: [dialog.warn('This picker expired', 'Open the menu again from **/roles**.')], components: [row(backHome())] };
   const menu = getMenu(engine, sid, s.mid);
   if (!menu) return editorView(engine, sid, s.mid);
@@ -451,6 +491,8 @@ async function addRolesToMenu(engine, sid, mid, roles, extras = {}, actorId = nu
     const check = await engine.perms.canManageRole(sid, role.id);
     if (!check.ok) { skipped.push(check.reason); continue; }
     if (staffPerms(role).length) { skipped.push(`**${role.name}** has staff permissions (${staffList(role)}), so anyone clicking the menu would get them. Use a role without those permissions`); continue; }
+    const why = guardReason(engine, sid, role.id);
+    if (why) { skipped.push(`**${role.name}** ${why}, so it can't go on a menu anyone can click`); continue; }
     if (typeof role.position === 'number' && role.position >= myTop) { skipped.push(`**${role.name}** is at or above your highest role, so you can't hand it out`); continue; }
     menu.items.push({ roleId: role.id, emoji: extras.emoji || null, label: clip(extras.label || role.name, 80) });
     added.push(role.name);
@@ -498,13 +540,14 @@ async function itemView(engine, sid, mid, idx, note) {
   };
 }
 
-async function channelPicker(engine, sid, mid, note) {
+async function channelPicker(ctx, mid, note) {
+  const { engine, serverId: sid } = ctx;
   const menu = getMenu(engine, sid, mid);
   if (!menu) return editorView(engine, sid, mid);
   const chans = await textChannels(engine, sid);
   const detected = (await engine.detectChannels(sid).catch(() => ({}))).roles || null;
   const ordered = detected ? [detected, ...chans.filter((c) => c.id !== detected.id)] : chans;
-  const sess = engine.router.session({ mid, channelIds: ordered.map((c) => c.id) });
+  const sess = openSession(ctx, { mid, channelIds: ordered.map((c) => c.id) });
   const body = [note, `Where should **${menu.title}** go?${detected ? ` I'd suggest **#${detected.name}**.` : ''}`, `-# Or type: /roles post ${mid} #channel`].filter(Boolean).join('\n\n');
   const embeds = [card({ title: '📌 Post the menu', body, color: 'roles' })];
   const back = backMenu(mid);
@@ -521,6 +564,8 @@ async function doPost(ctx, mid, channelId) {
   const { engine, serverId: sid } = ctx;
   const menu = getMenu(engine, sid, mid);
   if (!menu) return show(ctx, await editorView(engine, sid, mid));
+  const known = (await textChannels(engine, sid)).some((c) => c.id === channelId);
+  if (!known) return show(ctx, await editorView(engine, sid, mid, `${ICONS.warn} I can't find that channel in this server. Press **Post** and pick one from the list.`));
   const live = isLive(ctx);
   if (live) await ctx.update({ embeds: [dialog.info('Posting…', `Putting **${menu.title}** in **${await channelName(engine, sid, channelId)}**.`)], components: [] });
   try {
@@ -540,7 +585,7 @@ async function startPost(ctx, mid) {
   if (!menu) return show(ctx, await editorView(engine, sid, mid));
   if (!liveItems(menu).length) return show(ctx, await editorView(engine, sid, mid, `${ICONS.warn} Add at least one role before posting.`));
   if (menu.messageId && menu.channelId) return doPost(ctx, mid, menu.channelId);
-  return showSel(ctx, await channelPicker(engine, sid, mid));
+  return showSel(ctx, await channelPicker(ctx, mid));
 }
 
 async function deleteMenu(ctx, mid) {
@@ -624,8 +669,8 @@ function findMenuId(engine, sid, token) {
   const menus = data(engine, sid).menus || {};
   const t = String(token ?? '').trim().toLowerCase();
   if (!t) return null;
-  if (menus[t]) return t;
-  if (/^\d+$/.test(t) && menus[`m${t}`]) return `m${t}`;
+  if (own(menus, t)) return t;
+  if (/^\d+$/.test(t) && own(menus, `m${t}`)) return `m${t}`;
   const hit = fuzzyFind(t, Object.entries(menus), { key: ([, m]) => m.title });
   return hit?.item?.[0] || null;
 }
@@ -665,12 +710,12 @@ async function runTyped(ctx) {
   const { engine, serverId: sid } = ctx;
   const argv = ctx.argv.map(String);
   const word = argv[0].toLowerCase().replace(/^\//, '');
-  const sub = SUBS[word] || (findMenuId(engine, sid, word) && /^m?\d+$/.test(word) ? 'open' : null);
+  const sub = own(SUBS, word) || (findMenuId(engine, sid, word) && /^m?\d+$/.test(word) ? 'open' : null);
   if (!sub) {
     const guess = didYouMean(word, Object.keys(SUBS));
     return ctx.warn("I didn't get that", `${guess.length ? `Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?\n\n` : ''}${usage}`);
   }
-  const rest = SUBS[word] ? argv.slice(1) : argv;
+  const rest = own(SUBS, word) ? argv.slice(1) : argv;
   if (sub === 'help') return ctx.info('Role menu shortcuts', usage);
   if (sub === 'list') return show(ctx, await homeView(engine, sid));
   if (sub === 'new') {
@@ -687,7 +732,7 @@ async function runTyped(ctx) {
   if (sub === 'preview') return previewMenu(ctx, mid);
   if (sub === 'delete') return deleteMenu(ctx, mid);
   if (sub === 'add') {
-    if (!args.length) return showSel(ctx, await pickerView(engine, sid, engine.router.session({ mid, roleIds: (await manageableRoles(engine, sid, ctx.userId)).map((r) => r.id) })));
+    if (!args.length) return showSel(ctx, await pickerView(engine, sid, openSession(ctx, { mid, roleIds: (await manageableRoles(engine, sid, ctx.userId)).map((r) => r.id) })));
     const { role, rest: after } = await takeRole(ctx, args);
     if (!role) return ctx.warn("I can't find that role", `Mention it like **@Gamer** or type its name.\n\n${usage}`);
     const emoji = after[0] && isEmoji(after[0]) ? after[0] : null;
@@ -709,12 +754,12 @@ async function runTyped(ctx) {
     return show(ctx, await editorView(engine, sid, mid, `➖ Took **${out.item.label}** off the menu.`, [out.undo]));
   }
   if (sub === 'type') {
-    const t = TYPE_WORDS[(args[0] || '').toLowerCase()];
+    const t = own(TYPE_WORDS, (args[0] || '').toLowerCase());
     if (!t) return ctx.warn('Which type?', 'Pick **buttons**, **dropdown** or **reactions**, like `/roles type m1 buttons`.');
     return show(ctx, await editorView(engine, sid, mid, setType(engine, sid, mid, t)));
   }
   if (sub === 'mode') {
-    const m = MODE_WORDS[(args[0] || '').toLowerCase().replace(/[^a-z]/g, '')];
+    const m = own(MODE_WORDS, (args[0] || '').toLowerCase().replace(/[^a-z]/g, ''));
     if (!m) return ctx.warn('Which mode?', 'Pick **toggle** (click again to remove), **unique** (one role at a time) or **add** (only gives roles).');
     return show(ctx, await editorView(engine, sid, mid, setMode(engine, sid, mid, m)));
   }
@@ -741,11 +786,18 @@ function openNewForm(ctx) {
 }
 
 async function runCommand(ctx) {
+  await ctx.require('admin');
   if (ctx.argv.length) return runTyped(ctx);
   return show(ctx, await homeView(ctx.engine, ctx.serverId));
 }
 
-const admin = (run) => ({ perm: 'admin', run });
+const admin = (run) => ({
+  perm: 'admin',
+  run: async (ctx) => {
+    await ctx.require('admin');
+    return run(ctx);
+  },
+});
 
 export const { setup, teardown, check } = defineApp({
   id: ID,
@@ -775,13 +827,16 @@ export const { setup, teardown, check } = defineApp({
       const { engine, serverId: sid } = ctx;
       const mid = ctx.argv[0];
       if (!getMenu(engine, sid, mid)) return show(ctx, await editorView(engine, sid, mid));
-      const sess = engine.router.session({ mid, roleIds: (await manageableRoles(engine, sid, ctx.userId)).map((r) => r.id) });
+      const sess = openSession(ctx, { mid, roleIds: (await manageableRoles(engine, sid, ctx.userId)).map((r) => r.id) });
       return showSel(ctx, await pickerView(engine, sid, sess, 0));
     }),
-    addpg: admin(async (ctx) => showSel(ctx, await pickerView(ctx.engine, ctx.serverId, ctx.argv[0], ctx.argv[1]))),
+    addpg: admin(async (ctx) => {
+      if (!ownSession(ctx, ctx.argv[0], 'roleIds')) return show(ctx, await homeView(ctx.engine, ctx.serverId, `${ICONS.warn} That picker expired. Open the menu again.`));
+      return showSel(ctx, await pickerView(ctx.engine, ctx.serverId, ctx.argv[0], ctx.argv[1]));
+    }),
     addsel: admin(async (ctx) => {
       const { engine, serverId: sid } = ctx;
-      const s = engine.router.getSession(ctx.argv[0]);
+      const s = ownSession(ctx, ctx.argv[0], 'roleIds');
       if (!s) return show(ctx, await homeView(engine, sid, `${ICONS.warn} That picker expired. Open the menu again.`));
       const map = await roleMapOf(engine, sid);
       const picked = (ctx.values || []).map((v) => map.get(s.roleIds[Number(v)])).filter(Boolean);
@@ -790,7 +845,7 @@ export const { setup, teardown, check } = defineApp({
     }),
     addbtn: admin(async (ctx) => {
       const { engine, serverId: sid } = ctx;
-      const s = engine.router.getSession(ctx.argv[0]);
+      const s = ownSession(ctx, ctx.argv[0], 'roleIds');
       if (!s) return show(ctx, await homeView(engine, sid, `${ICONS.warn} That picker expired. Open the menu again.`));
       const role = (await roleMapOf(engine, sid)).get(s.roleIds[Number(ctx.argv[1])]);
       const res = role ? await addRolesToMenu(engine, sid, s.mid, [role], {}, ctx.userId) : { note: `${ICONS.warn} That role doesn't exist anymore.` };
@@ -860,19 +915,19 @@ export const { setup, teardown, check } = defineApp({
     }),
     type: admin(async (ctx) => {
       const [mid, t] = ctx.argv;
-      const note = TYPES[t] ? setType(ctx.engine, ctx.serverId, mid, t) : null;
+      const note = own(TYPES, t) ? setType(ctx.engine, ctx.serverId, mid, t) : null;
       return show(ctx, await editorView(ctx.engine, ctx.serverId, mid, note));
     }),
     mode: admin(async (ctx) => {
       const [mid, m] = ctx.argv;
-      const note = MODES[m] ? setMode(ctx.engine, ctx.serverId, mid, m) : null;
+      const note = own(MODES, m) ? setMode(ctx.engine, ctx.serverId, mid, m) : null;
       return show(ctx, await editorView(ctx.engine, ctx.serverId, mid, note));
     }),
     preview: admin((ctx) => previewMenu(ctx, ctx.argv[0])),
     post: admin((ctx) => startPost(ctx, ctx.argv[0])),
     postsel: admin((ctx) => doPost(ctx, ctx.argv[0], ctx.values?.[0])),
     postch: admin(async (ctx) => {
-      const s = ctx.engine.router.getSession(ctx.argv[0]);
+      const s = ownSession(ctx, ctx.argv[0], 'channelIds');
       const chId = s?.channelIds?.[Number(ctx.argv[1])];
       if (!s || !chId) return show(ctx, await homeView(ctx.engine, ctx.serverId, `${ICONS.warn} That channel list expired. Press **Post** again.`));
       return doPost(ctx, s.mid, chId);
@@ -881,6 +936,8 @@ export const { setup, teardown, check } = defineApp({
     p: {
       run: async (ctx) => {
         const [mid, idxS] = ctx.argv;
+        const stale = postedProblem(ctx, mid, 'buttons');
+        if (stale) return ctx.ephemeral(`${ICONS.warn} ${stale}`);
         const res = await changeRole(ctx.engine, ctx.serverId, ctx.userId, mid, Number(idxS), 'toggle');
         return ctx.ephemeral(pickText([res]));
       },
@@ -888,6 +945,8 @@ export const { setup, teardown, check } = defineApp({
     d: {
       run: async (ctx) => {
         const mid = ctx.argv[0];
+        const stale = postedProblem(ctx, mid, 'dropdown');
+        if (stale) return ctx.ephemeral(`${ICONS.warn} ${stale}`);
         const menu = getMenu(ctx.engine, ctx.serverId, mid);
         const picks = [...new Set((ctx.values || []).map(Number))].slice(0, menu?.mode === 'unique' ? 1 : MAX_ITEMS);
         const results = [];
@@ -904,10 +963,7 @@ export const { setup, teardown, check } = defineApp({
 
   yap: [{
     words: ['roles', 'rolemenu', 'reactionroles'],
-    run: async (ctx) => {
-      await ctx.require('admin');
-      return runCommand(ctx);
-    },
+    run: (ctx) => runCommand(ctx),
   }],
 
   panel: async (ctx) => {

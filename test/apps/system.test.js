@@ -130,3 +130,506 @@ test('/status stays private: no buttons, so it is never posted publicly', async 
   const clicked = await h.click('yo:system:status', { user: IDS.owner });
   assert.equal(clicked[0].type, 'ephemeral');
 });
+test('a panel only works for the person who opened it', async () => {
+  const h = await createHarness();
+  const ans = await h.slash('apps', '', { user: IDS.admin });
+  const toggle = h.allButtons(ans).find((b) => b.custom_id.startsWith('yo:system:toggle:'));
+  assert.ok(toggle.messageId, 'the panel message is known');
+  const target = toggle.custom_id.split(':')[3];
+  const before = h.engine.settings.isEnabled(IDS.server, target);
+  const member = await h.click(toggle.custom_id, { user: IDS.member, messageId: toggle.messageId });
+  assert.match(h.textOf(member[0]), /Not your panel/);
+  const otherAdmin = await h.click(toggle.custom_id, { user: IDS.owner, messageId: toggle.messageId });
+  assert.match(h.textOf(otherAdmin[0]), /Not your panel/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, target), before, 'nothing changed');
+  await h.click(toggle.custom_id, { user: IDS.admin, messageId: toggle.messageId });
+  assert.equal(h.engine.settings.isEnabled(IDS.server, target), !before, 'the opener can still use it');
+});
+
+test('the home screen is locked to whoever ran /menu, typed or from the slash menu', async () => {
+  const h = await createHarness();
+  const ans = await h.slash('menu', '', { user: IDS.admin });
+  const open = h.allButtons(ans).find((b) => b.custom_id.startsWith('yo:system:open:'));
+  const other = await h.click(open.custom_id, { user: IDS.member, messageId: open.messageId });
+  assert.match(h.textOf(other[0]), /Not your panel/);
+  await h.message('/menu', { user: IDS.mod });
+  const typed = h.lastSent(IDS.channels.general);
+  const btn = h.allButtons([typed]).find((b) => b.custom_id.startsWith('yo:system:'));
+  const blocked = await h.click(btn.custom_id, { user: IDS.member, messageId: typed.id });
+  assert.match(h.textOf(blocked[0]), /Not your panel/);
+});
+
+async function withDemo() {
+  const { defineApp } = await import('../../engine/apps.js');
+  const { customId } = await import('../../engine/router.js');
+  const h = await createHarness({ apps: [] });
+  const seen = { panel: [], yap: [] };
+  const demo = defineApp({
+    id: 'demo',
+    name: 'Demo',
+    icon: '🧪',
+    description: 'A sample app for tests.',
+    panel: async (ctx) => {
+      seen.panel.push(ctx.userId);
+      return ctx.ephemeral({ content: 'Demo panel', components: [{ type: 'row', components: [{ type: 'button', style: 'secondary', label: 'Poke', custom_id: customId('demo', 'poke') }] }] });
+    },
+    components: { poke: { run: (ctx) => ctx.ephemeral('Poked') } },
+    yap: [{ words: ['demoword'], run: async (ctx) => { seen.yap.push({ user: ctx.userId, argv: ctx.argv, app: ctx.app }); return ctx.ephemeral('Demo yap'); } }],
+  });
+  await demo.setup(h.bot);
+  return { h, seen };
+}
+
+const toggleOf = (h, where) => h.allButtons(where).find((b) => b.custom_id.startsWith('yo:system:toggle:demo'));
+
+test('the Apps button on the home screen is admin only, on a panel or forged', async () => {
+  const { h } = await withDemo();
+  const home = await h.slash('menu', '', { user: IDS.admin });
+  const apps = h.allButtons(home).find((b) => b.custom_id === 'yo:system:apps');
+  assert.ok(apps, 'admins see the Apps button');
+  const onPanel = await h.click(apps.custom_id, { user: IDS.member, messageId: apps.messageId });
+  assert.match(h.textOf(onPanel[0]), /Not your panel/);
+  const forged = await h.click(apps.custom_id, { user: IDS.member });
+  assert.match(h.textOf(forged[0]), /Only admins/);
+  const modForged = await h.click(apps.custom_id, { user: IDS.mod });
+  assert.match(h.textOf(modForged[0]), /Only admins/);
+  const mine = await h.click(apps.custom_id, { user: IDS.admin, messageId: apps.messageId });
+  assert.ok(toggleOf(h, mine), 'the admin gets the apps panel');
+  const memberHome = await h.slash('menu', '', { user: IDS.member });
+  assert.ok(!h.allButtons(memberHome).some((b) => b.custom_id === 'yo:system:apps'), 'members never see the Apps button');
+});
+
+test('install and uninstall buttons refuse members and mods, on a panel or forged', async () => {
+  const { h } = await withDemo();
+  const panel = await h.slash('apps', '', { user: IDS.admin });
+  const toggle = toggleOf(h, panel);
+  assert.ok(toggle.messageId);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+  const onPanel = await h.click(toggle.custom_id, { user: IDS.member, messageId: toggle.messageId });
+  assert.match(h.textOf(onPanel[0]), /Not your panel/);
+  const forged = await h.click(toggle.custom_id, { user: IDS.member });
+  assert.match(h.textOf(forged[0]), /Only admins/);
+  const modForged = await h.click(toggle.custom_id, { user: IDS.mod });
+  assert.match(h.textOf(modForged[0]), /Only admins/);
+  const shortForged = await h.click('yo:system:toggle:demo', { user: IDS.member2 });
+  assert.match(h.textOf(shortForged[0]), /Only admins/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true, 'nothing changed');
+  await h.click(toggle.custom_id, { user: IDS.admin, messageId: toggle.messageId });
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), false);
+});
+
+test('app installs need a server, so a click without one changes nothing', async () => {
+  const { h } = await withDemo();
+  const toggled = await h.click('yo:system:toggle:demo:off', { user: IDS.admin, server: null });
+  assert.match(h.textOf(toggled[0]), /Servers only/);
+  const opened = await h.click('yo:system:apps', { user: IDS.admin, server: null });
+  assert.match(h.textOf(opened[0]), /Servers only/);
+  assert.ok(!h.allButtons(opened).length);
+  const tile = await h.click('yo:system:open:demo', { user: IDS.admin, server: null });
+  assert.match(h.textOf(tile[0]), /Servers only/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+  assert.deepEqual(h.engine.settings.servers().filter((s) => s !== IDS.server), []);
+});
+
+test('an install button does what its label says, even when pressed twice', async () => {
+  const { h } = await withDemo();
+  const panel = await h.slash('apps', '', { user: IDS.admin });
+  const toggle = toggleOf(h, panel);
+  assert.match(toggle.label, /Uninstall Demo/);
+  assert.match(toggle.custom_id, /:off$/);
+  await h.click(toggle.custom_id, { user: IDS.admin, messageId: toggle.messageId });
+  await h.click(toggle.custom_id, { user: IDS.admin, messageId: toggle.messageId });
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), false, 'a stale Uninstall never installs');
+  await h.click('yo:system:toggle:demo:on', { user: IDS.owner });
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+});
+
+test('system apps and made-up ids cannot be toggled', async () => {
+  const { h } = await withDemo();
+  const core = await h.click('yo:system:toggle:system:off', { user: IDS.admin });
+  assert.match(h.textOf(core[0]), /always on/);
+  const unknown = await h.click('yo:system:toggle:nothing:off', { user: IDS.admin });
+  assert.match(h.textOf(unknown[0]), /Can't change that/);
+  assert.equal(h.engine.settings.raw(IDS.server).apps.nothing, undefined);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'system'), true);
+});
+
+test('the Status button is for the bot owner only, on a panel or forged', async () => {
+  const { h } = await withDemo();
+  const home = await h.slash('menu', '', { user: IDS.owner });
+  const status = h.allButtons(home).find((b) => b.custom_id === 'yo:system:status');
+  assert.ok(status);
+  const onPanel = await h.click(status.custom_id, { user: IDS.admin, messageId: status.messageId });
+  assert.match(h.textOf(onPanel[0]), /Not your panel/);
+  for (const user of [IDS.member, IDS.mod, IDS.admin]) {
+    const forged = await h.click(status.custom_id, { user });
+    assert.match(h.textOf(forged[0]), /Only YapOS's owner/);
+    assert.doesNotMatch(h.textOf(forged[0]), /Latency/);
+  }
+  const mine = await h.click(status.custom_id, { user: IDS.owner, messageId: status.messageId });
+  assert.match(h.textOf(mine[0]), /System monitor/);
+  assert.equal(mine[0].type, 'ephemeral');
+});
+
+test('a help panel belongs to whoever asked, and anyone can ask for their own', async () => {
+  const { h } = await withDemo();
+  const help = await h.slash('help', '', { user: IDS.admin });
+  const pick = h.allButtons(help).find((b) => b.custom_id === 'yo:system:helppick');
+  const panelId = help[help.length - 1].message.id;
+  assert.ok(pick && panelId);
+  const other = await h.pick(pick.custom_id, ['demo'], { user: IDS.member, messageId: panelId });
+  assert.match(h.textOf(other[0]), /Not your panel/);
+  const mine = await h.pick(pick.custom_id, ['demo'], { user: IDS.admin, messageId: panelId });
+  assert.match(h.textOf(mine[0]), /Demo/);
+  const own = await h.slash('help', '', { user: IDS.member });
+  assert.match(h.textOf(own[own.length - 1]), /YapOS help/);
+  const detail = await h.click('yo:system:helpapp:demo', { user: IDS.member });
+  assert.match(h.textOf(detail[0]), /A sample app for tests/);
+  const back = h.allButtons(detail).find((b) => b.custom_id === 'yo:system:help');
+  const blocked = await h.click(back.custom_id, { user: IDS.member2, messageId: back.messageId });
+  assert.match(h.textOf(blocked[0]), /Not your panel/);
+  const allowed = await h.click(back.custom_id, { user: IDS.member, messageId: back.messageId });
+  assert.match(h.textOf(allowed[allowed.length - 1]), /YapOS help/);
+});
+
+test('help never echoes mentions or markup back', async () => {
+  const { h } = await withDemo();
+  const typed = await h.slash('help', '@everyone', { user: IDS.member });
+  assert.match(h.textOf(typed[0]), /No such app/);
+  assert.doesNotMatch(h.textOf(typed[0]), /@/);
+  const picked = await h.pick('yo:system:helppick', [`<@${IDS.owner}>`], { user: IDS.member });
+  assert.match(h.textOf(picked[0]), /No such app/);
+  assert.doesNotMatch(h.textOf(picked[0]), /[<@]/);
+});
+
+test('an app tile opens that app for the person who clicked, and the new panel is theirs', async () => {
+  const { h, seen } = await withDemo();
+  const home = await h.slash('menu', '', { user: IDS.admin });
+  const tile = h.allButtons(home).find((b) => b.custom_id === 'yo:system:open:demo');
+  assert.ok(tile);
+  const other = await h.click(tile.custom_id, { user: IDS.member, messageId: tile.messageId });
+  assert.match(h.textOf(other[0]), /Not your panel/);
+  assert.deepEqual(seen.panel, []);
+  const opened = await h.click(tile.custom_id, { user: IDS.admin, messageId: tile.messageId });
+  assert.deepEqual(seen.panel, [IDS.admin]);
+  const poke = h.allButtons(opened).find((b) => b.custom_id === 'yo:demo:poke');
+  const stranger = await h.click(poke.custom_id, { user: IDS.member, messageId: poke.messageId });
+  assert.match(h.textOf(stranger[0]), /Not your panel/);
+  await h.click(tile.custom_id, { user: IDS.member });
+  assert.deepEqual(seen.panel, [IDS.admin, IDS.member], 'a leftover tile runs the app as the clicker, never as the opener');
+});
+
+test('tiles refuse apps that are missing, uninstalled or the system itself', async () => {
+  const { h, seen } = await withDemo();
+  const none = await h.click('yo:system:open:nothing', { user: IDS.member });
+  assert.match(h.textOf(none[0]), /Nothing to open/);
+  const self = await h.click('yo:system:open:system', { user: IDS.member });
+  assert.match(h.textOf(self[0]), /Nothing to open/);
+  const blank = await h.click('yo:system:open', { user: IDS.member });
+  assert.match(h.textOf(blank[0]), /Nothing to open/);
+  h.engine.settings.setEnabled(IDS.server, 'demo', false);
+  const off = await h.click('yo:system:open:demo', { user: IDS.member });
+  assert.match(h.textOf(off[0]), /isn't installed here/);
+  assert.deepEqual(seen.panel, []);
+});
+
+test('/yap hands the typed words to the app as the person who typed them', async () => {
+  const { h, seen } = await withDemo();
+  const ans = await h.slash('yap', 'demoword one two', { user: IDS.member });
+  assert.match(h.textOf(ans[0]), /Demo yap/);
+  assert.deepEqual(seen.yap, [{ user: IDS.member, argv: ['one', 'two'], app: 'demo' }]);
+  await h.slash('yap', 'demo', { user: IDS.member2 });
+  assert.deepEqual(seen.panel, [IDS.member2]);
+  h.engine.settings.setEnabled(IDS.server, 'demo', false);
+  const off = await h.slash('yap', 'demoword', { user: IDS.admin });
+  assert.match(h.textOf(off[0]), /isn't installed here/);
+  const offPanel = await h.slash('yap', 'demo', { user: IDS.admin });
+  assert.match(h.textOf(offPanel[0]), /isn't installed here/);
+  assert.equal(seen.yap.length, 1);
+  assert.equal(seen.panel.length, 1);
+});
+
+test('/yap cannot reach the apps panel or the system monitor', async () => {
+  const { h } = await withDemo();
+  for (const word of ['apps', 'status', 'system', 'toggle']) {
+    const ans = await h.slash('yap', word, { user: IDS.member });
+    assert.match(h.textOf(ans[0]), /didn't get that/);
+    assert.ok(!h.allButtons(ans).some((b) => b.custom_id.startsWith('yo:system:toggle')));
+  }
+});
+
+test('a home screen opened by a member has no staff buttons and stays theirs', async () => {
+  const { h } = await withDemo();
+  const home = await h.slash('menu', '', { user: IDS.member });
+  const ids = h.allButtons(home).map((b) => b.custom_id);
+  assert.deepEqual(ids.filter((id) => id === 'yo:system:apps' || id === 'yo:system:status'), []);
+  const help = h.allButtons(home).find((b) => b.custom_id === 'yo:system:help');
+  const admin = await h.click(help.custom_id, { user: IDS.admin, messageId: help.messageId });
+  assert.match(h.textOf(admin[0]), /Not your panel/);
+  const mine = await h.click(help.custom_id, { user: IDS.member, messageId: help.messageId });
+  assert.match(h.textOf(mine[mine.length - 1]), /YapOS help/);
+});
+
+const S2 = '5e000000-0000-4000-8000-000000000002';
+const C2 = 'c0000000-0000-4000-8000-0000000000a1';
+const R2 = 'r0000000-0000-4000-8000-0000000000b6';
+
+function addSecondServer(h) {
+  const st = h.fake.state;
+  st.servers[S2] = { id: S2, name: 'Other Town', icon_path: null, owner_id: IDS.member, member_count: 2, online_count: 1 };
+  st.roles[S2] = [{ id: R2, name: 'YapOS', color: null, position: 6, perms: { manage_roles: true, send_messages: true }, auto: null, mentionable: false }];
+  st.members[S2] = [
+    { id: IDS.member, username: 'sam', display_name: 'Sam', nickname: null, roles: [], joined_at: '2026-01-05T00:00:00Z' },
+    { id: IDS.bot, username: 'yapos', display_name: 'YapOS', nickname: null, roles: [R2], joined_at: '2026-01-02T00:00:00Z' },
+  ];
+  st.channels[S2] = [{ id: C2, name: 'general', type: 'text', kind: 'text', server_id: S2, position: 0, category: null, category_id: null, private: false, read_only: false, slowmode: 0 }];
+  st.bans[S2] = [];
+  st.everyone[S2] = { send_messages: true, view_channel: true };
+}
+
+const STAFF_IDS = ['yo:system:apps', 'yo:system:toggle:demo:off', 'yo:system:toggle:demo:on', 'yo:system:toggle:demo'];
+
+test('staff buttons pressed on a panel the member opened themselves are still refused', async () => {
+  const { h } = await withDemo();
+  const home = await h.slash('menu', '', { user: IDS.member });
+  const mine = h.allButtons(home).find((b) => b.custom_id === 'yo:system:help');
+  assert.ok(mine.messageId);
+  assert.equal(h.engine.router.panelOwner(mine.messageId), IDS.member);
+  const on = { user: IDS.member, messageId: mine.messageId };
+  for (const id of STAFF_IDS) {
+    const tries = [await h.click(id, on), await h.pick(id, ['demo'], on), await h.submit(id, { app: 'demo', enabled: 'false' }, on)];
+    for (const ans of tries) {
+      assert.match(h.textOf(ans[0]), /Only admins/, id);
+      assert.ok(!h.allButtons(ans).some((b) => b.custom_id.startsWith('yo:system:toggle')), id);
+    }
+  }
+  const status = await h.click('yo:system:status', on);
+  assert.match(h.textOf(status[0]), /Only YapOS's owner/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+  assert.equal(h.engine.settings.raw(IDS.server).apps.demo, undefined, 'nothing was written');
+});
+
+test('ids pasted into a button give no extra rights', async () => {
+  const { h } = await withDemo();
+  const pasted = [
+    `yo:system:toggle:demo:off:${IDS.owner}`,
+    `yo:system:toggle:demo:off:${IDS.admin}:${IDS.server}`,
+    `yo:system:apps:${IDS.owner}`,
+    `yo:system:apps:${IDS.roles.top}`,
+    `yo:system:toggle:demo:${IDS.roles.admin}`,
+  ];
+  for (const id of pasted) {
+    const ans = await h.click(id, { user: IDS.member });
+    assert.match(h.textOf(ans[0]), /Only admins/, id);
+  }
+  const status = await h.click(`yo:system:status:${IDS.owner}`, { user: IDS.member });
+  assert.match(h.textOf(status[0]), /Only YapOS's owner/);
+  const nobody = await h.click('yo:system:toggle:demo:off', { user: 'a0000000-0000-4000-8000-0000000000ff' });
+  assert.match(h.textOf(nobody[0]), /Only admins/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+});
+
+test('running another server does not make someone an admin here', async () => {
+  const { h } = await withDemo();
+  addSecondServer(h);
+  const there = { user: IDS.member, server: S2, channel: C2 };
+  const theirs = await h.slash('apps', '', there);
+  const toggle = toggleOf(h, theirs);
+  assert.ok(toggle, 'they manage apps in their own server');
+  await h.click(toggle.custom_id, { ...there, messageId: toggle.messageId });
+  assert.equal(h.engine.settings.isEnabled(S2, 'demo'), false);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true, 'this server is untouched');
+  const carried = await h.click(toggle.custom_id, { user: IDS.member, messageId: toggle.messageId });
+  assert.match(h.textOf(carried[0]), /Only admins/);
+  const named = await h.click(`yo:system:toggle:demo:off:${IDS.server}`, there);
+  assert.doesNotMatch(h.textOf(named[0]), /Only admins/);
+  const opened = await h.click('yo:system:apps', { user: IDS.member, messageId: toggle.messageId });
+  assert.match(h.textOf(opened[0]), /Only admins/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+  const adminThere = await h.click('yo:system:toggle:demo:on', { user: IDS.admin, server: S2, channel: C2 });
+  assert.match(h.textOf(adminThere[0]), /Only admins/);
+  assert.equal(h.engine.settings.isEnabled(S2, 'demo'), false, 'an admin here is nobody there');
+});
+
+test('typed commands get the same checks as the slash menu', async () => {
+  const { h } = await withDemo();
+  for (const text of ['!apps', '/apps', '!apps demo off']) {
+    await h.message(text, { user: IDS.member });
+    const m = h.lastSent(IDS.channels.general);
+    assert.match(h.textOf(m), /Only admins/, text);
+    assert.ok(!h.allButtons([m]).length, text);
+  }
+  await h.message('!apps', { user: IDS.member, authorAsString: true });
+  assert.match(h.textOf(h.lastSent(IDS.channels.general)), /Only admins/);
+  for (const user of [IDS.member, IDS.mod, IDS.admin]) {
+    await h.message('!status', { user });
+    const m = h.lastSent(IDS.channels.general);
+    assert.match(h.textOf(m), /Only YapOS's owner/);
+    assert.doesNotMatch(h.textOf(m), /Latency/);
+  }
+  for (const word of ['apps', 'status', 'toggle demo off', '/apps']) {
+    await h.message(`!yap ${word}`, { user: IDS.member });
+    assert.match(h.textOf(h.lastSent(IDS.channels.general)), /didn't get that/, word);
+  }
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+  await h.message('!apps', { user: IDS.admin });
+  const panel = h.lastSent(IDS.channels.general);
+  const toggle = toggleOf(h, [panel]);
+  assert.ok(toggle, 'an admin gets the panel from chat');
+  const blocked = await h.click(toggle.custom_id, { user: IDS.member, messageId: panel.id });
+  assert.match(h.textOf(blocked[0]), /Not your panel/);
+  const forged = await h.click(toggle.custom_id, { user: IDS.member });
+  assert.match(h.textOf(forged[0]), /Only admins/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+});
+
+test('rights follow the role: lost with it at once, never gained by a lookalike role', async () => {
+  const { h } = await withDemo();
+  const sam = h.fake.memberOf(IDS.server, IDS.member);
+  sam.roles.push(IDS.roles.vip, IDS.roles.gamer);
+  const vip = await h.click('yo:system:toggle:demo:off', { user: IDS.member });
+  assert.match(h.textOf(vip[0]), /Only admins/);
+  h.engine.settings.patchCore(IDS.server, { modRoles: [IDS.roles.vip] });
+  h.engine.perms.invalidate();
+  const asMod = await h.click('yo:system:toggle:demo:off', { user: IDS.member });
+  assert.match(h.textOf(asMod[0]), /Only admins/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+  const panel = await h.slash('apps', '', { user: IDS.admin });
+  const toggle = toggleOf(h, panel);
+  const alex = h.fake.memberOf(IDS.server, IDS.admin);
+  alex.roles = alex.roles.filter((r) => r !== IDS.roles.admin);
+  const demoted = await h.click(toggle.custom_id, { user: IDS.admin, messageId: toggle.messageId });
+  assert.match(h.textOf(demoted[0]), /Only admins/);
+  const again = await h.slash('apps', '', { user: IDS.admin });
+  assert.match(h.textOf(again[0]), /Only admins/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true, 'a removed admin changes nothing');
+  const { h: h2 } = await withDemo();
+  h2.fake.memberOf(IDS.server, IDS.member).roles.push(IDS.roles.top);
+  await h2.click('yo:system:toggle:demo:off', { user: IDS.member });
+  assert.equal(h2.engine.settings.isEnabled(IDS.server, 'demo'), false, 'a real admin role does work');
+});
+
+test('hostile app ids and form values are refused without a trace', async () => {
+  const { h } = await withDemo();
+  const long = 'a'.repeat(5000);
+  for (const id of ['__proto__', 'constructor', 'DEMO', 'demo.off', '../demo', '@everyone', `<@${IDS.owner}>`, 'system']) {
+    const ans = await h.click(`yo:system:toggle:${id}:off`, { user: IDS.admin });
+    assert.match(h.textOf(ans[0]), /Can't change that/, id);
+    assert.doesNotMatch(h.textOf(ans[0]), /[<@]/, id);
+  }
+  assert.deepEqual(Object.keys(h.engine.settings.raw(IDS.server).apps), []);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+  for (const value of ['__proto__', 'constructor', '@everyone', long, 'system:toggle:demo:off', { app: 'demo' }, null, 42]) {
+    const ans = await h.pick('yo:system:helppick', [value], { user: IDS.member });
+    assert.ok(ans.length, 'answered');
+    assert.doesNotMatch(h.textOf(ans[ans.length - 1]), /@everyone|a{40}/);
+    assert.ok(!h.allButtons(ans).some((b) => b.custom_id.startsWith('yo:system:toggle')));
+  }
+  const form = await h.submit('yo:system:helppick', { app: '@everyone', server_id: S2, user_id: IDS.owner }, { user: IDS.member });
+  assert.match(h.textOf(form[form.length - 1]), /YapOS help/);
+  const formStatus = await h.submit('yo:system:status', { user_id: IDS.owner, owner: 'true' }, { user: IDS.member });
+  assert.match(h.textOf(formStatus[0]), /Only YapOS's owner/);
+  const formOpen = await h.submit('yo:system:open:system', { app: 'system' }, { user: IDS.member });
+  assert.match(h.textOf(formOpen[0]), /Nothing to open/);
+  const helpLong = await h.slash('help', `${long} <@${IDS.owner}>`, { user: IDS.member });
+  assert.ok(h.textOf(helpLong[0]).length < 400);
+  const yapLong = await h.slash('yap', `@everyone${long}`, { user: IDS.member });
+  assert.doesNotMatch(h.textOf(yapLong[0]), /@everyone/);
+  assert.ok(h.textOf(yapLong[0]).length < 400);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+});
+
+test('the home screen has no back door into admin views', async () => {
+  const { h, seen } = await withDemo();
+  const home = await h.slash('menu', '', { user: IDS.member });
+  const mine = h.allButtons(home).find((b) => b.custom_id === 'yo:system:open:demo');
+  assert.ok(mine.messageId);
+  for (const id of ['system', 'apps', 'status', 'toggle', 'sys', 'System', 'd.e.m.o', '../demo', 'demo!']) {
+    const ans = await h.click(`yo:system:open:${id}`, { user: IDS.member, messageId: mine.messageId });
+    assert.match(h.textOf(ans[0]), /Nothing to open/, id);
+    assert.ok(!h.allButtons(ans).length, id);
+  }
+  const staffView = (ans) => h.allButtons(ans).some((b) => /yo:system:(toggle|apps|status)/.test(b.custom_id)) || /Latency|Uninstall/.test(h.textOf(ans[ans.length - 1]));
+  for (const word of ['System', 'SYSTEM', 'apps', 'status', 'menu apps', '']) {
+    const ans = await h.slash('yap', word, { user: IDS.member });
+    assert.ok(!staffView(ans), word);
+  }
+  assert.deepEqual(seen.panel, []);
+});
+
+test('buttons that were never handed out do nothing', async () => {
+  const { h } = await withDemo();
+  const undo = await h.click('yo:sys:undo:abc123', { user: IDS.member });
+  assert.match(h.textOf(undo[0]), /Too late to undo/);
+  const form = await h.click('yo:sys:form:abc123', { user: IDS.member });
+  assert.match(h.textOf(form[0]), /expired/);
+  const made = await h.click('yo:system:install:demo', { user: IDS.member });
+  assert.match(h.textOf(made[0]), /older panel/);
+  const real = h.engine.router.addUndo({ serverId: IDS.server, actorId: IDS.admin, label: 'test change', perm: 'admin', run: async () => { h.engine.settings.setEnabled(IDS.server, 'demo', false); } });
+  const stolen = await h.click(real.button.custom_id, { user: IDS.member });
+  assert.match(h.textOf(stolen[0]), /Only admins/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+});
+
+test('an uninstalled app stays closed to old buttons, tiles and typed words', async () => {
+  const { h, seen } = await withDemo();
+  const home = await h.slash('menu', '', { user: IDS.member });
+  const tile = h.allButtons(home).find((b) => b.custom_id === 'yo:system:open:demo');
+  const opened = await h.click(tile.custom_id, { user: IDS.member, messageId: tile.messageId });
+  const poke = h.allButtons(opened).find((b) => b.custom_id === 'yo:demo:poke');
+  assert.ok(poke.messageId);
+  await h.click('yo:system:toggle:demo:off', { user: IDS.admin });
+  const before = seen.panel.length;
+  const stalePoke = await h.click(poke.custom_id, { user: IDS.member, messageId: poke.messageId });
+  assert.match(h.textOf(stalePoke[0]), /isn't installed here/);
+  const staleTile = await h.click(tile.custom_id, { user: IDS.member, messageId: tile.messageId });
+  assert.match(h.textOf(staleTile[0]), /isn't installed here/);
+  await h.message('!yap demoword', { user: IDS.member });
+  assert.match(h.textOf(h.lastSent(IDS.channels.general)), /isn't installed here/);
+  await h.message('!yap demo', { user: IDS.member });
+  assert.match(h.textOf(h.lastSent(IDS.channels.general)), /isn't installed here/);
+  const fresh = await h.slash('menu', '', { user: IDS.member });
+  assert.ok(!h.allButtons(fresh).some((b) => b.custom_id === 'yo:system:open:demo'), 'the tile is gone');
+  const selfInstall = await h.click('yo:system:toggle:demo:on', { user: IDS.member, messageId: tile.messageId });
+  assert.match(h.textOf(selfInstall[0]), /Only admins/);
+  assert.equal(seen.panel.length, before);
+  assert.equal(seen.yap.length, 0);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), false);
+});
+
+test('direct messages cannot reach server controls', async () => {
+  const { h } = await withDemo();
+  for (const text of ['/apps', '!apps', '/status', '!yap apps', 'yo:system:toggle:demo:off']) await h.dm(text, { user: IDS.member });
+  const dmCh = Object.keys(h.fake.state.dms)[0];
+  assert.ok(h.sent(dmCh).length);
+  for (const m of h.sent(dmCh)) {
+    assert.doesNotMatch(h.textOf(m), /Uninstall|Latency/);
+    assert.ok(!h.allButtons([m]).length);
+  }
+  const status = await h.click('yo:system:status', { user: IDS.member, server: null });
+  assert.match(h.textOf(status[0]), /Only YapOS's owner/);
+  const toggled = await h.click('yo:system:toggle:demo:off', { user: IDS.member, server: null });
+  assert.match(h.textOf(toggled[0]), /Servers only/);
+  assert.equal(h.engine.settings.isEnabled(IDS.server, 'demo'), true);
+  assert.deepEqual(h.engine.settings.servers().filter((s) => s !== IDS.server), []);
+});
+
+test('a second ordinary member gets their own working home, help and app panel', async () => {
+  const { h, seen } = await withDemo();
+  const first = await h.slash('menu', '', { user: IDS.member });
+  const second = await h.slash('menu', '', { user: IDS.member2 });
+  const tile = h.allButtons(second).find((b) => b.custom_id === 'yo:system:open:demo');
+  const firstTile = h.allButtons(first).find((b) => b.custom_id === 'yo:system:open:demo');
+  assert.notEqual(tile.messageId, firstTile.messageId);
+  const crossed = await h.click(firstTile.custom_id, { user: IDS.member2, messageId: firstTile.messageId });
+  assert.match(h.textOf(crossed[0]), /Not your panel/);
+  const opened = await h.click(tile.custom_id, { user: IDS.member2, messageId: tile.messageId });
+  assert.deepEqual(seen.panel, [IDS.member2]);
+  const poke = h.allButtons(opened).find((b) => b.custom_id === 'yo:demo:poke');
+  const poked = await h.click(poke.custom_id, { user: IDS.member2, messageId: poke.messageId });
+  assert.match(h.textOf(poked[0]), /Poked/);
+  const help = await h.slash('help', 'demo', { user: IDS.member2 });
+  assert.match(h.textOf(help[0]), /A sample app for tests/);
+  const yap = await h.slash('yap', 'demoword hi', { user: IDS.member2 });
+  assert.match(h.textOf(yap[0]), /Demo yap/);
+});

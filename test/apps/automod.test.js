@@ -302,10 +302,10 @@ test('panel: mods can view, admins toggle, select fallback to buttons', async ()
   const toggle = h.findButton('Caps lock', panel);
   const modClick = await h.click(toggle.custom_id, { user: IDS.mod });
   assert.match(h.textOf(modClick[0]), /Only admins/);
-  await h.click(toggle.custom_id, { user: IDS.admin });
+  await h.click(toggle.custom_id, { user: IDS.admin, messageId: toggle.messageId });
   assert.equal(config(h).filters.caps, true);
   const strict = h.findButton('Strict', panel);
-  await h.click(strict.custom_id, { user: IDS.admin });
+  await h.click(strict.custom_id, { user: IDS.admin, messageId: strict.messageId });
   assert.equal(config(h).strictness, 'strict');
 });
 
@@ -457,4 +457,392 @@ test('verify button will not hand out a role that became powerful', async () => 
   assert.match(h.textOf(got[0]), /can't verify you/);
   assert.ok(!h.fake.memberOf(IDS.server, IDS.member2).roles.includes(IDS.roles.vip));
   assert.ok(h.sent(C.modlog).some((m) => /Verification paused/.test(h.textOf(m))));
+});
+
+test('settings panel buttons are locked to the admin who opened it', async () => {
+  const { h } = await setup({ features: { selects: false } });
+  const opened = await h.slash('automod', '', { user: IDS.admin });
+  const panel = opened[opened.length - 1];
+  for (const label of ['Caps lock', 'Strict', 'Refresh']) {
+    const b = h.findButton(label, panel);
+    assert.ok(b.messageId, 'panel message id known');
+    for (const user of [IDS.member, IDS.mod, IDS.owner]) {
+      const ans = await h.click(b.custom_id, { user, messageId: b.messageId });
+      assert.match(h.textOf(ans[0]), /Not your panel/);
+    }
+  }
+  assert.equal(config(h).filters.caps, false);
+  assert.equal(config(h).strictness, 'normal');
+  await h.click(h.findButton('Caps lock', panel).custom_id, { user: IDS.admin, messageId: panel.message.id });
+  assert.equal(config(h).filters.caps, true);
+});
+
+test('forged or leftover settings buttons are refused by role', async () => {
+  const { h } = await setup({ features: { selects: false } });
+  const opened = await h.slash('automod', '', { user: IDS.admin });
+  const panel = opened[opened.length - 1];
+  const toggle = h.findButton('Caps lock', panel);
+  const strict = h.findButton('Strict', panel);
+  const refresh = h.findButton('Refresh', panel);
+  for (const user of [IDS.member, IDS.mod]) {
+    assert.match(h.textOf((await h.click(toggle.custom_id, { user }))[0]), /Only admins/);
+    assert.match(h.textOf((await h.click(strict.custom_id, { user }))[0]), /Only admins/);
+    assert.match(h.textOf((await h.pick('yo:automod:strictpick', ['strict'], { user }))[0]), /Only admins/);
+  }
+  const peek = await h.click(refresh.custom_id, { user: IDS.member });
+  assert.match(h.textOf(peek[0]), /Only moderators/);
+  assert.doesNotMatch(h.textOf(peek[0]), /Strictness/);
+  assert.match(h.textOf((await h.click('yo:automod:lift', { user: IDS.member }))[0]), /Only moderators/);
+  assert.equal(config(h).filters.caps, false);
+  assert.equal(config(h).strictness, 'normal');
+});
+
+test('strictness select is locked to the opener and refused by role when forged', async () => {
+  const { h } = await setup();
+  const opened = await h.slash('automod', '', { user: IDS.admin });
+  const panel = opened[opened.length - 1];
+  const sel = h.allButtons(opened).find((b) => b.isSelect);
+  const other = await h.pick(sel.custom_id, ['strict'], { user: IDS.owner, messageId: panel.message.id });
+  assert.match(h.textOf(other[0]), /Not your panel/);
+  const forged = await h.pick(sel.custom_id, ['strict'], { user: IDS.member });
+  assert.match(h.textOf(forged[0]), /Only admins/);
+  assert.equal(config(h).strictness, 'normal');
+  await h.pick(sel.custom_id, ['strict'], { user: IDS.admin, messageId: panel.message.id });
+  assert.equal(config(h).strictness, 'strict');
+});
+
+test('the home screen Open button and /yap check the role of whoever used them', async () => {
+  const { h } = await setup({ features: { selects: false } });
+  const open = await h.click('yo:system:open:automod', { user: IDS.member });
+  assert.match(h.textOf(open[0]), /Only moderators/);
+  assert.equal(h.allButtons(open).length, 0);
+  const asMod = await h.click('yo:system:open:automod', { user: IDS.mod });
+  assert.match(h.textOf(asMod[asMod.length - 1]), /Only admins can change these/);
+  for (const text of ['automod', 'filter list', 'raid', 'raid on', 'lockdown', 'lockdown off', 'automod strictness', 'automod wrds']) {
+    const ans = await h.slash('yap', text, { user: IDS.member });
+    assert.match(h.textOf(ans[0]), /Only moderators/, text);
+  }
+  const asModYap = await h.slash('yap', 'raid on', { user: IDS.mod });
+  assert.match(h.textOf(asModYap[0]), /Only admins/);
+  assert.equal(config(h).filters.raid, false);
+  assert.equal(h.fake.state.everyone[IDS.server].send_messages, true);
+});
+
+test('plain members get a role refusal for every typed automod shortcut', async () => {
+  const { h } = await setup();
+  for (const text of ['', 'words list', 'words add x', 'links list', 'links allow example.com', 'exempt', 'strictness', 'strict', 'preset gaming', 'verify off', 'lift', 'caps on', 'on caps', 'nonsense']) {
+    const ans = await h.slash('automod', text, { user: IDS.member });
+    assert.match(h.textOf(ans[0]), /Only moderators/, text);
+  }
+  assert.deepEqual(config(h).words.list, []);
+  assert.equal(config(h).filters.caps, false);
+});
+
+test('Undo on a settings change is locked to the opener and admin only', async () => {
+  const { h } = await setup();
+  await h.slash('automod', 'words add one, two', { user: IDS.admin });
+  const cleared = await h.slash('automod', 'words clear', { user: IDS.admin });
+  const undo = h.findButton('Undo', cleared);
+  const openBtn = h.findButton('Open Automod', cleared);
+  assert.ok(undo.messageId);
+  for (const user of [IDS.member, IDS.mod]) {
+    const onPanel = await h.click(undo.custom_id, { user, messageId: undo.messageId });
+    assert.match(h.textOf(onPanel[0]), /Not your panel/);
+    const forged = await h.click(undo.custom_id, { user });
+    assert.match(h.textOf(forged[0]), /Only admins/);
+  }
+  const peek = await h.click(openBtn.custom_id, { user: IDS.member, messageId: openBtn.messageId });
+  assert.match(h.textOf(peek[0]), /Not your panel/);
+  assert.deepEqual(config(h).words.list, []);
+  await h.click(undo.custom_id, { user: IDS.admin, messageId: undo.messageId });
+  assert.deepEqual(config(h).words.list, ['one', 'two']);
+});
+
+test('Lift lockdown inside a settings panel is locked, the alert stays open to staff only', async () => {
+  const { h } = await setup({ mod: false, features: { selects: false } });
+  await h.slash('automod', 'lockdown', { user: IDS.mod });
+  const alert = h.lastSent(C.modlog);
+  const opened = await h.slash('automod', '', { user: IDS.mod });
+  const panel = opened[opened.length - 1];
+  const lift = h.findButton('Lift lockdown', panel);
+  const otherStaff = await h.click(lift.custom_id, { user: IDS.admin, messageId: lift.messageId });
+  assert.match(h.textOf(otherStaff[0]), /Not your panel/);
+  const member = await h.clickButton('Lift lockdown', { user: IDS.member, in: alert });
+  assert.match(h.textOf(member[0]), /Only moderators/);
+  assert.equal(h.fake.state.everyone[IDS.server].send_messages, false);
+  const admin = await h.clickButton('Lift lockdown', { user: IDS.admin, in: alert });
+  assert.equal(admin[0].type, 'update');
+  assert.equal(h.fake.state.everyone[IDS.server].send_messages, true);
+});
+
+test('the posted Verify button is public and only ever gives the presser the verify role', async () => {
+  const { h } = await setup();
+  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
+  const panel = h.lastSent(C.welcome);
+  for (const user of [IDS.member, IDS.member2]) {
+    const got = await h.clickButton('Verify', { user, in: panel });
+    assert.match(h.textOf(got[0]), /verified/);
+    assert.deepEqual(h.fake.memberOf(IDS.server, user).roles, [IDS.roles.member, IDS.roles.vip]);
+  }
+  const extra = await h.click(`yo:automod:verify:${IDS.roles.mod}:${IDS.mod}`, { user: IDS.member, messageId: panel.id });
+  assert.match(h.textOf(extra[0]), /already verified/);
+  assert.ok(!h.fake.memberOf(IDS.server, IDS.member).roles.includes(IDS.roles.mod));
+  await h.slash('automod', 'verify off', { user: IDS.admin });
+  const off = await h.click('yo:automod:verify', { user: IDS.member2, messageId: panel.id });
+  assert.match(h.textOf(off[0]), /Verification is off/);
+});
+
+const S2 = '5e000000-0000-4000-8000-000000000002';
+const G2 = 'c0000000-0000-4000-8000-000000000021';
+const BOT_ROLE_2 = 'r0000000-0000-4000-8000-000000000026';
+
+function addSecondServer(h, ownerId) {
+  const s = h.fake.state;
+  s.servers[S2] = { id: S2, name: 'Side Town', icon_path: null, owner_id: ownerId, member_count: 2, online_count: 1 };
+  s.roles[S2] = [{ id: BOT_ROLE_2, name: 'YapOS', color: null, position: 6, perms: { manage_roles: true, manage_messages: true, manage_server: true }, auto: null, mentionable: false }];
+  s.members[S2] = [
+    { id: ownerId, username: 'sam', display_name: 'Sam', nickname: null, roles: [], joined_at: '2026-02-01T00:00:00Z' },
+    { id: IDS.bot, username: 'yapos', display_name: 'YapOS', nickname: null, roles: [BOT_ROLE_2], joined_at: '2026-02-01T00:00:00Z' },
+  ];
+  s.channels[S2] = [{ id: G2, name: 'general', type: 'text', kind: 'text', server_id: S2, position: 0, category: null, category_id: null, private: false, read_only: false, slowmode: 0 }];
+  s.bans[S2] = [];
+  s.everyone[S2] = { send_messages: true, view_channel: true };
+}
+
+const STAFF_IDS = ['yo:automod:toggle:caps', 'yo:automod:toggle:raid', 'yo:automod:strict:relaxed', 'yo:automod:panel', 'yo:automod:lift', 'yo:system:open:automod'];
+
+test('a member pressing staff ids on a menu they opened themselves is refused by role', async () => {
+  const { h } = await setup({ mod: false, features: { selects: false } });
+  await h.slash('automod', 'lockdown', { user: IDS.mod });
+  const before = structuredClone(config(h));
+  await h.slash('menu', '', { user: IDS.member });
+  const own = h.lastSent(C.general);
+  assert.ok(own?.id, 'the member has a menu of their own');
+  for (const id of STAFF_IDS) {
+    const ans = await h.click(id, { user: IDS.member, messageId: own.id });
+    assert.match(h.textOf(ans[0]), /Only moderators|Only admins/, id);
+    assert.equal(h.allButtons(ans).length, 0, id);
+    assert.doesNotMatch(h.textOf(ans[0]), /Strictness|\b40[0-9]\b/, id);
+  }
+  const picked = await h.pick('yo:automod:strictpick', ['strict'], { user: IDS.member, messageId: own.id });
+  assert.match(h.textOf(picked[0]), /Only admins/);
+  assert.deepEqual(config(h), before);
+  assert.equal(h.fake.state.everyone[IDS.server].send_messages, false);
+});
+
+test('pasted ids, extra arguments and hostile form values give a member nothing', async () => {
+  const { h } = await setup({ mod: false });
+  await h.slash('automod', 'lockdown', { user: IDS.mod });
+  const before = structuredClone(config(h));
+  const pasted = [
+    `yo:automod:toggle:caps:${IDS.owner}`, `yo:automod:toggle:${IDS.owner}`, `yo:automod:strict:strict:${IDS.admin}`,
+    `yo:automod:lift:${IDS.owner}`, `yo:automod:lift:${IDS.server}`, `yo:automod:panel:${IDS.admin}`, 'yo:automod:toggle:__proto__', 'yo:automod:nothing',
+  ];
+  for (const id of pasted) {
+    const ans = await h.click(id, { user: IDS.member });
+    assert.match(h.textOf(ans[0]), /Only moderators|Only admins|older panel/, id);
+  }
+  const hostile = [{ user_id: IDS.owner, level: 'owner' }, ['strict'], { 0: 'strict' }, JSON.parse('{"__proto__":{"admin":true}}')];
+  for (const values of hostile) {
+    for (const id of ['yo:automod:toggle:caps', 'yo:automod:strict:strict', 'yo:automod:strictpick', 'yo:automod:panel', 'yo:automod:lift']) {
+      const ans = await h.submit(id, values, { user: IDS.member });
+      assert.match(h.textOf(ans[0]), /Only moderators|Only admins/, id);
+    }
+  }
+  assert.deepEqual(config(h), before);
+  assert.equal(h.fake.state.everyone[IDS.server].send_messages, false);
+});
+
+test('owning another server gives no power over this one', async () => {
+  const { h } = await setup({ mod: false, features: { selects: false } });
+  addSecondServer(h, IDS.member);
+  await h.slash('automod', 'words add one', { user: IDS.admin });
+  const cleared = await h.slash('automod', 'words clear', { user: IDS.admin });
+  const undo = h.findButton('Undo', cleared);
+  const opened = await h.slash('automod', '', { user: IDS.admin });
+  const panel = opened[opened.length - 1];
+  await h.slash('automod', 'lockdown', { user: IDS.mod });
+  const alert = h.lastSent(C.modlog);
+  const before = structuredClone(config(h));
+
+  const onTheirs = await h.click('yo:automod:toggle:caps', { user: IDS.member, server: S2, channel: G2, messageId: panel.message.id });
+  assert.match(h.textOf(onTheirs[0]), /Not your panel/);
+  const undoFromAway = await h.click(undo.custom_id, { user: IDS.member, server: S2, channel: G2 });
+  assert.match(h.textOf(undoFromAway[0]), /Only admins/);
+  assert.deepEqual(config(h).words.list, []);
+
+  await h.click('yo:automod:toggle:caps', { user: IDS.member, server: S2, channel: G2 });
+  await h.slash('automod', 'words add theirs', { user: IDS.member, server: S2, channel: G2 });
+  assert.equal(h.engine.settings.appConfig(S2, 'automod').filters.caps, true);
+  assert.deepEqual(h.engine.settings.appConfig(S2, 'automod').words.list, ['theirs']);
+  assert.deepEqual(config(h), before);
+
+  const lift = await h.click('yo:automod:lift', { user: IDS.member, server: S2, channel: G2, messageId: alert.id });
+  assert.doesNotMatch(h.textOf(lift[0]), /is lifting/);
+  assert.equal(h.fake.state.everyone[IDS.server].send_messages, false);
+  assert.ok(h.findButton('Lift lockdown', h.fake.state.messages[C.modlog].find((m) => m.id === alert.id)));
+
+  const here = await h.click('yo:automod:toggle:caps', { user: IDS.member });
+  assert.match(h.textOf(here[0]), /Only admins/);
+  assert.deepEqual(config(h), before);
+});
+
+test('verify pressed from another server gives nothing here', async () => {
+  const { h } = await setup({ mod: false });
+  addSecondServer(h, IDS.member);
+  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
+  const panel = h.lastSent(C.welcome);
+  const away = await h.click('yo:automod:verify', { user: IDS.member, server: S2, channel: G2, messageId: panel.id });
+  assert.match(h.textOf(away[0]), /Verification is off/);
+  assert.deepEqual(h.fake.memberOf(IDS.server, IDS.member).roles, [IDS.roles.member]);
+  assert.deepEqual(h.fake.memberOf(S2, IDS.member).roles, []);
+});
+
+test('a role with webhook, nickname or move powers cannot become or stay the verify role', async () => {
+  const { h } = await setup({ mod: false });
+  const gamer = h.fake.state.roles[IDS.server].find((r) => r.id === IDS.roles.gamer);
+  for (const perm of ['manage_webhooks', 'manage_nicknames', 'move_members']) {
+    gamer.perms = { [perm]: true };
+    h.engine.perms.invalidate();
+    const ans = await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.gamer}>`, { user: IDS.admin });
+    assert.match(h.textOf(ans[0]), /too powerful/, perm);
+  }
+  assert.equal(config(h).verify.enabled, false);
+  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
+  const panel = h.lastSent(C.welcome);
+  h.fake.state.roles[IDS.server].find((r) => r.id === IDS.roles.vip).perms.manage_webhooks = true;
+  h.engine.perms.invalidate();
+  const got = await h.clickButton('Verify', { user: IDS.member2, in: panel });
+  assert.match(h.textOf(got[0]), /can't verify you/);
+  assert.deepEqual(h.fake.memberOf(IDS.server, IDS.member2).roles, [IDS.roles.member]);
+});
+
+test('verify role moved above the bot after setup is not handed out', async () => {
+  const { h } = await setup({ mod: false });
+  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
+  const panel = h.lastSent(C.welcome);
+  h.fake.state.roles[IDS.server].find((r) => r.id === IDS.roles.vip).position = 8;
+  h.engine.perms.invalidate();
+  const got = await h.clickButton('Verify', { user: IDS.member, in: panel });
+  assert.match(h.textOf(got[0]), /can't verify you/);
+  assert.deepEqual(h.fake.memberOf(IDS.server, IDS.member).roles, [IDS.roles.member]);
+});
+
+test('hammering a stuck Verify button alerts the mods once, not every press', async () => {
+  const { h } = await setup({ mod: false });
+  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
+  const panel = h.lastSent(C.welcome);
+  h.fake.fail('PUT', /\/roles\//, { status: 403, error: 'Role management is in testing (flag bot_roles)' });
+  for (let i = 0; i < 6; i++) {
+    const got = await h.clickButton('Verify', { user: i % 2 ? IDS.member : IDS.member2, in: panel });
+    assert.match(h.textOf(got[0]), /couldn't verify you|can't verify you/);
+  }
+  const alerts = h.sent(C.modlog).filter((m) => /Verification (failed|is stuck|paused)/.test(h.textOf(m)));
+  assert.equal(alerts.length, 1);
+});
+
+test('staff buttons replayed after Automod is uninstalled do nothing', async () => {
+  const { h } = await setup({ mod: false, features: { selects: false } });
+  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
+  const verifyPanel = h.lastSent(C.welcome);
+  await h.slash('automod', 'words add one', { user: IDS.admin });
+  const cleared = await h.slash('automod', 'words clear', { user: IDS.admin });
+  const undo = h.findButton('Undo', cleared);
+  const before = structuredClone(config(h));
+  h.engine.settings.setEnabled(IDS.server, 'automod', false);
+  for (const user of [IDS.member, IDS.admin]) {
+    for (const id of ['yo:automod:toggle:caps', 'yo:automod:strict:strict', 'yo:automod:panel', 'yo:automod:lift', 'yo:system:open:automod']) {
+      const ans = await h.click(id, { user });
+      assert.match(h.textOf(ans[0]), /isn't installed here/, id);
+    }
+  }
+  const v = await h.clickButton('Verify', { user: IDS.member, in: verifyPanel });
+  assert.match(h.textOf(v[0]), /isn't installed here/);
+  assert.deepEqual(h.fake.memberOf(IDS.server, IDS.member).roles, [IDS.roles.member]);
+  const memberUndo = await h.click(undo.custom_id, { user: IDS.member });
+  assert.match(h.textOf(memberUndo[0]), /Only admins/);
+  const adminUndo = await h.click(undo.custom_id, { user: IDS.admin, messageId: undo.messageId });
+  assert.match(h.textOf(adminUndo[0]), /isn't installed here/);
+  for (const text of ['words add late', 'caps on', 'lockdown']) {
+    const ans = await h.slash('automod', text, { user: IDS.admin });
+    assert.match(h.textOf(ans[0]), /isn't installed here/, text);
+  }
+  const yap = await h.slash('yap', 'filter add late', { user: IDS.admin });
+  assert.match(h.textOf(yap[0]), /isn't installed here/);
+  assert.deepEqual(config(h), before);
+  assert.equal(h.fake.state.everyone[IDS.server].send_messages, true);
+});
+
+test('typed chat commands refuse a member the same way the slash menu does', async () => {
+  const { h } = await setup({ mod: false });
+  h.engine.settings.patchApp(IDS.server, 'automod', { filters: { ...config(h).filters, spam: false } });
+  const before = structuredClone(config(h));
+  for (const text of ['!automod', '!automod words add typed', '/automod caps on', '!automod lockdown', '!automod strictness strict', `!automod verify setup <#${C.welcome}> <@&${IDS.roles.mod}>`, `!automod exempt <#${C.general}>`, '!yap filter add typed', '!yap lockdown', '!yap automod']) {
+    const count = h.sent(C.general).length;
+    await h.message(text, { user: IDS.member });
+    const reply = h.sent(C.general).slice(count);
+    assert.equal(reply.length, 1, text);
+    assert.match(h.textOf(reply[0]), /Only moderators/, text);
+    assert.doesNotMatch(h.textOf(reply[0]), /\b40[0-9]\b|Strictness/, text);
+    assert.equal(h.allButtons(reply).length, 0, text);
+  }
+  await h.message('!automod words add typed', { user: IDS.member, authorAsString: true });
+  assert.deepEqual(config(h), before);
+  assert.equal(h.fake.state.everyone[IDS.server].send_messages, true);
+  assert.equal(h.sent(C.welcome).length, 0);
+});
+
+test('an admin who lost the role cannot keep using the panel they opened', async () => {
+  const { h } = await setup({ features: { selects: false } });
+  const opened = await h.slash('automod', '', { user: IDS.admin });
+  const panel = opened[opened.length - 1];
+  await h.slash('automod', 'words add one', { user: IDS.admin });
+  const cleared = await h.slash('automod', 'words clear', { user: IDS.admin });
+  const undo = h.findButton('Undo', cleared);
+  h.fake.memberOf(IDS.server, IDS.admin).roles = [IDS.roles.member];
+  h.engine.perms.invalidate();
+  const toggle = h.findButton('Caps lock', panel);
+  const ans = await h.click(toggle.custom_id, { user: IDS.admin, messageId: toggle.messageId });
+  assert.match(h.textOf(ans[0]), /Only admins/);
+  const refresh = await h.click('yo:automod:panel', { user: IDS.admin, messageId: toggle.messageId });
+  assert.match(h.textOf(refresh[0]), /Only moderators/);
+  const undone = await h.click(undo.custom_id, { user: IDS.admin, messageId: undo.messageId });
+  assert.match(h.textOf(undone[0]), /Only admins/);
+  assert.equal(config(h).filters.caps, false);
+  assert.deepEqual(config(h).words.list, []);
+});
+
+test('staff cannot repaint a public panel by pressing settings ids on it', async () => {
+  const { h } = await setup({ mod: false, features: { selects: false } });
+  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
+  const panel = h.lastSent(C.welcome);
+  const stored = () => h.fake.state.messages[C.welcome].find((m) => m.id === panel.id);
+  for (const [user, id] of [[IDS.mod, 'yo:automod:panel'], [IDS.mod, 'yo:automod:lift'], [IDS.admin, 'yo:automod:toggle:caps'], [IDS.admin, 'yo:automod:strict:strict']]) {
+    await h.click(id, { user, channel: C.welcome, messageId: panel.id });
+    assert.ok(h.findButton('Verify', stored()), id);
+    assert.equal(h.allButtons(stored()).length, 1, id);
+    assert.match(h.textOf(stored()), /Verify to join in/, id);
+  }
+  await h.slash('automod', 'lockdown', { user: IDS.mod });
+  await h.click('yo:automod:lift', { user: IDS.mod, channel: C.welcome, messageId: panel.id });
+  assert.equal(h.fake.state.everyone[IDS.server].send_messages, true);
+  assert.equal(h.allButtons(stored()).length, 1);
+  const got = await h.clickButton('Verify', { user: IDS.member2, in: panel });
+  assert.match(h.textOf(got[0]), /verified/);
+});
+
+test('made-up filter, strictness and preset names are not stored', async () => {
+  const { h } = await setup();
+  const before = structuredClone(config(h));
+  for (const id of ['yo:automod:toggle:constructor', 'yo:automod:toggle:toString', 'yo:automod:toggle:__proto__', 'yo:automod:strict:constructor', 'yo:automod:strict:__proto__']) {
+    const ans = await h.click(id, { user: IDS.admin });
+    assert.match(h.textOf(ans[0]), /older panel/, id);
+  }
+  const picked = await h.pick('yo:automod:strictpick', ['constructor'], { user: IDS.admin });
+  assert.match(h.textOf(picked[0]), /Pick a strictness/);
+  for (const text of ['strictness constructor', 'constructor', 'preset constructor', 'preset __proto__', 'toString', 'hasOwnProperty on']) {
+    const ans = await h.slash('automod', text, { user: IDS.admin });
+    assert.doesNotMatch(h.textOf(ans[0]), /undefined/, text);
+  }
+  assert.deepEqual(config(h), before);
 });
