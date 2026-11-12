@@ -113,6 +113,15 @@ test('SQL is always parameterised', async () => {
   const { cookie } = await h.login(USERS.alice);
   await h.api('GET', `/api/servers/${SERVER}/cases?q=${encodeURIComponent("'; DROP TABLE jobs; --")}`, cookie);
   await h.request('GET', `/api/public/${encodeURIComponent("x' OR 1=1 --")}`);
+  await h.grant(cookie);
+  const evil = encodeURIComponent("'; DROP TABLE grants; --");
+  await h.api('GET', `/api/servers/${SERVER}/members?q=${evil}`, cookie);
+  await h.api('GET', `/api/servers/${SERVER}/tickets?q=${evil}&status=all`, cookie);
+  await h.api('POST', `/api/servers/${SERVER}/members/${USERS.bob.id}/actions`, cookie, { action: 'warn', reason: "'; DROP TABLE jobs; --" });
+  await h.api('POST', `/api/servers/${SERVER}/tickets/3/actions`, cookie, { action: 'close', reason: "'); DROP TABLE jobs; --" });
+  const { jobs } = await h.poll();
+  await h.answer(jobs.map((j) => ({ id: j.id, ok: true, result: { grant: true, level: "admin'; DROP TABLE grants; --", note: "'; DROP TABLE jobs; --" } })));
+  assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM jobs').get().n, 5);
   for (const sql of h.db.queries) {
     assert.ok(!sql.includes('DROP'), sql);
     assert.ok(!sql.includes(USERS.alice.id), sql);

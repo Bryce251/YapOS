@@ -11,8 +11,12 @@ import { renderOverview } from './pages/overview.js';
 import { renderApps } from './pages/apps.js';
 import { renderAppSettings } from './pages/app-settings.js';
 import { renderCases } from './pages/cases.js';
+import { renderMembers } from './pages/members.js';
+import { renderMod } from './pages/mod.js';
+import { renderTickets } from './pages/tickets.js';
 import { renderPublicSettings } from './pages/public-settings.js';
 import { renderPublic } from './pages/public.js';
+import { spotlight } from './spotlight.js';
 
 const root = document.getElementById('app');
 let shell = null;
@@ -28,6 +32,9 @@ const TITLES = {
   overview: 'Overview',
   apps: 'Apps',
   app: 'App settings',
+  members: 'Members',
+  mod: 'Moderation',
+  tickets: 'Tickets',
   cases: 'Cases',
   'public-settings': 'Public page',
   public: 'Leaderboard',
@@ -39,6 +46,9 @@ const PAGES = {
   overview: renderOverview,
   apps: renderApps,
   app: renderAppSettings,
+  members: renderMembers,
+  mod: renderMod,
+  tickets: renderTickets,
   cases: renderCases,
   'public-settings': renderPublicSettings,
 };
@@ -227,4 +237,5 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 initTheme();
+spotlight(root);
 render();

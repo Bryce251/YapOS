@@ -16,6 +16,9 @@ const CHUNK_SIZE = 1900;
 const MAX_CHUNKS = 10;
 const PREVIEW_CHUNKS = 3;
 const MAX_PAGES = 50;
+const LIVE_PAGES = 10;
+const LIVE_TTL_MS = 45_000;
+const MAX_LIVE = 200;
 const PENDING_TTL_MS = 15 * 60_000;
 const MAX_PENDING = 500;
 const MAX_LIMIT = 10;
@@ -33,6 +36,12 @@ const WARN_JOB = 'tickets.quietwarn';
 const CLOSE_JOB = 'tickets.quietclose';
 const STARS = [1, 2, 3, 4, 5];
 const MAX_COMMENT = 500;
+const TRANSCRIPT_CAP = 200_000;
+const MAX_TRANSCRIPTS_KEPT = 20;
+const TRANSCRIPT_NS = 'ticket-transcripts';
+const PAGE_SIZE = 50;
+const MAX_PAGE = 100;
+const SEARCH_MAX = 100;
 
 const TYPES = {
   support: { id: 'support', name: 'Support', emoji: '🎫', questions: [] },
@@ -80,19 +89,60 @@ function readData(engine, sid) {
   return { ...emptyData(), ...engine.store.get(ID, sid, emptyData()) };
 }
 
+const transcriptKey = (sid, number) => `${sid}-${Number(number)}`;
+
 function pruneClosed(d) {
+  const dropped = [];
   const closed = Object.values(d.tickets).filter((t) => t.status === 'closed' && !t.cleanup).sort((a, b) => a.number - b.number);
-  for (const t of closed.slice(0, Math.max(0, closed.length - MAX_CLOSED_KEPT))) delete d.tickets[t.number];
+  for (const t of closed.slice(0, Math.max(0, closed.length - MAX_CLOSED_KEPT))) {
+    if (t.hasTranscript) dropped.push(t.number);
+    delete d.tickets[t.number];
+  }
+  const stored = Object.values(d.tickets).filter((t) => t.hasTranscript).sort((a, b) => a.number - b.number);
+  for (const t of stored.slice(0, Math.max(0, stored.length - MAX_TRANSCRIPTS_KEPT))) {
+    dropped.push(t.number);
+    delete t.hasTranscript;
+  }
+  return dropped;
 }
+
+function liftInlineTranscripts(engine, sid, d) {
+  for (const t of Object.values(d.tickets)) {
+    if (!('transcript' in t) && !('transcriptCount' in t)) continue;
+    if (typeof t.transcript === 'string') {
+      engine.store.set(TRANSCRIPT_NS, transcriptKey(sid, t.number), { text: t.transcript, count: t.transcriptCount ?? 0, at: t.closedAt || Date.now() });
+      t.hasTranscript = true;
+    }
+    delete t.transcript;
+    delete t.transcriptCount;
+  }
+}
+
+function saveTranscript(engine, sid, number, transcript) {
+  engine.store.set(TRANSCRIPT_NS, transcriptKey(sid, number), { text: capTranscript(transcript.text), count: transcript.count, at: Date.now() });
+}
+
+function storedTranscript(engine, sid, number) {
+  const doc = engine.store.get(TRANSCRIPT_NS, transcriptKey(sid, number), null);
+  return doc && typeof doc.text === 'string' ? doc : null;
+}
+
+const capTranscript = (text) => {
+  const s = String(text || '');
+  return s.length > TRANSCRIPT_CAP ? s.slice(-TRANSCRIPT_CAP) : s;
+};
 
 function writeData(engine, sid, fn) {
   let out;
+  let dropped = [];
   engine.store.update(ID, sid, (d) => {
     const full = { ...emptyData(), ...d };
     out = fn(full);
-    pruneClosed(full);
+    liftInlineTranscripts(engine, sid, full);
+    dropped = pruneClosed(full);
     return full;
   }, emptyData());
+  for (const n of dropped) engine.store.delete(TRANSCRIPT_NS, transcriptKey(sid, n));
   return out;
 }
 
@@ -308,14 +358,19 @@ function cardComponents(t) {
   return [row(btns)];
 }
 
-async function refreshCard(ctx, t) {
-  const payload = { embeds: [ticketCard(ctx.engine, ctx.serverId, t)], components: cardComponents(t) };
-  if (ctx.kind === 'button' && t.cardId && ctx.source.message_id === t.cardId) return ctx.update(payload);
-  if (!t.cardId) return null;
-  return ctx.engine.budget.edit({ channelId: t.channelId, messageId: t.cardId, opts: payload }).catch((e) => {
-    ctx.engine.log.debug('ticket card edit failed', e?.message);
+const cardPayload = (engine, sid, t) => ({ embeds: [ticketCard(engine, sid, t)], components: cardComponents(t) });
+
+function editCard(engine, sid, t) {
+  if (!t.cardId) return Promise.resolve(null);
+  return engine.budget.edit({ channelId: t.channelId, messageId: t.cardId, opts: cardPayload(engine, sid, t) }).catch((e) => {
+    engine.log.debug('ticket card edit failed', e?.message);
     return null;
   });
+}
+
+async function refreshCard(ctx, t) {
+  if (ctx.kind === 'button' && t.cardId && ctx.source.message_id === t.cardId) return ctx.update(cardPayload(ctx.engine, ctx.serverId, t));
+  return editCard(ctx.engine, ctx.serverId, t);
 }
 
 async function postLog(engine, sid, payload, priority = 'low') {
@@ -556,7 +611,7 @@ function formatMessageLine(m, botId, names) {
   return `[${stamp(m.created_at)}] ${who}: ${bits.join(' ') || '(no text)'}`;
 }
 
-async function readHistory(engine, t) {
+async function readHistory(engine, t, maxPages = MAX_PAGES) {
   const { bot } = engine;
   const out = [];
   const seen = new Set();
@@ -567,7 +622,7 @@ async function readHistory(engine, t) {
   };
   try {
     let after = t.anchorAt || new Date(t.createdAt - 1000).toISOString();
-    for (let page = 0; page < MAX_PAGES; page++) {
+    for (let page = 0; page < maxPages; page++) {
       const batch = await bot.messagesAfter(t.channelId, after, 100);
       const added = push(batch);
       if (!batch?.length || batch.length < 100 || !added) break;
@@ -580,9 +635,9 @@ async function readHistory(engine, t) {
   return out.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
 }
 
-async function buildTranscript(engine, sid, t, { closedBy, reason } = {}) {
+async function buildTranscript(engine, sid, t, { closedBy, reason, maxPages = MAX_PAGES } = {}) {
   const cfg = cfgOf(engine, sid);
-  const [msgs, names] = await Promise.all([readHistory(engine, t), mentionNames(engine, sid)]);
+  const [msgs, names] = await Promise.all([readHistory(engine, t, maxPages), mentionNames(engine, sid)]);
   const head = [
     `Ticket #${pad(t.number)} (${typeById(cfg, t.typeId)?.name || 'Ticket'})`,
     `Opened by ${await usernameOf(engine, sid, t.openerId, t.openerId)} on ${stamp(t.createdAt)} UTC`,
@@ -679,9 +734,11 @@ async function closeTicket(engine, sid, t, { by = null, reason = '' } = {}) {
   } else {
     notes.push('The ticket channel was already deleted, so there is no transcript.');
   }
+  if (transcript) saveTranscript(engine, sid, t.number, transcript);
   const closed = patchTicket(engine, sid, t.number, {
     status: 'closed', closedAt: Date.now(), closedBy: by, reason: clip(reason || '', 500) || null,
     cleanup: { channel: !!channel, role: !!fresh.roleId },
+    hasTranscript: !!transcript,
   });
   if (transcript) {
     const dmOk = await dmTranscript(engine, sid, closed, transcript);
@@ -1132,18 +1189,35 @@ async function confirmClose(ctx) {
   return null;
 }
 
-async function claimTicket(ctx, t) {
-  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId, t))) return refuse(ctx, 'staff', 'Only staff can claim tickets. A staff member will be with you soon.');
+async function claimCore(engine, sid, t, uid) {
+  if (!(await isStaff(engine, sid, uid, t))) return { outcome: 'denied', ticket: t };
   let outcome = 'won';
-  const updated = patchTicket(ctx.engine, ctx.serverId, t.number, (x) => {
+  const updated = patchTicket(engine, sid, t.number, (x) => {
     if (x.status !== 'open') { outcome = 'closed'; return {}; }
-    if (x.claimedBy) { outcome = x.claimedBy === ctx.userId ? 'mine' : 'taken'; return {}; }
-    return { claimedBy: ctx.userId };
+    if (x.claimedBy) { outcome = x.claimedBy === uid ? 'mine' : 'taken'; return {}; }
+    return { claimedBy: uid };
   });
-  if (!updated || outcome === 'closed') return ctx.info('This ticket is closed', 'Open a new one with `/ticket` if you still need help.');
+  return { outcome: updated ? outcome : 'missing', ticket: updated };
+}
+
+async function unclaimCore(engine, sid, t, uid) {
+  const staff = await isStaff(engine, sid, uid, t);
+  if (staff && !t.claimedBy) return { outcome: 'unclaimed', ticket: t };
+  if (!staff || (t.claimedBy !== uid && !(await isAdmin(engine, sid, uid)))) return { outcome: 'denied', ticket: t };
+  const updated = patchTicket(engine, sid, t.number, { claimedBy: null });
+  return { outcome: updated ? 'won' : 'missing', ticket: updated };
+}
+
+const claimNote = (uid) => `🙋 <@${uid}> claimed this ticket and will help you.`;
+const unclaimNote = (uid) => `↩️ <@${uid}> unclaimed this ticket. Another staff member can pick it up.`;
+
+async function claimTicket(ctx, t) {
+  const { outcome, ticket: updated } = await claimCore(ctx.engine, ctx.serverId, t, ctx.userId);
+  if (outcome === 'denied') return refuse(ctx, 'staff', 'Only staff can claim tickets. A staff member will be with you soon.');
+  if (!updated || outcome === 'closed' || outcome === 'missing') return ctx.info('This ticket is closed', 'Open a new one with `/ticket` if you still need help.');
   if (outcome === 'mine') return ctx.info('Already yours', 'You have already claimed this ticket.');
   if (outcome === 'taken') return ctx.warn('Already claimed', `<@${updated.claimedBy}> is already handling this ticket.`);
-  const note = `🙋 <@${ctx.userId}> claimed this ticket and will help you.`;
+  const note = claimNote(ctx.userId);
   if (ctx.kind === 'button' && ctx.source.message_id === updated.cardId) {
     await refreshCard(ctx, updated);
     return ctx.send(updated.channelId, note, { priority: 'normal' }).catch(() => null);
@@ -1154,13 +1228,11 @@ async function claimTicket(ctx, t) {
 
 async function unclaimTicket(ctx, stale) {
   const t = getTicket(ctx.engine, ctx.serverId, stale.number) || stale;
-  const staff = await isStaff(ctx.engine, ctx.serverId, ctx.userId, t);
-  if (staff && !t.claimedBy) return ctx.info('Not claimed', 'Nobody has claimed this ticket yet.');
-  if (!staff || (t.claimedBy !== ctx.userId && !(await isAdmin(ctx.engine, ctx.serverId, ctx.userId)))) {
-    return refuse(ctx, 'admin', 'Only the person who claimed this ticket, or an admin, can unclaim it.');
-  }
-  const updated = patchTicket(ctx.engine, ctx.serverId, t.number, { claimedBy: null });
-  const note = `↩️ <@${ctx.userId}> unclaimed this ticket. Another staff member can pick it up.`;
+  const { outcome, ticket: updated } = await unclaimCore(ctx.engine, ctx.serverId, t, ctx.userId);
+  if (outcome === 'unclaimed') return ctx.info('Not claimed', 'Nobody has claimed this ticket yet.');
+  if (outcome === 'denied') return refuse(ctx, 'admin', 'Only the person who claimed this ticket, or an admin, can unclaim it.');
+  if (!updated) return ctx.info('This ticket is gone', "I couldn't find it any more.");
+  const note = unclaimNote(ctx.userId);
   if (ctx.kind === 'button' && ctx.source.message_id === updated.cardId) {
     await refreshCard(ctx, updated);
     return ctx.send(updated.channelId, note, { priority: 'normal' }).catch(() => null);
@@ -1728,6 +1800,171 @@ async function rolesFrom(ctx, v) {
   return { roles: found.filter((r, i) => found.findIndex((x) => x.id === r.id) === i) };
 }
 
+const STATUS_FILTERS = { open: ['open', 'closing'], closed: ['closed'], all: ['open', 'closing', 'closed'] };
+
+async function nameBook(engine, sid) {
+  const members = await engine.cache.members(sid).catch(() => []);
+  const byId = new Map(members.map((m) => [m.id, m]));
+  return (uid) => {
+    if (!uid) return null;
+    if (uid === engine.bot.me?.id) return { id: uid, name: 'YapOS' };
+    const m = byId.get(uid);
+    return { id: uid, name: m ? (m.nickname || m.display_name || m.username || 'Someone') : 'Someone who left' };
+  };
+}
+
+function ticketRow(cfg, t, who) {
+  const type = typeById(cfg, t.typeId);
+  return {
+    number: t.number,
+    status: t.status,
+    name: t.name || `ticket-${pad(t.number)}`,
+    topic: t.topic || null,
+    type: type ? { id: type.id, name: type.name, emoji: type.emoji } : null,
+    opener: who(t.openerId) || { id: null, name: 'Someone' },
+    claimedBy: who(t.claimedBy),
+    members: (t.members || []).length,
+    createdAt: t.createdAt ?? null,
+    closedAt: t.closedAt ?? null,
+    lastActivityAt: t.lastActivityAt ?? null,
+    rating: t.rating?.stars ?? null,
+    channelId: t.status === 'closed' ? null : t.channelId ?? null,
+  };
+}
+
+function ticketDetail(cfg, t, who) {
+  return {
+    ...ticketRow(cfg, t, who),
+    answers: (t.answers || []).map((a) => ({ q: String(a.q ?? ''), a: String(a.a ?? '') })),
+    reason: t.reason || null,
+    closedBy: who(t.closedBy),
+    people: uniq([t.openerId, ...(t.members || [])]).map(who),
+  };
+}
+
+function ratingStats(tickets) {
+  const rated = tickets.filter((t) => t.rating?.stars);
+  if (!rated.length) return { average: null, count: 0 };
+  const avg = rated.reduce((a, t) => a + t.rating.stars, 0) / rated.length;
+  return { average: Math.round(avg * 10) / 10, count: rated.length };
+}
+
+const pageOf = (raw) => Math.min(MAX_PAGE, Math.max(1, Math.floor(Number(raw)) || 1));
+
+function matches(row, q) {
+  if (!q) return true;
+  const hay = [String(row.number), pad(row.number), row.name, row.topic, row.opener?.name, row.claimedBy?.name, row.type?.name].filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(q);
+}
+
+function createTicketService(engine) {
+  const cfg = (sid) => cfgOf(engine, sid);
+  const live = new Map();
+
+  function cachedLive(key) {
+    const hit = live.get(key);
+    if (!hit) return null;
+    if (Date.now() - hit.at < LIVE_TTL_MS) return hit.value;
+    live.delete(key);
+    return null;
+  }
+
+  function rememberLive(key, value) {
+    live.delete(key);
+    live.set(key, { at: Date.now(), value });
+    while (live.size > MAX_LIVE) live.delete(live.keys().next().value);
+  }
+
+  async function list(sid, { status = 'open', q = '', page = 1 } = {}) {
+    const all = Object.values(readData(engine, sid).tickets);
+    const wanted = STATUS_FILTERS[status] || STATUS_FILTERS.open;
+    const who = await nameBook(engine, sid);
+    const c = cfg(sid);
+    const needle = String(q || '').trim().slice(0, SEARCH_MAX).toLowerCase();
+    const rows = all.filter((t) => wanted.includes(t.status)).sort((a, b) => b.number - a.number)
+      .map((t) => ticketRow(c, t, who)).filter((r) => matches(r, needle));
+    const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    const at = Math.min(pageOf(page), pages);
+    return {
+      tickets: rows.slice((at - 1) * PAGE_SIZE, at * PAGE_SIZE),
+      total: rows.length,
+      page: at,
+      pages,
+      pageSize: PAGE_SIZE,
+      counts: { open: all.filter((t) => t.status !== 'closed').length, closed: all.filter((t) => t.status === 'closed').length },
+      rating: ratingStats(all),
+    };
+  }
+
+  async function get(sid, number) {
+    const t = getTicket(engine, sid, number);
+    if (!t) return null;
+    return ticketDetail(cfg(sid), t, await nameBook(engine, sid));
+  }
+
+  async function transcript(sid, number) {
+    const t = getTicket(engine, sid, number);
+    if (!t) return null;
+    if (t.status === 'closed') {
+      const doc = t.hasTranscript ? storedTranscript(engine, sid, t.number) : null;
+      return doc ? { text: doc.text, count: doc.count ?? 0, live: false } : null;
+    }
+    const key = `${sid}:${t.number}`;
+    const hit = cachedLive(key);
+    if (hit) return hit;
+    const built = await buildTranscript(engine, sid, t, { maxPages: LIVE_PAGES });
+    const value = { text: capTranscript(built.text), count: built.count, live: true };
+    rememberLive(key, value);
+    return value;
+  }
+
+  const answer = async (sid, number, ok, text) => ({ ok, message: text, ...(ok ? {} : { error: text }), ticket: await get(sid, number) });
+
+  async function claim(sid, number, uid) {
+    const t = getTicket(engine, sid, number);
+    if (!t) return answer(sid, number, false, "I couldn't find that ticket.");
+    const { outcome, ticket: updated } = await claimCore(engine, sid, t, uid);
+    if (outcome === 'denied') return answer(sid, number, false, 'Only staff can claim tickets.');
+    if (outcome === 'closed' || outcome === 'missing') return answer(sid, number, false, 'This ticket is closed.');
+    if (outcome === 'mine') return answer(sid, number, true, 'You already claimed this ticket.');
+    if (outcome === 'taken') {
+      const name = (await nameBook(engine, sid))(updated.claimedBy)?.name || 'Someone';
+      return answer(sid, number, false, `${name} is already handling this ticket.`);
+    }
+    await editCard(engine, sid, updated);
+    await engine.budget.send({ serverId: sid, channelId: updated.channelId, content: claimNote(uid), priority: 'normal' }).catch(() => null);
+    return answer(sid, number, true, `You claimed ticket #${pad(updated.number)}.`);
+  }
+
+  async function unclaim(sid, number, uid) {
+    const t = getTicket(engine, sid, number);
+    if (!t) return answer(sid, number, false, "I couldn't find that ticket.");
+    if (t.status !== 'open') return answer(sid, number, false, 'This ticket is closed.');
+    const { outcome, ticket: updated } = await unclaimCore(engine, sid, t, uid);
+    if (outcome === 'unclaimed') return answer(sid, number, false, 'Nobody has claimed this ticket yet.');
+    if (outcome === 'denied') return answer(sid, number, false, 'Only the person who claimed this ticket, or an admin, can unclaim it.');
+    if (!updated) return answer(sid, number, false, "I couldn't find that ticket.");
+    await editCard(engine, sid, updated);
+    await engine.budget.send({ serverId: sid, channelId: updated.channelId, content: unclaimNote(uid), priority: 'normal' }).catch(() => null);
+    return answer(sid, number, true, `You unclaimed ticket #${pad(updated.number)}. Another staff member can pick it up.`);
+  }
+
+  async function close(sid, number, { by = null, reason = '' } = {}) {
+    const t = getTicket(engine, sid, number);
+    if (!t) return answer(sid, number, false, "I couldn't find that ticket.");
+    if (t.status !== 'open') return answer(sid, number, false, t.status === 'closing' ? 'This ticket is already closing.' : 'This ticket is already closed.');
+    if (t.openerId !== by && !(await isStaff(engine, sid, by, t))) return answer(sid, number, false, 'Only staff or the person who opened this ticket can close it.');
+    const out = await closeTicket(engine, sid, t, { by, reason: clip(String(reason || ''), 500) });
+    if (out.already) return answer(sid, number, false, 'This ticket is already closed.');
+    const where = out.logged ? 'The transcript went to the log channel.'
+      : out.transcript ? 'No log channel is set, so the transcript is only kept here.'
+        : 'There was no channel left, so I cleaned up and marked it closed.';
+    return answer(sid, number, true, `Closed ticket #${pad(t.number)}. ${where}`);
+  }
+
+  return { list, get, transcript, claim, unclaim, close };
+}
+
 const DASHBOARD = [
   {
     key: 'staffRoles', label: 'Ticket staff roles', type: 'roles', web: true,
@@ -1827,6 +2064,8 @@ export const { setup, teardown, check } = defineApp({
   },
 
   dashboard: DASHBOARD,
+
+  services: (engine) => createTicketService(engine),
 
   jobs: {
     quietwarn: quietWarnJob,

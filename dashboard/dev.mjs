@@ -8,6 +8,7 @@ import { createWorker } from './worker/app.js';
 import { D1Database } from './test/d1-shim.js';
 import { createHarness, IDS } from '../test/harness.js';
 import { createDashboard } from '../engine/dashboard.js';
+import { createBudget } from '../engine/budget.js';
 import { createLogger } from '../engine/log.js';
 import { monthKey, shiftMonth } from '../apps/wrapped.js';
 
@@ -241,6 +242,15 @@ function createFakeOAuth({ users, clientId, clientSecret, redirectUri }) {
   return { handler, codes, tokens };
 }
 
+function freshBudget(engine) {
+  engine.budget = createBudget({ bot: engine.bot, verified: engine.budget.verified, log: engine.log });
+}
+
+function followRealTime(clock) {
+  let skew = 0;
+  Object.defineProperty(clock, 't', { get: () => Date.now() + skew, set: (v) => { skew = v - Date.now(); }, enumerable: true, configurable: true });
+}
+
 async function seedBot(h) {
   const { engine } = h;
   const S = IDS.server;
@@ -292,6 +302,78 @@ async function seedBot(h) {
   await h.slash('warn', `${mention(IDS.member2)} caps lock shouting`, { user: IDS.mod });
   await h.slash('timeout', `${mention(IDS.member2)} 10m kept arguing after a warning`, { user: IDS.admin });
   await h.slash('warn', `${mention(IDS.member)} posted an invite link`, { user: IDS.mod });
+  await h.slash('mod', `note ${mention(IDS.member)} keeps arguing in general, talked to them in DMs`, { user: IDS.mod });
+  await h.slash('mod', `note ${mention(IDS.member)} was much calmer this week`, { user: IDS.admin });
+  await h.slash('mod', `note ${mention(IDS.member2)} new here, still learning the rules`, { user: IDS.mod });
+  await h.settle();
+  await seedTickets(h);
+}
+
+async function seedTickets(h) {
+  const { engine } = h;
+  const S = IDS.server;
+  if (!engine.apps.get('tickets')) return;
+  engine.settings.patchApp(S, 'tickets', { logChannelId: IDS.channels.modlog });
+  const ticketOf = (uid) => Object.values(engine.store.get('tickets', S, { tickets: {} }).tickets || {})
+    .filter((t) => t.openerId === uid && t.status === 'open')
+    .pop() || null;
+  const open = async (uid, topic) => {
+    await h.slash('ticket', topic, { user: uid });
+    await h.settle();
+    return ticketOf(uid);
+  };
+  const say = async (t, uid, text) => {
+    if (t?.channelId) await h.message(text, { user: uid, channel: t.channelId });
+  };
+
+  const done = await open(IDS.member, 'Refund for a shop role I bought by mistake');
+  if (done) {
+    await say(done, IDS.member, 'Hi! I bought the VIP role in the shop by accident.');
+    await say(done, IDS.admin, 'No worries, I refunded the coins and removed the role.');
+    await say(done, IDS.member, 'Thank you so much!');
+    const closedAt = Date.now() - 2 * 3600_000;
+    const stamp = (at) => new Date(at).toISOString().slice(0, 16).replace('T', ' ');
+    const transcript = [
+      `Ticket #${String(done.number).padStart(4, '0')} (Support)`,
+      `Opened by sam on ${stamp(done.createdAt)} UTC`,
+      `Claimed by alex`,
+      `Closed by alex on ${stamp(closedAt)} UTC. Reason: Refunded`,
+      `Topic: ${done.topic}`,
+      '-'.repeat(40),
+      `[${stamp(done.createdAt)}] sam: Hi! I bought the VIP role in the shop by accident.`,
+      `[${stamp(done.createdAt)}] alex: No worries, I refunded the coins and removed the role.`,
+      `[${stamp(done.createdAt)}] sam: Thank you so much!`,
+      '',
+    ].join('\n');
+    engine.store.update('tickets', S, (d) => {
+      const t = d.tickets[done.number];
+      if (t) {
+        Object.assign(t, {
+          status: 'closed',
+          claimedBy: IDS.admin,
+          closedAt,
+          closedBy: IDS.admin,
+          reason: 'Refunded',
+          rating: { stars: 5, at: closedAt + 60_000, comment: 'Super quick, thanks!', logMessageId: null },
+          transcript,
+        });
+      }
+      return d;
+    }, { seq: 0, tickets: {} });
+    await engine.bot.deleteChannel?.(done.channelId).catch(() => {});
+    if (done.roleId) await engine.bot.deleteRole?.(S, done.roleId).catch(() => {});
+    engine.cache.invalidate?.(S);
+  }
+
+  const help = await open(IDS.member, 'My level did not go up after the event');
+  await say(help, IDS.member, 'I chatted a lot during the event but my level stayed the same.');
+
+  const claimed = await open(IDS.member2, 'Can I get the Gamer role?');
+  if (claimed?.channelId) {
+    await h.slash('ticket', 'claim', { user: IDS.mod, channel: claimed.channelId });
+    await say(claimed, IDS.member2, 'I play every weekend with the group.');
+    await say(claimed, IDS.mod, 'Sure, checking with the admins now.');
+  }
   await h.settle();
 }
 
@@ -371,7 +453,9 @@ export async function startDev({
   env.ASSETS = createAssets({ secure: false });
 
   const harness = await createHarness();
+  followRealTime(harness.fake.clock);
   await seedBot(harness);
+  freshBudget(harness.engine);
   const dashLog = quiet ? quietLog() : createLogger({ level: process.env.YAPOS_LOG || 'info' });
   const dashboard = createDashboard({ engine: harness.engine, url: env.PUBLIC_URL, secret: botSecret, log: dashLog });
   harness.engine.dashboard = dashboard;

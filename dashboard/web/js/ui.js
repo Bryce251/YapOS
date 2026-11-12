@@ -240,6 +240,7 @@ export function drawer({ title, subtitle = '', onClose, labelledBy } = {}) {
     if (closed) return;
     closed = true;
     root.classList.remove('is-open');
+    root.classList.add('is-closing');
     document.removeEventListener('keydown', onKey, true);
     document.body.classList.remove('has-modal');
     setTimeout(() => root.remove(), 180);
@@ -247,6 +248,7 @@ export function drawer({ title, subtitle = '', onClose, labelledBy } = {}) {
     onClose?.();
   };
   function onKey(e) {
+    if (document.querySelector('.dialog-root')) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       close();
@@ -264,6 +266,8 @@ export function drawer({ title, subtitle = '', onClose, labelledBy } = {}) {
   return { root, body, close, setTitle: (t) => { header.querySelector('.drawer-title').textContent = t; } };
 }
 
+const openDrawer = () => [...document.querySelectorAll('.drawer-root')].some((r) => !r.classList.contains('is-closing'));
+
 export function confirmDialog({ title, body, confirmLabel = 'Confirm', tone = 'danger' }) {
   return new Promise((resolve) => {
     const titleId = nextId('dlg');
@@ -274,7 +278,7 @@ export function confirmDialog({ title, body, confirmLabel = 'Confirm', tone = 'd
       done = true;
       document.removeEventListener('keydown', onKey, true);
       root.remove();
-      document.body.classList.remove('has-modal');
+      if (!openDrawer()) document.body.classList.remove('has-modal');
       if (previous && previous.focus && previous.isConnected) previous.focus();
       resolve(v);
     };
@@ -306,12 +310,61 @@ export function card({ title = '', icon: iconName = '', actions = null, classNam
   return h('section', { class: ['card', className] }, head, h('div', { class: ['card-body', bodyClass] }, ...children));
 }
 
+const COUNT_RE = /^(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?([^\d]{0,4})$/;
+
+export function prefersReducedMotion() {
+  try {
+    return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch {
+    return true;
+  }
+}
+
+export function countUp(el, text, { duration = 900 } = {}) {
+  const final = String(text ?? '');
+  const m = COUNT_RE.exec(final);
+  if (!m || typeof requestAnimationFrame !== 'function' || prefersReducedMotion()) return false;
+  const target = Number(m[1].replace(/,/g, '') + (m[2] || ''));
+  if (!Number.isFinite(target) || target <= 0) return false;
+  const decimals = m[2] ? m[2].length - 1 : 0;
+  const fmt = new Intl.NumberFormat('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals, useGrouping: m[1].includes(',') });
+  const show = (n) => {
+    el.textContent = `${fmt.format(n)}${m[3]}`;
+  };
+  let start = 0;
+  let waited = 0;
+  const step = (t) => {
+    if (!el.isConnected) {
+      if (start || waited > 120) {
+        el.textContent = final;
+        return;
+      }
+      waited += 1;
+      requestAnimationFrame(step);
+      return;
+    }
+    if (!start) start = t;
+    const p = Math.min(1, (t - start) / duration);
+    if (p >= 1) {
+      el.textContent = final;
+      return;
+    }
+    show(target * (1 - (1 - p) ** 3));
+    requestAnimationFrame(step);
+  };
+  show(0);
+  requestAnimationFrame(step);
+  return true;
+}
+
 export function statCard({ label, value, icon: iconName = '', hint = '', tone = '' }) {
+  const valueEl = h('div', { class: 'stat-value', text: value });
+  if (typeof value === 'string' || typeof value === 'number') countUp(valueEl, String(value));
   return h('div', { class: ['stat-card', tone ? `stat-${tone}` : ''] },
     h('div', { class: 'stat-top' },
       h('span', { class: 'stat-label', text: label }),
       iconName ? h('span', { class: 'stat-icon' }, icon(iconName, { size: 16 })) : null),
-    h('div', { class: 'stat-value', text: value }),
+    valueEl,
     hint ? h('div', { class: 'stat-hint', text: hint }) : h('div', { class: 'stat-hint', text: ' ' }));
 }
 

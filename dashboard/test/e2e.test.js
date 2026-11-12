@@ -329,3 +329,231 @@ test('the bot sees the dashboard as hot while people use it, and logging out end
   assert.equal(out.status, 200);
   assert.equal((await b.req('GET', '/api/me')).status, 401);
 });
+
+const modlogText = () => dev.harness.sent(C.modlog).map((m) => JSON.stringify(m)).join('\n');
+const act = async (b, uid, body) => settle(b, await b.mutate('POST', `/api/servers/${S}/members/${uid}/actions`, body));
+const caseTotal = async (b) => (await (await b.req('GET', `/api/servers/${S}/cases`)).json()).total;
+
+test('the members list searches by name and filters by role', async () => {
+  const b = await login('alex');
+  await openServer(b);
+  const all = await settle(b, await b.req('GET', `/api/servers/${S}/members`));
+  assert.equal(all.status, 'done');
+  assert.equal(all.result.grant, true);
+  assert.equal(all.result.pageSize, 50);
+  assert.equal(all.result.capped, false);
+  const ids = all.result.members.map((m) => m.id);
+  for (const id of [IDS.owner, IDS.admin, IDS.mod, IDS.member, IDS.member2]) assert.ok(ids.includes(id), id);
+  assert.equal(ids[ids.length - 1], IDS.owner, 'newest joins come first');
+  const alex = all.result.members.find((m) => m.id === IDS.admin);
+  assert.deepEqual(alex.roles.slice(0, 2), [R.admin, R.member]);
+  assert.equal(all.result.members.find((m) => m.id === IDS.bot)?.bot, true);
+  const sam = all.result.members.find((m) => m.id === IDS.member);
+  assert.equal(sam.warnings, 2);
+  assert.ok(sam.cases >= 2);
+
+  const search = await settle(b, await b.req('GET', `/api/servers/${S}/members?q=RIL`));
+  assert.deepEqual(search.result.members.map((m) => m.id), [IDS.member2]);
+  assert.equal(search.result.total, 1);
+  const byRole = await settle(b, await b.req('GET', `/api/servers/${S}/members?role=${R.mod}&sort=name`));
+  assert.deepEqual(byRole.result.members.map((m) => m.id), [IDS.mod]);
+  const both = await settle(b, await b.req('GET', `/api/servers/${S}/members?role=${R.member}&q=sam`));
+  assert.deepEqual(both.result.members.map((m) => m.id), [IDS.member]);
+  assert.equal((await b.req('GET', `/api/servers/${S}/members?sort=sideways`)).status, 400);
+});
+
+test('member detail carries the right can flags for each target', async () => {
+  const b = await login('alex');
+  await openServer(b);
+  const sam = (await settle(b, await b.req('GET', `/api/servers/${S}/members/${IDS.member}`))).result.member;
+  assert.equal(sam.username, 'sam');
+  assert.equal(sam.banned, false);
+  assert.equal(sam.timeout, null);
+  assert.ok(sam.roles.some((r) => r.id === R.member && r.manageable === true));
+  assert.equal(sam.notes.length, 2);
+  assert.match(sam.notes[0].text, /calmer/);
+  assert.deepEqual({ ...sam.can }, { warn: true, unwarn: true, timeout: true, kick: true, ban: true, unban: false, role: true, nick: false, note: true });
+
+  const owner = (await settle(b, await b.req('GET', `/api/servers/${S}/members/${IDS.owner}`))).result.member;
+  for (const k of ['warn', 'timeout', 'kick', 'ban', 'unban', 'role', 'nick']) assert.equal(owner.can[k], false, k);
+});
+
+test('a timeout and its removal through the dashboard get case numbers in the mod log', async () => {
+  const b = await login('alex');
+  await openServer(b);
+  const start = await caseTotal(b);
+  const on = await act(b, IDS.member2, { action: 'timeout', duration: '15m', reason: 'needs a short break' });
+  assert.equal(on.status, 'done');
+  assert.equal(on.result.ok, true);
+  assert.equal(on.result.action, 'timeout');
+  assert.equal(on.result.case.n, start + 1);
+  assert.equal(on.result.case.duration, 15 * 60_000);
+  assert.ok(on.result.member.timeout?.until);
+  assert.match(on.result.message, /@riley/);
+
+  const off = await act(b, IDS.member2, { action: 'untimeout', reason: 'all good now' });
+  assert.equal(off.result.ok, true);
+  assert.equal(off.result.case.n, start + 2);
+  assert.equal(off.result.member.timeout, null);
+
+  await dev.harness.settle();
+  const log = modlogText();
+  assert.match(log, new RegExp(`Case #${start + 1}\\b`));
+  assert.match(log, new RegExp(`Case #${start + 2}\\b`));
+  assert.equal(await caseTotal(b), start + 2);
+  const cases = (await (await b.req('GET', `/api/servers/${S}/cases?user=${IDS.member2}`)).json()).cases;
+  assert.equal(cases[0].n, start + 2);
+});
+
+test('an admin acting on the owner is refused in plain words and nothing changes', async () => {
+  const b = await login('alex');
+  await openServer(b);
+  const start = await caseTotal(b);
+  const refused = await act(b, IDS.owner, { action: 'warn', reason: 'testing' });
+  assert.equal(refused.status, 'done');
+  assert.equal(refused.result.grant, true);
+  assert.equal(refused.result.ok, false);
+  assert.ok(refused.result.error.length > 10);
+  assert.doesNotMatch(refused.result.error, /\b(403|forbidden|undefined|null)\b/i);
+  const kick = await act(b, IDS.owner, { action: 'kick' });
+  assert.equal(kick.result.ok, false);
+  assert.ok(dev.harness.fake.state.members[S].some((m) => m.id === IDS.owner));
+  assert.equal(await caseTotal(b), start);
+
+  const bad = await b.mutate('POST', `/api/servers/${S}/members/${IDS.member}/actions`, { action: 'explode' });
+  assert.equal(bad.status, 400);
+});
+
+test('a warning from the dashboard can be removed again with unwarn', async () => {
+  const b = await login('alex');
+  await openServer(b);
+  const start = await caseTotal(b);
+  const warn = await act(b, IDS.member2, { action: 'warn', reason: 'rude in general' });
+  assert.equal(warn.result.ok, true);
+  const n = warn.result.case.n;
+  assert.equal(n, start + 1);
+  assert.ok(warn.result.member.warnings.some((w) => w.case === n));
+  const mod = dev.harness.engine.service('mod');
+  assert.ok(mod.activeWarns(S, IDS.member2).some((w) => w.caseId === n));
+
+  const undo = await act(b, IDS.member2, { action: 'unwarn', case: n });
+  assert.equal(undo.result.ok, true);
+  assert.match(undo.result.message, new RegExp(`case #${n}`));
+  assert.ok(!undo.result.member.warnings.some((w) => w.case === n));
+  assert.ok(!mod.activeWarns(S, IDS.member2).some((w) => w.caseId === n));
+
+  const again = await act(b, IDS.member2, { action: 'unwarn', case: n });
+  assert.equal(again.result.ok, false);
+  assert.match(again.result.error, /already removed/);
+});
+
+test('roles can be added and removed from the member drawer', async () => {
+  const b = await login('alex');
+  await openServer(b);
+  const start = await caseTotal(b);
+  const rolesOf = () => dev.harness.fake.state.members[S].find((m) => m.id === IDS.member).roles;
+  const add = await act(b, IDS.member, { action: 'role_add', role_id: R.gamer });
+  assert.equal(add.result.ok, true);
+  assert.equal(add.result.case, null);
+  assert.ok(rolesOf().includes(R.gamer));
+  assert.ok(add.result.member.roles.some((r) => r.id === R.gamer));
+
+  const remove = await act(b, IDS.member, { action: 'role_remove', role_id: R.gamer });
+  assert.equal(remove.result.ok, true);
+  assert.ok(!rolesOf().includes(R.gamer));
+  assert.ok(!remove.result.member.roles.some((r) => r.id === R.gamer));
+
+  const tooHigh = await act(b, IDS.member, { action: 'role_add', role_id: R.top });
+  assert.equal(tooHigh.result.ok, false);
+  assert.ok(!rolesOf().includes(R.top));
+  assert.equal(await caseTotal(b), start);
+  await dev.harness.settle();
+  assert.match(modlogText(), /Gamer/);
+});
+
+test('the tickets list shows counts, ratings, filters and search', async () => {
+  const b = await login('jolli');
+  const server = await openServer(b);
+  assert.equal(server.overview.stats.casesByDay.length, 14);
+  assert.ok(server.overview.stats.tickets.open >= 2);
+  assert.ok(server.overview.stats.activeWarns >= 2);
+  const open = await settle(b, await b.req('GET', `/api/servers/${S}/tickets`));
+  assert.equal(open.status, 'done');
+  assert.equal(open.result.grant, true);
+  assert.ok(open.result.counts.open >= 2);
+  assert.ok(open.result.counts.closed >= 1);
+  assert.equal(open.result.rating.average, 5);
+  assert.ok(open.result.tickets.every((t) => t.status !== 'closed'));
+  const numbers = open.result.tickets.map((t) => t.number);
+  assert.deepEqual(numbers, [...numbers].sort((x, y) => y - x));
+
+  const closed = await settle(b, await b.req('GET', `/api/servers/${S}/tickets?status=closed`));
+  const refund = closed.result.tickets.find((t) => /Refund/.test(t.topic || ''));
+  assert.ok(refund);
+  assert.equal(refund.rating, 5);
+  assert.equal(refund.opener.id, IDS.member);
+
+  const search = await settle(b, await b.req('GET', `/api/servers/${S}/tickets?status=all&q=gamer`));
+  assert.equal(search.result.tickets.length, 1);
+  assert.equal(search.result.tickets[0].opener.id, IDS.member2);
+  assert.equal(search.result.tickets[0].claimedBy?.id, IDS.mod);
+  assert.equal((await b.req('GET', `/api/servers/${S}/tickets?status=lost`)).status, 400);
+});
+
+test('ticket detail comes with its transcript, stored or live', async () => {
+  const b = await login('jolli');
+  await openServer(b);
+  const all = (await settle(b, await b.req('GET', `/api/servers/${S}/tickets?status=all`))).result.tickets;
+  const refund = all.find((t) => /Refund/.test(t.topic || ''));
+  const help = all.find((t) => /level/.test(t.topic || ''));
+
+  const stored = await settle(b, await b.req('GET', `/api/servers/${S}/tickets/${refund.number}`));
+  assert.equal(stored.status, 'done');
+  assert.equal(stored.result.ticket.number, refund.number);
+  assert.equal(stored.result.ticket.reason, 'Refunded');
+  assert.equal(stored.result.ticket.closedBy?.id, IDS.admin);
+  assert.equal(stored.result.transcript.live, false);
+  assert.match(stored.result.transcript.text, /Thank you so much!/);
+
+  const live = await settle(b, await b.req('GET', `/api/servers/${S}/tickets/${help.number}`));
+  assert.equal(live.result.transcript.live, true);
+  assert.match(live.result.transcript.text, /my level stayed the same/);
+  assert.ok(live.result.transcript.count >= 1);
+
+  const missing = await settle(b, await b.req('GET', `/api/servers/${S}/tickets/999999`));
+  assert.equal(missing.result.ticket, null);
+  assert.match(missing.result.error, /couldn't find/);
+  assert.equal((await b.req('GET', `/api/servers/${S}/tickets/abc`)).status, 400);
+});
+
+test('a ticket can be claimed and then closed from the dashboard', async () => {
+  const b = await login('jolli');
+  await openServer(b);
+  const all = (await settle(b, await b.req('GET', `/api/servers/${S}/tickets`))).result.tickets;
+  const help = all.find((t) => /level/.test(t.topic || ''));
+  assert.equal(help.claimedBy, null);
+  const path = `/api/servers/${S}/tickets/${help.number}/actions`;
+
+  const claim = await settle(b, await b.mutate('POST', path, { action: 'claim' }));
+  assert.equal(claim.status, 'done');
+  assert.equal(claim.result.ok, true);
+  assert.equal(claim.result.ticket.claimedBy.id, IDS.owner);
+  await dev.harness.settle();
+  assert.ok(dev.harness.sent(help.channelId).length > 0);
+
+  const close = await settle(b, await b.mutate('POST', path, { action: 'close', reason: 'Fixed the level role' }));
+  assert.equal(close.result.ok, true);
+  assert.match(close.result.message, /Closed ticket/);
+  assert.equal(close.result.ticket.status, 'closed');
+  assert.equal(close.result.ticket.reason, 'Fixed the level role');
+  const stored = dev.harness.engine.store.get('tickets', S, null).tickets[help.number];
+  assert.equal(stored.status, 'closed');
+  assert.equal('transcript' in stored, false);
+  assert.match(dev.harness.engine.store.get('ticket-transcripts', `${S}-${help.number}`, null).text, /my level stayed the same/);
+
+  const twice = await settle(b, await b.mutate('POST', path, { action: 'close' }));
+  assert.equal(twice.result.ok, false);
+  assert.match(twice.result.error, /already/);
+  const noCsrf = await b.req('POST', path, { body: { action: 'claim' }, headers: { Origin: dev.url } });
+  assert.equal(noCsrf.status, 403);
+});

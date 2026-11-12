@@ -675,3 +675,518 @@ test('a web save cannot set level-ups to a channel that does not exist', async (
   assert.equal(h.engine.settings.appConfig(S, 'levels').announce, 'channel');
   assert.equal(h.engine.settings.appConfig(S, 'levels').channelId, C.general);
 });
+
+const NEW_TYPES = ['members', 'member', 'modaction', 'tickets', 'ticket', 'ticketaction'];
+
+function seedTickets(h, count) {
+  const t = h.now();
+  h.engine.store.set('tickets', S, {
+    seq: count,
+    tickets: Object.fromEntries(Array.from({ length: count }, (_, i) => {
+      const n = i + 1;
+      const closed = n % 3 === 0;
+      return [n, {
+        id: `${S}:${n}`, number: n, channelId: closed ? null : `c-${n}`, roleId: null, openerId: n % 2 ? IDS.member : IDS.member2, typeId: 'support',
+        claimedBy: null, status: closed ? 'closed' : 'open', createdAt: t - 10 * 86_400_000 + n, closedAt: closed ? (n === 3 ? t - 30 * 86_400_000 : t - 3_600_000) : null,
+        closedBy: closed ? IDS.mod : null, reason: closed ? 'sorted' : null, answers: [{ q: 'What happened?', a: `case ${n}` }], topic: n === 7 ? 'Printer on fire' : `topic ${n}`,
+        members: [], mode: 'role', name: `ticket-${String(n).padStart(4, '0')}`, cardId: null, lastActivityAt: t, rating: closed ? { stars: 4 } : null,
+      }];
+    })),
+  });
+}
+
+function addMembers(h, count, extra = {}) {
+  const list = h.fake.state.members[S];
+  for (let i = 0; i < count; i++) {
+    const n = String(i + 1).padStart(4, '0');
+    list.push({ id: `f0000000-0000-4000-8000-00000000${n}`, username: `user${n}`, display_name: `User ${n}`, nickname: null, roles: [R.member], joined_at: new Date(Date.parse('2026-02-01T00:00:00Z') + i * 60_000).toISOString(), ...extra });
+  }
+  h.engine.cache.invalidate(S);
+}
+
+test('jobs go through one handler map and unknown or sneaky types are refused', async () => {
+  const { w, dash, h } = await setup({ harness: { apps: ['mod'] } });
+  assert.deepEqual([...dash.jobTypes].sort(), ['access', 'change', 'member', 'members', 'modaction', 'servers', 'ticket', 'ticketaction', 'tickets']);
+  for (const type of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', 'MEMBERS', '']) w.queue.push({ id: `j-${type || 'blank'}`, type, user_id: IDS.admin, server_id: S, data: {} });
+  w.queue.push({ id: 'j-num', type: 7, user_id: IDS.admin, server_id: S, data: {} });
+  await dash.tick();
+  await h.settle();
+  for (const type of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', 'MEMBERS', 'blank', 'num']) {
+    const r = w.result(`j-${type}`);
+    assert.equal(r.ok, false, type);
+    assert.equal(r.error, "I don't know that job.", type);
+  }
+});
+
+test('every new job refuses members and mods, and marks the server as used for admins', async () => {
+  const { run, dash, w } = await setup({ harness: { apps: ['mod', 'tickets'] } });
+  const data = { user_id: IDS.member2, action: 'warn', number: 1 };
+  for (const type of NEW_TYPES) {
+    for (const who of [IDS.member, IDS.mod]) {
+      const r = await run(type, who, data);
+      assert.equal(r.ok, true, type);
+      assert.equal(r.result.grant, false, type);
+      assert.equal(r.result.error, 'You need to be an admin of this server.', type);
+      assert.equal(r.error, 'You need to be an admin of this server.', type);
+    }
+  }
+  assert.equal(Object.keys(w.snapshots).length, 0, 'refusals never push a snapshot');
+  const ok = await run('members', IDS.admin);
+  assert.equal(ok.result.grant, true);
+  assert.equal(ok.result.level, 'admin');
+  const owner = await run('members', IDS.owner);
+  assert.equal(owner.result.level, 'owner');
+  assert.ok(dash, 'still running');
+});
+
+test('the members job lists, searches, filters, sorts and pages the member list', async () => {
+  const { h, run } = await setup({ harness: { apps: ['mod'] } });
+  const all = await run('members', IDS.admin);
+  const r = all.result;
+  assert.equal(r.total, 6);
+  assert.equal(r.page, 1);
+  assert.equal(r.pages, 1);
+  assert.equal(r.pageSize, 50);
+  assert.equal(r.capped, false);
+  assert.deepEqual(r.members.map((m) => m.id), [IDS.member2, IDS.member, IDS.mod, IDS.admin, IDS.bot, IDS.owner]);
+  const mo = r.members.find((m) => m.id === IDS.mod);
+  assert.deepEqual(Object.keys(mo).sort(), ['avatar_url', 'bot', 'cases', 'id', 'joined_at', 'name', 'roles', 'username', 'warnings']);
+  assert.equal(mo.name, 'Mo');
+  assert.equal(mo.username, 'morgan');
+  assert.equal(mo.joined_at, '2026-01-04T00:00:00Z');
+  assert.deepEqual(mo.roles, [R.mod, R.member]);
+  assert.equal(mo.bot, false);
+  assert.equal(r.members.find((m) => m.id === IDS.bot).bot, true);
+  assert.deepEqual(r.members.find((m) => m.id === IDS.admin).roles, [R.admin, R.member]);
+
+  const old = await run('members', IDS.admin, { sort: 'joined_old' });
+  assert.equal(old.result.members[0].id, IDS.owner);
+  const byName = await run('members', IDS.admin, { sort: 'name' });
+  assert.deepEqual(byName.result.members.map((m) => m.name), ['Alex', 'Jolli', 'Mo', 'Riley', 'Sam', 'YapOS']);
+
+  assert.deepEqual((await run('members', IDS.admin, { q: 'RILEY' })).result.members.map((m) => m.id), [IDS.member2]);
+  assert.deepEqual((await run('members', IDS.admin, { q: 'morg' })).result.members.map((m) => m.id), [IDS.mod]);
+  assert.deepEqual((await run('members', IDS.admin, { q: IDS.member.slice(-6) })).result.members.map((m) => m.id), [IDS.member]);
+  assert.equal((await run('members', IDS.admin, { q: 'nobody-like-this' })).result.total, 0);
+  assert.deepEqual((await run('members', IDS.admin, { role: R.mod })).result.members.map((m) => m.id), [IDS.mod]);
+  assert.deepEqual((await run('members', IDS.admin, { role: `<@&${R.admin}>` })).result.members.map((m) => m.id), [IDS.admin]);
+
+  await h.engine.service('mod').act(S, { actorId: IDS.admin, kind: 'warn', targetId: IDS.member, reason: 'spam' });
+  const after = await run('members', IDS.admin, { q: 'sam' });
+  assert.equal(after.result.members[0].warnings, 1);
+  assert.equal(after.result.members[0].cases, 1);
+
+  addMembers(h, 120);
+  const p1 = await run('members', IDS.admin, { sort: 'joined_old' });
+  assert.equal(p1.result.total, 126);
+  assert.equal(p1.result.pages, 3);
+  assert.equal(p1.result.members.length, 50);
+  const p3 = await run('members', IDS.admin, { sort: 'joined_old', page: '3' });
+  assert.equal(p3.result.page, 3);
+  assert.equal(p3.result.members.length, 26);
+  const past = await run('members', IDS.admin, { page: 99 });
+  assert.equal(past.result.page, 3, 'a page past the end lands on the last one');
+});
+
+test('the members job refuses bad input with a plain error and an empty list', async () => {
+  const { run } = await setup({ harness: { apps: ['mod'] } });
+  const cases = [
+    [{ q: 'x'.repeat(101) }, /too long/],
+    [{ q: 5 }, /too long/],
+    [{ role: 'not a role!' }, /role id/],
+    [{ role: ['r'] }, /role id/],
+    [{ sort: 'random' }, /Sort by/],
+    [{ sort: { a: 1 } }, /Sort by/],
+    [{ page: 0 }, /page from 1 to 100/],
+    [{ page: 101 }, /page from 1 to 100/],
+    [{ page: 1.5 }, /page from 1 to 100/],
+    [{ page: 'two' }, /page from 1 to 100/],
+    [{ page: -1 }, /page from 1 to 100/],
+  ];
+  for (const [data, re] of cases) {
+    const r = await run('members', IDS.admin, data);
+    assert.equal(r.ok, true, JSON.stringify(data));
+    assert.equal(r.result.grant, true);
+    assert.match(r.result.error, re, JSON.stringify(data));
+    assert.deepEqual(r.result.members, []);
+    assert.equal(r.result.total, 0);
+  }
+  const fine = await run('members', IDS.admin, { q: 'x'.repeat(100), role: null, sort: '', page: null });
+  assert.equal(fine.result.error, undefined);
+});
+
+test('the members job stays under 500 KB with a full member cache', async () => {
+  const { h, run } = await setup({ harness: { apps: ['mod'] } });
+  addMembers(h, 1994, { username: 'u'.repeat(200), display_name: 'D'.repeat(200), avatar_path: 'avatars/a.png' });
+  const r = await run('members', IDS.admin);
+  assert.equal(r.ok, true);
+  assert.equal(r.result.total, 2000);
+  assert.equal(r.result.capped, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(r)) < 500 * 1024);
+  assert.ok(r.result.members.every((m) => m.username.length <= 64 && m.name.length <= 64));
+});
+
+test('the member job adds roles, status, notes and what the admin can do', async () => {
+  const { h, run } = await setup({ harness: { apps: ['mod'] } });
+  h.fake.clock.t = Date.now();
+  const mod = h.engine.service('mod');
+  await mod.act(S, { actorId: IDS.admin, kind: 'note', targetId: IDS.member, note: 'first' });
+  await mod.act(S, { actorId: IDS.admin, kind: 'note', targetId: IDS.member, note: 'second' });
+  await mod.act(S, { actorId: IDS.admin, kind: 'timeout', targetId: IDS.member, durationMs: 600_000 });
+  const r = await run('member', IDS.admin, { user_id: IDS.member });
+  const m = r.result.member;
+  for (const k of ['id', 'name', 'avatar_url', 'warnings', 'cases', 'levels', 'economy']) assert.ok(k in m, k);
+  assert.equal(m.username, 'sam');
+  assert.equal(m.nickname, null);
+  assert.equal(m.joined_at, '2026-01-05T00:00:00Z');
+  assert.deepEqual(m.roles.map((x) => x.id), [R.member]);
+  assert.deepEqual(Object.keys(m.roles[0]).sort(), ['color', 'id', 'manageable', 'name', 'position']);
+  assert.equal(m.banned, false);
+  assert.equal(m.tempBan, null);
+  assert.ok(m.timeout && typeof m.timeout.until === 'string');
+  assert.deepEqual(m.notes.map((n) => n.text), ['second', 'first']);
+  assert.deepEqual(m.can, { warn: true, unwarn: true, timeout: true, kick: true, ban: true, unban: false, role: true, nick: false, note: true }, 'YapOS has no Manage Nicknames here');
+  assert.equal(m.bot, false);
+  assert.ok(Array.isArray(m.assignable));
+  assert.equal(m.cases[0].type, 'timeout');
+
+  const owner = await run('member', IDS.admin, { user_id: IDS.owner });
+  assert.equal(owner.result.member.can.kick, false, 'nobody can kick the owner');
+
+  await mod.act(S, { actorId: IDS.admin, kind: 'ban', targetId: IDS.member2 });
+  const gone = await run('member', IDS.admin, { user_id: IDS.member2 });
+  assert.equal(gone.result.member.banned, true);
+  assert.equal(gone.result.member.name, 'riley', 'the last known name from their cases');
+  assert.notEqual(gone.result.member.name, 'Banned member');
+  const stranger = await run('member', IDS.admin, { user_id: 'a0000000-0000-4000-8000-0000000000fe' });
+  assert.equal(stranger.result.member.name, 'Not in the server');
+  assert.equal(gone.result.member.can.unban, true);
+  assert.equal(gone.result.member.can.ban, false);
+
+  h.engine.settings.setEnabled(S, 'mod', false);
+  const off = await run('member', IDS.admin, { user_id: IDS.member });
+  assert.ok(Object.values(off.result.member.can).every((v) => v === false), 'no actions while Mod is uninstalled');
+
+  for (const bad of [undefined, '', '../etc', 42, { id: IDS.member }]) {
+    const x = await run('member', IDS.admin, { user_id: bad });
+    assert.equal(x.result.member, null);
+    assert.match(x.result.error, /doesn't look right/);
+  }
+});
+
+test('modaction warns exactly like /mod warn, returns the case and fresh member, and pushes a snapshot', async () => {
+  const { h, w, run } = await setup({ harness: { apps: ['mod'] } });
+  h.engine.settings.patchCore(S, { logChannel: C.modlog });
+  const r = await run('modaction', IDS.admin, { user_id: IDS.member, action: 'warn', reason: 'spam links' });
+  assert.equal(r.ok, true);
+  const out = r.result;
+  assert.equal(out.grant, true);
+  assert.equal(out.ok, true);
+  assert.equal(out.action, 'warn');
+  assert.equal(out.case.n, 1);
+  assert.equal(out.case.type, 'warn');
+  assert.equal(out.case.reason, 'spam links');
+  assert.equal(out.case.mod.id, IDS.admin);
+  assert.match(out.message, /Warned/);
+  assert.ok(!/\*\*/.test(out.message));
+  assert.equal(out.member.id, IDS.member);
+  assert.equal(out.member.warnings.length, 1);
+  assert.equal(out.member.warnings[0].case, 1);
+  const stored = h.engine.store.get('mod', S, null).cases[0];
+  assert.equal(stored.source, 'dashboard');
+  assert.ok(w.snapshots[S], 'a fresh snapshot went out');
+  assert.equal(w.snapshots[S].cases[0].n, 1);
+  const order = w.requests.map((r) => r.path);
+  assert.ok(order.lastIndexOf('/bot/results') < order.lastIndexOf(`/bot/snapshot/${S}`), 'the answer goes out before the snapshot');
+  assert.ok(h.fake.state.messages[C.modlog]?.length, 'the case went to the mod log');
+
+  const typed = await createHarness({ apps: ['mod'] });
+  await typed.slash('mod', `warn <@${IDS.member}> spam links`, { user: IDS.admin });
+  const viaCommand = typed.engine.store.get('mod', S, null).cases[0];
+  assert.equal(viaCommand.id, stored.id);
+  assert.equal(viaCommand.action, stored.action);
+  assert.equal(viaCommand.reason, stored.reason);
+});
+
+test('modaction runs timeouts, bans, unbans, unwarns, roles, nicknames and notes', async () => {
+  const { h, run } = await setup({ harness: { apps: ['mod'] } });
+  h.fake.clock.t = Date.now();
+  const act = (action, extra = {}, user = IDS.member) => run('modaction', IDS.admin, { user_id: user, action, ...extra }).then((r) => r.result);
+
+  const to = await act('timeout', { duration: '10m', reason: 'cool off' });
+  assert.equal(to.ok, true, to.error);
+  assert.equal(to.case.duration, 600_000);
+  assert.ok(h.fake.state.timeouts[`${S}:${IDS.member}`]);
+  assert.ok(to.member.timeout);
+  const unto = await act('untimeout');
+  assert.equal(unto.ok, true);
+  assert.equal(h.fake.state.timeouts[`${S}:${IDS.member}`], undefined);
+
+  const temp = await act('ban', { duration: '2d' }, IDS.member2);
+  assert.equal(temp.ok, true, temp.error);
+  assert.equal(temp.case.type, 'ban');
+  assert.equal(temp.case.duration, 2 * 86_400_000);
+  assert.equal(temp.member.banned, true);
+  assert.ok(temp.member.tempBan?.until);
+  const unban = await act('unban', {}, IDS.member2);
+  assert.equal(unban.ok, true, unban.error);
+  assert.equal(unban.member.banned, false);
+
+  const warn = await act('warn', { reason: 'rude' });
+  const unwarn = await act('unwarn', { case: String(warn.case.n) });
+  assert.equal(unwarn.ok, true, unwarn.error);
+  assert.equal(unwarn.case.type, 'unwarn');
+  assert.equal(unwarn.member.warnings.length, 0);
+  const again = await act('unwarn', { case: warn.case.n });
+  assert.equal(again.ok, false);
+  assert.match(again.error, /already removed/);
+
+  const give = await act('role_add', { role_id: R.vip });
+  assert.equal(give.ok, true, give.error);
+  assert.equal(give.case, null);
+  assert.ok(h.fake.memberOf(S, IDS.member).roles.includes(R.vip));
+  assert.ok(give.member.roles.some((x) => x.id === R.vip));
+  const take = await act('role_remove', { role_id: R.vip });
+  assert.equal(take.ok, true, take.error);
+  assert.ok(!h.fake.memberOf(S, IDS.member).roles.includes(R.vip));
+  const high = await act('role_add', { role_id: R.top });
+  assert.equal(high.ok, false);
+  assert.ok(high.error.length > 5);
+
+  h.fake.state.roles[S].find((x) => x.id === R.bot).perms.manage_nicknames = true;
+  h.engine.perms.invalidate();
+  const nick = await act('nick', { nickname: 'Sammy' });
+  assert.equal(nick.ok, true, nick.error);
+  assert.equal(h.fake.memberOf(S, IDS.member).nickname, 'Sammy');
+  const clear = await act('nick', { nickname: '' });
+  assert.equal(clear.ok, true);
+  assert.equal(h.fake.memberOf(S, IDS.member).nickname, null);
+
+  const note = await act('note', { note: 'keeps asking for free roles' });
+  assert.equal(note.ok, true);
+  assert.equal(note.case, null);
+  assert.equal(note.member.notes[0].text, 'keeps asking for free roles');
+
+  const kick = await act('kick');
+  assert.equal(kick.ok, true, kick.error);
+  assert.equal(h.fake.memberOf(S, IDS.member), null);
+});
+
+test('modaction refusals answer ok:false with a plain sentence and change nothing', async () => {
+  const { h, run } = await setup({ harness: { apps: ['mod'] } });
+  const act = (data) => run('modaction', IDS.admin, { user_id: IDS.member, ...data }).then((r) => {
+    assert.equal(r.ok, true, 'the job itself is done');
+    assert.equal(r.result.grant, true);
+    return r.result;
+  });
+  const bad = [
+    [{ action: 'explode' }, /don't know that action/],
+    [{ action: ['warn'] }, /don't know that action/],
+    [{ action: 'warn', user_id: 'not an id!' }, /member id/],
+    [{ action: 'warn', user_id: null }, /member id/],
+    [{ action: 'warn', reason: 'r'.repeat(501) }, /under 500/],
+    [{ action: 'warn', reason: 7 }, /under 500/],
+    [{ action: 'timeout' }, /how long/],
+    [{ action: 'timeout', duration: 'soon' }, /couldn't read that length/],
+    [{ action: 'timeout', duration: '1'.repeat(21) }, /couldn't read that length/],
+    [{ action: 'timeout', duration: '30d' }, /28 days/],
+    [{ action: 'timeout', duration: '10s' }, /at least 1 minute/],
+    [{ action: 'ban', duration: '2y' }, /up to 1 year/],
+    [{ action: 'ban', duration: 'forever' }, /couldn't read that length/],
+    [{ action: 'nick', nickname: 'n'.repeat(33) }, /up to 32/],
+    [{ action: 'note', note: 'n'.repeat(501) }, /under 500/],
+    [{ action: 'note', note: '   ' }, /empty/],
+    [{ action: 'role_add' }, /Pick a role/],
+    [{ action: 'role_add', role_id: '<bad role>' }, /role id/],
+    [{ action: 'role_add', role_id: 'r0000000-0000-4000-8000-0000000000ff' }, /couldn't find that role/],
+    [{ action: 'unwarn' }, /Pick the warning/],
+    [{ action: 'unwarn', case: 0 }, /case number/],
+    [{ action: 'unwarn', case: 1.5 }, /case number/],
+    [{ action: 'unwarn', case: 2_000_000_000 }, /case number/],
+    [{ action: 'unwarn', case: 9 }, /couldn't find a warning/],
+    [{ action: 'kick', user_id: IDS.owner }, /owner/],
+  ];
+  for (const [data, re] of bad) {
+    const out = await act(data);
+    assert.equal(out.ok, false, JSON.stringify(data));
+    assert.equal(typeof out.error, 'string');
+    assert.match(out.error, re, JSON.stringify(data));
+    assert.ok(!/\*\*|`|<@/.test(out.error), out.error);
+    assert.equal(out.case, undefined);
+  }
+  assert.equal(h.engine.store.get('mod', S, null)?.cases?.length ?? 0, 0, 'no cases were recorded');
+  assert.ok(h.fake.memberOf(S, IDS.owner));
+
+  h.engine.settings.setEnabled(S, 'mod', false);
+  const off = await act({ action: 'warn' });
+  assert.equal(off.ok, false);
+  assert.match(off.error, /Mod isn't installed/);
+});
+
+test('modaction turns raw API failures into a plain sentence', async () => {
+  const { h, run } = await setup({ harness: { apps: ['mod'] } });
+  const mod = h.engine.service('mod');
+  const real = mod.act;
+  mod.act = async () => { throw Object.assign(new Error('Forbidden'), { status: 403 }); };
+  try {
+    const r = await run('modaction', IDS.admin, { user_id: IDS.member, action: 'kick' });
+    assert.equal(r.result.ok, false);
+    assert.ok(r.result.error.length > 10);
+    assert.ok(!/403|Forbidden/.test(r.result.error), r.result.error);
+  } finally {
+    mod.act = real;
+  }
+});
+
+test('the tickets job lists tickets through the tickets service', async () => {
+  const { h, run } = await setup({ harness: { apps: ['mod', 'tickets'] } });
+  seedTickets(h, 120);
+  const open = await run('tickets', IDS.admin);
+  assert.equal(open.result.grant, true);
+  assert.equal(open.result.total, 80);
+  assert.equal(open.result.pages, 2);
+  assert.equal(open.result.pageSize, 50);
+  assert.deepEqual(open.result.counts, { open: 80, closed: 40 });
+  assert.equal(open.result.rating.count, 40);
+  assert.equal(open.result.tickets[0].number, 119);
+  const row = open.result.tickets[0];
+  for (const k of ['number', 'status', 'name', 'topic', 'type', 'opener', 'claimedBy', 'members', 'createdAt', 'closedAt', 'lastActivityAt', 'rating', 'channelId']) assert.ok(k in row, k);
+  const closed = await run('tickets', IDS.admin, { status: 'closed', page: '2' });
+  assert.equal(closed.result.page, 1, 'one page of closed tickets');
+  assert.ok(closed.result.tickets.every((t) => t.status === 'closed'));
+  const all = await run('tickets', IDS.admin, { status: 'all' });
+  assert.equal(all.result.total, 120);
+  const found = await run('tickets', IDS.admin, { q: 'PRINTER' });
+  assert.deepEqual(found.result.tickets.map((t) => t.number), [7]);
+
+  for (const [data, re] of [[{ status: 'pending' }, /open, closed or all/], [{ q: 'q'.repeat(101) }, /too long/], [{ page: 0 }, /page from/], [{ page: 'x' }, /page from/]]) {
+    const r = await run('tickets', IDS.admin, data);
+    assert.match(r.result.error, re);
+    assert.deepEqual(r.result.tickets, []);
+    assert.deepEqual(r.result.counts, { open: 0, closed: 0 });
+  }
+  h.engine.settings.setEnabled(S, 'tickets', false);
+  const off = await run('tickets', IDS.admin);
+  assert.match(off.result.error, /Tickets isn't installed/);
+  assert.deepEqual(off.result.tickets, []);
+});
+
+test('the ticket job gives details and the right transcript, trimmed to fit', async () => {
+  const { h, run } = await setup({ harness: { apps: ['mod', 'tickets'] } });
+  seedTickets(h, 9);
+  const open = await run('ticket', IDS.admin, { number: 1 });
+  assert.equal(open.result.ticket.number, 1);
+  assert.deepEqual(open.result.ticket.answers, [{ q: 'What happened?', a: 'case 1' }]);
+  assert.ok(Array.isArray(open.result.ticket.people));
+  assert.ok('closedBy' in open.result.ticket && 'reason' in open.result.ticket);
+  assert.ok(open.result.transcript === null || open.result.transcript.live === true);
+
+  const none = await run('ticket', IDS.admin, { number: '3' });
+  assert.equal(none.result.ticket.status, 'closed');
+  assert.equal(none.result.transcript, null, 'old closed tickets have no stored copy');
+
+  h.engine.store.update('tickets', S, (d) => {
+    d.tickets[6].hasTranscript = true;
+    return d;
+  });
+  h.engine.store.set('ticket-transcripts', `${S}-6`, { text: `start\n${'€'.repeat(199_990)}\nthe end`, count: 42, at: 1 });
+  const big = await run('ticket', IDS.admin, { number: 6 });
+  assert.equal(big.ok, true, big.error);
+  assert.equal(big.result.transcript.live, false);
+  assert.equal(big.result.transcript.count, 42);
+  assert.ok(big.result.transcript.text.endsWith('\nthe end'), 'the end is kept');
+  assert.ok(!big.result.transcript.text.startsWith('start'), 'the start was cut to fit');
+  assert.ok(Buffer.byteLength(JSON.stringify(big)) <= 500 * 1024);
+
+  for (const bad of [undefined, 0, -1, 'abc', 1.5, 2_000_000_000, { n: 1 }]) {
+    const r = await run('ticket', IDS.admin, { number: bad });
+    assert.match(r.result.error, /ticket number/, String(bad));
+    assert.equal(r.result.ticket, null);
+    assert.equal(r.result.transcript, null);
+  }
+  const missing = await run('ticket', IDS.admin, { number: 500 });
+  assert.match(missing.result.error, /couldn't find that ticket/);
+  h.engine.settings.setEnabled(S, 'tickets', false);
+  const off = await run('ticket', IDS.admin, { number: 1 });
+  assert.match(off.result.error, /Tickets isn't installed/);
+});
+
+test('ticketaction claims, unclaims and refuses closing a closed ticket', async () => {
+  const { h, w, run } = await setup({ harness: { apps: ['mod', 'tickets'] } });
+  seedTickets(h, 6);
+  const claim = await run('ticketaction', IDS.admin, { number: 1, action: 'claim' });
+  assert.equal(claim.result.grant, true);
+  assert.equal(claim.result.ok, true, claim.result.error);
+  assert.match(claim.result.message, /claimed ticket #0001/);
+  assert.equal(claim.result.ticket.claimedBy.id, IDS.admin);
+  assert.equal(claim.result.error, undefined);
+  assert.ok(w.snapshots[S], 'a fresh snapshot went out');
+  const unclaim = await run('ticketaction', IDS.admin, { number: '1', action: 'unclaim' });
+  assert.equal(unclaim.result.ok, true, unclaim.result.error);
+  assert.equal(unclaim.result.ticket.claimedBy, null);
+  const twice = await run('ticketaction', IDS.admin, { number: 1, action: 'unclaim' });
+  assert.equal(twice.result.ok, false);
+  assert.match(twice.result.error, /Nobody has claimed/);
+
+  const closed = await run('ticketaction', IDS.admin, { number: 3, action: 'close', reason: 'done' });
+  assert.equal(closed.result.ok, false);
+  assert.match(closed.result.error, /already closed/);
+  assert.equal(closed.result.ticket.status, 'closed');
+
+  const bad = [
+    [{ number: 1, action: 'delete' }, /claim, unclaim or close/],
+    [{ number: 1 }, /claim, unclaim or close/],
+    [{ number: 0, action: 'claim' }, /ticket number/],
+    [{ number: 'one', action: 'claim' }, /ticket number/],
+    [{ number: 1, action: 'close', reason: 'r'.repeat(501) }, /under 500/],
+    [{ number: 999, action: 'claim' }, /couldn't find that ticket/],
+  ];
+  for (const [data, re] of bad) {
+    const r = await run('ticketaction', IDS.admin, data);
+    assert.equal(r.result.ok, false, JSON.stringify(data));
+    assert.match(r.result.error, re, JSON.stringify(data));
+    assert.equal(r.result.message, r.result.error);
+  }
+  h.engine.settings.setEnabled(S, 'tickets', false);
+  const off = await run('ticketaction', IDS.admin, { number: 1, action: 'claim' });
+  assert.match(off.result.error, /Tickets isn't installed/);
+});
+
+test('the overview has mod, ticket and member stats', async () => {
+  const { h, w, run } = await setup({ harness: { apps: ['mod', 'tickets'] } });
+  await run('access', IDS.admin);
+  const empty = w.snapshots[S].overview.stats;
+  assert.equal(empty.casesByDay.length, 14);
+  assert.ok(empty.casesByDay.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d.day) && d.count === 0));
+  assert.deepEqual(empty.casesByType, {});
+  assert.equal(empty.activeWarns, 0);
+  assert.equal(empty.tempBans, 0);
+  assert.deepEqual(empty.tickets, { open: 0, closed7d: 0 });
+  assert.equal(empty.newMembers7d, 0);
+
+  const mod = h.engine.service('mod');
+  await mod.act(S, { actorId: IDS.admin, kind: 'warn', targetId: IDS.member, reason: 'a' });
+  await mod.act(S, { actorId: IDS.admin, kind: 'warn', targetId: IDS.member2, reason: 'b' });
+  await mod.act(S, { actorId: IDS.admin, kind: 'ban', targetId: IDS.member2, durationMs: 86_400_000 });
+  seedTickets(h, 6);
+  h.fake.state.members[S].push({ id: IDS.admin2, username: 'casey', display_name: 'Casey', nickname: null, roles: [], joined_at: new Date(h.now() - 86_400_000).toISOString() });
+  h.engine.cache.invalidate(S);
+  await run('access', IDS.admin);
+  const s = w.snapshots[S].overview.stats;
+  assert.equal(s.casesByDay.reduce((a, d) => a + d.count, 0), 3);
+  assert.equal(s.casesByDay.at(-1).count, 3, 'today is last');
+  assert.deepEqual(s.casesByType, { warn: 2, ban: 1 });
+  assert.equal(s.activeWarns, 2);
+  assert.equal(typeof s.activeTimeouts, 'number');
+  assert.equal(s.tempBans, 1);
+  assert.deepEqual(s.tickets, { open: 4, closed7d: 1 });
+  assert.equal(s.newMembers7d, 1);
+  h.engine.store.update('tickets', S, (d) => { d.tickets[1].status = 'closing'; return d; });
+  await run('access', IDS.admin);
+  assert.equal(w.snapshots[S].overview.counts.openTickets, w.snapshots[S].overview.stats.tickets.open, 'both open counts include closing tickets');
+  assert.equal(w.snapshots[S].overview.counts.openTickets, 4);
+
+  h.engine.settings.setEnabled(S, 'mod', false);
+  await run('access', IDS.admin);
+  assert.equal(w.snapshots[S].overview.stats.casesByDay.length, 14);
+});

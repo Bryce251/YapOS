@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isInternalHref, loginUrl, matchRoute, normalizePath, publicPath, safeNext, serverPath } from '../web/js/router.js';
+import { isInternalHref, loginUrl, matchRoute, normalizePath, publicPath, safeNext, sectionFor, serverPath } from '../web/js/router.js';
 
 const SID = '33333333-3333-4333-8333-333333333333';
 
@@ -14,6 +14,15 @@ test('matches every page in the contract', () => {
   assert.equal(app.name, 'app');
   assert.deepEqual(app.params, { sid: SID, app: 'levels' });
   assert.equal(matchRoute(`/servers/${SID}/cases`).name, 'cases');
+  assert.equal(matchRoute(`/servers/${SID}/members`).name, 'members');
+  assert.deepEqual(matchRoute(`/servers/${SID}/members`).params, { sid: SID });
+  assert.equal(matchRoute(`/servers/${SID}/mod`).name, 'mod');
+  assert.equal(matchRoute(`/servers/${SID}/tickets`).name, 'tickets');
+  assert.equal(matchRoute(`/servers/${SID}/tickets`).private, true);
+  assert.equal(matchRoute(`/servers/${SID}/members/u1`).name, 'not-found');
+  assert.equal(sectionFor('members'), 'members');
+  assert.equal(sectionFor('mod'), 'mod');
+  assert.equal(sectionFor('tickets'), 'tickets');
   assert.equal(matchRoute(`/servers/${SID}/public`).name, 'public-settings');
   const pub = matchRoute('/p/My-Server');
   assert.equal(pub.name, 'public');

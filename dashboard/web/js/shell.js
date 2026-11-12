@@ -1,14 +1,18 @@
 import { h, replace } from './dom.js';
 import { icon, logoMark } from './icons.js';
-import { avatar } from './ui.js';
+import { avatar, linkButton } from './ui.js';
 import { themeToggle } from './theme.js';
 import { serverPath } from './router.js';
 import { levelLabel } from './format.js';
+import { ADD_BOT_URL } from './links.js';
 
 const NAV = [
   { id: 'overview', label: 'Overview', icon: 'overview', sub: '' },
+  { id: 'members', label: 'Members', icon: 'users', sub: 'members' },
+  { id: 'mod', label: 'Moderation', icon: 'shield', sub: 'mod' },
+  { id: 'tickets', label: 'Tickets', icon: 'ticket', sub: 'tickets' },
+  { id: 'cases', label: 'Cases', icon: 'list', sub: 'cases' },
   { id: 'apps', label: 'Apps', icon: 'apps', sub: 'apps' },
-  { id: 'cases', label: 'Cases', icon: 'shield', sub: 'cases' },
   { id: 'public-settings', label: 'Public page', icon: 'globe', sub: 'public' },
 ];
 
@@ -16,6 +20,20 @@ export function brand({ href = '/', size = 28 } = {}) {
   return h('a', { href, class: 'brand', dataset: { link: '' }, attrs: { 'aria-label': 'YapOS home' } },
     logoMark({ size, label: '' }),
     h('span', { class: 'brand-name' }, h('span', { text: 'YapOS' }), h('span', { class: 'brand-sub', text: 'Dashboard' })));
+}
+
+export function addToServerButton({ compact = false, wide = false } = {}) {
+  const el = linkButton({ label: 'Add to your server', href: ADD_BOT_URL, icon: 'plus', variant: 'glow', external: true, className: compact ? 'btn-glow-compact' : wide ? 'btn-glow-wide' : '' });
+  el.title = 'Add YapOS to your server';
+  el.append(h('span', { class: 'btn-glow-dots', attrs: { 'aria-hidden': 'true' } }));
+  return el;
+}
+
+function appAurora() {
+  return h('div', { class: 'aurora aurora-app', attrs: { 'aria-hidden': 'true' } },
+    h('span', { class: 'aurora-light aurora-light-a' }),
+    h('span', { class: 'aurora-light aurora-light-b' }),
+    h('span', { class: 'aurora-light aurora-light-c' }));
 }
 
 function userBlock(user, onLogout) {
@@ -33,8 +51,10 @@ export function createShell({ onLogout }) {
   const serverSlot = h('div', { class: 'server-switch-slot' });
   const userSlot = h('div', { class: 'sidebar-footer' });
   const sidebar = h('aside', { class: 'sidebar', id: 'sidebar', attrs: { 'aria-label': 'Sidebar' } },
-    h('div', { class: 'sidebar-top' }, brand({ href: '/servers' }),
+    h('div', { class: 'sidebar-top' },
+      h('div', { class: 'sidebar-brand-row' }, brand({ href: '/servers' })),
       h('button', { type: 'button', class: 'icon-btn sidebar-close', attrs: { 'aria-label': 'Close menu' } }, icon('x', { size: 18 }))),
+    h('div', { class: 'sidebar-cta' }, addToServerButton({ wide: true })),
     serverSlot,
     sidebarNav,
     userSlot);
@@ -45,7 +65,7 @@ export function createShell({ onLogout }) {
   const topbar = h('header', { class: 'topbar' }, menuBtn, h('div', { class: 'topbar-brand' }), crumbs, topRight);
   const main = h('main', { class: 'content', id: 'main', tabIndex: -1 });
   const skip = h('a', { href: '#main', class: 'skip-link', text: 'Skip to content' });
-  const root = h('div', { class: 'app-shell' }, skip, sidebar, overlay, h('div', { class: 'app-main' }, topbar, main));
+  const root = h('div', { class: 'app-shell' }, skip, sidebar, overlay, h('div', { class: 'app-main' }, appAurora(), topbar, main));
 
   let open = false;
   function setOpen(v) {
@@ -78,8 +98,8 @@ export function createShell({ onLogout }) {
     close: () => setOpen(false),
     update({ variant, section, server, user, crumbs: trail }) {
       root.classList.toggle('shell-plain', variant === 'plain');
-      replace(topRight, themeToggle(), variant === 'plain' ? userBlock(user, onLogout) : null);
-      replace(root.querySelector('.topbar-brand'), variant === 'plain' ? brand({ href: '/servers' }) : null);
+      replace(topRight, variant === 'plain' ? null : h('span', { class: 'topbar-cta' }, addToServerButton({ compact: true })), themeToggle(), variant === 'plain' ? userBlock(user, onLogout) : null);
+      replace(root.querySelector('.topbar-brand'), ...(variant === 'plain' ? [brand({ href: '/servers' }), addToServerButton()] : []));
       replace(userSlot, userBlock(user, onLogout));
       if (server) {
         replace(serverSlot,

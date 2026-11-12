@@ -2,7 +2,7 @@ import { MINUTE, ID_RE, SERVER_ID_RE, APP_RE, SLUG_RE, SETTING_KEY_RE, USER_BODY
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { PUBLIC_STALE } from './cron.js';
 import { getSession, touchSession, publicUser } from './sessions.js';
-import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT } from './jobs.js';
+import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
 
 const SERVERS_TTL = 2 * MINUTE;
 const CASES_PAGE_SIZE = 50;
@@ -11,6 +11,15 @@ const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const TIMEOUT_MESSAGE = "YapOS hasn't answered yet. It may be offline or restarting.";
 const NO_ACCESS_MESSAGE = 'You need to be an admin of this server.';
+const MAX_LIST_PAGE = 100;
+const MAX_NUMBER = 1e9;
+const MEMBER_SORTS = new Set(['joined_new', 'joined_old', 'name']);
+const TICKET_STATUSES = new Set(['open', 'closed', 'all']);
+const MOD_ACTIONS = new Set(['warn', 'timeout', 'untimeout', 'kick', 'ban', 'unban', 'unwarn', 'role_add', 'role_remove', 'nick', 'note']);
+const TICKET_ACTIONS = new Set(['claim', 'unclaim', 'close']);
+const MOD_TEXT_FIELDS = { reason: 500, duration: 20, nickname: 32, note: 500 };
+const MOD_FIELDS = new Set(['action', 'role_id', 'case', ...Object.keys(MOD_TEXT_FIELDS)]);
+const TICKET_FIELDS = new Set(['action', 'reason']);
 
 export function csrfOk(request, env) {
   const origin = request.headers.get('Origin');
@@ -100,7 +109,7 @@ async function getJob(env, session, jobId, t) {
     const message = typeof error === 'string' && error ? error : NO_ACCESS_MESSAGE;
     return json({ status: 'error', error: message, message, result: { grant: false, level: result.level ?? null } });
   }
-  if (job.server_id && (job.type === 'change' || job.type === 'member')) {
+  if (job.server_id && SERVER_JOB_TYPES.has(job.type)) {
     const grant = await freshGrant(env.DB, session.user_id, job.server_id, t);
     if (!grant) return fail(403, 'grant_required', 'Your access to this server needs checking again. Open the server page to refresh it.');
   }
@@ -172,6 +181,128 @@ async function getMember(env, session, sid, uid, t) {
   if (g.response) return g.response;
   const job = await enqueue(env.DB, { type: 'member', userId: session.user_id, serverId: sid, data: { user_id: uid } }, t);
   return pending(job);
+}
+
+function badRequest(message) {
+  return new HttpError(400, 'bad_request', message);
+}
+
+function queryText(params, name, max) {
+  return (params.get(name) || '').trim().slice(0, max);
+}
+
+function queryPage(params) {
+  const raw = (params.get('page') || '').trim();
+  if (!raw) return 1;
+  const page = /^[0-9]{1,3}$/.test(raw) ? Number(raw) : 0;
+  if (page < 1 || page > MAX_LIST_PAGE) throw badRequest(`The page must be a number from 1 to ${MAX_LIST_PAGE}.`);
+  return page;
+}
+
+function checkTicketNumber(value) {
+  const number = typeof value === 'string' && /^[0-9]{1,10}$/.test(value) ? Number(value) : 0;
+  if (number < 1 || number > MAX_NUMBER) throw new HttpError(400, 'bad_id', "That ticket number doesn't look right.");
+  return number;
+}
+
+function checkFields(body, allowed) {
+  for (const k of Object.keys(body)) {
+    if (!allowed.has(k)) throw badRequest(`Unknown field "${k.slice(0, 40)}".`);
+  }
+}
+
+function optionalText(body, key, max) {
+  const value = body[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw badRequest(`The ${key} must be text.`);
+  const text = value.trim();
+  if (text.length > max) throw badRequest(`The ${key} can be at most ${max} characters.`);
+  return text;
+}
+
+function validateModAction(body) {
+  checkFields(body, MOD_FIELDS);
+  if (typeof body.action !== 'string' || !MOD_ACTIONS.has(body.action)) throw badRequest("That action isn't one YapOS knows.");
+  const data = { action: body.action };
+  for (const [key, max] of Object.entries(MOD_TEXT_FIELDS)) {
+    const text = optionalText(body, key, max);
+    if (text !== undefined) data[key] = text;
+  }
+  if (body.role_id !== undefined && body.role_id !== null) {
+    if (typeof body.role_id !== 'string' || !ID_RE.test(body.role_id)) throw new HttpError(400, 'bad_id', "That role id doesn't look right.");
+    data.role_id = body.role_id;
+  }
+  if (body.case !== undefined && body.case !== null) {
+    if (!Number.isInteger(body.case) || body.case < 1 || body.case > MAX_NUMBER) throw badRequest('The case must be a case number.');
+    data.case = body.case;
+  }
+  const action = data.action;
+  if (action === 'timeout' && !data.duration) throw badRequest('Pick how long the timeout lasts.');
+  if (action === 'unwarn' && data.case === undefined) throw badRequest('Pick which warning to remove.');
+  if ((action === 'role_add' || action === 'role_remove') && !data.role_id) throw badRequest('Pick a role.');
+  if (action === 'nick' && data.nickname === undefined) throw badRequest('Type a nickname, or leave it empty to clear it.');
+  if (action === 'note' && !data.note) throw badRequest('Type the note first.');
+  return data;
+}
+
+function validateTicketAction(body) {
+  checkFields(body, TICKET_FIELDS);
+  if (typeof body.action !== 'string' || !TICKET_ACTIONS.has(body.action)) throw badRequest("That ticket action isn't one YapOS knows.");
+  const data = { action: body.action };
+  const reason = optionalText(body, 'reason', 500);
+  if (reason !== undefined) data.reason = reason;
+  return data;
+}
+
+async function enqueueFor(env, session, sid, type, data, t) {
+  const g = await requireGrant(env, session, sid, t);
+  if (g.response) return g.response;
+  const job = await enqueue(env.DB, { type, userId: session.user_id, serverId: sid, data }, t);
+  return pending(job);
+}
+
+async function getMembers(env, session, sid, url, t) {
+  const params = url.searchParams;
+  const data = {};
+  const q = queryText(params, 'q', 100);
+  if (q) data.q = q;
+  const role = (params.get('role') || '').trim();
+  if (role) data.role = checkId(role, 'role');
+  const sort = (params.get('sort') || '').trim() || 'joined_new';
+  if (!MEMBER_SORTS.has(sort)) throw badRequest('Sort by newest, oldest or name.');
+  data.sort = sort;
+  data.page = queryPage(params);
+  return enqueueFor(env, session, sid, 'members', data, t);
+}
+
+async function postMemberAction(request, env, session, sid, uid, t) {
+  checkId(uid, 'member');
+  const body = await readJson(request, USER_BODY_LIMIT);
+  const data = { user_id: uid, ...validateModAction(body) };
+  return enqueueFor(env, session, sid, 'modaction', data, t);
+}
+
+async function getTickets(env, session, sid, url, t) {
+  const params = url.searchParams;
+  const status = (params.get('status') || '').trim() || 'open';
+  if (!TICKET_STATUSES.has(status)) throw badRequest('Show open, closed or all tickets.');
+  const data = { status };
+  const q = queryText(params, 'q', 100);
+  if (q) data.q = q;
+  data.page = queryPage(params);
+  return enqueueFor(env, session, sid, 'tickets', data, t);
+}
+
+async function getTicket(env, session, sid, raw, t) {
+  const number = checkTicketNumber(raw);
+  return enqueueFor(env, session, sid, 'ticket', { number }, t);
+}
+
+async function postTicketAction(request, env, session, sid, raw, t) {
+  const number = checkTicketNumber(raw);
+  const body = await readJson(request, USER_BODY_LIMIT);
+  const data = { number, ...validateTicketAction(body) };
+  return enqueueFor(env, session, sid, 'ticketaction', data, t);
 }
 
 function validateAppChange(body, app) {
@@ -314,7 +445,12 @@ export async function handleApi(request, env, deps, url) {
     const sid = checkId(route[1], 'server', SERVER_ID_RE);
     if (n === 2 && readOnly) return getServer(env, session, sid, t);
     if (n === 3 && route[2] === 'cases' && readOnly) return getCases(env, session, sid, url, t);
+    if (n === 3 && route[2] === 'members' && readOnly) return getMembers(env, session, sid, url, t);
     if (n === 4 && route[2] === 'members' && readOnly) return getMember(env, session, sid, route[3], t);
+    if (n === 5 && route[2] === 'members' && route[4] === 'actions' && method === 'POST') return postMemberAction(request, env, session, sid, route[3], t);
+    if (n === 3 && route[2] === 'tickets' && readOnly) return getTickets(env, session, sid, url, t);
+    if (n === 4 && route[2] === 'tickets' && readOnly) return getTicket(env, session, sid, route[3], t);
+    if (n === 5 && route[2] === 'tickets' && route[4] === 'actions' && method === 'POST') return postTicketAction(request, env, session, sid, route[3], t);
     if (n === 4 && route[2] === 'apps' && method === 'PATCH') return patchApp(request, env, session, sid, route[3], t);
     if (n === 3 && route[2] === 'public' && method === 'PATCH') return patchPublic(request, env, session, sid, t);
   }

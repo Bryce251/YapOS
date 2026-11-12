@@ -135,6 +135,15 @@ export function createHarness(overrides = {}) {
     return bot('POST', '/bot/results', { results });
   }
 
+  async function take(jobId) {
+    const { jobs } = await poll();
+    return jobs.find((j) => j.id === jobId) || null;
+  }
+
+  async function settle(cookie, jobId) {
+    return (await api('GET', `/api/jobs/${jobId}`, cookie)).json();
+  }
+
   async function grant(cookie, sid = SERVER, level = 'admin') {
     const res = await api('GET', `/api/servers/${sid}`, cookie);
     const body = await res.json();
@@ -156,7 +165,7 @@ export function createHarness(overrides = {}) {
     });
   }
 
-  return { db, env, clock, calls, codes, yapin, worker, request, startLogin, login, api, bot, poll, answer, grant, pushSnapshot, assets, logs, base };
+  return { db, env, clock, calls, codes, yapin, worker, request, startLogin, login, api, bot, poll, answer, take, settle, grant, pushSnapshot, assets, logs, base };
 }
 
 export function advance(h, ms) {

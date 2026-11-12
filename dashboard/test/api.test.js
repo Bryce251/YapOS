@@ -388,3 +388,324 @@ test('a refused access check is remembered for 5 minutes instead of asking the b
   const g = h.db.raw.prepare('SELECT level FROM grants WHERE user_id = ? AND server_id = ?').get(USERS.alice.id, SERVER);
   assert.equal(g.level, 'admin');
 });
+
+const NEW_ROUTES = [
+  ['GET', `/api/servers/${SERVER}/members`],
+  ['POST', `/api/servers/${SERVER}/members/${USERS.bob.id}/actions`, { action: 'kick' }],
+  ['GET', `/api/servers/${SERVER}/tickets`],
+  ['GET', `/api/servers/${SERVER}/tickets/7`],
+  ['POST', `/api/servers/${SERVER}/tickets/7/actions`, { action: 'claim' }],
+];
+const NEW_TYPES = ['members', 'modaction', 'tickets', 'ticket', 'ticketaction'];
+
+const typeCount = (h, types) => h.db.raw.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE type IN (${types.map(() => '?').join(', ')})`).get(...types).n;
+
+async function ready(h, user = USERS.alice) {
+  const { cookie } = await h.login(user);
+  await h.pushSnapshot();
+  await h.grant(cookie);
+  return cookie;
+}
+
+async function enqueued(h, cookie, method, path, body) {
+  const res = await h.api(method, path, cookie, body);
+  assert.equal(res.status, 202, `${method} ${path}`);
+  const out = await res.json();
+  assert.equal(out.pending, true);
+  const job = await h.take(out.job);
+  assert.ok(job, 'the bot gets the job');
+  assert.equal(job.server_id, SERVER);
+  assert.equal(job.user_id, USERS.alice.id);
+  return job;
+}
+
+test('members list: query becomes a members job with defaults', async () => {
+  const h = createHarness();
+  const cookie = await ready(h);
+  const plain = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/members`);
+  assert.equal(plain.type, 'members');
+  assert.deepEqual(plain.data, { sort: 'joined_new', page: 1 });
+  const full = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/members?q=${encodeURIComponent('  Bob  ')}&role=role-1&sort=name&page=3`);
+  assert.deepEqual(full.data, { q: 'Bob', role: 'role-1', sort: 'name', page: 3 });
+  const empty = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/members?q=&role=&sort=&page=`);
+  assert.deepEqual(empty.data, { sort: 'joined_new', page: 1 });
+  const long = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/members?q=${'x'.repeat(300)}`);
+  assert.equal(long.data.q.length, 100);
+  const oldest = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/members?sort=joined_old&page=100`);
+  assert.deepEqual(oldest.data, { sort: 'joined_old', page: 100 });
+});
+
+test('members list: bad filters are refused before any job', async () => {
+  const h = createHarness();
+  const cookie = await ready(h);
+  const before = jobCount(h);
+  for (const qs of ['sort=random', 'sort=JOINED_NEW', 'page=0', 'page=101', 'page=abc', 'page=1.5', 'page=-1', 'page=1e2', 'role=bad%20id', `role=${'a'.repeat(65)}`]) {
+    const res = await h.api('GET', `/api/servers/${SERVER}/members?${qs}`, cookie);
+    assert.equal(res.status, 400, qs);
+    const body = await res.json();
+    assert.ok(['bad_request', 'bad_id'].includes(body.error), qs);
+    assert.equal(typeof body.message, 'string');
+  }
+  assert.equal(jobCount(h), before);
+});
+
+test('member actions: every action becomes a modaction job with only the allowed fields', async () => {
+  const h = createHarness();
+  const cookie = await ready(h);
+  const path = `/api/servers/${SERVER}/members/${USERS.bob.id}/actions`;
+  const cases = [
+    [{ action: 'warn', reason: '  spam  ' }, { action: 'warn', reason: 'spam' }],
+    [{ action: 'timeout', duration: '10m', reason: 'cool off' }, { action: 'timeout', duration: '10m', reason: 'cool off' }],
+    [{ action: 'untimeout' }, { action: 'untimeout' }],
+    [{ action: 'kick', reason: null }, { action: 'kick' }],
+    [{ action: 'ban', duration: '7d', reason: 'raid' }, { action: 'ban', duration: '7d', reason: 'raid' }],
+    [{ action: 'unban' }, { action: 'unban' }],
+    [{ action: 'unwarn', case: 12 }, { action: 'unwarn', case: 12 }],
+    [{ action: 'role_add', role_id: 'role-1' }, { action: 'role_add', role_id: 'role-1' }],
+    [{ action: 'role_remove', role_id: 'role-1' }, { action: 'role_remove', role_id: 'role-1' }],
+    [{ action: 'nick', nickname: 'Bobby' }, { action: 'nick', nickname: 'Bobby' }],
+    [{ action: 'nick', nickname: '' }, { action: 'nick', nickname: '' }],
+    [{ action: 'note', note: 'Asked nicely twice.' }, { action: 'note', note: 'Asked nicely twice.' }],
+  ];
+  for (const [body, data] of cases) {
+    const job = await enqueued(h, cookie, 'POST', path, body);
+    assert.equal(job.type, 'modaction');
+    assert.deepEqual(job.data, { user_id: USERS.bob.id, ...data }, JSON.stringify(body));
+    await h.answer([{ id: job.id, ok: true, result: { grant: true, level: 'admin', ok: true, action: data.action, case: null, message: 'Done.' } }]);
+  }
+});
+
+test('member actions: strict body validation', async () => {
+  const h = createHarness();
+  const cookie = await ready(h);
+  const path = `/api/servers/${SERVER}/members/${USERS.bob.id}/actions`;
+  const before = jobCount(h);
+  const bad = [
+    {},
+    { action: 'nuke' },
+    { action: 'WARN' },
+    { action: ['warn'] },
+    { action: 'warn', extra: 1 },
+    { action: 'warn', user_id: USERS.alice.id },
+    { action: 'warn', reason: 'x'.repeat(501) },
+    { action: 'warn', reason: 5 },
+    { action: 'timeout' },
+    { action: 'timeout', duration: '' },
+    { action: 'timeout', duration: 'x'.repeat(21) },
+    { action: 'nick' },
+    { action: 'nick', nickname: 'x'.repeat(33) },
+    { action: 'note' },
+    { action: 'note', note: '   ' },
+    { action: 'note', note: 'x'.repeat(501) },
+    { action: 'role_add' },
+    { action: 'role_add', role_id: 'bad id' },
+    { action: 'role_remove', role_id: 7 },
+    { action: 'unwarn' },
+    { action: 'unwarn', case: 0 },
+    { action: 'unwarn', case: 1.5 },
+    { action: 'unwarn', case: '3' },
+    { action: 'unwarn', case: 1e9 + 1 },
+  ];
+  for (const [i, body] of bad.entries()) {
+    if (i % 15 === 14) advance(h, MIN);
+    const res = await h.api('POST', path, cookie, body);
+    assert.equal(res.status, 400, JSON.stringify(body));
+    const out = await res.json();
+    assert.ok(['bad_request', 'bad_id'].includes(out.error), JSON.stringify(body));
+    assert.equal(typeof out.message, 'string');
+  }
+  advance(h, MIN);
+  assert.equal((await h.api('POST', path, cookie, '{"action":"warn","__proto__":{"x":1}}')).status, 400);
+  assert.equal((await h.api('POST', path, cookie, '["warn"]')).status, 400);
+  assert.equal((await h.api('POST', path, cookie, { action: 'warn', reason: 'x'.repeat(70 * 1024) })).status, 413);
+  for (const uid of ['bad%20id', 'a'.repeat(65)]) {
+    assert.equal((await h.api('POST', `/api/servers/${SERVER}/members/${uid}/actions`, cookie, { action: 'kick' })).status, 400, uid);
+  }
+  assert.equal((await h.api('GET', path, cookie)).status, 404);
+  assert.equal((await h.api('PATCH', path, cookie, { action: 'kick' })).status, 404);
+  assert.equal(jobCount(h), before);
+});
+
+test('tickets list: query becomes a tickets job with defaults', async () => {
+  const h = createHarness();
+  const cookie = await ready(h);
+  const plain = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/tickets`);
+  assert.equal(plain.type, 'tickets');
+  assert.deepEqual(plain.data, { status: 'open', page: 1 });
+  const full = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/tickets?status=closed&q=refund&page=2`);
+  assert.deepEqual(full.data, { status: 'closed', q: 'refund', page: 2 });
+  const all = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/tickets?status=all`);
+  assert.equal(all.data.status, 'all');
+  const before = jobCount(h);
+  for (const qs of ['status=pending', 'status=OPEN', 'page=0', 'page=101', 'page=x']) {
+    const res = await h.api('GET', `/api/servers/${SERVER}/tickets?${qs}`, cookie);
+    assert.equal(res.status, 400, qs);
+    assert.equal((await res.json()).error, 'bad_request');
+  }
+  assert.equal(jobCount(h), before);
+});
+
+test('ticket detail: the number must be a whole number from 1 to 1e9', async () => {
+  const h = createHarness();
+  const cookie = await ready(h);
+  const job = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/tickets/42`);
+  assert.equal(job.type, 'ticket');
+  assert.deepEqual(job.data, { number: 42 });
+  const top = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/tickets/1000000000`);
+  assert.deepEqual(top.data, { number: 1e9 });
+  const before = jobCount(h);
+  for (const n of ['0', '-1', 'abc', '1e3', '1.5', '1000000001', '12345678901', '%20', '9'.repeat(30)]) {
+    const res = await h.api('GET', `/api/servers/${SERVER}/tickets/${n}`, cookie);
+    assert.equal(res.status, 400, n);
+    assert.equal((await res.json()).error, 'bad_id');
+  }
+  assert.equal(jobCount(h), before);
+});
+
+test('ticket actions: enqueue and strict body validation', async () => {
+  const h = createHarness();
+  const cookie = await ready(h);
+  const path = `/api/servers/${SERVER}/tickets/7/actions`;
+  const good = [
+    [{ action: 'claim' }, { action: 'claim' }],
+    [{ action: 'unclaim' }, { action: 'unclaim' }],
+    [{ action: 'close', reason: ' solved ' }, { action: 'close', reason: 'solved' }],
+  ];
+  for (const [body, data] of good) {
+    const job = await enqueued(h, cookie, 'POST', path, body);
+    assert.equal(job.type, 'ticketaction');
+    assert.deepEqual(job.data, { number: 7, ...data });
+    await h.answer([{ id: job.id, ok: true, result: { grant: true, level: 'admin', ok: true, message: 'Done.' } }]);
+  }
+  const before = jobCount(h);
+  const bad = [{}, { action: 'delete' }, { action: 'close', reason: 'x'.repeat(501) }, { action: 'close', reason: 1 }, { action: 'claim', number: 8 }, { action: 'claim', user_id: USERS.bob.id }];
+  for (const body of bad) {
+    const res = await h.api('POST', path, cookie, body);
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.equal((await res.json()).error, 'bad_request');
+  }
+  assert.equal((await h.api('POST', `/api/servers/${SERVER}/tickets/0/actions`, cookie, { action: 'claim' })).status, 400);
+  assert.equal((await h.api('POST', `/api/servers/${SERVER}/tickets/x/actions`, cookie, { action: 'claim' })).status, 400);
+  assert.equal((await h.api('GET', path, cookie)).status, 404);
+  assert.equal(jobCount(h), before);
+});
+
+test('member and ticket actions need same Origin and X-YapOS', async () => {
+  const h = createHarness();
+  const cookie = await ready(h);
+  const posts = NEW_ROUTES.filter((r) => r[0] === 'POST');
+  for (const [method, path, body] of posts) {
+    for (const extra of [{ Origin: null }, { Origin: 'https://evil.example' }, { 'X-YapOS': null }, { 'X-YapOS': '0' }]) {
+      const res = await h.api(method, path, cookie, body, extra);
+      assert.equal(res.status, 403, `${path} ${JSON.stringify(extra)}`);
+      assert.equal((await res.json()).error, 'forbidden');
+    }
+  }
+  assert.equal(typeCount(h, NEW_TYPES), 0);
+});
+
+test('new routes need a grant and never reach the bot without one', async () => {
+  const h = createHarness();
+  const { cookie } = await h.login(USERS.alice);
+  for (const [method, path, body] of NEW_ROUTES) {
+    const res = await h.api(method, path, cookie, body);
+    assert.equal(res.status, 403, path);
+    const out = await res.json();
+    assert.equal(out.error, 'grant_required');
+    assert.ok(out.job);
+  }
+  assert.equal(typeCount(h, NEW_TYPES), 0);
+  const { jobs } = await h.poll();
+  assert.ok(jobs.length > 0);
+  assert.ok(jobs.every((j) => j.type === 'access'));
+  await h.answer(jobs.map((j) => ({ id: j.id, ok: true, result: { grant: false, level: 'member' } })));
+  for (const [method, path, body] of NEW_ROUTES) {
+    const res = await h.api(method, path, cookie, body);
+    assert.equal(res.status, 403, path);
+    assert.equal((await res.json()).error, 'no_access');
+  }
+  assert.equal(typeCount(h, NEW_TYPES), 0);
+});
+
+test('IDOR: new routes are per user and per server', async () => {
+  const h = createHarness();
+  const a = await h.login(USERS.alice);
+  const b = await h.login(USERS.bob);
+  await h.pushSnapshot();
+  await h.grant(a.cookie);
+  for (const [method, path, body] of NEW_ROUTES) {
+    const bob = await h.api(method, path, b.cookie, body);
+    assert.equal(bob.status, 403, `bob ${path}`);
+    const other = await h.api(method, path.replace(SERVER, OTHER_SERVER), a.cookie, body);
+    assert.equal(other.status, 403, `other ${path}`);
+  }
+  assert.equal(typeCount(h, NEW_TYPES), 0);
+  const { jobs: access } = await h.poll();
+  await h.answer(access.map((j) => ({ id: j.id, ok: true, result: { grant: false, level: 'member' } })));
+  const res = await h.api('POST', `/api/servers/${SERVER}/members/${USERS.bob.id}/actions`, a.cookie, { action: 'kick' });
+  const { job } = await res.json();
+  const taken = await h.take(job);
+  await h.answer([{ id: taken.id, ok: true, result: { grant: true, level: 'admin', ok: true, action: 'kick', message: 'Kicked.' } }]);
+  assert.equal((await h.api('GET', `/api/jobs/${job}`, b.cookie)).status, 404);
+  assert.equal((await h.settle(a.cookie, job)).status, 'done');
+});
+
+test('new job results are only readable with a fresh grant', async () => {
+  const h = createHarness();
+  const cookie = await ready(h);
+  const ids = [];
+  for (const [method, path, body] of NEW_ROUTES) {
+    const { job } = await (await h.api(method, path, cookie, body)).json();
+    ids.push(job);
+  }
+  const { jobs } = await h.poll();
+  assert.equal(jobs.length, NEW_ROUTES.length);
+  assert.deepEqual(jobs.map((j) => j.type).sort(), [...NEW_TYPES].sort());
+  await h.answer(jobs.map((j) => ({ id: j.id, ok: true, result: { grant: true, level: 'admin', ok: true } })));
+  for (const job of ids) assert.equal((await h.settle(cookie, job)).status, 'done');
+  advance(h, 5 * MIN + 1);
+  for (const job of ids) {
+    const res = await h.api('GET', `/api/jobs/${job}`, cookie);
+    assert.equal(res.status, 403);
+    assert.equal((await res.json()).error, 'grant_required');
+  }
+});
+
+test('new job results refresh the grant, and a refusal revokes it', async () => {
+  const h = createHarness();
+  const cookie = await ready(h);
+  const path = `/api/servers/${SERVER}/members/${USERS.bob.id}/actions`;
+  const first = await enqueued(h, cookie, 'POST', path, { action: 'warn', reason: 'spam' });
+  advance(h, 4 * MIN);
+  await h.answer([{ id: first.id, ok: true, result: { grant: true, level: 'owner', ok: false, error: 'I cannot act on the server owner.' } }]);
+  advance(h, 2 * MIN);
+  const done = await h.settle(cookie, first.id);
+  assert.equal(done.status, 'done', 'a refused action is still a finished job');
+  assert.equal(done.result.ok, false);
+  assert.match(done.result.error, /owner/);
+  const g = h.db.raw.prepare('SELECT level FROM grants WHERE user_id = ? AND server_id = ?').get(USERS.alice.id, SERVER);
+  assert.equal(g.level, 'owner');
+  const second = await enqueued(h, cookie, 'GET', `/api/servers/${SERVER}/tickets`);
+  await h.answer([{ id: second.id, ok: false, result: { grant: false, level: 'mod' }, error: 'You need to be an admin of this server.' }]);
+  const refused = await h.settle(cookie, second.id);
+  assert.equal(refused.status, 'error');
+  assert.equal(refused.result.grant, false);
+  assert.equal(h.db.raw.prepare("SELECT COUNT(*) AS n FROM grants WHERE level != 'none'").get().n, 0);
+  const after = await h.api('POST', path, cookie, { action: 'kick' });
+  assert.equal(after.status, 403);
+  assert.equal((await after.json()).error, 'no_access');
+});
+
+test('a new search replaces the same user\'s older pending search', async () => {
+  const h = createHarness();
+  const { cookie } = await h.login(USERS.alice);
+  await h.grant(cookie, SERVER, 'admin');
+  const first = await (await h.api('GET', `/api/servers/${SERVER}/members?q=al`, cookie)).json();
+  const second = await (await h.api('GET', `/api/servers/${SERVER}/members?q=ali`, cookie)).json();
+  assert.ok(first.job && second.job && first.job !== second.job);
+  const old = await (await h.api('GET', `/api/jobs/${first.job}`, cookie)).json();
+  assert.equal(old.status, 'error');
+  assert.match(old.message, /newer request/);
+  const fresh = await (await h.api('GET', `/api/jobs/${second.job}`, cookie)).json();
+  assert.equal(fresh.status, 'pending');
+});

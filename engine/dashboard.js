@@ -1,5 +1,5 @@
 import { VERSION, hideSecret } from './config.js';
-import { parseBool } from './parse.js';
+import { parseBool, parseDuration } from './parse.js';
 import { avatarUrl } from './links.js';
 
 const IDLE_MS = 15_000;
@@ -25,7 +25,6 @@ const RECENT = 10;
 const MEMBER_CASES = 50;
 const APP_RE = /^[a-z0-9_-]{1,32}$/;
 const SAFE_ID = /^[\w-]{1,64}$/;
-const JOB_TYPES = new Set(['servers', 'access', 'change', 'member']);
 const GRANT_LEVELS = new Set(['admin', 'owner']);
 const NOT_ADMIN = 'You need to be an admin of this server.';
 const LOOKUP_FAILED = "YapOS couldn't check your role just now. Try again in a minute.";
@@ -35,6 +34,29 @@ const RESULT_MAX_BYTES = 500 * 1024;
 const RESULTS_BATCH_BYTES = 1_500_000;
 const RESULTS_PER_POST = 100;
 const BOT_SERVERS_MS = 5 * 60_000;
+const PAGE_SIZE = 50;
+const MAX_PAGE = 100;
+const MAX_QUERY = 100;
+const MAX_REASON = 500;
+const MAX_DURATION = 20;
+const MAX_NICK = 32;
+const MAX_NOTE = 500;
+const MAX_CASE_NUMBER = 1_000_000_000;
+const MEMBER_CACHE_CAP = 2000;
+const STATS_DAYS = 14;
+const DAY_MS = 86_400_000;
+const WEEK_MS = 7 * DAY_MS;
+const YEAR_MS = 365 * DAY_MS;
+const RESULT_ROOM = RESULT_MAX_BYTES - 8 * 1024;
+const MEMBER_SORTS = new Set(['joined_new', 'joined_old', 'name']);
+const TICKET_STATUSES = new Set(['open', 'closed', 'all']);
+const TICKET_ACTIONS = new Set(['claim', 'unclaim', 'close']);
+const MOD_ACTIONS = new Set(['warn', 'timeout', 'untimeout', 'kick', 'ban', 'unban', 'unwarn', 'role_add', 'role_remove', 'nick', 'note']);
+const NO_CAN = Object.freeze({ warn: false, unwarn: false, timeout: false, kick: false, ban: false, unban: false, role: false, nick: false, note: false });
+const MOD_OFF = "Mod isn't installed here. Install it first.";
+const TICKETS_OFF = "Tickets isn't installed here. Install it first.";
+const UNKNOWN_JOB = "I don't know that job.";
+const BAD_LENGTH = "I couldn't read that length. Try something like 10m, 2h or 3d.";
 
 export const SLUG_RE = /^[a-z0-9-]{3,32}$/;
 
@@ -166,6 +188,47 @@ function cleanBase(url) {
   return { base: `${u.origin}${u.pathname.replace(/\/+$/, '')}`, reason: null };
 }
 
+const blank = (v) => v === undefined || v === null || v === '';
+
+function textArg(v, max) {
+  if (blank(v)) return '';
+  return typeof v === 'string' && v.length <= max ? v : null;
+}
+
+function intArg(v, min, max, fallback) {
+  if (blank(v)) return fallback;
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d{1,10}$/.test(v.trim()) ? Number(v.trim()) : NaN;
+  return Number.isInteger(n) && n >= min && n <= max ? n : null;
+}
+
+function optionalId(v) {
+  if (blank(v)) return '';
+  return typeof v === 'string' ? safeId(v) : null;
+}
+
+function durationArg(text) {
+  const s = text.trim().toLowerCase();
+  if (!s) return 0;
+  const years = /^(\d{1,2})\s*(?:y|yr|yrs|year|years)$/.exec(s);
+  if (years) return Number(years[1]) * YEAR_MS;
+  const ms = parseDuration(s);
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
+const isBotMember = (m, botId) => !!m && (m.id === botId || m.bot === true || m.is_bot === true || (Array.isArray(m.badges) && m.badges.includes('bot')));
+const joinedAt = (m) => { const t = Date.parse(m?.joined_at ?? ''); return Number.isFinite(t) ? t : null; };
+const isEveryone = (r, sid) => /^@?everyone$/i.test(r?.name || '') || r?.id === sid || r?.id === 'everyone';
+
+function utcDayStart(ms) {
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+function emptyDays(t) {
+  const first = utcDayStart(t) - (STATS_DAYS - 1) * DAY_MS;
+  return Array.from({ length: STATS_DAYS }, (_, i) => ({ day: new Date(first + i * DAY_MS).toISOString().slice(0, 10), count: 0 }));
+}
+
 function sizeOf(value) {
   try { return Buffer.byteLength(JSON.stringify(value ?? null)); } catch { return Infinity; }
 }
@@ -178,7 +241,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
   const state = {
     timer: null, stopped: true, busy: false, failures: 0, delay: null, hot: false,
     used: new Map(), snapped: new Map(), published: new Map(), pending: [],
-    gone: new Set(), botIds: null, botIdsAt: -Infinity,
+    gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(),
   };
 
   async function request(method, path, body) {
@@ -258,13 +321,37 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       recent: cases.slice(0, RECENT),
       counts: {
         cases: cases.length,
-        openTickets: Object.values(tickets?.tickets || {}).filter((t) => t?.status === 'open').length,
+        openTickets: Object.values(tickets?.tickets || {}).filter((t) => t?.status === 'open' || t?.status === 'closing').length,
         starboardPosts: Object.keys(stars || {}).length,
       },
+      stats: await overviewStats(sid),
     };
     const online = counts?.online_count ?? server?.online_count;
     if (typeof online === 'number') out.online_count = online;
     return out;
+  }
+
+  async function overviewStats(sid) {
+    const t = now();
+    const mod = engine.service('mod');
+    let base = null;
+    try { base = mod?.stats ? mod.stats(sid) : null; } catch (e) { log.debug('[dashboard] mod stats failed', e?.message); }
+    const tickets = Object.values(engine.store.get('tickets', sid, null)?.tickets || {}).filter(plainObject);
+    const members = await engine.cache.members(sid).catch(() => null);
+    const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+    const days = Array.isArray(base?.casesByDay) && base.casesByDay.length ? base.casesByDay.map((d) => ({ day: String(d?.day ?? ''), count: count(d?.count) })) : emptyDays(t);
+    return {
+      casesByDay: days,
+      casesByType: plainObject(base?.casesByType) ? Object.fromEntries(Object.entries(base.casesByType).map(([k, v]) => [k, count(v)])) : {},
+      activeWarns: count(base?.activeWarns),
+      activeTimeouts: Number.isInteger(base?.activeTimeouts) ? base.activeTimeouts : null,
+      tempBans: count(base?.tempBans),
+      tickets: {
+        open: tickets.filter((x) => x.status === 'open' || x.status === 'closing').length,
+        closed7d: tickets.filter((x) => x.status === 'closed' && Number(x.closedAt) >= t - WEEK_MS).length,
+      },
+      newMembers7d: Array.isArray(members) && members.length ? members.filter((m) => (joinedAt(m) ?? -Infinity) >= t - WEEK_MS).length : null,
+    };
   }
 
   function appsPart(sid) {
@@ -489,12 +576,28 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     return { result: { grant: true, level, applied, errors, snapshot: { apps: fresh.apps, settings: fresh.settings } } };
   }
 
-  async function runMember(sid, uid, data) {
-    const { level } = await levelOf(sid, uid);
-    if (!GRANT_LEVELS.has(level)) return { result: { grant: false, level, error: NOT_ADMIN }, error: NOT_ADMIN };
-    const target = safeId(data.user_id);
-    if (!target) return { result: { grant: true, level, member: null, error: "That member id doesn't look right." } };
-    state.used.set(sid, now());
+  const denied = (level) => ({ result: { grant: false, level, error: NOT_ADMIN }, error: NOT_ADMIN });
+
+  function guarded(fn) {
+    return async (sid, uid, data) => {
+      const { level, member } = await levelOf(sid, uid);
+      if (!GRANT_LEVELS.has(level)) return denied(level);
+      state.used.set(sid, now());
+      return fn(sid, uid, data, { level, member });
+    };
+  }
+
+  function fallbackDetail(m) {
+    return { username: m?.username ?? null, nickname: m?.nickname ?? null, joined_at: m?.joined_at ?? null, roles: [], timeout: null, banned: false, tempBan: null, notes: [], can: { ...NO_CAN } };
+  }
+
+  function lastKnownName(cases) {
+    const hit = cases.find((c) => c.user?.name);
+    return hit ? plainName(hit.user.name) : null;
+  }
+
+  async function memberInfo(sid, uid, target) {
+    engine.perms.invalidateKey(`m:${sid}:${target}`);
     const m = await engine.perms.member(sid, target).catch(() => null);
     const mod = engine.service('mod');
     const levels = engine.settings.isEnabled(sid, 'levels') ? engine.service('levels') : null;
@@ -505,21 +608,239 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     try { lv = levels?.getUser ? levels.getUser(sid, target) : null; } catch { lv = null; }
     let bal = null;
     try { bal = econ?.balance ? econ.balance(sid, target) : null; } catch { bal = null; }
+    let detail = null;
+    try { detail = mod?.memberDetail ? await mod.memberDetail(sid, target, uid) : null; } catch (e) { log.debug('[dashboard] member detail failed', e?.message); }
+    if (!plainObject(detail)) detail = fallbackDetail(m);
+    const can = plainObject(detail.can) && engine.settings.isEnabled(sid, 'mod') ? detail.can : NO_CAN;
+    return {
+      ...detail,
+      id: target,
+      name: m ? memberName(m) : lastKnownName(cases) || (detail.banned ? 'Banned member' : 'Not in the server'),
+      avatar_url: avatarUrl(m?.avatar_path ?? null),
+      bot: isBotMember(m, engine.bot.me?.id ?? null),
+      warnings,
+      cases,
+      levels: lv ? { level: lv.level, xp: lv.xp, messages: lv.messages || 0, voiceSeconds: lv.voiceSeconds || 0 } : null,
+      economy: bal === null ? null : { balance: bal },
+      can: Object.fromEntries(Object.keys(NO_CAN).map((k) => [k, can[k] === true])),
+    };
+  }
+
+  async function runMember(sid, uid, data, { level }) {
+    const target = typeof data.user_id === 'string' ? safeId(data.user_id) : null;
+    if (!target) return { result: { grant: true, level, member: null, error: "That member id doesn't look right." } };
+    return { result: { grant: true, level, member: await memberInfo(sid, uid, target) } };
+  }
+
+  async function roleOrder(sid) {
+    const roles = await engine.perms.roles(sid).catch(() => null);
+    if (!Array.isArray(roles)) return null;
+    return new Map(roles.filter((r) => r?.id && !isEveryone(r, sid)).map((r) => [r.id, typeof r.position === 'number' ? r.position : 0]));
+  }
+
+  function caseCounts(sid) {
+    const data = engine.store.get('mod', sid, null);
+    const counts = new Map();
+    for (const c of Array.isArray(data?.cases) ? data.cases : []) if (c?.targetId) counts.set(c.targetId, (counts.get(c.targetId) || 0) + 1);
+    return counts;
+  }
+
+  function sortMembers(list, sort) {
+    const byName = (a, b) => memberName(a).toLowerCase().localeCompare(memberName(b).toLowerCase()) || String(a.id).localeCompare(String(b.id));
+    if (sort === 'name') return list.sort(byName);
+    const dir = sort === 'joined_old' ? 1 : -1;
+    return list.sort((a, b) => {
+      const x = joinedAt(a);
+      const y = joinedAt(b);
+      if (x === y) return byName(a, b);
+      if (x === null) return 1;
+      if (y === null) return -1;
+      return (x - y) * dir;
+    });
+  }
+
+  function memberRow(sid, m, { order, cases, mod, botId }) {
+    const ids = (Array.isArray(m.roles) ? m.roles : []).filter((r) => typeof r === 'string' && r !== sid && (!order || order.has(r)));
+    if (order) ids.sort((a, b) => order.get(b) - order.get(a));
+    let warnings = 0;
+    try { warnings = mod?.activeWarns ? mod.activeWarns(sid, m.id).length : 0; } catch { warnings = 0; }
+    return {
+      id: m.id,
+      name: memberName(m),
+      username: typeof m.username === 'string' ? m.username.slice(0, 64) : '',
+      avatar_url: avatarUrl(m.avatar_path ?? null),
+      joined_at: typeof m.joined_at === 'string' ? m.joined_at : null,
+      roles: ids,
+      bot: isBotMember(m, botId),
+      warnings,
+      cases: cases.get(m.id) || 0,
+    };
+  }
+
+  async function runMembers(sid, uid, data, { level }) {
+    const empty = { members: [], total: 0, page: 1, pages: 1, pageSize: PAGE_SIZE, capped: false };
+    const bad = (error) => ({ result: { grant: true, level, ...empty, error } });
+    const q = textArg(data.q, MAX_QUERY);
+    if (q === null) return bad('That search is too long.');
+    const role = optionalId(data.role);
+    if (role === null) return bad("That role id doesn't look right.");
+    const sort = blank(data.sort) ? 'joined_new' : MEMBER_SORTS.has(data.sort) ? data.sort : null;
+    if (!sort) return bad('Sort by newest, oldest or name.');
+    const page = intArg(data.page, 1, MAX_PAGE, 1);
+    if (page === null) return bad(`Pick a page from 1 to ${MAX_PAGE}.`);
+    const all = await engine.cache.members(sid).catch(() => null);
+    if (!Array.isArray(all)) return bad("I couldn't load the member list just now. Try again in a minute.");
+    const needle = q.trim().toLowerCase();
+    const hit = (m) => !needle || [m.nickname, m.display_name, m.username, m.id].some((x) => typeof x === 'string' && x.toLowerCase().includes(needle));
+    const hasRole = (m) => !role || (Array.isArray(m.roles) && m.roles.includes(role));
+    const list = sortMembers(all.filter((m) => plainObject(m) && typeof m.id === 'string' && hasRole(m) && hit(m)), sort);
+    const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+    const at = Math.min(page, pages);
+    const ctx = { order: await roleOrder(sid), cases: caseCounts(sid), mod: engine.service('mod'), botId: engine.bot.me?.id ?? null };
+    const members = list.slice((at - 1) * PAGE_SIZE, at * PAGE_SIZE).map((m) => memberRow(sid, m, ctx));
+    const counts = await engine.bot.memberCounts?.(sid).catch(() => null);
+    const total = counts?.member_count ?? (await engine.perms.server(sid).catch(() => null))?.member_count;
+    const capped = all.length >= MEMBER_CACHE_CAP || (typeof total === 'number' && total > all.length);
+    return { result: { grant: true, level, members, total: list.length, page: at, pages, pageSize: PAGE_SIZE, capped } };
+  }
+
+  function modArgs(data) {
+    const action = typeof data.action === 'string' && MOD_ACTIONS.has(data.action) ? data.action : null;
+    if (!action) return { error: "I don't know that action." };
+    const target = typeof data.user_id === 'string' ? safeId(data.user_id) : null;
+    if (!target) return { error: "That member id doesn't look right." };
+    const reason = textArg(data.reason, MAX_REASON);
+    if (reason === null) return { error: `Keep the reason under ${MAX_REASON} characters.` };
+    const duration = textArg(data.duration, MAX_DURATION);
+    if (duration === null) return { error: BAD_LENGTH };
+    const nickname = textArg(data.nickname, MAX_NICK);
+    if (nickname === null) return { error: `Nicknames can be up to ${MAX_NICK} characters.` };
+    const note = textArg(data.note, MAX_NOTE);
+    if (note === null) return { error: `Keep the note under ${MAX_NOTE} characters.` };
+    const roleId = optionalId(data.role_id);
+    if (roleId === null) return { error: "That role id doesn't look right." };
+    const caseNumber = intArg(data.case, 1, MAX_CASE_NUMBER, 0);
+    if (caseNumber === null) return { error: "That case number doesn't look right." };
+    let durationMs = null;
+    if (action === 'timeout' || action === 'ban') {
+      const ms = durationArg(duration);
+      if (ms === null) return { error: BAD_LENGTH };
+      if (action === 'timeout' && !ms) return { error: 'Pick how long the timeout should last.' };
+      durationMs = ms || null;
+    }
+    if ((action === 'role_add' || action === 'role_remove') && !roleId) return { error: 'Pick a role first.' };
+    if (action === 'unwarn' && !caseNumber) return { error: 'Pick the warning to remove.' };
+    if (action === 'note' && !note.trim()) return { error: 'The note was empty, so nothing was saved.' };
+    return { value: { action, target, reason: reason.trim(), durationMs, nickname, note: note.trim(), roleId: roleId || null, caseNumber: caseNumber || null } };
+  }
+
+  async function modError(sid, mod, e, a) {
+    if (!e?.friendly) log.debug(`[dashboard] ${a.action} from the dashboard failed`, e?.message);
+    const who = await engine.perms.member(sid, a.target).catch(() => null);
+    let text = null;
+    try { text = typeof mod.explainError === 'function' ? mod.explainError(e, a.action, who ? memberName(who) : 'that member') : null; } catch { text = null; }
+    return String(text || (e?.friendly ? e.message : "That didn't work. Try again in a minute.")).slice(0, 1000);
+  }
+
+  async function runModAction(sid, uid, data, { level }) {
+    const no = (error) => ({ result: { grant: true, level, ok: false, error } });
+    const args = modArgs(data);
+    if (args.error) return no(args.error);
+    const a = args.value;
+    const mod = engine.service('mod');
+    if (!engine.settings.isEnabled(sid, 'mod') || typeof mod?.act !== 'function') return no(MOD_OFF);
+    let out;
+    try {
+      out = await mod.act(sid, {
+        actorId: uid, kind: a.action, targetId: a.target, durationMs: a.durationMs, reason: a.reason,
+        roleId: a.roleId, nickname: a.nickname, note: a.note, caseNumber: a.caseNumber, source: 'dashboard',
+      });
+    } catch (e) {
+      return no(await modError(sid, mod, e, a));
+    }
+    const member = await memberInfo(sid, uid, a.target);
+    state.dirty.add(sid);
     return {
       result: {
         grant: true,
         level,
-        member: {
-          id: target,
-          name: m ? memberName(m) : 'Not in the server',
-          avatar_url: avatarUrl(m?.avatar_path ?? null),
-          warnings,
-          cases,
-          levels: lv ? { level: lv.level, xp: lv.xp, messages: lv.messages || 0, voiceSeconds: lv.voiceSeconds || 0 } : null,
-          economy: bal === null ? null : { balance: bal },
-        },
+        ok: true,
+        action: a.action,
+        case: plainObject(out?.case) ? compactCase(out.case) : null,
+        message: String(out?.message || 'Done.').slice(0, 1000),
+        member,
       },
     };
+  }
+
+  function ticketsService(sid) {
+    if (!engine.settings.isEnabled(sid, 'tickets')) return null;
+    const svc = engine.service('tickets');
+    return svc && typeof svc.list === 'function' ? svc : null;
+  }
+
+  async function runTickets(sid, uid, data, { level }) {
+    const empty = { tickets: [], total: 0, page: 1, pages: 1, pageSize: PAGE_SIZE, counts: { open: 0, closed: 0 }, rating: { average: null, count: 0 } };
+    const bad = (error) => ({ result: { grant: true, level, ...empty, error } });
+    const status = blank(data.status) ? 'open' : TICKET_STATUSES.has(data.status) ? data.status : null;
+    if (!status) return bad('Show open, closed or all tickets.');
+    const q = textArg(data.q, MAX_QUERY);
+    if (q === null) return bad('That search is too long.');
+    const page = intArg(data.page, 1, MAX_PAGE, 1);
+    if (page === null) return bad(`Pick a page from 1 to ${MAX_PAGE}.`);
+    const svc = ticketsService(sid);
+    if (!svc) return bad(TICKETS_OFF);
+    const out = await svc.list(sid, { status, q: q.trim(), page });
+    return { result: { grant: true, level, ...empty, ...(plainObject(out) ? out : {}) } };
+  }
+
+  function fitTranscript(result) {
+    let size = sizeOf(result);
+    while (size > RESULT_ROOM && result.transcript?.text) {
+      const text = result.transcript.text;
+      result.transcript = { ...result.transcript, text: text.slice(Math.min(text.length, Math.max(1024, size - RESULT_ROOM))) };
+      size = sizeOf(result);
+    }
+    return result;
+  }
+
+  async function runTicket(sid, uid, data, { level }) {
+    const bad = (error) => ({ result: { grant: true, level, ticket: null, transcript: null, error } });
+    const number = intArg(data.number, 1, MAX_CASE_NUMBER, null);
+    if (!number) return bad("That ticket number doesn't look right.");
+    const svc = ticketsService(sid);
+    if (!svc) return bad(TICKETS_OFF);
+    const ticket = await svc.get(sid, number);
+    if (!plainObject(ticket)) return bad("I couldn't find that ticket.");
+    let raw = null;
+    try { raw = await svc.transcript(sid, number); } catch (e) { log.debug('[dashboard] ticket transcript failed', e?.message); }
+    const transcript = plainObject(raw) && typeof raw.text === 'string'
+      ? { text: raw.text, count: Number.isInteger(raw.count) ? raw.count : 0, live: raw.live === true }
+      : null;
+    return { result: fitTranscript({ grant: true, level, ticket, transcript }) };
+  }
+
+  async function ticketCall(svc, sid, number, uid, action, reason) {
+    if (action === 'close') return svc.close(sid, number, { by: uid, reason });
+    return action === 'claim' ? svc.claim(sid, number, uid) : svc.unclaim(sid, number, uid);
+  }
+
+  async function runTicketAction(sid, uid, data, { level }) {
+    const no = (error) => ({ result: { grant: true, level, ok: false, message: error, error, ticket: null } });
+    const number = intArg(data.number, 1, MAX_CASE_NUMBER, null);
+    if (!number) return no("That ticket number doesn't look right.");
+    const action = typeof data.action === 'string' && TICKET_ACTIONS.has(data.action) ? data.action : null;
+    if (!action) return no('Pick claim, unclaim or close.');
+    const reason = textArg(data.reason, MAX_REASON);
+    if (reason === null) return no(`Keep the reason under ${MAX_REASON} characters.`);
+    const svc = ticketsService(sid);
+    if (!svc) return no(TICKETS_OFF);
+    const out = await ticketCall(svc, sid, number, uid, action, reason.trim());
+    const ok = out?.ok === true;
+    const message = String(out?.message || (ok ? 'Done.' : "That didn't work.")).slice(0, 1000);
+    if (ok) state.dirty.add(sid);
+    const error = ok ? {} : { error: String(out?.error || message).slice(0, 1000) };
+    return { result: { grant: true, level, ok, message, ...error, ticket: plainObject(out?.ticket) ? out.ticket : null } };
   }
 
   async function runServers(uid) {
@@ -543,6 +864,19 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     return { result: { grant, level } };
   }
 
+  const handlers = Object.assign(Object.create(null), {
+    servers: (sid, uid) => runServers(uid),
+    access: (sid, uid) => runAccess(sid, uid),
+    change: (sid, uid, data) => runChange(sid, uid, data),
+    member: guarded(runMember),
+    members: guarded(runMembers),
+    modaction: guarded(runModAction),
+    tickets: guarded(runTickets),
+    ticket: guarded(runTicket),
+    ticketaction: guarded(runTicketAction),
+  });
+  const jobTypes = new Set(Object.keys(handlers));
+
   function jobData(raw) {
     if (raw === null || raw === undefined) return {};
     if (typeof raw === 'string') {
@@ -557,7 +891,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     const id = typeof job.id === 'string' || typeof job.id === 'number' ? job.id : null;
     if (id === null || String(id).length > 100) return null;
     const fail = (error) => ({ id, ok: false, error });
-    if (!JOB_TYPES.has(job.type)) return fail("I don't know that job.");
+    if (typeof job.type !== 'string' || !jobTypes.has(job.type)) return fail(UNKNOWN_JOB);
     const uid = safeId(job.user_id);
     if (!uid) return fail('That job has no user.');
     const data = jobData(job.data);
@@ -568,11 +902,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       if (!sid || !SERVER_ID.test(sid)) return fail('That job has no server.');
     }
     try {
-      let out;
-      if (job.type === 'servers') out = await runServers(uid);
-      else if (job.type === 'access') out = await runAccess(sid, uid);
-      else if (job.type === 'change') out = await runChange(sid, uid, data);
-      else out = await runMember(sid, uid, data);
+      const out = await handlers[job.type](sid, uid, data);
       return { id, ok: true, result: out.result, ...(out.error ? { error: out.error } : {}) };
     } catch (e) {
       if (e?.lookup) {
@@ -616,6 +946,13 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       if (!r.ok && retryable(r.status)) throw Object.assign(new Error(`results answered ${r.status}`), { status: r.status });
       if (!r.ok) log.warn(`[dashboard] the dashboard refused ${batch.length} job result(s) (${r.status}); dropping them.`);
       state.pending.splice(0, batch.length);
+    }
+  }
+
+  async function pushDirty() {
+    for (const sid of [...state.dirty]) {
+      state.dirty.delete(sid);
+      await pushSnapshot(sid).catch((e) => log.debug('[dashboard] snapshot after a change failed', e?.message));
     }
   }
 
@@ -663,6 +1000,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       const results = [];
       for (const job of jobs) results.push(await runJob(job));
       await postResults(results);
+      await pushDirty();
       await refresh();
       if (state.failures) log.info('[dashboard] connected again');
       state.failures = 0;
@@ -699,6 +1037,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     get delay() { return state.delay; },
     get hot() { return state.hot; },
     get running() { return !state.stopped; },
+    get jobTypes() { return [...jobTypes]; },
     start() {
       if (!enabled) {
         log.info(reason ? `[dashboard] off: ${reason}.` : '[dashboard] off: set YAPOS_DASHBOARD_URL and YAPOS_DASHBOARD_SECRET to turn it on.');

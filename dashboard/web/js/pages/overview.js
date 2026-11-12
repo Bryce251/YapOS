@@ -72,6 +72,74 @@ function appsCard(sid, apps) {
       : h('p', { class: 'muted', text: 'No apps are installed. Turn some on from the Apps page.' }));
 }
 
+function countOf(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+}
+
+function dayLabel(day) {
+  const d = new Date(`${day}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(d.getTime())) return day || '';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+function casesChart(byDay) {
+  const days = (Array.isArray(byDay) ? byDay : []).slice(-14)
+    .map((d) => ({ day: String(d?.day ?? ''), count: countOf(d?.count) ?? 0 }));
+  if (!days.length) return null;
+  const total = days.reduce((sum, d) => sum + d.count, 0);
+  const max = Math.max(1, ...days.map((d) => d.count));
+  return h('div', { class: 'pulse-chart' },
+    h('div', { class: 'pulse-summary' },
+      h('span', { class: 'pulse-total', text: formatNumber(total) }),
+      h('span', { class: 'pulse-caption', text: total === 1 ? 'case in the last 14 days' : 'cases in the last 14 days' })),
+    h('ol', { class: 'pulse-bars', attrs: { role: 'img', 'aria-label': `Cases per day for the last ${days.length} days, ${formatNumber(total)} in total` } },
+      ...days.map((d, i) => h('li', {
+        class: ['pulse-bar-col', d.count ? '' : 'is-zero'],
+        title: `${dayLabel(d.day)}: ${formatNumber(d.count)} ${d.count === 1 ? 'case' : 'cases'}`,
+        style: { '--h': `${Math.round((d.count / max) * 100)}%`, '--i': String(i) },
+      }, h('span', { class: 'pulse-bar' })))),
+    h('div', { class: 'pulse-axis' }, h('span', { text: dayLabel(days[0].day) }), h('span', { text: 'Today' })));
+}
+
+function typeChips(byType) {
+  if (!byType || typeof byType !== 'object') return null;
+  const rows = Object.entries(byType)
+    .map(([type, n]) => [type, countOf(n) ?? 0])
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+  if (!rows.length) return null;
+  return h('div', { class: 'pulse-types', attrs: { 'aria-label': 'Cases by type in the last 30 days' } },
+    ...rows.map(([type, n]) => badge(`${caseTypeLabel(type)} · ${formatNumber(n)}`, caseTone(type))));
+}
+
+function metric(label, value) {
+  const n = countOf(value);
+  if (n === null) return null;
+  return h('div', { class: 'pulse-metric' },
+    h('span', { class: 'pulse-metric-value', text: formatCompact(n) }),
+    h('span', { class: 'pulse-metric-label', text: label }));
+}
+
+function pulseCard(sid, stats) {
+  if (!stats || typeof stats !== 'object') return null;
+  const tickets = stats.tickets && typeof stats.tickets === 'object' ? stats.tickets : {};
+  const metrics = [
+    metric('Active warnings', stats.activeWarns),
+    metric('Timed out now', stats.activeTimeouts),
+    metric('Temp bans', stats.tempBans),
+    metric('Tickets closed this week', tickets.closed7d),
+    metric('New members this week', stats.newMembers7d),
+  ].filter(Boolean);
+  const chart = casesChart(stats.casesByDay);
+  if (!chart && !metrics.length) return null;
+  const more = h('a', { href: serverPath(sid, 'mod'), class: 'link-subtle', dataset: { link: '' } }, 'Moderation', icon('arrow-right', { size: 14 }));
+  return card({ title: 'Last 14 days', icon: 'activity', actions: more, className: 'card-pulse' },
+    h('div', null, chart || h('p', { class: 'muted', text: 'No daily numbers yet.' }), typeChips(stats.casesByType)),
+    metrics.length ? h('div', { class: 'pulse-metrics' }, ...metrics) : null);
+}
+
 export function renderOverview(ctx) {
   const { main, params } = ctx;
   serverChrome(ctx, 'overview', 'Overview');
@@ -113,16 +181,18 @@ export function renderOverview(ctx) {
       const appsInfo = ov.apps || {};
       const enabledApps = appsInfo.enabled ?? detail.apps.filter((a) => a.enabled).length;
       const totalApps = appsInfo.total ?? detail.apps.length;
-      body.replaceChildren(
+      body.replaceChildren(...[
         h('div', { class: 'stat-grid' },
           statCard({ label: 'Members', value: formatCompact(ov.member_count), icon: 'users', hint: ov.online_count !== undefined && ov.online_count !== null ? `${formatNumber(ov.online_count)} online` : '' }),
           statCard({ label: 'Apps installed', value: `${formatNumber(enabledApps)}`, icon: 'apps', hint: `of ${formatNumber(totalApps)} available` }),
           statCard({ label: 'Mod cases', value: formatCompact(counts.cases ?? 0), icon: 'shield', hint: 'All time' }),
-          statCard({ label: 'Open tickets', value: formatCompact(counts.openTickets ?? 0), icon: 'ticket' }),
+          statCard({ label: 'Open tickets', value: formatCompact(counts.openTickets ?? ov.stats?.tickets?.open ?? 0), icon: 'ticket' }),
           statCard({ label: 'Starboard posts', value: formatCompact(counts.starboardPosts ?? 0), icon: 'star' })),
+        pulseCard(params.sid, ov.stats),
         h('div', { class: 'overview-grid' },
           recentCard(params.sid, ov.recent),
-          h('div', { class: 'stack' }, botCard(ov.bot), appsCard(params.sid, detail.apps))));
+          h('div', { class: 'stack' }, botCard(ov.bot), appsCard(params.sid, detail.apps))),
+      ].filter(Boolean));
     },
   });
 }

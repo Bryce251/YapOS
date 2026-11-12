@@ -30,6 +30,7 @@ export function errorView(err, onRetry, { compact = false } = {}) {
       return errorState({ title: 'No access to this server', body: err.message, compact, iconName: 'lock' });
     }
     if (err.status === 404) return errorState({ title: 'Not found', body: err.message, onRetry, compact });
+    if (err.code === 'job_error' && err.data && err.data.grant === true) return errorState({ title: "Can't show this", body: err.message, onRetry, compact });
     if (err.code === 'unauthorized') return errorState({ title: 'Signed out', body: 'Taking you to the login page…', compact, iconName: 'user' });
     return errorState({ title: 'Something went wrong', body: err.message, onRetry, compact });
   }

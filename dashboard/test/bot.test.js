@@ -210,3 +210,81 @@ test('a public page the bot stopped refreshing goes offline after 2 hours', asyn
   await h.worker.scheduled({}, h.env, {});
   assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM public_pages').get().n, 0);
 });
+
+const NEW_JOBS = [
+  ['members', 'GET', `/api/servers/${SERVER}/members?q=sam&sort=name&page=2`, undefined, { q: 'sam', sort: 'name', page: 2 }],
+  ['modaction', 'POST', `/api/servers/${SERVER}/members/${USERS.bob.id}/actions`, { action: 'timeout', duration: '1h', reason: 'spam' }, { user_id: USERS.bob.id, action: 'timeout', duration: '1h', reason: 'spam' }],
+  ['tickets', 'GET', `/api/servers/${SERVER}/tickets?status=all`, undefined, { status: 'all', page: 1 }],
+  ['ticket', 'GET', `/api/servers/${SERVER}/tickets/3`, undefined, { number: 3 }],
+  ['ticketaction', 'POST', `/api/servers/${SERVER}/tickets/3/actions`, { action: 'close', reason: 'done' }, { number: 3, action: 'close', reason: 'done' }],
+];
+
+const grantOf = (h, user, sid = SERVER) => h.db.raw.prepare('SELECT level, confirmed_at FROM grants WHERE user_id = ? AND server_id = ?').get(user.id, sid);
+
+test('poll hands the bot every new job type with its server and data', async () => {
+  const h = createHarness();
+  const { cookie } = await h.login(USERS.alice);
+  await h.grant(cookie);
+  const ids = {};
+  for (const [type, method, path, body] of NEW_JOBS) {
+    const res = await h.api(method, path, cookie, body);
+    assert.equal(res.status, 202, type);
+    ids[type] = (await res.json()).job;
+  }
+  const { jobs } = await h.poll();
+  for (const [type, , , , data] of NEW_JOBS) {
+    const job = jobs.find((j) => j.id === ids[type]);
+    assert.equal(job.type, type);
+    assert.equal(job.server_id, SERVER);
+    assert.equal(job.user_id, USERS.alice.id);
+    assert.deepEqual(job.data, data, type);
+  }
+});
+
+test('results of every new job type refresh or revoke the grant', async () => {
+  for (const [type, method, path, body] of NEW_JOBS) {
+    const h = createHarness();
+    const { cookie } = await h.login(USERS.alice);
+    await h.grant(cookie, SERVER, 'admin');
+    const before = grantOf(h, USERS.alice).confirmed_at;
+    const first = (await (await h.api(method, path, cookie, body)).json()).job;
+    await h.poll();
+    advance(h, 3 * MIN);
+    const r = await h.answer([{ id: first, ok: true, result: { grant: true, level: 'owner', ok: true } }]);
+    assert.equal((await r.json()).stored, 1, type);
+    const refreshed = grantOf(h, USERS.alice);
+    assert.equal(refreshed.level, 'owner', type);
+    assert.ok(refreshed.confirmed_at > before, type);
+    const second = (await (await h.api(method, path, cookie, body)).json()).job;
+    await h.poll();
+    await h.answer([{ id: second, ok: true, result: { grant: false, level: 'member', error: 'You need to be an admin of this server.' } }]);
+    assert.equal(grantOf(h, USERS.alice).level, 'none', type);
+    assert.equal(grantOf(h, USERS.bob), undefined, type);
+  }
+});
+
+test('a new job answered ok:false without a result leaves the grant alone', async () => {
+  const h = createHarness();
+  const { cookie } = await h.login(USERS.alice);
+  await h.grant(cookie, SERVER, 'admin');
+  const { job } = await (await h.api('GET', `/api/servers/${SERVER}/members`, cookie)).json();
+  await h.poll();
+  await h.answer([{ id: job, ok: false, error: 'I could not load the member list.' }]);
+  assert.equal(grantOf(h, USERS.alice).level, 'admin');
+  const res = await (await h.api('GET', `/api/jobs/${job}`, cookie)).json();
+  assert.equal(res.status, 'error');
+  assert.equal(res.message, 'I could not load the member list.');
+});
+
+test('a big members answer over 512 KB becomes a friendly error', async () => {
+  const h = createHarness();
+  const { cookie } = await h.login(USERS.alice);
+  await h.grant(cookie);
+  const { job } = await (await h.api('GET', `/api/servers/${SERVER}/members`, cookie)).json();
+  await h.poll();
+  const members = [{ id: 'x', name: 'x'.repeat(600 * 1024) }];
+  await h.answer([{ id: job, ok: true, result: { grant: true, level: 'admin', members } }]);
+  const res = await (await h.api('GET', `/api/jobs/${job}`, cookie)).json();
+  assert.equal(res.status, 'error');
+  assert.match(res.message, /too big/);
+});

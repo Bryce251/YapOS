@@ -1,5 +1,5 @@
 import { SERVER_ID_RE, SLUG_RE, PART_LIMIT, HttpError, json, fail, readJson, isPlainObject, safeEqual, isLocalHost, byteLength, clipString, safeHttpsUrl } from './util.js';
-import { expireJobs, claimJobs, isHot, DENIED } from './jobs.js';
+import { expireJobs, claimJobs, isHot, DENIED, SERVER_JOB_TYPES } from './jobs.js';
 
 const RESULTS_LIMIT = 2 * 1024 * 1024;
 const SNAPSHOT_LIMIT = 4 * PART_LIMIT + 64 * 1024;
@@ -11,7 +11,7 @@ const MAX_BOARD = 100;
 const JOB_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 const LEVEL_RE = /^[a-z_]{1,16}$/;
 const SNAPSHOT_PARTS = ['overview', 'apps', 'settings', 'cases'];
-const GRANT_TYPES = new Set(['access', 'change', 'member']);
+const GRANT_TYPES = new Set(['access', ...SERVER_JOB_TYPES]);
 
 async function authorize(request, env, url) {
   if (url.protocol !== 'https:' && !isLocalHost(url.hostname)) {

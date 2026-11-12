@@ -5,8 +5,10 @@ export const GRANT_TTL = 5 * MINUTE;
 export const DENY_TTL = 5 * MINUTE;
 export const DENIED = 'none';
 export const OPEN_JOBS_PER_USER = 5;
-export const JOB_TYPES = ['servers', 'access', 'change', 'member'];
+export const SERVER_JOB_TYPES = new Set(['change', 'member', 'members', 'modaction', 'tickets', 'ticket', 'ticketaction']);
+export const JOB_TYPES = ['servers', 'access', ...SERVER_JOB_TYPES];
 const DEDUPE_TYPES = new Set(['servers', 'access']);
+const SUPERSEDE_TYPES = new Set(['members', 'member', 'tickets', 'ticket']);
 
 export async function expireJobs(db, t) {
   await db
@@ -30,6 +32,12 @@ export async function enqueue(db, { type, userId, serverId = null, data = {} }, 
       .bind(userId, type, serverId || '', t - JOB_TIMEOUT)
       .first();
     if (existing) return existing.id;
+  }
+  if (SUPERSEDE_TYPES.has(type) && serverId) {
+    await db
+      .prepare("UPDATE jobs SET status = 'error', error = 'A newer request replaced this one.', updated = ? WHERE user_id = ? AND server_id = ? AND type = ? AND status = 'pending'")
+      .bind(t, userId, serverId, type)
+      .run();
   }
   if ((await openJobs(db, userId, t)) >= OPEN_JOBS_PER_USER) {
     throw new HttpError(429, 'busy', 'You already have a few requests waiting for YapOS. Wait for them to finish, then try again.', { retryAfter: 10 });
