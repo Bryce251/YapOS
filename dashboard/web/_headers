@@ -6,3 +6,11 @@
   X-Frame-Options: DENY
   Cross-Origin-Opener-Policy: same-origin
   Strict-Transport-Security: max-age=31536000
+/activity
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  Content-Security-Policy: default-src 'self'; img-src 'self' https://files.yapper.website https://www.yapin.gg data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors https://www.yapin.gg https://yapin.gg https://www.yapper.website https://yapper.website; base-uri 'none'; form-action 'none'
+/activity/*
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  Content-Security-Policy: default-src 'self'; img-src 'self' https://files.yapper.website https://www.yapin.gg data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors https://www.yapin.gg https://yapin.gg https://www.yapper.website https://yapper.website; base-uri 'none'; form-action 'none'

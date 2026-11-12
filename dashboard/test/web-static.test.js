@@ -177,12 +177,15 @@ test('index.html works under the strict CSP', () => {
   assert.equal(/https?:\/\//.test(html), false);
 });
 
+const ACTIVITY_PARENT_ORIGINS = ['https://www.yapper.website', 'https://yapper.website', 'https://yapin.gg', 'https://www.yapin.gg'];
+
 test('no external resources and no forbidden wording', () => {
   for (const f of files) {
     const src = readFileSync(f, 'utf8');
     const urls = rel(f) === '_headers' ? [] : src.match(/https?:\/\/[^\s'"`)]+/g) || [];
     for (const u of urls) {
-      assert.ok(u.startsWith('http://www.w3.org/2000/svg') || (rel(f) === 'js/links.js' && u.startsWith('https://www.yapin.gg/bot/')), `${rel(f)} references ${u}`);
+      const bridgeOrigin = rel(f) === 'activity/js/bridge.js' && ACTIVITY_PARENT_ORIGINS.includes(u);
+      assert.ok(bridgeOrigin || u.startsWith('http://www.w3.org/2000/svg') || (rel(f) === 'js/links.js' && u.startsWith('https://www.yapin.gg/bot/')), `${rel(f)} references ${u}`);
     }
     assert.equal(/url\(/.test(src) && f.endsWith('.css'), false, `${rel(f)} loads a url()`);
     assert.equal(/\b(claude|anthropic)\b/i.test(src), false, rel(f));
@@ -212,14 +215,29 @@ test('every website module loads and its imports resolve', async () => {
 });
 
 test('static files get the same security headers as the Worker', async () => {
-  const { CSP, PERMISSIONS_POLICY } = await import(pathToFileURL(path.join(here, '..', 'worker', 'security.js')).href);
+  const { CSP, ACTIVITY_CSP, PERMISSIONS_POLICY } = await import(pathToFileURL(path.join(here, '..', 'worker', 'security.js')).href);
   const text = readFileSync(path.join(web, '_headers'), 'utf8');
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
   assert.equal(lines[0], '/*');
-  const headers = new Map(lines.slice(1).map((l) => {
+  const blockAt = (start) => {
+    const end = lines.findIndex((l, i) => i > start && !/^\s/.test(l));
+    return lines.slice(start + 1, end < 0 ? undefined : end);
+  };
+  const toMap = (block) => new Map(block.filter((l) => !l.trim().startsWith('!')).map((l) => {
     const i = l.indexOf(':');
     return [l.slice(0, i).trim().toLowerCase(), l.slice(i + 1).trim()];
   }));
+  const rootBlock = blockAt(0);
+  assert.equal(rootBlock.some((l) => l.trim().startsWith('!')), false);
+  const headers = toMap(rootBlock);
+  for (const p of ['/activity', '/activity/*']) {
+    const at = lines.indexOf(p);
+    assert.ok(at > 0, `_headers has a ${p} block`);
+    const block = blockAt(at);
+    assert.ok(block.some((l) => l.trim() === '! X-Frame-Options'), p);
+    assert.ok(block.some((l) => l.trim() === '! Content-Security-Policy'), p);
+    assert.equal(toMap(block).get('content-security-policy'), ACTIVITY_CSP, p);
+  }
   assert.equal(headers.get('content-security-policy'), CSP);
   assert.equal(headers.get('permissions-policy'), PERMISSIONS_POLICY);
   assert.equal(headers.get('x-content-type-options'), 'nosniff');

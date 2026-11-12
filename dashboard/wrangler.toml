@@ -7,7 +7,7 @@ routes = [{ pattern = "yapos.dev", custom_domain = true }]
 [assets]
 directory = "./web"
 binding = "ASSETS"
-run_worker_first = ["/api/*", "/auth/*", "/bot/*"]
+run_worker_first = ["/api/*", "/auth/*", "/bot/*", "/activity", "/activity/*"]
 
 [[d1_databases]]
 binding = "DB"

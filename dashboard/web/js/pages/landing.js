@@ -88,6 +88,6 @@ export function renderLanding(root, { user, search }) {
   const features = h('section', { class: 'features', attrs: { 'aria-labelledby': 'features-title' } },
     h('h2', { class: 'sr-only', id: 'features-title', text: 'Features' }),
     h('ul', { class: 'feature-grid' }, ...FEATURES.map(featureCard)));
-  const footer = h('footer', { class: 'site-footer' }, h('span', { text: `YapOS · ${new Date().getFullYear()}` }), h('span', { class: 'site-footer-sep', text: '·' }), h('span', { text: 'Run /setup in your server to get started.' }));
+  const footer = h('footer', { class: 'site-footer' }, h('span', { text: `YapOS · ${new Date().getFullYear()}` }), h('span', { class: 'site-footer-sep', text: '·' }), h('span', null, 'Made by ', h('strong', { text: 'Jolli' })));
   root.replaceChildren(h('div', { class: 'site' }, aurora(), header, h('main', { class: 'site-main', id: 'main', tabIndex: -1 }, hero, features), footer));
 }

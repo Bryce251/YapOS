@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YapOS Party test call</title>
+<link rel="icon" href="/favicon.png">
+<link rel="stylesheet" href="/activity-dev/harness.css">
+<script type="module" src="/activity-dev/harness.js"></script>
+</head>
+<body>
+<header class="bar">
+  <div class="brand">
+    <span class="dot"></span>
+    <strong>YapOS Party</strong>
+    <span class="pill">Test call on this computer</span>
+  </div>
+  <div class="controls">
+    <button type="button" id="add" class="btn primary">Add player</button>
+    <button type="button" id="remove-host" class="btn">Remove host</button>
+    <button type="button" id="restart" class="btn">Restart activity</button>
+    <label class="field">
+      <span>Delay each way</span>
+      <input type="range" id="latency" min="0" max="1500" step="25" value="0">
+      <output id="latency-out" for="latency">0 ms</output>
+    </label>
+    <label class="field">
+      <span>Frame width</span>
+      <select id="width">
+        <option value="phone">Phone (320 px)</option>
+        <option value="small" selected>Small (420 px)</option>
+        <option value="wide">Wide (720 px)</option>
+      </select>
+    </label>
+  </div>
+</header>
+<main class="layout">
+  <section class="stage" id="stage" aria-label="Players"></section>
+  <aside class="side">
+    <section class="panel">
+      <h2>Shared state</h2>
+      <div class="meter-row">
+        <span>Keys</span>
+        <div class="meter" id="keys-meter"><span></span></div>
+        <span id="keys-text">0 / 256</span>
+      </div>
+      <div class="meter-row">
+        <span>Size</span>
+        <div class="meter" id="bytes-meter"><span></span></div>
+        <span id="bytes-text">0 B / 64 KB</span>
+      </div>
+      <div class="meter-row">
+        <span>Call ops</span>
+        <div class="meter" id="ops-meter"><span></span></div>
+        <span id="ops-text">0 / 600</span>
+      </div>
+      <ul class="keys" id="keys"></ul>
+      <p class="empty" id="keys-empty">Nothing saved yet.</p>
+      <pre class="value" id="value" hidden></pre>
+    </section>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Log <span class="badge" id="warn-count" hidden>0</span></h2>
+        <button type="button" id="clear-log" class="btn small">Clear</button>
+      </div>
+      <ol class="log" id="log"></ol>
+    </section>
+  </aside>
+</main>
+</body>
+</html>

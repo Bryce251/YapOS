@@ -1,0 +1,184 @@
+import chain, { checkWord, PROBLEMS, MAX_LETTERS } from '../games/chain.js';
+import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+
+export function eventText(m) {
+  const e = m.last;
+  if (m.note === 'first' && m.cur) return `${m.cur.isMe ? 'You go' : `${m.cur.name} goes`} first.`;
+  if (!e) return '';
+  const who = e.isMe ? 'You' : e.name;
+  if (e.kind === 'word') return m.vote ? '' : `${who} played “${e.w}”.`;
+  if (e.kind === 'miss') return `${who} ran out of time and lost a life.`;
+  if (e.kind === 'out') return e.isMe ? "You're out of lives!" : `${e.name} is out of lives!`;
+  if (e.kind === 'reject') return `“${e.w}” was voted not a word. ${who} lost a life.`;
+  if (e.kind === 'left') return `${e.name} left, so their turn was skipped.`;
+  return '';
+}
+
+export function turnText(m) {
+  if (m.phase !== 'turn' || !m.cur) return 'That’s the game!';
+  const L = m.letter.toUpperCase();
+  if (m.myTurn) return `Your turn! Type a word that starts with ${L}.`;
+  if (!m.playing) return `You're watching. ${m.cur.name} needs a word that starts with ${L}.`;
+  if (!m.alive) return `You're out, but you can still vote. ${m.cur.name} is up.`;
+  return `${m.cur.name} needs a word that starts with ${L}.`;
+}
+
+function hearts(n, max) {
+  const full = Math.max(0, n);
+  const out = [];
+  for (let i = 0; i < max; i += 1) out.push(h('span', { class: ['heart', i < full ? 'is-full' : null], text: i < full ? '♥' : '♡' }));
+  return h('span', { class: 'hearts', attrs: { 'aria-label': plural(full, 'life', 'lives') } }, out);
+}
+
+export function createChainView({ engine, toast }) {
+  const el = h('section', { class: 'game game-chain', attrs: { 'aria-label': 'Word Chain' } });
+  const head = h('div', { class: 'chain-headwrap' });
+  const ring = h('div', { class: 'chain-ring' });
+  const stage = h('div', { class: 'chain-stage' });
+  const input = h('input', {
+    class: 'word-input',
+    dataset: { key: 'chain-input' },
+    attrs: { type: 'text', maxlength: MAX_LETTERS + 4, autocomplete: 'off', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': 'Your word', placeholder: 'Type a word' },
+  });
+  const sendBtn = button('Play', { variant: 'primary', key: 'chain-send', on: () => submit() });
+  const hint = h('p', { class: 'entry-hint', attrs: { role: 'status', 'aria-live': 'polite' } });
+  const entry = h('div', { class: 'chain-entry' }, h('div', { class: 'entry-row' }, input, sendBtn), hint);
+  const voteBox = h('div', { class: 'chain-vote' });
+  const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
+  el.append(head, ring, stage, entry, voteBox, foot);
+
+  const local = { nope: null, t: null, sentT: null };
+  let snap = null;
+  let model = null;
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submit();
+    }
+  });
+  input.addEventListener('input', () => {
+    hint.textContent = '';
+  });
+
+  function submit() {
+    if (!model || !model.myTurn || !snap) return;
+    const st = snap.state.chain;
+    if (local.sentT === model.t) return;
+    const problem = checkWord(input.value, st.letter, st.used);
+    if (problem) {
+      hint.textContent = PROBLEMS[problem] || 'That word does not work.';
+      return;
+    }
+    local.sentT = model.t;
+    engine.act({ type: 'word', text: input.value.trim().toLowerCase(), t: model.t });
+    input.value = '';
+    hint.textContent = 'Sent!';
+  }
+
+  function nope(v) {
+    if (!v || !v.canVote) return;
+    local.nope = v.n;
+    engine.act({ type: 'nope', n: v.n });
+    if (snap) update(snap);
+  }
+
+  const paintHead = memo((m) =>
+    h(
+      'div',
+      { class: 'game-head' },
+      h('span', { class: 'chip chip-static', text: `🔗 ${plural(m.count, 'word', 'words')}` }),
+      m.phase === 'turn' ? timer(m.starts, m.ends, 'Time left for this turn') : null,
+    ),
+  );
+
+  const paintRing = memo((m) =>
+    h(
+      'ul',
+      { class: 'chain-players', attrs: { 'aria-label': 'Players' } },
+      m.players.map((p) =>
+        h(
+          'li',
+          { class: ['chain-player', p.isCur ? 'is-up' : null, p.out ? 'is-out' : null, p.isMe ? 'is-me' : null, p.present ? null : 'is-away'] },
+          avatar(p, 'sm'),
+          h('span', { class: 'chain-name', text: p.isMe ? `${p.name} (you)` : p.name }),
+          hearts(p.lives, m.max),
+        ),
+      ),
+    ),
+  );
+
+  const paintStage = memo((m) => [
+    h(
+      'div',
+      { class: 'chain-letter-wrap' },
+      h('span', { class: 'eyebrow', text: 'Next word starts with' }),
+      h('span', { class: 'chain-letter', text: (m.letter || '?').toUpperCase(), attrs: { 'aria-live': 'polite' } }),
+    ),
+    m.words.length
+      ? h(
+          'ol',
+          { class: 'chain-words', attrs: { 'aria-label': 'Words so far' } },
+          m.words.map((w) =>
+            h(
+              'li',
+              { class: ['chain-word', w.latest ? 'is-latest' : null, w.isMe ? 'is-me' : null] },
+              h('span', { class: 'chain-word-text' }, h('strong', { text: w.word.slice(0, 1).toUpperCase() }), w.word.slice(1, -1), h('strong', { class: 'chain-tail', text: w.word.length > 1 ? w.word.slice(-1) : '' })),
+              h('span', { class: 'chain-by', text: w.isMe ? 'you' : w.name }),
+            ),
+          ),
+        )
+      : h('p', { class: 'muted chain-empty', text: 'The chain is empty. The first word can be anything that starts with this letter.' }),
+  ]);
+
+  const paintVote = memo((m) => {
+    const v = m.vote;
+    if (!v || m.phase !== 'turn') return null;
+    const mineWord = v.by.isMe;
+    return h(
+      'div',
+      { class: 'vote-card' },
+      h('span', { class: 'vote-text' }, mineWord ? 'Your word ' : `${v.by.name} played `, h('strong', { text: `“${v.word}”` }), '.'),
+      !v.open
+        ? h('span', { class: 'muted vote-note', text: 'Voting on words needs 4 or more players.' })
+        : mineWord
+        ? h('span', { class: 'muted vote-note', text: v.count ? `${v.count} of ${v.need} votes say it isn't a word.` : 'Others can vote if they think it isn’t a real word.' })
+        : v.onClock
+        ? h('span', { class: 'muted vote-note', text: v.count ? `${v.count} of ${v.need} votes say it isn't a word. The others decide while it's your turn.` : "The others can vote while it's your turn." })
+        : button(v.voted ? `Voted (${v.count}/${v.need})` : `Not a word? (${v.count}/${v.need})`, { variant: v.voted ? 'ghost' : 'secondary', size: 'sm', key: 'nope', disabled: !v.canVote, on: () => nope(v) }),
+    );
+  });
+
+  const paintFoot = memo((m) => h('span', { class: 'foot-text', text: [eventText(m), turnText(m)].filter(Boolean).join(' ') }));
+
+  function update(next) {
+    snap = next;
+    const m = chain.model(next, local);
+    model = m;
+    if (!m) {
+      paintHead(head, { count: 0, phase: 'wait' });
+      return;
+    }
+    paintHead(head, { count: m.count, phase: m.phase, starts: m.starts, ends: m.ends });
+    paintRing(ring, m);
+    paintStage(stage, { letter: m.letter, words: m.words });
+    paintVote(voteBox, { vote: m.vote, phase: m.phase });
+    paintFoot(foot, m);
+    const open = m.myTurn && local.sentT !== m.t;
+    input.disabled = !open;
+    sendBtn.disabled = !open;
+    entry.classList.toggle('is-open', open);
+    entry.classList.toggle('is-hidden', !m.playing || !m.alive);
+    input.setAttribute('placeholder', m.myTurn ? `Starts with ${m.letter.toUpperCase()}…` : 'Wait your turn');
+    if (local.t !== m.t) {
+      local.t = m.t;
+      if (!open) input.value = '';
+      if (m.note === 'again' && m.myTurn) hint.textContent = m.last && m.last.kind === 'reject' && m.last.isMe ? 'That word was voted out. Try another!' : `The last word was voted out, so it's back to ${m.letter.toUpperCase()}. Your clock restarted.`;
+      else if (!m.myTurn) hint.textContent = '';
+      if (open && typeof input.focus === 'function') input.focus();
+      if (m.last && m.last.isMe && m.last.kind === 'out') toast("You're out of lives! You can still vote on words.");
+    }
+  }
+
+  return { el, update, destroy() {} };
+}

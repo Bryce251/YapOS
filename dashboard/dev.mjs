@@ -17,7 +17,10 @@ const WEB = path.join(HERE, 'web');
 const DEV_DIR = path.join(HERE, '.dev');
 const SCHEMA = readFileSync(path.join(HERE, 'schema.sql'), 'utf8');
 const CLIENT_ID = 'b21fe402-0f20-43df-867b-8b346029fd8d';
-const WORKER_FIRST = [/^\/api(\/|$)/, /^\/auth(\/|$)/, /^\/bot(\/|$)/];
+const ACTIVITY_DEV = path.join(HERE, 'dev', 'activity-dev');
+const WORKER_FIRST = [/^\/api(\/|$)/, /^\/auth(\/|$)/, /^\/bot(\/|$)/, /^\/activity(\/|$)/];
+const ACTIVITY_DEV_FILE = /^\/activity-dev\/([a-z0-9-]+\.(?:html|js|css))?$/;
+export const ACTIVITY_DEV_CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const SKIP_HEADERS = new Set(['host', 'connection', 'keep-alive', 'transfer-encoding', 'cf-connecting-ip', 'upgrade']);
 const CLEANUP_EVERY_MS = 15 * 60_000;
 const CODE_TTL_MS = 5 * 60_000;
@@ -55,12 +58,17 @@ export function parseHeadersFile(text) {
     if (!/^\s/.test(raw)) {
       const pattern = raw.trim();
       const source = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/:[A-Za-z]\w*/g, '[^/]+');
-      current = { pattern, re: new RegExp(`^${source}$`), headers: [] };
+      current = { pattern, re: new RegExp(`^${source}$`), headers: [], detach: [] };
       rules.push(current);
       continue;
     }
     if (!current) continue;
     const line = raw.trim();
+    if (line.startsWith('!')) {
+      const name = line.slice(1).trim();
+      if (name) current.detach.push(name);
+      continue;
+    }
     const i = line.indexOf(':');
     if (i <= 0) continue;
     current.headers.push([line.slice(0, i).trim(), line.slice(i + 1).trim()]);
@@ -101,16 +109,55 @@ function createAssets({ dir = WEB, secure = false } = {}) {
         'Content-Type': TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream',
         'Cache-Control': 'public, max-age=0, must-revalidate',
       });
-      for (const rule of rules) {
-        if (!rule.re.test(url.pathname)) continue;
-        for (const [k, v] of rule.headers) {
-          if (!secure && k.toLowerCase() === 'strict-transport-security') continue;
-          headers.set(k, v);
-        }
-      }
+      headersFor(rules, url.pathname, { secure }).forEach((v, k) => headers.set(k, v));
       return new Response(request.method === 'HEAD' ? null : body, { status: 200, headers });
     },
   };
+}
+
+export function headersFor(rules, pathname, { secure = false } = {}) {
+  const headers = new Headers();
+  for (const rule of rules) {
+    if (!rule.re.test(pathname)) continue;
+    for (const k of rule.detach) headers.delete(k);
+    for (const [k, v] of rule.headers) {
+      if (!secure && k.toLowerCase() === 'strict-transport-security') continue;
+      headers.set(k, v);
+    }
+  }
+  return headers;
+}
+
+export function allowDevFraming(response, url) {
+  if (url.searchParams.get('dev') !== '1') return response;
+  const csp = response.headers.get('Content-Security-Policy') || '';
+  if (!/frame-ancestors https:/.test(csp)) return response;
+  const out = new Response(response.body, response);
+  out.headers.set('Content-Security-Policy', csp.replace('frame-ancestors ', "frame-ancestors 'self' "));
+  return out;
+}
+
+async function activityDev(request) {
+  const url = new URL(request.url);
+  if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Method not allowed', { status: 405, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+  if (url.pathname === '/activity-dev') return new Response(null, { status: 308, headers: { Location: `/activity-dev/${url.search}`, 'Cache-Control': 'no-store' } });
+  const m = ACTIVITY_DEV_FILE.exec(url.pathname);
+  const name = m ? m[1] || 'index.html' : null;
+  const file = name ? path.join(ACTIVITY_DEV, name) : null;
+  const info = file ? await stat(file).catch(() => null) : null;
+  const headers = new Headers({
+    'Content-Security-Policy': ACTIVITY_DEV_CSP,
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'same-origin',
+    'X-Frame-Options': 'DENY',
+    'Cache-Control': 'no-store',
+  });
+  if (!info || !info.isFile()) {
+    headers.set('Content-Type', 'text/plain; charset=utf-8');
+    return new Response('Not found', { status: 404, headers });
+  }
+  headers.set('Content-Type', TYPES[path.extname(file)] || 'application/octet-stream');
+  return new Response(request.method === 'HEAD' ? null : await readFile(file), { status: 200, headers });
 }
 
 function readBody(req) {
@@ -434,12 +481,14 @@ export async function startDev({
 
   async function route(request) {
     const url = new URL(request.url);
+    if (url.pathname === '/activity-dev' || url.pathname.startsWith('/activity-dev/')) return activityDev(request);
     const workerFirst = WORKER_FIRST.some((re) => re.test(url.pathname));
     if (!workerFirst && (request.method === 'GET' || request.method === 'HEAD')) {
       const asset = await env.ASSETS.fetch(request);
       if (asset.status !== 404) return asset;
     }
     const response = await worker.fetch(request, env, ctx);
+    if (url.pathname === '/activity' || url.pathname.startsWith('/activity/')) return allowDevFraming(response, url);
     if (url.pathname.startsWith('/api/') && (response.status === 202 || response.status === 403)) poke();
     return response;
   }
@@ -502,6 +551,7 @@ async function main() {
     '',
     `YapOS Dashboard (local) is running at ${dev.url}`,
     `Fake Yapin' sign-in is at ${dev.oauthUrl}`,
+    `YapOS Party test call is at ${dev.url}/activity-dev/`,
     `Test server: Test Town (${dev.serverId})`,
     '',
     'Test users (pick one on the sign-in page):',
