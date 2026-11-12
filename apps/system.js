@@ -45,7 +45,7 @@ async function homeLayout(ctx) {
   const tiles = appTiles(engine, ctx.serverId);
   const core = ctx.core();
   const level = await ctx.level();
-  const header = `## ${ICONS.system} ${VERSION.full}\nYour server's operating system.${core.setupDone ? '' : '\n**First boot:** run **/setup** to get going in a minute.'}`;
+  const header = `## ${ICONS.system} ${VERSION.full}\nYour server's operating system.`;
   const parts = [v2.text(header), v2.separator()];
   for (const a of tiles.slice(0, 8)) {
     parts.push(v2.section([`**${a.meta.icon} ${a.meta.name}**\n${a.meta.description}`], v2.button('Open', cid('open', a.meta.id), 'secondary')));

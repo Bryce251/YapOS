@@ -54,14 +54,34 @@ export function createMemoryStore(seed = {}) {
   return store;
 }
 
-export function createJsonStore({ dir, delay = 500, log = null } = {}) {
+export function createJsonStore({ dir, delay = 50, log = null } = {}) {
   if (!dir) throw new Error('createJsonStore needs a dir');
   fs.mkdirSync(dir, { recursive: true });
   const timers = new Map();
+  const chains = new Map();
   const file = (ns) => path.join(dir, `${ns}.json`);
+  const tmpFile = (ns) => `${file(ns)}.${process.pid}.tmp`;
+
+  const leftovers = (ns) => {
+    const prefix = `${ns}.json.`;
+    try {
+      return fs.readdirSync(dir)
+        .filter((f) => f.startsWith(prefix) && f.endsWith('.tmp'))
+        .map((f) => path.join(dir, f));
+    } catch {
+      return [];
+    }
+  };
+
   const load = (ns) => {
     const p = file(ns);
-    if (!fs.existsSync(p)) return {};
+    const stale = leftovers(ns);
+    if (!fs.existsSync(p)) {
+      const recovered = recoverTmp(ns, stale);
+      for (const f of stale) { try { fs.unlinkSync(f); } catch {} }
+      return recovered;
+    }
+    for (const f of stale) { try { fs.unlinkSync(f); } catch {} }
     try {
       return JSON.parse(fs.readFileSync(p, 'utf8'));
     } catch (e) {
@@ -71,10 +91,30 @@ export function createJsonStore({ dir, delay = 500, log = null } = {}) {
       return {};
     }
   };
-  const writeNow = async (ns, obj) => {
+
+  const recoverTmp = (ns, candidates) => {
+    const newestFirst = candidates
+      .map((f) => { try { return { f, at: fs.statSync(f).mtimeMs }; } catch { return null; } })
+      .filter(Boolean)
+      .sort((a, b) => b.at - a.at);
+    for (const { f } of newestFirst) {
+      try {
+        const data = JSON.parse(fs.readFileSync(f, 'utf8'));
+        if (!data || typeof data !== 'object' || Array.isArray(data)) continue;
+        fs.writeFileSync(file(ns), JSON.stringify(data, null, 1), 'utf8');
+        log?.info(`recovered data/${ns}.json from an unfinished save`);
+        return data;
+      } catch {}
+    }
+    return {};
+  };
+
+  const serialize = (obj) => JSON.stringify(obj ?? {}, null, 1);
+
+  const writeAsync = async (ns, text) => {
     const p = file(ns);
-    const tmp = `${p}.${process.pid}.tmp`;
-    await fs.promises.writeFile(tmp, JSON.stringify(obj ?? {}, null, 1), 'utf8');
+    const tmp = tmpFile(ns);
+    await fs.promises.writeFile(tmp, text, 'utf8');
     for (let attempt = 0; ; attempt++) {
       try {
         await fs.promises.rename(tmp, p);
@@ -85,27 +125,81 @@ export function createJsonStore({ dir, delay = 500, log = null } = {}) {
       }
     }
   };
+
+  const writeSync = (ns, text) => {
+    const p = file(ns);
+    const tmp = `${p}.${process.pid}.final.tmp`;
+    fs.writeFileSync(tmp, text, 'utf8');
+    for (let attempt = 0; ; attempt++) {
+      try {
+        fs.renameSync(tmp, p);
+        return;
+      } catch (e) {
+        if (attempt >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) {
+          fs.writeFileSync(p, text, 'utf8');
+          try { fs.unlinkSync(tmp); } catch {}
+          return;
+        }
+        const until = Date.now() + 30 * (attempt + 1);
+        while (Date.now() < until) {}
+      }
+    }
+  };
+
+  const queueWrite = (ns) => {
+    const text = serialize(store._raw(ns));
+    const prev = chains.get(ns) || Promise.resolve();
+    const next = prev.catch(() => {}).then(() => writeAsync(ns, text)).catch((e) => {
+      store._dirty.add(ns);
+      log?.error(`Couldn't save data/${ns}.json: ${e.message}`);
+      throw e;
+    });
+    chains.set(ns, next);
+    next.finally(() => { if (chains.get(ns) === next) chains.delete(ns); }).catch(() => {});
+    return next;
+  };
+
   let store;
   const persist = {
-    write: writeNow,
+    write: (ns) => queueWrite(ns),
     schedule(ns) {
       if (timers.has(ns)) return;
-      timers.set(ns, setTimeout(() => {
+      const t = setTimeout(() => {
         timers.delete(ns);
         if (!store._dirty.has(ns)) return;
         store._dirty.delete(ns);
-        writeNow(ns, store._raw(ns)).catch((e) => { store._dirty.add(ns); log?.error(`Couldn't save data/${ns}.json: ${e.message}`); });
-      }, delay).unref?.() ?? 0);
+        queueWrite(ns).catch(() => {});
+      }, delay);
+      timers.set(ns, t);
     },
   };
   store = base(load, persist);
   store._raw = (ns) => Object.fromEntries(store.entries(ns));
-  const flush = store.flush;
+
   store.flush = async () => {
     for (const t of timers.values()) clearTimeout(t);
     timers.clear();
-    await flush();
+    for (const ns of [...store._dirty]) { store._dirty.delete(ns); queueWrite(ns).catch(() => {}); }
+    await Promise.allSettled([...chains.values()]);
   };
+
+  store.flushSync = () => {
+    for (const t of timers.values()) clearTimeout(t);
+    timers.clear();
+    let saved = 0;
+    for (const ns of [...store._dirty]) {
+      try {
+        writeSync(ns, serialize(store._raw(ns)));
+        store._dirty.delete(ns);
+        saved++;
+      } catch (e) {
+        log?.error(`Couldn't save data/${ns}.json on exit: ${e.message}`);
+      }
+    }
+    return saved;
+  };
+
+  store.pending = () => store._dirty.size + timers.size + chains.size;
   store.kind = 'json';
   store.dir = dir;
   return store;
@@ -113,12 +207,23 @@ export function createJsonStore({ dir, delay = 500, log = null } = {}) {
 
 export function flushOnExit(store, log) {
   let done = false;
-  const go = async (sig) => {
+  const stopNow = (sig) => {
     if (done) return;
     done = true;
-    try { await store.flush(); log?.info(`saved data (${sig})`); } catch (e) { log?.error('final save failed', e); }
+    try {
+      const n = store.flushSync ? store.flushSync() : 0;
+      log?.info(`saved data before stopping (${sig}${n ? `, ${n} file${n === 1 ? '' : 's'}` : ''})`);
+    } catch (e) {
+      log?.error('final save failed', e);
+    }
     process.exit(0);
   };
-  process.once('SIGINT', () => go('SIGINT'));
-  process.once('SIGTERM', () => go('SIGTERM'));
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
+    try { process.on(sig, () => stopNow(sig)); } catch {}
+  }
+  process.on('exit', () => {
+    if (done) return;
+    done = true;
+    try { store.flushSync?.(); } catch {}
+  });
 }

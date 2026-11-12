@@ -205,3 +205,94 @@ test('voice joins and leaves update who is in voice', async () => {
   await h.voiceLeave(IDS.member);
   assert.deepEqual((await h.bot.voice(IDS.server))[0].user_ids, []);
 });
+test('a change made right before the bot exits is still saved', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { pathToFileURL } = await import('node:url');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yapos-exit-'));
+  const storageUrl = pathToFileURL(path.resolve('engine/storage.js')).href;
+  const script = [
+    'const { createJsonStore, flushOnExit } = await import(' + JSON.stringify(storageUrl) + ');',
+    'const store = createJsonStore({ dir: ' + JSON.stringify(dir) + ', delay: 60000 });',
+    'flushOnExit(store, null);',
+    "store.set('settings', 'srv', { welcome: 'saved before exit' });",
+    'process.exit(0);',
+  ].join('\n');
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+  assert.equal(saved.srv.welcome, 'saved before exit');
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')), []);
+});
+
+test('a crash still saves what was changed', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { pathToFileURL } = await import('node:url');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yapos-crash-'));
+  const storageUrl = pathToFileURL(path.resolve('engine/storage.js')).href;
+  const script = [
+    'const { createJsonStore, flushOnExit } = await import(' + JSON.stringify(storageUrl) + ');',
+    'const store = createJsonStore({ dir: ' + JSON.stringify(dir) + ', delay: 60000 });',
+    'flushOnExit(store, null);',
+    "store.set('levels', 'srv', { xp: 1234 });",
+    "setTimeout(() => { throw new Error('boom'); }, 5);",
+  ].join('\n');
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+  assert.notEqual(run.status, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'levels.json'), 'utf8')).srv.xp, 1234);
+});
+
+test('many quick changes are saved in order and the newest wins', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yapos-order-'));
+  const store = createJsonStore({ dir, delay: 1 });
+  for (let i = 1; i <= 200; i++) {
+    store.set('levels', 'srv', { xp: i });
+    if (i % 7 === 0) await new Promise((r) => setTimeout(r, 1));
+  }
+  await store.flush();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'levels.json'), 'utf8')).srv.xp, 200);
+  assert.equal(store.pending(), 0);
+  const again = createJsonStore({ dir });
+  assert.equal(again.get('levels', 'srv').xp, 200);
+});
+
+test('a save cut off halfway is recovered on the next start', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yapos-tmp-'));
+  fs.writeFileSync(path.join(dir, 'roles.json.99999.tmp'), JSON.stringify({ srv: { menus: 3 } }));
+  fs.writeFileSync(path.join(dir, 'roles.json.88888.tmp'), '{"srv": {"men');
+  const store = createJsonStore({ dir });
+  assert.equal(store.get('roles', 'srv').menus, 3, 'a save from an earlier run is recovered');
+  assert.ok(fs.existsSync(path.join(dir, 'roles.json')), 'the recovered data is written back as the real file');
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')), [], 'leftovers are cleaned up');
+});
+
+test('changes reach the disk within a moment, without waiting for shutdown', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yapos-fast-'));
+  const store = createJsonStore({ dir });
+  store.set('mod', 'srv', { cases: 1 });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'mod.json'), 'utf8')).srv.cases, 1);
+});
+test('only one copy of the bot can hold the lock, and it frees when that copy stops', async () => {
+  const { takeLock } = await import('../../engine/lock.js');
+  const port = 47000 + (process.pid % 900);
+  const first = await takeLock({ port });
+  assert.equal(first.ok, true);
+  const second = await takeLock({ port });
+  assert.equal(second.ok, false, 'a second copy is refused');
+  await first.release();
+  const third = await takeLock({ port });
+  assert.equal(third.ok, true, 'free again once the first copy is gone');
+  await third.release();
+});
+
+test('a second bot.js exits straight away with code 3 and a plain message', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { takeLock } = await import('../../engine/lock.js');
+  const port = 47000 + ((process.pid + 7) % 900);
+  const held = await takeLock({ port });
+  assert.equal(held.ok, true);
+  const run = spawnSync(process.execPath, ['bot.js'], { encoding: 'utf8', env: { ...process.env, YAPPER_BOT_TOKEN: 'yb_lock_test_only', YAPOS_LOCK_PORT: String(port), YAPOS_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'yapos-lock-')) }, timeout: 20000 });
+  await held.release();
+  assert.equal(run.status, 3, run.stderr + run.stdout);
+  assert.match(run.stdout + run.stderr, /already running/);
+});

@@ -3,6 +3,7 @@ import { loadConfig, VERSION } from './engine/config.js';
 import { createLogger } from './engine/log.js';
 import { createJsonStore, flushOnExit } from './engine/storage.js';
 import { createEngine } from './engine/index.js';
+import { takeLock } from './engine/lock.js';
 
 const log = createLogger();
 const config = loadConfig();
@@ -10,6 +11,15 @@ const config = loadConfig();
 if (!config.token) {
   log.error('No bot token found. Set YAPPER_BOT_TOKEN, or copy config.example.json to config.json and paste your token there.');
   process.exit(2);
+}
+
+const lock = await takeLock().catch((e) => {
+  log.warn(`couldn't check for another running copy (${e.message}); starting anyway`);
+  return { ok: true };
+});
+if (!lock.ok) {
+  log.error('YapOS is already running in another window. Only one copy can run at a time, or every command would be answered twice.');
+  process.exit(3);
 }
 
 const store = createJsonStore({ dir: config.dataPath, log });

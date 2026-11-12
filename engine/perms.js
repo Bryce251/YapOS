@@ -74,7 +74,7 @@ export function createPerms({ bot, settings, cacheMs = 60_000, now = () => Date.
     const have = await level(sid, uid);
     if (!atLeast(have, need)) {
       const who = { mod: 'moderators', admin: 'admins', owner: 'the server owner' }[need] || need;
-      throw friendly(`Only ${who} can use this.`, { title: 'Not allowed', hint: need === 'mod' ? 'Mods are people with Kick, Ban, Timeout or Manage Messages, or a mod role picked in /setup.' : undefined });
+      throw friendly(`Only ${who} can use this.`, { title: 'Not allowed', hint: need === 'mod' ? 'Mods are people with Kick, Ban, Timeout or Manage Messages, or a role added with /mod modrole add.' : undefined });
     }
     return have;
   }

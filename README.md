@@ -2,7 +2,7 @@
 
 The all-in-one operating system for your Yapin' server. Moderation, automod, welcomes, role menus and more, organised as **apps** that each server installs or uninstalls with `/apps`.
 
-**YapOS 1.0 "Boot"** · System, Setup, Mod, Automod, Welcome, Roles, Levels, Tickets, Studio.
+**YapOS 1.0 "Boot"** · System, Mod, Automod, Welcome, Roles, Levels, Tickets, Studio.
 
 ## Run it
 
@@ -10,13 +10,13 @@ Needs Node.js 18 or newer (22+ so the live gateway is used; older versions fall 
 
 1. Copy `config.example.json` to `config.json` and paste your bot token (Settings → Developer → your bot → Token).
    Or set the `YAPPER_BOT_TOKEN` environment variable instead. The environment wins over the file.
-2. Start it:
+2. Start it: double-click `start.bat` (it restarts the bot if it crashes), or run:
 
    ```bash
    npm start
    ```
 
-3. In your server, run `/setup` for the first-boot wizard, then `/menu` for the home screen.
+3. In your server, run `/menu` for the home screen. Admins pick the mod log channel with `/mod log #mod-log`.
 
 `config.json` and `data/` hold your token and your servers' settings. Keep them when you update; replace everything else.
 
@@ -25,8 +25,7 @@ Needs Node.js 18 or newer (22+ so the live gateway is used; older versions fall 
 | App | Commands |
 |---|---|
 | System | `/menu` `/help` `/status` `/apps` `/yap` |
-| Setup | `/setup` |
-| Mod | `/mod` `/warn` `/timeout` `/kick` `/ban` `/purge` `/lock` `/unlock` `/case` |
+| Mod | `/mod` (also `/mod log`, `/mod modrole`) `/warn` `/timeout` `/kick` `/ban` `/purge` `/lock` `/unlock` `/case` |
 | Automod | `/automod` |
 | Welcome | `/welcome` |
 | Roles | `/roles` |
@@ -38,7 +37,7 @@ Every hub command opens a panel. Most also take typed shortcuts, like `/mod time
 
 ## Give the bot a role
 
-Put the bot's role **above** the roles it should manage or moderate, and tick what you use: Manage Messages, Kick, Ban, Timeout Members, Manage Roles, Manage Channels. `/setup` checks this for you and tells you what's missing.
+Put the bot's role **above** the roles it should manage or moderate, and tick what you use: Manage Messages, Kick, Ban, Timeout Members, Manage Roles, Manage Channels. If a permission is missing, the bot tells you which one in plain words.
 
 ## Tests
 

@@ -51,6 +51,14 @@ const SUB_ALIASES = {
   unban: 'unban', warn: 'warn', warnings: 'warnings', warns: 'warnings', case: 'case', cases: 'cases',
   history: 'cases', purge: 'purge', clear: 'purge', slowmode: 'slowmode', slow: 'slowmode', lock: 'lock',
   unlock: 'unlock', settings: 'settings', config: 'settings', panel: 'panel', home: 'panel',
+  log: 'log', logs: 'log', modlog: 'log', logchannel: 'log',
+  modrole: 'modrole', modroles: 'modrole', staff: 'modrole',
+  adminrole: 'adminrole', adminroles: 'adminrole',
+};
+
+const STAFF_KINDS = {
+  modrole: { key: 'modRoles', label: 'mod role', who: 'admin', usage: '`/mod modrole add @Helpers`, `/mod modrole remove @Helpers`' },
+  adminrole: { key: 'adminRoles', label: 'admin role', who: 'owner', usage: '`/mod adminrole add @Managers`, `/mod adminrole remove @Managers`' },
 };
 
 const USAGE = {
@@ -246,7 +254,7 @@ async function needChannelHere(ctx, channelId) {
 async function checkCanAct(ctx, targetId, def, label) {
   const { engine, serverId } = ctx;
   if (def.perm && !(await engine.perms.actorCan(serverId, ctx.userId, def.perm))) {
-    throw friendly(`You need **${permName(def.perm)}** to ${def.verb} people. Ask an admin to tick it on your role, or to add your role as a mod role in **/setup**.`, { title: 'Not allowed' });
+    throw friendly(`You need **${permName(def.perm)}** to ${def.verb} people. Ask an admin to tick it on your role, or an admin can make your role a mod role with \`/mod modrole add @role\`.`, { title: 'Not allowed' });
   }
   if (!def.skipHierarchy) await checkRank(engine, serverId, ctx.userId, targetId, def, label);
   if (targetId === ctx.userId) throw friendly("You can't do that to yourself.", { title: `I can't ${def.verb} ${label}` });
@@ -488,7 +496,7 @@ async function runPurge(ctx, tokens) {
   const label = user ? tag(user) : null;
   try {
     if (!(await ctx.engine.perms.actorCan(ctx.serverId, ctx.userId, 'manage_messages'))) {
-      throw friendly(`You need **${permName('manage_messages')}** to clear messages. Ask an admin to tick it on your role, or to add your role as a mod role in **/setup**.`, { title: 'Not allowed' });
+      throw friendly(`You need **${permName('manage_messages')}** to clear messages. Ask an admin to tick it on your role, or an admin can make your role a mod role with \`/mod modrole add @role\`.`, { title: 'Not allowed' });
     }
     await needChannelHere(ctx, ctx.channelId);
     await needBotPerm(ctx, 'manage_messages', 'delete messages');
@@ -756,15 +764,71 @@ function parseSteps(text) {
   return { steps: steps.sort((a, b) => a.at - b.at) };
 }
 
+const roleList = (ids) => (ids || []).length ? ids.map((r) => `<@&${r}>`).join(' ') : 'None';
+
+async function runLogChannel(ctx, tokens) {
+  const first = (tokens[0] || '').toLowerCase();
+  const current = ctx.core().logChannel;
+  if (!first) {
+    return ctx.info('Mod log channel', `${current ? `Mod actions are logged in <#${current}>.` : 'No log channel yet.'}\nSet one with \`/mod log #mod-log\`, or turn it off with \`/mod log off\`.`);
+  }
+  if (/^(off|none|clear|remove|disable)$/.test(first)) {
+    ctx.engine.settings.patchCore(ctx.serverId, { logChannel: null });
+    return ctx.ok('Log channel cleared', 'Mod actions are no longer logged anywhere.');
+  }
+  const ch = await ctx.findChannel(tokens.join(' '), 'text');
+  if (!ch || ch.server_id && ch.server_id !== ctx.serverId) return ctx.warn("I couldn't find that channel", 'Mention it, like `/mod log #mod-log`.');
+  ctx.engine.settings.patchCore(ctx.serverId, { logChannel: ch.id });
+  return ctx.ok('Log channel saved', `Mod actions, Automod alerts and warnings from other apps now go to <#${ch.id}>.`);
+}
+
+async function runStaffRoles(ctx, sub, tokens) {
+  const kind = STAFF_KINDS[sub];
+  if (kind.who === 'owner' && (await ctx.level()) !== 'owner') {
+    return ctx.warn('Not allowed', 'Only the server owner can choose admin roles.');
+  }
+  const core = ctx.core();
+  const current = [...(core[kind.key] || [])];
+  const action = (tokens[0] || '').toLowerCase();
+  if (!action || /^(list|show)$/.test(action)) {
+    return ctx.info(`${kind.label[0].toUpperCase()}${kind.label.slice(1)}s`, `${roleList(current)}\n\nChange them with ${kind.usage}.`);
+  }
+  const adding = /^(add|\+)$/.test(action);
+  const removing = /^(remove|rm|del|delete|-)$/.test(action);
+  if (!adding && !removing) return ctx.warn("I didn't get that", `Try ${kind.usage}.`);
+  const role = await ctx.findRole(tokens.slice(1).join(' '));
+  if (!role) return ctx.warn("I couldn't find that role", `Mention it, like ${kind.usage.split(',')[0]}.`);
+  if (removing) {
+    if (!current.includes(role.id)) return ctx.info('Nothing to remove', `**${role.name}** isn't a ${kind.label}.`);
+    ctx.engine.settings.patchCore(ctx.serverId, { [kind.key]: current.filter((r) => r !== role.id) });
+    ctx.engine.perms.invalidate();
+    return ctx.ok(`${kind.label[0].toUpperCase()}${kind.label.slice(1)} removed`, `**${role.name}** no longer counts as a ${kind.label}.`);
+  }
+  if (/^@?everyone$/i.test(role.name) || role.id === ctx.serverId) return ctx.warn("Can't use that role", `Everyone has that role, so it can't be a ${kind.label}.`);
+  if (role.auto && role.auto !== 'none') return ctx.warn("Can't use that role", `**${role.name}** is given out automatically, so it can't be a ${kind.label}.`);
+  if ((await ctx.level()) !== 'owner') {
+    const mine = await ctx.engine.perms.topPosition(ctx.serverId, ctx.userId);
+    if (typeof role.position === 'number' && role.position >= mine) return ctx.warn('Not allowed', `**${role.name}** is at or above your highest role, so only the server owner can make it a ${kind.label}.`);
+  }
+  if (current.includes(role.id)) return ctx.info('Already set', `**${role.name}** is already a ${kind.label}.`);
+  if (current.length >= 10) return ctx.warn('Too many roles', `There can be up to 10 ${kind.label}s. Remove one first.`);
+  ctx.engine.settings.patchCore(ctx.serverId, { [kind.key]: [...current, role.id] });
+  ctx.engine.perms.invalidate();
+  return ctx.ok(`${kind.label[0].toUpperCase()}${kind.label.slice(1)} added`, `People with **${role.name}** now count as YapOS ${kind.label === 'mod role' ? 'moderators' : 'admins'} here.`);
+}
+
 function settingsView(ctx) {
   const cfg = ctx.config();
-  const log = ctx.core().logChannel;
+  const core = ctx.core();
+  const log = core.logChannel;
   const days = Number(cfg.warnDecayDays) || 0;
   const fields = [
     { name: 'DM people before kick, ban or timeout', value: cfg.dmOnAction ? '🟢 On' : '⚪ Off', inline: false },
     { name: 'Warnings count for', value: days ? `${days} day${days === 1 ? '' : 's'}` : 'Forever', inline: true },
     { name: 'Automatic steps', value: formatSteps(cfg.escalation) || 'None', inline: true },
-    { name: 'Log channel', value: log ? `<#${log}>` : 'Not set. Run **/setup** to pick one.', inline: false },
+    { name: 'Log channel', value: log ? `<#${log}>` : 'Not set. Type `/mod log #mod-log` to pick one.', inline: false },
+    { name: 'Extra mod roles', value: `${roleList(core.modRoles)}\n-# \`/mod modrole add @role\``, inline: true },
+    { name: 'Extra admin roles', value: `${roleList(core.adminRoles)}\n-# \`/mod adminrole add @role\` (owner)`, inline: true },
   ];
   return {
     embeds: [card({ title: `${ICONS.mod} Mod settings`, body: 'How moderation works on this server.', fields, color: 'mod' })],
@@ -832,6 +896,11 @@ async function route(ctx, sub, tokens) {
     if (sub === 'lock') return await runLock(ctx, tokens, true);
     if (sub === 'unlock') return await runLock(ctx, tokens, false);
     if (sub === 'settings') return await ctx.ephemeral(settingsView(ctx));
+    if (sub === 'log' || sub === 'modrole' || sub === 'adminrole') {
+      await requireFresh(ctx, 'admin');
+      if (sub === 'log') return await runLogChannel(ctx, tokens);
+      return await runStaffRoles(ctx, sub, tokens);
+    }
     return await showPanel(ctx);
   } catch (e) {
     return ctx.fail(e);
@@ -961,5 +1030,7 @@ export const { setup, teardown, check } = defineApp({
     'Lengths: 10m, 2h, 1d. A bare number means minutes for timeouts and seconds for slowmode.',
     'Every action gets a case number. /case 12 shows one, /mod warnings @sam lists warnings.',
     'Bans, timeouts, warnings, locks and slowmode changes come with an Undo button for 10 minutes.',
+    'Admins: `/mod log #mod-log` picks where actions are logged. `/mod modrole add @Helpers` makes a role count as mods.',
+    'Server owner: `/mod adminrole add @Managers` makes a role count as YapOS admins.',
   ],
 });

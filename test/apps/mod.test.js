@@ -955,3 +955,47 @@ test('mod never posts a button that is open to everyone', async () => {
   assert.ok(h.sent(IDS.channels.modlog).length > 3);
   assert.equal(h.allButtons(h.sent(IDS.channels.modlog)).length, 0, 'log posts carry no buttons');
 });
+
+test('admins set the mod log channel with /mod log, members and mods cannot', async () => {
+  const h = await createHarness({ apps: ['mod'] });
+  const member = await h.slash('mod', 'log #mod-log', { user: IDS.member });
+  assert.match(h.textOf(member[member.length - 1]), /Only moderators/);
+  const mod = await h.slash('mod', 'log #mod-log', { user: IDS.mod });
+  assert.match(h.textOf(mod[mod.length - 1]), /Only admins/);
+  assert.equal(h.engine.settings.core(S).logChannel, null);
+  const admin = await h.slash('mod', 'log #mod-log', { user: IDS.admin });
+  assert.match(h.textOf(admin[admin.length - 1]), /Log channel saved/);
+  assert.equal(h.engine.settings.core(S).logChannel, IDS.channels.modlog);
+  await h.slash('mod', 'log off', { user: IDS.admin });
+  assert.equal(h.engine.settings.core(S).logChannel, null);
+});
+
+test('admins add and remove extra mod roles, and the role then works', async () => {
+  const h = await createHarness({ apps: ['mod'] });
+  h.fake.memberOf(S, IDS.member2).roles = [];
+  const before = await h.slash('warn', '@riley spam', { user: IDS.member });
+  assert.match(h.textOf(before[before.length - 1]), /Only moderators/);
+  const added = await h.slash('mod', 'modrole add @Member', { user: IDS.admin });
+  assert.match(h.textOf(added[added.length - 1]), /Mod role added/);
+  assert.deepEqual(h.engine.settings.core(S).modRoles, [IDS.roles.member]);
+  const after = await h.slash('warn', '@riley spam', { user: IDS.member });
+  assert.match(h.textOf(after[after.length - 1]), /Warned/);
+  await h.slash('mod', 'modrole remove @Member', { user: IDS.admin });
+  assert.deepEqual(h.engine.settings.core(S).modRoles, []);
+  const gone = await h.slash('warn', '@riley spam', { user: IDS.member });
+  assert.match(h.textOf(gone[gone.length - 1]), /Only moderators/);
+});
+
+test('extra admin roles are for the server owner only and refuse silly roles', async () => {
+  const h = await createHarness({ apps: ['mod'] });
+  const admin = await h.slash('mod', 'adminrole add @VIP', { user: IDS.admin });
+  assert.match(h.textOf(admin[admin.length - 1]), /Only the server owner/);
+  assert.deepEqual(h.engine.settings.core(S).adminRoles, []);
+  const owner = await h.slash('mod', 'adminrole add @VIP', { user: IDS.owner });
+  assert.match(h.textOf(owner[owner.length - 1]), /Admin role added/);
+  assert.deepEqual(h.engine.settings.core(S).adminRoles, [IDS.roles.vip]);
+  const high = await h.slash('mod', 'modrole add @Admin', { user: IDS.admin });
+  assert.match(h.textOf(high[high.length - 1]), /at or above your highest role/);
+  const list = await h.slash('mod', 'settings', { user: IDS.admin });
+  assert.match(h.textOf(list[list.length - 1]), /Extra admin roles/);
+});
