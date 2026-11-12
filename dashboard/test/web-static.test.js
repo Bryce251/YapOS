@@ -182,7 +182,7 @@ test('no external resources and no forbidden wording', () => {
     const src = readFileSync(f, 'utf8');
     const urls = rel(f) === '_headers' ? [] : src.match(/https?:\/\/[^\s'"`)]+/g) || [];
     for (const u of urls) {
-      assert.ok(u.startsWith('http://www.w3.org/2000/svg'), `${rel(f)} references ${u}`);
+      assert.ok(u.startsWith('http://www.w3.org/2000/svg') || (rel(f) === 'js/links.js' && u.startsWith('https://www.yapin.gg/bot/')), `${rel(f)} references ${u}`);
     }
     assert.equal(/url\(/.test(src) && f.endsWith('.css'), false, `${rel(f)} loads a url()`);
     assert.equal(/\b(claude|anthropic)\b/i.test(src), false, rel(f));
@@ -253,4 +253,10 @@ test('an off switch track has at least 3:1 contrast against cards in both themes
   const blocks = [...css.matchAll(/--surface: (#[0-9a-f]{6});[\s\S]*?--switch-off: (#[0-9a-f]{6});/g)];
   assert.ok(blocks.length >= 3, 'light, dark and forced-dark themes all set --switch-off');
   for (const [, surface, off] of blocks) assert.ok(contrast(surface, off) >= 3, `${off} on ${surface}`);
+});
+
+test('the add bot link points at the YapOS invite page', async () => {
+  const { ADD_BOT_URL, BOT_ID } = await import('../web/js/links.js');
+  assert.match(BOT_ID, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.equal(ADD_BOT_URL, `https://www.yapin.gg/bot/${BOT_ID}`);
 });

@@ -1,6 +1,7 @@
 import { h } from '../dom.js';
 import { icon } from '../icons.js';
-import { avatar, badge, button, emptyState, loadingRegion, pageHeader, skeleton } from '../ui.js';
+import { avatar, badge, button, emptyState, linkButton, loadingRegion, pageHeader, skeleton } from '../ui.js';
+import { ADD_BOT_URL } from '../links.js';
 import { mountAsync } from './common.js';
 import { serverPath } from '../router.js';
 import { formatCompact, levelLabel } from '../format.js';
@@ -39,13 +40,15 @@ function serverCard(s) {
       icon('chevron-right', { size: 16, className: 'server-card-arrow' }))));
 }
 
+const addBotButton = (size = 'md', variant = 'primary') => linkButton({ label: 'Add YapOS to a server', href: ADD_BOT_URL, icon: 'plus', variant, size, external: true });
+
 export function renderServers(ctx) {
   const { api, main } = ctx;
   ctx.setChrome({ variant: 'plain', crumbs: [{ label: 'Servers' }] });
   const body = h('div', { class: 'page-body' });
   const refresh = button({ label: 'Refresh', icon: 'refresh', size: 'sm' });
   main.replaceChildren(h('div', { class: 'page page-narrow' },
-    pageHeader({ title: 'Your servers', description: 'Servers where you are an admin or the owner and YapOS is installed.', actions: refresh }),
+    pageHeader({ title: 'Your servers', description: 'Servers where you are an admin or the owner and YapOS is installed.', actions: [addBotButton('sm', 'secondary'), refresh] }),
     body));
   let force = false;
   const reload = mountAsync(body, {
@@ -69,7 +72,8 @@ export function renderServers(ctx) {
         body.replaceChildren(emptyState({
           icon: 'server',
           title: 'No servers to manage yet',
-          body: "You'll see servers here where YapOS is installed and you are an admin or the owner. Invite YapOS to a server, then refresh.",
+          body: "You'll see servers here where YapOS is installed and you are an admin or the owner. Add YapOS to a server, then refresh.",
+          action: addBotButton(),
         }));
         return;
       }

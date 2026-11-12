@@ -4,6 +4,7 @@ import { brand } from '../shell.js';
 import { themeToggle } from '../theme.js';
 import { linkButton } from '../ui.js';
 import { loginUrl, safeNext } from '../router.js';
+import { ADD_BOT_URL } from '../links.js';
 
 const FEATURES = [
   { icon: 'apps', title: 'Every app in one place', body: 'Install or remove apps like Levels, Tickets and Automod with a single switch.' },
@@ -46,7 +47,7 @@ export function renderLanding(root, { user, search }) {
       h('h1', { class: 'hero-title', text: 'YapOS Dashboard' }),
       h('p', { class: 'hero-lead', text: 'Manage apps, settings and moderation for every server you run, from one calm place. Changes go straight to YapOS and apply in seconds.' }),
       cancelled ? h('p', { class: 'notice notice-info', attrs: { role: 'status' } }, icon('info', { size: 16 }), h('span', { text: 'Login was cancelled. You can try again whenever you like.' })) : null,
-      h('div', { class: 'hero-actions' }, cta),
+      h('div', { class: 'hero-actions' }, cta, linkButton({ label: 'Add to your server', href: ADD_BOT_URL, icon: 'plus', size: 'lg', external: true })),
       h('p', { class: 'hero-fine', text: 'We only ask for your basic profile. You can manage servers where you are an admin or the owner.' })),
     osPreview());
   const features = h('section', { class: 'features', attrs: { 'aria-labelledby': 'features-title' } },
