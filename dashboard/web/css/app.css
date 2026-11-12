@@ -296,6 +296,8 @@ svg.icon {
 
 .logo-mark {
   flex: none;
+  display: block;
+  border-radius: 22%;
 }
 
 .brand-name {

@@ -103,14 +103,14 @@ export function icon(name, { size = 16, label = '', className = '' } = {}) {
 }
 
 export function logoMark({ size = 28, label = 'YapOS' } = {}) {
-  const svg = make('svg', { viewBox: '0 0 32 32', width: size, height: size, class: 'logo-mark', focusable: 'false' });
-  if (label) {
-    svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', label);
-  } else svg.setAttribute('aria-hidden', 'true');
-  svg.appendChild(make('rect', { x: 0, y: 0, width: 32, height: 32, rx: 8, fill: '#f2613f' }));
-  svg.appendChild(make('path', { d: 'M10 9l6 7.5L22 9M16 16.5V23.5', fill: 'none', stroke: '#ffffff', 'stroke-width': 3, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
-  return svg;
+  const img = document.createElement('img');
+  img.src = '/logo.png';
+  img.width = size;
+  img.height = size;
+  img.className = 'logo-mark';
+  img.alt = label || '';
+  img.decoding = 'async';
+  return img;
 }
 
 export const ICON_NAMES = Object.keys(ICONS);

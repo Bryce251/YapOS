@@ -229,10 +229,12 @@ test('static files get the same security headers as the Worker', async () => {
   assert.equal(text.includes('#'), false);
 });
 
-test('favicon is a local svg', () => {
-  const svg = readFileSync(path.join(web, 'favicon.svg'), 'utf8');
-  assert.match(svg, /^<svg /);
-  assert.match(svg, /#f2613f/);
+test('the logo and favicon are local pngs', () => {
+  const png = readFileSync(path.join(web, 'logo.png'));
+  assert.equal(png.subarray(1, 4).toString('latin1'), 'PNG');
+  const html = readFileSync(path.join(web, 'index.html'), 'utf8');
+  assert.ok(html.includes('rel="icon" href="/favicon.png"'));
+  assert.equal(readFileSync(path.join(web, 'favicon.png')).subarray(1, 4).toString('latin1'), 'PNG');
 });
 
 function luminance(hex) {
