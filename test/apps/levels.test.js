@@ -906,7 +906,7 @@ test('a panel the member opened does not unlock staff buttons', async () => {
   const opened = await h.click(customId('system', 'open', 'levels'), { user: IDS.member, messageId: menuId });
   assert.doesNotMatch(lastText(h, opened), /Levels settings/);
   assert.match(lastText(h, opened), /Sam/);
-  assert.deepEqual(h.allButtons(opened).map((b) => b.custom_id), [customId('levels', 'lbpeek')]);
+  assert.deepEqual(h.allButtons(opened).map((b) => b.custom_id), [customId('levels', 'lbpeek'), customId('system', 'home')]);
   assert.deepEqual(cfg(h), before);
   assert.equal(userOf(h, IDS.member).xp, 900);
   assert.equal(userOf(h, IDS.member2).xp, 300);

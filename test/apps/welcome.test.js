@@ -583,16 +583,15 @@ test('a member who opens their own menu cannot ride its lock into welcome settin
 
   const tile = await h.click('yo:system:open:welcome', { user: IDS.member, messageId: mine });
   assert.equal(tile.length, 1);
-  assert.equal(tile[0].type, 'ephemeral');
   assert.match(h.textOf(tile[0]), /Preview/);
-  assert.equal(h.allButtons(tile).length, 0, 'the tile gives a member no settings buttons');
+  assert.equal(h.allButtons(tile).filter((b) => b.custom_id.startsWith('yo:welcome:')).length, 0, 'the tile gives a member no settings buttons');
 
   const adminMenu = await h.slash('menu', '', { user: IDS.admin });
   const theirs = adminMenu.find((a) => a.message).message.id;
   const stolen = await h.click('yo:system:open:welcome', { user: IDS.member, messageId: theirs });
   assert.match(h.textOf(stolen[0]), /Not your panel/);
   const opened = await h.click('yo:system:open:welcome', { user: IDS.admin, messageId: theirs });
-  const panelId = opened.find((a) => a.message).message.id;
+  const panelId = opened.find((a) => a.message)?.message.id ?? theirs;
   assert.ok(h.findButton('Edit messages', opened));
   const press = await h.click('yo:welcome:toggle:leave', { user: IDS.member, messageId: panelId });
   assert.match(h.textOf(press[0]), /Not your panel/);
@@ -875,4 +874,85 @@ test('a second ordinary member gets their own preview and no way in', async () =
   await h.join(uuid(1));
   assert.equal(h.allButtons(h.sent()).length, 0, 'there is no public welcome button to lean on');
   assert.deepEqual(cfgOf(h), { ...before, leave: true });
+});
+
+let lateEvent = 900000;
+async function lateEventFor(h, type, userId, username) {
+  if (type === 'member_join' && !h.fake.memberOf(IDS.server, userId)) h.fake.state.members[IDS.server].push({ id: userId, username, display_name: username, nickname: null, roles: [], joined_at: new Date(h.fake.clock.t).toISOString() });
+  if (type === 'member_leave') h.fake.state.members[IDS.server] = h.fake.state.members[IDS.server].filter((m) => m.id !== userId);
+  await h.bot.handle({ id: ++lateEvent, type, data: { server_id: IDS.server, channel_id: null, user_id: userId, username, joined_at: null, member_count: h.fake.state.members[IDS.server].length, invite_code: null, yaposLate: true } });
+  await h.settle();
+}
+
+test('placeholder typos are refused with a suggestion when typed', async () => {
+  const h = await make();
+  const before = cfgOf(h).joinText;
+  const ans = await h.slash('welcome', 'text Hi {usr}, welcome!', { user: IDS.admin });
+  assert.match(lastText(h, ans), /\{usr\} isn't a placeholder I know\. Did you mean \{user\}\?/);
+  assert.equal(cfgOf(h).joinText, before, 'nothing saved');
+  const leave = await h.slash('welcome', 'leave Bye {nmae}', { user: IDS.admin });
+  assert.match(lastText(h, leave), /\{nmae\} isn't a placeholder I know\./);
+  const dm = await h.slash('welcome', 'dm Hey {Username}', { user: IDS.admin });
+  assert.match(lastText(h, dm), /Did you mean \{username\}\?/);
+  const odd = await h.slash('welcome', 'text Hi {zzzzzzzz}', { user: IDS.admin });
+  assert.match(lastText(h, odd), /\{zzzzzzzz\} isn't a placeholder I know\./);
+  assert.match(lastText(h, odd), /\{count_ord\}/);
+  assert.equal(cfgOf(h).joinText, before);
+  assert.doesNotMatch(JSON.stringify(cfgOf(h)), /usr|nmae|Username|zzzz/);
+  const good = await h.slash('welcome', 'text Hi {user}, you are our {count_ord} in {server} ({count}, {username})', { user: IDS.admin });
+  assert.match(lastText(h, good), /saved/);
+  assert.match(cfgOf(h).joinText, /^Hi \{user\}/);
+});
+
+test('placeholder typos are refused in the form too and nothing is saved', async () => {
+  const h = await make();
+  const before = structuredClone(cfgOf(h));
+  const ans = await h.submit('yo:welcome:save', { join: 'Welcome {user}!', leave: 'Bye {usernme}', dm: '', title: '', image: '' }, { user: IDS.admin });
+  assert.match(lastText(h, ans), /\{usernme\} isn't a placeholder I know\. Did you mean \{username\}\?/);
+  assert.deepEqual(cfgOf(h), before);
+  const title = await h.submit('yo:welcome:save', { join: 'Welcome {user}!', leave: '', dm: '', title: 'Hi {srever}', image: '' }, { user: IDS.admin });
+  assert.match(lastText(h, title), /Did you mean \{server\}\?/);
+  assert.deepEqual(cfgOf(h), before);
+  const ok = await h.submit('yo:welcome:save', { join: 'Welcome {user} to {server}!', leave: '', dm: '', title: '', image: '' }, { user: IDS.admin });
+  assert.match(lastText(h, ok), /saved/);
+  assert.equal(cfgOf(h).joinText, 'Welcome {user} to {server}!');
+});
+
+test('late joins after the bot was offline become one message', async () => {
+  const h = await make();
+  const ids = Array.from({ length: 6 }, () => uuid(1));
+  for (const [i, id] of ids.entries()) await lateEventFor(h, 'member_join', id, `sleepy${i}`);
+  assert.equal(h.sent(W).length, 0, 'no card per person');
+  await h.engine.service('welcome').flushLate(IDS.server);
+  await h.settle();
+  const msgs = h.sent(W);
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].content, `While I was offline, 6 people joined: welcome <@${ids[0]}>, <@${ids[1]}> and 4 others!`);
+  assert.equal(h.engine.service('welcome').pending(IDS.server), 0, 'late joins do not count as a raid burst');
+
+  const two = [uuid(1), uuid(1)];
+  for (const id of two) await lateEventFor(h, 'member_join', id, 'late');
+  await lateEventFor(h, 'member_join', two[0], 'late');
+  await h.engine.service('welcome').flushLate(IDS.server);
+  await h.settle();
+  assert.equal(h.lastSent(W).content, `While I was offline, 2 people joined: welcome <@${two[0]}> and <@${two[1]}>!`);
+
+  const fresh = uuid(1);
+  await h.join(fresh, { username: 'awake' });
+  assert.equal(h.lastSent(W).content, `<@${fresh}>`, 'fresh joins still get their own card');
+});
+
+test('late joins post on their own after a few seconds, and late leaves stay quiet', async () => {
+  const h = await make();
+  patch(h, { leave: true });
+  const id = uuid(1);
+  await lateEventFor(h, 'member_join', id, 'solo');
+  assert.equal(h.sent(W).length, 0);
+  assert.ok(await waitFor(() => h.sent(W).length === 1, 800), 'posted after the wait');
+  assert.equal(h.lastSent(W).content, `While I was offline, 1 person joined: welcome <@${id}>!`);
+  await lateEventFor(h, 'member_leave', IDS.member2, 'riley');
+  await h.settle();
+  assert.equal(h.sent(W).length, 1, 'no goodbye for a late leave');
+  await h.leave(IDS.member);
+  assert.equal(h.sent(W).length, 2, 'fresh leaves still say goodbye');
 });

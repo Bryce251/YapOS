@@ -177,13 +177,18 @@ async function isStaff(engine, sid, uid) {
   return engine.perms.atLeast(level, 'mod');
 }
 
+function refuse(ctx, need, body) {
+  const embed = need === 'staff' ? dialog.denied(null, { title: 'Needs Staff', body }) : dialog.denied(need, { body });
+  return ctx.ephemeral({ embeds: [embed] });
+}
+
 async function isAdmin(engine, sid, uid) {
   return engine.perms.atLeast(await engine.perms.level(sid, uid), 'admin');
 }
 
 async function adminGate(ctx) {
   if (await isAdmin(ctx.engine, ctx.serverId, ctx.userId)) return true;
-  await ctx.warn('Not allowed', 'Only admins can change the ticket setup.');
+  await refuse(ctx, 'admin', 'Only admins can change the ticket setup.');
   return false;
 }
 
@@ -218,7 +223,7 @@ function adminOnly(run) {
   return { perm: 'admin', run: async (ctx) => ((await adminGate(ctx)) ? run(ctx) : null) };
 }
 
-const notYourConfirm = (ctx) => ctx.warn('Not your panel', 'Someone else asked to close this ticket. Run `/ticket close` yourself to get your own buttons.');
+const notYourConfirm = (ctx) => ctx.ephemeral({ embeds: [dialog.denied(null, { title: 'Not your panel', body: 'Someone else asked to close this ticket. Run `/ticket close` yourself to get your own buttons.' })] });
 
 async function canManage(ctx, t) {
   return t.openerId === ctx.userId || isStaff(ctx.engine, ctx.serverId, ctx.userId);
@@ -702,7 +707,7 @@ function confirmRows(sess) {
 }
 
 async function askClose(ctx, t, reason) {
-  if (!(await canManage(ctx, t))) return ctx.warn('Not allowed', 'Only staff or the person who opened this ticket can close it.');
+  if (!(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can close it.');
   const sess = ctx.engine.router.session({ num: t.number, reason: clip(reason || '', 500), sid: ctx.serverId, userId: ctx.userId });
   const body = `${reason ? `**Reason:** ${clip(reason, 300)}\n` : ''}I'll save a transcript, then delete the channel. This can't be undone.`;
   return ctx.ephemeral({ embeds: [card({ title: `${ICONS.lock} Close ticket #${pad(t.number)}?`, body, color: 'warn' })], components: confirmRows(sess) });
@@ -714,7 +719,7 @@ async function confirmClose(ctx) {
   if (!s || s.sid !== ctx.serverId) return ctx.warn('This button expired', 'Run `/ticket close` again.');
   const t = getTicket(ctx.engine, ctx.serverId, s.num);
   if (!t || t.status !== 'open') return ctx.info('Already closed', 'This ticket is already closed.');
-  if (!(await canManage(ctx, t))) return ctx.warn('Not allowed', 'Only staff or the person who opened this ticket can close it.');
+  if (!(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can close it.');
   if (s.userId !== ctx.userId) return notYourConfirm(ctx);
   ctx.engine.router.dropSession(sess);
   await ctx.update({ embeds: [card({ title: `${ICONS.lock} Closing ticket #${pad(t.number)}…`, body: 'Saving the transcript.', color: 'tickets' })], components: freeze(confirmRows(sess), ctx.source.custom_id) });
@@ -726,7 +731,7 @@ async function confirmClose(ctx) {
 }
 
 async function claimTicket(ctx, t) {
-  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId))) return ctx.warn('Staff only', 'Only staff can claim tickets. A staff member will be with you soon.');
+  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId))) return refuse(ctx, 'staff', 'Only staff can claim tickets. A staff member will be with you soon.');
   let outcome = 'won';
   const updated = patchTicket(ctx.engine, ctx.serverId, t.number, (x) => {
     if (x.status !== 'open') { outcome = 'closed'; return {}; }
@@ -750,7 +755,7 @@ async function unclaimTicket(ctx, stale) {
   const staff = await isStaff(ctx.engine, ctx.serverId, ctx.userId);
   if (staff && !t.claimedBy) return ctx.info('Not claimed', 'Nobody has claimed this ticket yet.');
   if (!staff || (t.claimedBy !== ctx.userId && !(await isAdmin(ctx.engine, ctx.serverId, ctx.userId)))) {
-    return ctx.warn('Not allowed', 'Only the person who claimed this ticket, or an admin, can unclaim it.');
+    return refuse(ctx, 'admin', 'Only the person who claimed this ticket, or an admin, can unclaim it.');
   }
   const updated = patchTicket(ctx.engine, ctx.serverId, t.number, { claimedBy: null });
   const note = `↩️ <@${ctx.userId}> unclaimed this ticket. Another staff member can pick it up.`;
@@ -767,7 +772,7 @@ function noRolesHere() {
 }
 
 async function addPerson(ctx, t, token) {
-  if (!(await canManage(ctx, t))) return ctx.warn('Not allowed', 'Only staff or the person who opened this ticket can add people.');
+  if (!(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can add people.');
   if (t.mode === 'staff' || !t.roleId) return ctx.warn(...noRolesHere());
   if (!token) return ctx.warn('Who should I add?', 'Try `/ticket add @sam`.');
   const user = await ctx.findUser(token);
@@ -784,7 +789,7 @@ async function addPerson(ctx, t, token) {
 }
 
 async function removePerson(ctx, t, token) {
-  if (!(await canManage(ctx, t))) return ctx.warn('Not allowed', 'Only staff or the person who opened this ticket can remove people.');
+  if (!(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can remove people.');
   if (t.mode === 'staff' || !t.roleId) return ctx.warn(...noRolesHere());
   if (!token) return ctx.warn('Who should I remove?', 'Try `/ticket remove @sam`.');
   const user = await ctx.findUser(token);
@@ -801,7 +806,7 @@ async function removePerson(ctx, t, token) {
 }
 
 async function renameTicket(ctx, t, text) {
-  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId))) return ctx.warn('Staff only', 'Only staff can rename tickets.');
+  if (!(await isStaff(ctx.engine, ctx.serverId, ctx.userId))) return refuse(ctx, 'staff', 'Only staff can rename tickets.');
   const name = cleanChannelName(text);
   if (!name) return ctx.warn('What should it be called?', 'Try `/ticket rename billing-question`. Letters, numbers and dashes, up to 32.');
   const before = t.name || (await ctx.bot.channel(t.channelId))?.name || `ticket-${pad(t.number)}`;
@@ -817,7 +822,7 @@ async function renameTicket(ctx, t, text) {
 }
 
 async function postTranscriptHere(ctx, t) {
-  if (!(await canManage(ctx, t))) return ctx.warn('Not allowed', 'Only staff or the person who opened this ticket can get the transcript.');
+  if (!(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can get the transcript.');
   const { transcripts } = rt(ctx.engine);
   const now = Date.now();
   for (const [k, at] of transcripts) if (now - at >= TRANSCRIPT_COOLDOWN_MS) transcripts.delete(k);
@@ -1166,7 +1171,7 @@ function ticketComponent(fn, { staffOnly = false } = {}) {
     run: async (ctx) => {
       const t = getTicket(ctx.engine, ctx.serverId, ctx.argv[0]);
       if (!t || t.status !== 'open') return ctx.info('This ticket is closed', 'Open a new one with `/ticket` if you still need help.');
-      if (staffOnly && !(await isStaff(ctx.engine, ctx.serverId, ctx.userId))) return ctx.warn('Staff only', 'Only staff can do that.');
+      if (staffOnly && !(await isStaff(ctx.engine, ctx.serverId, ctx.userId))) return refuse(ctx, 'staff', 'Only staff can do that.');
       return fn(ctx, t);
     },
   };
@@ -1242,14 +1247,14 @@ export const { setup, teardown, check } = defineApp({
         const s = ctx.engine.router.getSession(ctx.argv[0]);
         if (!s || s.sid !== ctx.serverId) return ctx.warn('This button expired', 'Nothing was closed. Run `/ticket close` again if you still want to.');
         const t = getTicket(ctx.engine, ctx.serverId, s.num);
-        if (t && !(await canManage(ctx, t))) return ctx.warn('Not allowed', 'Only staff or the person who opened this ticket can decide.');
+        if (t && !(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can decide.');
         if (s.userId !== ctx.userId) return notYourConfirm(ctx);
         ctx.engine.router.dropSession(ctx.argv[0]);
         return ctx.update({ embeds: [card({ title: `${ICONS.tickets} Ticket stays open`, body: 'Nothing was closed.', color: 'tickets' })], components: freeze(confirmRows(ctx.argv[0]), ctx.source.custom_id) });
       },
     },
     addp: ticketComponent(async (ctx, t) => {
-      if (!(await canManage(ctx, t))) return ctx.warn('Not allowed', 'Only staff or the person who opened this ticket can add people.');
+      if (!(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can add people.');
       if (t.mode === 'staff' || !t.roleId) return ctx.warn(...noRolesHere());
       return ctx.form({ title: `Add someone to #${pad(t.number)}`, action: 'addsave', fields: [{ id: 'who', label: 'Who? (a name or @mention)', style: 'short', required: true, max: 100, placeholder: 'riley' }] });
     }),

@@ -2,6 +2,7 @@ import { Bot } from './engine/sdk.js';
 import { loadConfig, VERSION } from './engine/config.js';
 import { createLogger } from './engine/log.js';
 import { createJsonStore, flushOnExit } from './engine/storage.js';
+import { createBackups } from './engine/backup.js';
 import { createEngine } from './engine/index.js';
 import { takeLock } from './engine/lock.js';
 import { teeConsoleToFile } from './engine/logfile.js';
@@ -27,6 +28,7 @@ if (!lock.ok) {
 
 const store = createJsonStore({ dir: config.dataPath, log });
 flushOnExit(store, log);
+createBackups({ dir: config.dataPath, store, log }).start();
 
 const bot = new Bot(config.token, { gateway: config.gateway ? undefined : false });
 const engine = createEngine({ bot, config, store, log });

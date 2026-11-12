@@ -503,7 +503,7 @@ function adminUndo(ctx, label, revert) {
   return engine.router.addUndo({
     serverId: sid, actorId: ctx.userId, label, perm: 'admin',
     run: async (i) => {
-      if (i?.server_id && i.server_id !== sid) throw friendly('That Undo button belongs to another server.', { title: 'Not allowed' });
+      if (i?.server_id && i.server_id !== sid) throw friendly('That Undo button belongs to another server, so it does nothing here.', { title: 'Wrong server' });
       if (i?.user_id) await engine.perms.require(sid, i.user_id, 'admin');
       return revert();
     },

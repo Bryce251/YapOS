@@ -1131,6 +1131,7 @@ function addServer(h) {
 const HOW_TO = /Turn a picture into a captioned GIF/;
 const OPEN_STUDIO = customId('system', 'open', 'studio');
 const TILE = /^yo:system:open:studio$/;
+const HOME = customId('system', 'home');
 
 test('the Studio tile answers only the person whose home screen it is, and staff see nothing more than a member', async () => {
   const { h, state } = await make();
@@ -1140,9 +1141,9 @@ test('the Studio tile answers only the person whose home screen it is, and staff
   assert.equal(tile.custom_id, OPEN_STUDIO);
   const own = await h.click(tile.custom_id, { user: IDS.member, messageId: tile.messageId });
   assert.equal(own.length, 1);
-  assert.equal(own[0].type, 'ephemeral');
+  assert.equal(own[0].type, 'update', 'the tile opens right on the home screen');
   assert.match(h.textOf(own[0]), HOW_TO);
-  assert.equal(h.allButtons(own).length, 0);
+  assert.deepEqual(h.allButtons(own).map((b) => b.custom_id), [HOME]);
   h.addSecondAdmin();
   for (const user of [IDS.member2, IDS.mod, IDS.admin, IDS.admin2]) {
     const other = await h.click(tile.custom_id, { user, messageId: tile.messageId });
@@ -1164,13 +1165,13 @@ test('the Studio tile answers only the person whose home screen it is, and staff
   assert.equal(ownerOnTheirs.length, 1);
   assert.doesNotMatch(h.textOf(ownerOnTheirs[0]), /Not your panel/);
   assert.equal(h.textOf(ownerOnTheirs[0]), h.textOf(own[0]));
-  assert.equal(h.allButtons(ownerOnTheirs).length, 0);
+  assert.deepEqual(h.allButtons(ownerOnTheirs).map((b) => b.custom_id), [HOME]);
 
   const ownerMenu = await h.slash('menu', '', { user: IDS.owner });
   const ownerTile = h.findButton(TILE, ownerMenu);
   const ownerView = await h.click(ownerTile.custom_id, { user: IDS.owner, messageId: ownerTile.messageId });
   assert.equal(h.textOf(ownerView[0]), h.textOf(own[0]));
-  assert.equal(h.allButtons(ownerView).length, 0);
+  assert.deepEqual(h.allButtons(ownerView).map((b) => b.custom_id), [HOME]);
   assert.equal(state.urls.length, 0);
 });
 
@@ -1180,14 +1181,17 @@ test('ids and values pasted onto the Studio tile change nothing', async () => {
   const tile = h.findButton(TILE, menu);
   const plainView = h.textOf((await h.click(OPEN_STUDIO, { user: IDS.member }))[0]);
   assert.match(plainView, HOW_TO);
+  const placedView = h.textOf((await h.click(OPEN_STUDIO, { user: IDS.member, messageId: tile.messageId }))[0]);
+  assert.match(placedView, HOW_TO);
   const sentBefore = h.sent().length;
   const hostile = { text: 'x'.repeat(5000), path: '../../secret.png', user: IDS.owner, server: uuid(), role: IDS.roles.top, kind: 'admin' };
   for (const extra of [IDS.owner, IDS.member2, IDS.mod, IDS.roles.top, IDS.roles.admin, IDS.bot, uuid(), 'admin', 'owner']) {
     for (const messageId of [null, tile.messageId]) {
       const pressed = await h.click(customId('system', 'open', 'studio', extra), { user: IDS.member, messageId });
       assert.equal(pressed.length, 1);
-      assert.equal(pressed[0].type, 'ephemeral');
-      assert.equal(h.textOf(pressed[0]), plainView);
+      assert.equal(pressed[0].type, messageId ? 'update' : 'ephemeral');
+      assert.equal(h.textOf(pressed[0]), messageId ? placedView : plainView);
+      assert.deepEqual(h.allButtons(pressed).map((b) => b.custom_id), messageId ? [HOME] : []);
     }
   }
   const picked = await h.pick(OPEN_STUDIO, [IDS.owner, 'admin', 'mod'], { user: IDS.member, messageId: tile.messageId });

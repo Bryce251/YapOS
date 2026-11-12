@@ -42,7 +42,7 @@ test('timeout via typed chat and the /timeout shortcut', async () => {
   assert.equal(h.fake.state.timeouts[tkey(IDS.member2)].minutes, 5);
 });
 
-test('duration parsing: bare minutes, clamp to 28 days, off clears, default length', async () => {
+test('duration parsing: bare minutes, clamp to 28 days, off clears, no length asks', async () => {
   const h = await make();
   await h.slash('timeout', '@sam 90', { user: IDS.mod });
   assert.equal(h.fake.state.timeouts[tkey(IDS.member)].minutes, 90);
@@ -51,10 +51,168 @@ test('duration parsing: bare minutes, clamp to 28 days, off clears, default leng
   assert.match(lastText(h, big), /28 days/);
   await h.slash('timeout', '@sam off', { user: IDS.mod });
   assert.equal(h.fake.state.timeouts[tkey(IDS.member)], undefined);
-  await h.slash('timeout', '@riley talking over people', { user: IDS.mod });
+  const asked = await h.slash('timeout', '@riley talking over people', { user: IDS.mod });
+  assert.match(lastText(h, asked), /How long should @riley be timed out\?/);
+  assert.equal(h.fake.state.timeouts[tkey(IDS.member2)], undefined);
+  await h.clickButton('10m', { user: IDS.mod, in: asked });
   assert.equal(h.fake.state.timeouts[tkey(IDS.member2)].minutes, 10);
+  assert.equal(h.fake.state.timeouts[tkey(IDS.member2)].reason, 'talking over people');
   await h.slash('mod', 'untimeout @riley', { user: IDS.mod });
   assert.equal(h.fake.state.timeouts[tkey(IDS.member2)], undefined);
+});
+
+test('timeout without a length asks, and each answer button works', async () => {
+  const h = await make();
+  const asked = await h.slash('timeout', '@riley', { user: IDS.mod });
+  const text = lastText(h, asked);
+  assert.match(text, /How long should @riley be timed out\?/);
+  for (const label of ['10m', '1h', '1d', '1w', 'Cancel']) assert.ok(h.findButton(label, asked), label);
+  assert.equal(h.fake.callsTo('POST', /timeouts/).length, 0, 'nothing happens before a length is picked');
+  assert.equal(h.engine.store.get('mod', S)?.cases?.length ?? 0, 0);
+  const done = await h.clickButton('1h', { user: IDS.mod, in: asked });
+  assert.equal(h.fake.state.timeouts[tkey(IDS.member2)].minutes, 60);
+  assert.match(lastText(h, done), /Timed out/);
+  assert.ok(h.findButton('Undo', done), 'the result still has Undo');
+  const again = await h.click(h.findButton('1d', asked).custom_id, { user: IDS.mod });
+  assert.match(lastText(h, again), /expired/);
+  assert.equal(h.fake.state.timeouts[tkey(IDS.member2)].minutes, 60, 'a second press does nothing');
+
+  const week = await h.message('!timeout riley being loud', { user: IDS.mod });
+  assert.ok(week);
+  const prompt = h.lastSent(G);
+  assert.match(h.textOf(prompt), /How long/);
+  await h.clickButton('1w', { user: IDS.mod, in: [prompt] });
+  assert.equal(h.fake.state.timeouts[tkey(IDS.member2)].minutes, 10080);
+  assert.equal(h.fake.state.timeouts[tkey(IDS.member2)].reason, 'being loud');
+});
+
+test('timeout length buttons belong to the asker and keep every check', async () => {
+  const h = await make();
+  const asked = await h.slash('timeout', '@sam', { user: IDS.mod });
+  const b = h.findButton('1h', asked);
+  const other = await h.click(b.custom_id, { user: IDS.admin });
+  assert.match(lastText(h, other), /expired/);
+  const member = await h.click(b.custom_id, { user: IDS.member2 });
+  assert.match(lastText(h, member), /Only moderators/);
+  assert.equal(h.fake.state.timeouts[tkey(IDS.member)], undefined);
+  const cancel = await h.clickButton('Cancel', { user: IDS.mod, in: asked });
+  assert.match(lastText(h, cancel), /Cancelled/);
+  assert.equal(h.fake.callsTo('POST', /timeouts/).length, 0);
+  const admin = await h.slash('timeout', '@alex', { user: IDS.mod });
+  assert.match(lastText(h, admin), /above|admin/);
+  assert.equal(h.findButton('1h', admin), null, 'no question when they could not do it anyway');
+});
+
+test('"forever" gets the 28 day limit and the same buttons', async () => {
+  const h = await make();
+  const ans = await h.slash('timeout', 'riley forever spam', { user: IDS.mod });
+  const text = lastText(h, ans);
+  assert.match(text, /I can't time someone out forever\. The longest is 28 days\./);
+  assert.match(text, /spam/);
+  assert.doesNotMatch(text, /Reason:\*\* forever/);
+  assert.equal(h.fake.state.timeouts[tkey(IDS.member2)], undefined);
+  await h.clickButton('1d', { user: IDS.mod, in: ans });
+  assert.equal(h.fake.state.timeouts[tkey(IDS.member2)].minutes, 1440);
+  assert.equal(h.fake.state.timeouts[tkey(IDS.member2)].reason, 'spam');
+  for (const clear of ['off', '0', 'clear']) {
+    await h.slash('timeout', `riley ${clear}`, { user: IDS.mod });
+    assert.equal(h.fake.state.timeouts[tkey(IDS.member2)], undefined, clear);
+    await h.slash('timeout', 'riley 5', { user: IDS.mod });
+  }
+});
+
+test('slowmode without a length asks, and odd lengths are explained', async () => {
+  const h = await make();
+  const asked = await h.slash('mod', 'slowmode', { user: IDS.mod });
+  assert.match(lastText(h, asked), /How long should people in/);
+  assert.equal(h.fake.channelById(G).slowmode, 0);
+  await h.clickButton('30s', { user: IDS.mod, in: asked });
+  assert.equal(h.fake.channelById(G).slowmode, 30);
+  const forever = await h.slash('mod', 'slowmode forever', { user: IDS.mod });
+  assert.match(lastText(h, forever), /6 hours/);
+  const off = await h.clickButton('Off', { user: IDS.mod, in: forever });
+  assert.match(lastText(h, off), /Slowmode off/);
+  assert.equal(h.fake.channelById(G).slowmode, 0);
+  const odd = await h.slash('mod', 'slowmode soonish', { user: IDS.mod });
+  assert.match(lastText(h, odd), /didn't understand \*\*soonish\*\*/);
+  await h.clickButton('Cancel', { user: IDS.mod, in: odd });
+  assert.equal(h.fake.channelById(G).slowmode, 0);
+});
+
+test('lock and unlock take a plain channel name', async () => {
+  const h = await make();
+  const N = IDS.channels.news;
+  h.fake.channelById(N).name = '📢・announcements';
+  h.engine.cache.invalidate(S);
+  const ans = await h.slash('lock', 'announcements raid incoming', { user: IDS.mod });
+  assert.match(lastText(h, ans), /Channel locked/);
+  assert.deepEqual(h.fake.state.overrides[`${N}:everyone`].deny, ['send_messages']);
+  assert.equal(h.fake.state.overrides[`${G}:everyone`], undefined, 'the current channel is untouched');
+  const c = h.engine.store.get('mod', S).cases.at(-1);
+  assert.equal(c.reason, 'raid incoming');
+  assert.equal(c.channelId, N);
+  const un = await h.slash('unlock', 'Announcements', { user: IDS.mod });
+  assert.match(lastText(h, un), /Channel unlocked/);
+  assert.equal(h.fake.state.overrides[`${N}:everyone`], undefined);
+});
+
+test('a close channel name asks before locking', async () => {
+  const h = await make();
+  const N = IDS.channels.news;
+  const ans = await h.slash('lock', 'anouncements spam wave', { user: IDS.mod });
+  assert.match(lastText(h, ans), /Did you mean #announcements\?/);
+  for (const label of ['Lock #announcements', 'Lock this channel', 'Cancel']) assert.ok(h.findButton(label, ans), label);
+  assert.equal(h.fake.state.overrides[`${N}:everyone`], undefined);
+  assert.equal(h.fake.state.overrides[`${G}:everyone`], undefined);
+  const forged = await h.click(h.findButton('Lock #announcements', ans).custom_id, { user: IDS.admin });
+  assert.match(lastText(h, forged), /expired/);
+  await h.clickButton('Lock #announcements', { user: IDS.mod, in: ans });
+  assert.deepEqual(h.fake.state.overrides[`${N}:everyone`].deny, ['send_messages']);
+  assert.equal(h.engine.store.get('mod', S).cases.at(-1).reason, 'spam wave');
+
+  const here = await h.slash('lock', 'anouncements', { user: IDS.mod });
+  await h.clickButton('Lock this channel', { user: IDS.mod, in: here });
+  assert.deepEqual(h.fake.state.overrides[`${G}:everyone`].deny, ['send_messages']);
+  assert.equal(h.engine.store.get('mod', S).cases.at(-1).reason, 'anouncements');
+
+  const unAsk = await h.slash('unlock', 'anouncements', { user: IDS.mod });
+  assert.ok(h.findButton('Unlock #announcements', unAsk));
+  await h.clickButton('Cancel', { user: IDS.mod, in: unAsk });
+  assert.ok(h.fake.state.overrides[`${N}:everyone`], 'cancel keeps it locked');
+  const unAgain = await h.slash('unlock', 'anouncements', { user: IDS.mod });
+  await h.clickButton('Unlock #announcements', { user: IDS.mod, in: unAgain });
+  assert.equal(h.fake.state.overrides[`${N}:everyone`], undefined);
+});
+
+test('a lock reason that is not a channel name still locks this channel', async () => {
+  const h = await make();
+  const ans = await h.slash('lock', 'calm down please', { user: IDS.mod });
+  assert.match(lastText(h, ans), /Channel locked/);
+  assert.equal(h.findButton('Lock this channel', ans), null);
+  assert.deepEqual(h.fake.state.overrides[`${G}:everyone`].deny, ['send_messages']);
+  assert.equal(h.engine.store.get('mod', S).cases.at(-1).reason, 'calm down please');
+});
+
+test('Undo buttons carry a hint for doing it by hand', async () => {
+  const h = await make();
+  giveModBan(h);
+  const seen = [];
+  const real = h.engine.router.addUndo;
+  h.engine.router.addUndo = (opts) => { seen.push(opts); return real(opts); };
+  await h.slash('ban', '@sam spam', { user: IDS.mod });
+  await h.slash('timeout', '@riley 1h', { user: IDS.mod });
+  await h.slash('lock', 'announcements', { user: IDS.mod });
+  await h.slash('warn', '@riley rude', { user: IDS.mod });
+  await h.slash('mod', 'slowmode 10s', { user: IDS.mod });
+  await h.slash('mod', 'slowmode 1m', { user: IDS.mod });
+  assert.deepEqual(seen.map((o) => o.manual), [
+    `/mod unban ${IDS.member}`,
+    '/mod untimeout @riley',
+    '/unlock #announcements',
+    '/mod warnings @riley',
+    '/mod slowmode #general off',
+    '/mod slowmode #general 10s',
+  ]);
 });
 
 test('timeout Undo clears it', async () => {

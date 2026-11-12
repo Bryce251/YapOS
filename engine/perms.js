@@ -1,4 +1,5 @@
 import { friendly, permName } from './errors.js';
+import { NEED_NAMES } from './ui.js';
 
 const LEVELS = ['member', 'mod', 'admin', 'owner'];
 const ADMIN_PERMS = ['administrator', 'manage_server'];
@@ -75,7 +76,7 @@ export function createPerms({ bot, settings, isBotOwner = () => false, cacheMs =
     const have = await level(sid, uid);
     if (!atLeast(have, need)) {
       const who = { mod: 'moderators', admin: 'admins', owner: 'the server owner' }[need] || need;
-      throw friendly(`Only ${who} can use this.`, { title: 'Not allowed', hint: need === 'mod' ? 'Mods are people with Kick, Ban, Timeout or Manage Messages, or a role added with /mod modrole add.' : undefined });
+      throw friendly(`Only ${who} can use this.`, { title: `Needs ${NEED_NAMES[need] || need}`, need, hint: need === 'mod' ? 'Mods are people with Kick, Ban, Timeout or Manage Messages, or a role added with /mod modrole add.' : undefined });
     }
     return have;
   }

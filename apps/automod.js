@@ -393,7 +393,7 @@ async function onMessage(ctx, msg) {
   const cfg = ctx.config();
   if (await isExempt(engine, sid, uid, msg.channel_id, cfg)) return;
   const lim = limits(cfg);
-  const track = cfg.filters.spam ? trackMessage(engine, sid, uid, msg, lim) : null;
+  const track = cfg.filters.spam && !msg.yaposLate ? trackMessage(engine, sid, uid, msg, lim) : null;
   if (msg.command) {
     const flood = track && track.recent.length > lim.floodMax ? { kind: 'flood', burst: track.recent } : null;
     if (flood) await handleViolation(engine, sid, msg, flood, cfg, uid);
@@ -572,6 +572,7 @@ async function onJoin(ctx, ev) {
   const { engine, serverId: sid } = ctx;
   if (!sid) return;
   await maybeExpireLock(engine, sid);
+  if (ev?.yaposLate) return;
   const cfg = ctx.config();
   if (!cfg.filters.raid || lockState(engine, sid)) return;
   const { joins } = mem(engine);
@@ -586,7 +587,6 @@ async function onJoin(ctx, ev) {
     joins.delete(sid);
     await lockdown(engine, sid, { reason: 'raid', joinCount: list.length });
   }
-  void ev;
 }
 
 function panelView(engine, sid, { canEdit = true } = {}) {

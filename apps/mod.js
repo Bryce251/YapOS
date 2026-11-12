@@ -1,7 +1,7 @@
 import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
-import { tokenize, parseDuration, takeDuration, formatDuration, didYouMean, clip } from '../engine/parse.js';
+import { tokenize, parseDuration, takeDuration, formatDuration, didYouMean, fuzzyFind, normalizeName, userId, clip } from '../engine/parse.js';
 import { friendly, permName, explain, looksLikeFeatureOff } from '../engine/errors.js';
 
 const ID = 'mod';
@@ -62,7 +62,7 @@ const STAFF_KINDS = {
 };
 
 const USAGE = {
-  timeout: '`/mod timeout @sam 10m spamming` (a bare number means minutes, `off` clears it)',
+  timeout: '`/mod timeout @sam 10m spamming` (a bare number means minutes, `off` clears it; with no length I ask how long)',
   untimeout: '`/mod untimeout @sam`',
   kick: '`/mod kick @sam reason`',
   ban: '`/mod ban @sam reason`',
@@ -234,7 +234,7 @@ async function checkRank(engine, serverId, actorId, targetId, def, label) {
   const { LEVELS } = engine.perms;
   const [mine, theirs] = await Promise.all([engine.perms.level(serverId, actorId), engine.perms.level(serverId, targetId)]);
   if (LEVELS.indexOf(theirs) > LEVELS.indexOf(mine)) {
-    throw friendly(`${label} is an admin here, so only admins or the server owner can ${def.verb} them.`, { title });
+    throw friendly(`${label} is an admin here, so only admins or the server owner can ${def.verb} them.`, { title, need: theirs === 'owner' ? 'owner' : 'admin' });
   }
 }
 
@@ -254,7 +254,7 @@ async function needChannelHere(ctx, channelId) {
 async function checkCanAct(ctx, targetId, def, label) {
   const { engine, serverId } = ctx;
   if (def.perm && !(await engine.perms.actorCan(serverId, ctx.userId, def.perm))) {
-    throw friendly(`You need **${permName(def.perm)}** to ${def.verb} people. Ask an admin to tick it on your role, or an admin can make your role a mod role with \`/mod modrole add @role\`.`, { title: 'Not allowed' });
+    throw friendly(`You need **${permName(def.perm)}** to ${def.verb} people.`, { title: 'Needs Mod', need: 'mod', hint: 'Ask an admin to tick it on your role, or an admin can make your role a mod role with `/mod modrole add @role`.' });
   }
   if (!def.skipHierarchy) await checkRank(engine, serverId, ctx.userId, targetId, def, label);
   if (targetId === ctx.userId) throw friendly("You can't do that to yourself.", { title: `I can't ${def.verb} ${label}` });
@@ -334,39 +334,88 @@ async function undoGate(ctx, i, def = {}, targetId = null, label = 'them') {
   refreshRoles(engine, serverId, i.user_id);
   await engine.perms.require(serverId, i.user_id, 'mod');
   if (def.perm && !(await engine.perms.actorCan(serverId, i.user_id, def.perm))) {
-    throw friendly(`You need **${permName(def.perm)}** to ${def.verb} people, so you can't undo this one.`, { title: 'Not allowed' });
+    throw friendly(`You need **${permName(def.perm)}** to ${def.verb} people, so you can't undo this one.`, { title: 'Needs Mod', need: 'mod' });
   }
   if (targetId && !def.skipHierarchy && i.user_id !== ctx.userId) await checkRank(engine, serverId, i.user_id, targetId, def, label);
 }
 
+const CLEAR_WORDS = /^(off|0|none|clear|stop|remove)$/i;
+const FOREVER_WORDS = /^(forever|permanent|permanently|perm|perma|permaban|infinite|infinity|always|indefinite|indefinitely|eternity|eternal|unlimited|never|max|maximum|lifetime|life)$/i;
+const TIMEOUT_CHOICES = ['10m', '1h', '1d', '1w'];
+const SLOWMODE_CHOICES = ['10s', '30s', '1m', '5m', 'off'];
+
+const looksLikeLength = (word) => FOREVER_WORDS.test(word || '') || /^\d/.test(word || '');
+
+function expiredQuestion(ctx) {
+  return ctx.warn('That question has expired', 'Run the command again and I will ask again.');
+}
+
+function ownQuestion(ctx, s, kind) {
+  return !!s && s.kind === kind && s.serverId === ctx.serverId && s.userId === ctx.userId;
+}
+
+function cancelled(ctx) {
+  return ctx.update({ embeds: [dialog.info('Cancelled', 'Nothing changed.')], components: [] });
+}
+
 async function runAction(ctx, kind, tokens) {
-  let def = ACTIONS[kind];
+  const def = ACTIONS[kind];
   const { user, rest } = await takeTarget(ctx, tokens);
   if (!user) return ctx.warn(`Who should I ${def.verb}?`, `Try ${USAGE[kind]}.`);
+  if (kind !== 'timeout') return performAction(ctx, kind, user, { reason: rest.join(' ') });
+  if (CLEAR_WORDS.test(rest[0] || '')) return performAction(ctx, 'untimeout', user, { reason: rest.slice(1).join(' ') });
+  const d = takeDuration(rest);
+  if (d.ms === null) return askTimeoutLength(ctx, user, rest);
+  const reason = d.rest.join(' ');
+  if (d.ms <= 0) return performAction(ctx, 'untimeout', user, { reason });
+  const durationMs = clampMinutes(d.ms) * 60000;
+  const note = d.ms > MAX_TIMEOUT_MIN * 60000 ? '\n-# Yapin\' timeouts go up to 28 days, so I used that.' : '';
+  return performAction(ctx, 'timeout', user, { durationMs, reason, note });
+}
+
+async function askTimeoutLength(ctx, user, words) {
   const label = tag(user);
-  let durationMs = null;
-  let words = rest;
-  let clampedNote = '';
-  if (kind === 'timeout') {
-    if (/^(off|0|none|clear|stop|remove)$/i.test(words[0] || '')) { kind = 'untimeout'; def = ACTIONS.untimeout; words = words.slice(1); } else {
-      const d = takeDuration(words);
-      const asked = d.ms ?? (Number(ctx.config().defaultTimeoutMinutes) || 10) * 60000;
-      words = d.rest;
-      if (asked <= 0) { kind = 'untimeout'; def = ACTIONS.untimeout; } else {
-        const minutes = clampMinutes(asked);
-        durationMs = minutes * 60000;
-        if (asked > MAX_TIMEOUT_MIN * 60000) clampedNote = '\n-# Yapin\' timeouts go up to 28 days, so I used that.';
-        if (d.ms === null) clampedNote += `\n-# No length given, so I used ${formatDuration(durationMs)}.`;
-      }
-    }
+  try {
+    await checkCanAct(ctx, user.id, ACTIONS.timeout, label);
+  } catch (e) {
+    return ctx.fail(e, { action: ACTIONS.timeout.verb, perm: ACTIONS.timeout.perm, target: label });
   }
-  const reason = words.join(' ').slice(0, 200);
+  const tried = looksLikeLength(words[0]);
+  const forever = FOREVER_WORDS.test(words[0] || '');
+  const reason = (tried ? words.slice(1) : words).join(' ').slice(0, 200);
+  const sid = ctx.engine.router.session({ kind: 'timeout', userId: ctx.userId, serverId: ctx.serverId, targetId: user.id, reason });
+  const question = `How long should ${label} be timed out?`;
+  const lead = forever
+    ? "I can't time someone out forever. The longest is 28 days."
+    : tried ? `I didn't understand **${clip(words[0], 30)}** as a length.` : '';
+  const body = [lead, question, reason ? `**Reason:** ${reason}` : '', '-# You can also type it, like `/timeout @sam 2h30m spam`.'].filter(Boolean).join('\n');
+  const buttons = [...TIMEOUT_CHOICES.map((c) => button(c, cid('tlen', sid, c), 'primary')), button('Cancel', cid('tlen', sid, 'cancel'), 'secondary')];
+  return ctx.ephemeral({ embeds: [dialog.warn(forever ? 'Too long' : 'How long?', body, { color: 'mod' })], components: [row(...buttons)] });
+}
+
+async function pickTimeoutLength(ctx) {
+  const [sid, choice] = ctx.argv;
+  const s = ctx.engine.router.getSession(sid);
+  if (!ownQuestion(ctx, s, 'timeout')) return expiredQuestion(ctx);
+  ctx.engine.router.dropSession(sid);
+  if (choice === 'cancel') return cancelled(ctx);
+  if (!TIMEOUT_CHOICES.includes(choice)) return expiredQuestion(ctx);
+  const user = (await ctx.findUser(s.targetId)) || { id: s.targetId };
+  const durationMs = clampMinutes(parseDuration(choice)) * 60000;
+  return performAction(ctx, 'timeout', user, { durationMs, reason: s.reason, respond: (p) => ctx.update(p) });
+}
+
+async function performAction(ctx, kind, user, { durationMs = null, reason: rawReason = '', note = '', respond } = {}) {
+  const def = ACTIONS[kind];
+  const label = tag(user);
+  const reason = String(rawReason || '').slice(0, 200);
+  const answer = respond || ((p) => ctx.reply(p));
   try {
     await checkCanAct(ctx, user.id, def, label);
     const aName = await actorName(ctx);
     const base = { actorId: ctx.userId, reason, source: 'mod', targetName: label, actorName: aName };
     const service = svc(ctx);
-    if (kind === 'warn') return await replyWarn(ctx, user, label, base, service);
+    if (kind === 'warn') return await replyWarn(ctx, user, label, base, service, answer);
     let dm = 'off';
     if (def.dm && kind !== 'timeout') dm = await tryDm(ctx, user.id, await dmText(ctx, def, reason, durationMs));
     let c;
@@ -377,6 +426,7 @@ async function runAction(ctx, kind, tokens) {
         dm = await tryDm(ctx, user.id, await dmText(ctx, def, reason, durationMs));
         undo = ctx.engine.router.addUndo({
           serverId: ctx.serverId, actorId: ctx.userId, label: `timeout for ${label}`,
+          manual: `/mod untimeout ${label}`,
           run: (i) => undoTimeout(ctx, i, user, label, c),
         });
       }
@@ -389,19 +439,20 @@ async function runAction(ctx, kind, tokens) {
       if (kind === 'ban') {
         undo = ctx.engine.router.addUndo({
           serverId: ctx.serverId, actorId: ctx.userId, label: `ban of ${label}`,
+          manual: `/mod unban ${user.id}`,
           run: (i) => undoBan(ctx, i, user, label, c),
         });
       }
     }
     const length = c.durationMs ? ` for **${formatDuration(c.durationMs)}**` : '';
-    const body = `${label}${length}.${reason ? `\n**Reason:** ${reason}` : ''}\n-# Case #${c.id}${clampedNote}${dmNote(dm)}`;
-    return ctx.reply({ embeds: [dialog.ok(def.title, body, { color: 'mod' })], components: undo ? [row(undo.button)] : [] });
+    const body = `${label}${length}.${reason ? `\n**Reason:** ${reason}` : ''}\n-# Case #${c.id}${note}${dmNote(dm)}`;
+    return answer({ embeds: [dialog.ok(def.title, body, { color: 'mod' })], components: undo ? [row(undo.button)] : [] });
   } catch (e) {
     return ctx.fail(e, { action: def.verb, perm: def.perm, target: label });
   }
 }
 
-async function replyWarn(ctx, user, label, base, service) {
+async function replyWarn(ctx, user, label, base, service, answer = (p) => ctx.reply(p)) {
   const out = await service.warn(ctx.serverId, user.id, base);
   const days = Number(ctx.config().warnDecayDays) || 0;
   const span = days > 0 ? ` in the last ${days} day${days === 1 ? '' : 's'}` : '';
@@ -418,9 +469,10 @@ async function replyWarn(ctx, user, label, base, service) {
   lines.push(`-# Case #${out.case.id}`);
   const undo = ctx.engine.router.addUndo({
     serverId: ctx.serverId, actorId: ctx.userId, label: `warning for ${label}`,
+    manual: `/mod warnings ${label}`,
     run: (i) => undoWarn(ctx, i, user, label, out),
   });
-  return ctx.reply({ embeds: [dialog.warn('Warned', lines.join('\n'), { color: 'mod' })], components: [row(undo.button)] });
+  return answer({ embeds: [dialog.warn('Warned', lines.join('\n'), { color: 'mod' })], components: [row(undo.button)] });
 }
 
 function markUndone(engine, sid, caseId) {
@@ -431,8 +483,8 @@ async function guardedUndo(i, explainCtx, work) {
   try {
     await work();
   } catch (e) {
-    const { title, body } = explain(e, explainCtx);
-    await undoReply(i, dialog.error(title, body));
+    const { title, body, embed } = explain(e, explainCtx);
+    await undoReply(i, embed || dialog.error(title, body));
   }
 }
 
@@ -496,7 +548,7 @@ async function runPurge(ctx, tokens) {
   const label = user ? tag(user) : null;
   try {
     if (!(await ctx.engine.perms.actorCan(ctx.serverId, ctx.userId, 'manage_messages'))) {
-      throw friendly(`You need **${permName('manage_messages')}** to clear messages. Ask an admin to tick it on your role, or an admin can make your role a mod role with \`/mod modrole add @role\`.`, { title: 'Not allowed' });
+      throw friendly(`You need **${permName('manage_messages')}** to clear messages.`, { title: 'Needs Mod', need: 'mod', hint: 'Ask an admin to tick it on your role, or an admin can make your role a mod role with `/mod modrole add @role`.' });
     }
     await needChannelHere(ctx, ctx.channelId);
     await needBotPerm(ctx, 'manage_messages', 'delete messages');
@@ -522,17 +574,41 @@ async function runPurge(ctx, tokens) {
   }
 }
 
-async function pickChannel(ctx, tokens) {
+async function currentChannel(ctx, channelId = ctx.channelId) {
+  await needChannelHere(ctx, channelId);
+  const all = await ctx.channels().catch(() => []);
+  return all.find((c) => c.id === channelId) || { id: channelId, name: null };
+}
+
+function closeChannel(word, list) {
+  const q = normalizeName(word);
+  if (q.length < 3) return null;
+  const hit = fuzzyFind(q, list);
+  if (hit?.item) return hit.item;
+  const names = list.map((c) => normalizeName(c.name)).filter(Boolean);
+  const guess = didYouMean(q, names, { limit: 1, max: 2 })[0];
+  return guess ? list.find((c) => normalizeName(c.name) === guess) || null : null;
+}
+
+async function pickChannel(ctx, tokens, { ask = false } = {}) {
   const first = tokens[0] || '';
   if (/^(<#|#)/.test(first)) {
     const ch = await ctx.findChannel(first);
     if (!ch) throw friendly(`I couldn't find the channel **${clip(first, 40)}**.`, { title: 'Which channel?' });
     return { channel: ch, rest: tokens.slice(1) };
   }
-  await needChannelHere(ctx, ctx.channelId);
-  const all = await ctx.channels().catch(() => []);
-  return { channel: all.find((c) => c.id === ctx.channelId) || { id: ctx.channelId, name: 'this channel' }, rest: tokens };
+  if (first && !userId(first)) {
+    const text = await ctx.channels('text').catch(() => []);
+    const wanted = normalizeName(first);
+    const exact = wanted && text.find((c) => normalizeName(c.name) === wanted);
+    if (exact) return { channel: exact, rest: tokens.slice(1) };
+    const close = ask ? closeChannel(first, text) : null;
+    if (close) return { suggest: close, rest: tokens.slice(1) };
+  }
+  return { channel: await currentChannel(ctx), rest: tokens };
 }
+
+const chanLabel = (channel) => (channel?.name ? `#${clip(channel.name, 60)}` : 'this channel');
 
 const isEveryoneOverride = (o, serverId) => !!o && (o.role_id == null || o.role_id === 'everyone' || o.role_id === serverId);
 
@@ -605,28 +681,69 @@ const viaNote = (r) => (r.via === 'override'
   : "-# Permission overrides aren't available here yet, so I made the channel read-only instead.");
 
 async function runLock(ctx, tokens, locking) {
-  let channel;
-  let rest;
+  let picked;
   try {
-    ({ channel, rest } = await pickChannel(ctx, tokens));
+    picked = await pickChannel(ctx, tokens, { ask: true });
   } catch (e) {
     return ctx.fail(e);
   }
+  if (picked.suggest) return askLockChannel(ctx, picked.suggest, tokens, locking);
+  return doLock(ctx, picked.channel, picked.rest.join(' '), locking);
+}
+
+async function askLockChannel(ctx, suggest, tokens, locking) {
+  const verb = locking ? 'Lock' : 'Unlock';
+  const sameAsHere = suggest.id === ctx.channelId;
+  const sid = ctx.engine.router.session({
+    kind: 'lock', userId: ctx.userId, serverId: ctx.serverId, locking,
+    suggestId: suggest.id, hereId: ctx.channelId,
+    reasonThere: tokens.slice(1).join(' ').slice(0, 200), reasonHere: tokens.join(' ').slice(0, 200),
+  });
+  const buttons = [
+    button(`${verb} ${chanLabel(suggest)}`, cid('lockpick', sid, 'there'), locking ? 'danger' : 'success', locking ? ICONS.lock : ICONS.unlock),
+    sameAsHere ? null : button(`${verb} this channel`, cid('lockpick', sid, 'here'), 'secondary'),
+    button('Cancel', cid('lockpick', sid, 'cancel'), 'secondary'),
+  ].filter(Boolean);
+  const body = `Did you mean #${suggest.name}?\n-# I didn't find a channel called **${clip(tokens[0], 40)}**.${sameAsHere ? '' : ` Pick **${verb} this channel** if that word was the reason.`}`;
+  return ctx.ephemeral({ embeds: [dialog.info('Which channel?', body)], components: [row(...buttons)] });
+}
+
+async function pickLockChannel(ctx) {
+  const [sid, choice] = ctx.argv;
+  const s = ctx.engine.router.getSession(sid);
+  if (!ownQuestion(ctx, s, 'lock')) return expiredQuestion(ctx);
+  ctx.engine.router.dropSession(sid);
+  if (choice === 'cancel') return cancelled(ctx);
+  const respond = (p) => ctx.update(p);
+  try {
+    if (choice === 'here') return await doLock(ctx, await currentChannel(ctx, s.hereId), s.reasonHere, s.locking, respond);
+    if (choice !== 'there') return expiredQuestion(ctx);
+    const channel = (await ctx.channels('text').catch(() => [])).find((c) => c.id === s.suggestId);
+    if (!channel) throw friendly("That channel isn't here anymore. Run the command again.", { title: 'Which channel?' });
+    return await doLock(ctx, channel, s.reasonThere, s.locking, respond);
+  } catch (e) {
+    return ctx.fail(e);
+  }
+}
+
+async function doLock(ctx, channel, rawReason, locking, respond) {
+  const answer = respond || ((p) => ctx.reply(p));
   const chName = `<#${channel.id}>`;
   const verb = locking ? 'lock' : 'unlock';
-  const reason = rest.join(' ').slice(0, 200);
+  const reason = String(rawReason || '').slice(0, 200);
   try {
     await needBotPerm(ctx, ['manage_channels', 'manage_roles'], `${verb} ${chName}`);
     const service = svc(ctx);
     const aName = await actorName(ctx);
     if (locking) {
       const r = await lockChannel(ctx, channel.id);
-      if (r.already) return ctx.info('Already locked', `${chName} is already locked.`);
+      if (r.already) return respond ? answer({ embeds: [dialog.info('Already locked', `${chName} is already locked.`)], components: [] }) : ctx.info('Already locked', `${chName} is already locked.`);
       writeData(ctx.engine, ctx.serverId, (d) => { d.locks[channel.id] = { via: r.via, prev: r.prev || null, prevReadOnly: !!r.prevReadOnly, at: Date.now(), by: ctx.userId }; });
       const c = await service.addCase(ctx.serverId, { action: 'lock', actorId: ctx.userId, actorName: aName, targetName: chName, reason, channelId: channel.id, meta: { via: r.via } });
       service.log(ctx.serverId, caseEmbed(c, viaNote(r)));
       const undo = ctx.engine.router.addUndo({
         serverId: ctx.serverId, actorId: ctx.userId, label: `lock of #${channel.name || 'channel'}`,
+        manual: channel.name ? `/unlock #${channel.name}` : `/unlock in ${chName}`,
         run: (i) => guardedUndo(i, { action: 'unlock', perm: 'manage_channels', target: chName }, async () => {
           await undoGate(ctx, i);
           const u = await doUnlock(ctx, channel, `Undo of case #${c.id}`, i.user_id);
@@ -635,11 +752,11 @@ async function runLock(ctx, tokens, locking) {
           return undoReply(i, dialog.ok('Unlocked', `${chName} is open again.\n-# Case #${u.id}`));
         }),
       });
-      return ctx.reply({ embeds: [dialog.ok('Channel locked', `${ICONS.lock} Only staff can post in ${chName} now.${reason ? `\n**Reason:** ${reason}` : ''}\n${viaNote(r)}\n-# Case #${c.id}`, { color: 'mod' })], components: [row(undo.button)] });
+      return answer({ embeds: [dialog.ok('Channel locked', `${ICONS.lock} Only staff can post in ${chName} now.${reason ? `\n**Reason:** ${reason}` : ''}\n${viaNote(r)}\n-# Case #${c.id}`, { color: 'mod' })], components: [row(undo.button)] });
     }
     const c = await doUnlock(ctx, channel, reason, ctx.userId);
-    if (!c) return ctx.info('Not locked', `${chName} isn't locked, so there's nothing to undo.`);
-    return ctx.reply({ embeds: [dialog.ok('Channel unlocked', `${ICONS.unlock} Everyone can post in ${chName} again.\n${viaNote(c.meta)}\n-# Case #${c.id}`, { color: 'mod' })] });
+    if (!c) return respond ? answer({ embeds: [dialog.info('Not locked', `${chName} isn't locked, so there's nothing to undo.`)], components: [] }) : ctx.info('Not locked', `${chName} isn't locked, so there's nothing to undo.`);
+    return answer({ embeds: [dialog.ok('Channel unlocked', `${ICONS.unlock} Everyone can post in ${chName} again.${reason ? `\n**Reason:** ${reason}` : ''}\n${viaNote(c.meta)}\n-# Case #${c.id}`, { color: 'mod' })], components: [] });
   } catch (e) {
     return ctx.fail(e, { action: `${verb} ${chName}`, perm: 'manage_channels' });
   }
@@ -664,16 +781,54 @@ async function runSlowmode(ctx, tokens) {
     return ctx.fail(e);
   }
   const raw = (rest[0] || '').toLowerCase();
-  if (!raw) return ctx.warn('How slow?', `Try ${USAGE.slowmode}. A bare number means seconds.`);
+  if (!raw) return askSlowmode(ctx, channel, '');
   let seconds;
   if (/^(off|0|none|stop|disable)$/.test(raw)) seconds = 0;
   else {
     const ms = parseDuration(raw, { bareUnit: 's' });
-    if (ms === null) return ctx.warn("I didn't get that length", `Try ${USAGE.slowmode}.`);
+    if (ms === null) return askSlowmode(ctx, channel, rest[0]);
     seconds = Math.round(ms / 1000);
   }
-  const capped = seconds > MAX_SLOWMODE_S;
-  seconds = Math.max(0, Math.min(MAX_SLOWMODE_S, seconds));
+  return applySlowmode(ctx, channel, seconds);
+}
+
+async function askSlowmode(ctx, channel, word) {
+  const chName = `<#${channel.id}>`;
+  try {
+    await needBotPerm(ctx, 'manage_channels', `change slowmode in ${chName}`);
+  } catch (e) {
+    return ctx.fail(e, { action: `change slowmode in ${chName}`, perm: 'manage_channels' });
+  }
+  const sid = ctx.engine.router.session({ kind: 'slowmode', userId: ctx.userId, serverId: ctx.serverId, channelId: channel.id });
+  const lead = !word ? '' : FOREVER_WORDS.test(word)
+    ? "Slowmode can't last forever between messages. The longest gap is 6 hours."
+    : `I didn't understand **${clip(word, 30)}** as a length.`;
+  const body = [lead, `How long should people in ${chName} wait between messages?`, `-# You can also type it, like ${USAGE.slowmode}. A bare number means seconds.`].filter(Boolean).join('\n');
+  const choices = SLOWMODE_CHOICES.map((c) => button(c === 'off' ? 'Off' : c, cid('slen', sid, c), c === 'off' ? 'secondary' : 'primary'));
+  return ctx.ephemeral({ embeds: [dialog.warn('How slow?', body, { color: 'mod' })], components: [row(...choices), row(button('Cancel', cid('slen', sid, 'cancel'), 'secondary'))] });
+}
+
+async function pickSlowmode(ctx) {
+  const [sid, choice] = ctx.argv;
+  const s = ctx.engine.router.getSession(sid);
+  if (!ownQuestion(ctx, s, 'slowmode')) return expiredQuestion(ctx);
+  ctx.engine.router.dropSession(sid);
+  if (choice === 'cancel') return cancelled(ctx);
+  if (!SLOWMODE_CHOICES.includes(choice)) return expiredQuestion(ctx);
+  let channel;
+  try {
+    channel = await currentChannel(ctx, s.channelId);
+  } catch (e) {
+    return ctx.fail(e);
+  }
+  const seconds = choice === 'off' ? 0 : Math.round(parseDuration(choice, { bareUnit: 's' }) / 1000);
+  return applySlowmode(ctx, channel, seconds, (p) => ctx.update(p));
+}
+
+async function applySlowmode(ctx, channel, requested, respond) {
+  const answer = respond || ((p) => ctx.reply(p));
+  const capped = requested > MAX_SLOWMODE_S;
+  const seconds = Math.max(0, Math.min(MAX_SLOWMODE_S, requested));
   const chName = `<#${channel.id}>`;
   try {
     await needBotPerm(ctx, 'manage_channels', `change slowmode in ${chName}`);
@@ -685,6 +840,7 @@ async function runSlowmode(ctx, tokens) {
     service.log(ctx.serverId, caseEmbed(c));
     const undo = ctx.engine.router.addUndo({
       serverId: ctx.serverId, actorId: ctx.userId, label: `slowmode back to ${prev ? formatDuration(prev * 1000) : 'off'}`,
+      manual: `/mod slowmode ${channel.name ? `#${channel.name} ` : ''}${prev ? formatDuration(prev * 1000).replace(/\s+/g, '') : 'off'}`,
       run: (i) => guardedUndo(i, { action: `change slowmode in ${chName}`, perm: 'manage_channels' }, async () => {
         await undoGate(ctx, i);
         await ctx.bot.editChannel(channel.id, { slowmode: prev });
@@ -693,7 +849,7 @@ async function runSlowmode(ctx, tokens) {
       }),
     });
     const body = seconds ? `People in ${chName} can send one message every **${formatDuration(seconds * 1000)}**.` : `Slowmode is off in ${chName}.`;
-    return ctx.reply({ embeds: [dialog.ok(seconds ? 'Slowmode on' : 'Slowmode off', `${body}${capped ? '\n-# 6 hours is the most Yapin\' allows, so I used that.' : ''}\n-# Case #${c.id}`, { color: 'mod' })], components: [row(undo.button)] });
+    return answer({ embeds: [dialog.ok(seconds ? 'Slowmode on' : 'Slowmode off', `${body}${capped ? '\n-# 6 hours is the most Yapin\' allows, so I used that.' : ''}\n-# Case #${c.id}`, { color: 'mod' })], components: [row(undo.button)] });
   } catch (e) {
     return ctx.fail(e, { action: `change slowmode in ${chName}`, perm: 'manage_channels' });
   }
@@ -785,7 +941,7 @@ async function runLogChannel(ctx, tokens) {
 async function runStaffRoles(ctx, sub, tokens) {
   const kind = STAFF_KINDS[sub];
   if (kind.who === 'owner' && (await ctx.level()) !== 'owner') {
-    return ctx.warn('Not allowed', 'Only the server owner can choose admin roles.');
+    return ctx.ephemeral({ embeds: [dialog.denied('owner', { body: 'Only the server owner can choose admin roles.' })] });
   }
   const core = ctx.core();
   const current = [...(core[kind.key] || [])];
@@ -808,7 +964,7 @@ async function runStaffRoles(ctx, sub, tokens) {
   if (role.auto && role.auto !== 'none') return ctx.warn("Can't use that role", `**${role.name}** is given out automatically, so it can't be a ${kind.label}.`);
   if ((await ctx.level()) !== 'owner') {
     const mine = await ctx.engine.perms.topPosition(ctx.serverId, ctx.userId);
-    if (typeof role.position === 'number' && role.position >= mine) return ctx.warn('Not allowed', `**${role.name}** is at or above your highest role, so only the server owner can make it a ${kind.label}.`);
+    if (typeof role.position === 'number' && role.position >= mine) return ctx.ephemeral({ embeds: [dialog.denied('owner', { body: `**${role.name}** is at or above your highest role, so only the server owner can make it a ${kind.label}.` })] });
   }
   if (current.includes(role.id)) return ctx.info('Already set', `**${role.name}** is already a ${kind.label}.`);
   if (current.length >= 10) return ctx.warn('Too many roles', `There can be up to 10 ${kind.label}s. Remove one first.`);
@@ -932,7 +1088,6 @@ export const { setup, teardown, check } = defineApp({
   defaults: {
     dmOnAction: true,
     warnDecayDays: 30,
-    defaultTimeoutMinutes: 10,
     escalation: DEFAULT_ESCALATION,
   },
 
@@ -943,7 +1098,7 @@ export const { setup, teardown, check } = defineApp({
     kick: { description: 'Kick someone: /kick @sam reason', perm: 'mod', run: shortcut('kick') },
     ban: { description: 'Ban someone: /ban @sam reason', perm: 'mod', run: shortcut('ban') },
     purge: { description: 'Delete recent messages: /purge 20, or /purge 20 @sam for one person', perm: 'mod', run: shortcut('purge') },
-    lock: { description: 'Stop everyone posting here: /lock or /lock #channel reason', perm: 'mod', run: shortcut('lock') },
+    lock: { description: 'Stop everyone posting here: /lock, or /lock announcements reason', perm: 'mod', run: shortcut('lock') },
     unlock: { description: 'Let everyone post again: /unlock or /unlock #channel', perm: 'mod', run: shortcut('unlock') },
     case: { description: 'Look up a mod case: /case 12, or /case for recent ones', perm: 'mod', run: shortcut('case') },
   },
@@ -954,6 +1109,9 @@ export const { setup, teardown, check } = defineApp({
     settings: { perm: 'mod', run: staff('mod', (ctx) => ctx.ephemeral(settingsView(ctx))) },
     lock: { perm: 'mod', run: staff('mod', (ctx) => runLock(ctx, [], true)) },
     unlock: { perm: 'mod', run: staff('mod', (ctx) => runLock(ctx, [], false)) },
+    tlen: { perm: 'mod', run: staff('mod', pickTimeoutLength) },
+    lockpick: { perm: 'mod', run: staff('mod', pickLockChannel) },
+    slen: { perm: 'mod', run: staff('mod', pickSlowmode) },
     purge: { perm: 'mod', run: staff('mod', (ctx) => runPurge(ctx, [String(buttonCount(ctx.argv[0]))])) },
     dm: {
       perm: 'admin',
@@ -1027,7 +1185,8 @@ export const { setup, teardown, check } = defineApp({
 
   help: [
     'Targets can be a mention, a user id, @username or just a name.',
-    'Lengths: 10m, 2h, 1d. A bare number means minutes for timeouts and seconds for slowmode.',
+    'Lengths: 10m, 2h, 1d. A bare number means minutes for timeouts and seconds for slowmode. Leave the length out and I ask.',
+    'Channels can be named plainly: `/lock announcements raid` locks #announcements. If the name is close, I ask first.',
     'Every action gets a case number. /case 12 shows one, /mod warnings @sam lists warnings.',
     'Bans, timeouts, warnings, locks and slowmode changes come with an Undo button for 10 minutes.',
     'Admins: `/mod log #mod-log` picks where actions are logged. `/mod modrole add @Helpers` makes a role count as mods.',

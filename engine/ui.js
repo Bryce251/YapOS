@@ -29,7 +29,7 @@ export function card({ title, body, fields = [], color: c = 'brand', footer, thu
   const fs = fields.filter((f) => f && f.name && f.value !== undefined && f.value !== '').slice(0, 10)
     .map((f) => ({ name: clip(f.name, 256), value: clip(String(f.value), 1024), inline: !!f.inline }));
   if (fs.length) e.fields = fs;
-  e.footer = { text: clip(footer ?? VERSION.full, 2048) };
+  if (footer !== false) e.footer = { text: clip(footer ?? VERSION.full, 2048) };
   if (thumbnail) e.thumbnail = { url: thumbnail };
   if (image) e.image = { url: image };
   return e;
@@ -40,7 +40,23 @@ export const dialog = {
   info: (title, body, extra) => card({ title: `${ICONS.info} ${title}`, body, color: 'info', ...extra }),
   warn: (title, body, extra) => card({ title: `${ICONS.warn} ${title}`, body, color: 'warn', ...extra }),
   error: (title, body, extra) => card({ title: `${ICONS.error} ${title}`, body, color: 'error', ...extra }),
+  denied: (need, opts) => denied(need, opts),
 };
+
+export const NEED_NAMES = { mod: 'Mod', admin: 'Admin', owner: 'Server owner', botowner: 'Bot owner' };
+const NEED_SENTENCES = {
+  mod: 'Only moderators can use this.',
+  admin: 'Only admins can use this.',
+  owner: 'Only the server owner can use this.',
+  botowner: 'Only the person who runs YapOS can use this.',
+};
+
+export function denied(need, { body, hint, title } = {}) {
+  const heading = title || `Needs ${NEED_NAMES[need] || 'more permissions'}`;
+  const sentence = body || NEED_SENTENCES[need] || "You don't have permission to use this.";
+  return card({ title: `${ICONS.lock} ${heading}`, body: hint ? `${sentence}
+-# ${hint}` : sentence, color: 'warn', footer: false });
+}
 
 export function button(label, customId, style = 'secondary', emoji, { disabled = false } = {}) {
   const b = { type: 'button', style, label: clip(label, 80) };

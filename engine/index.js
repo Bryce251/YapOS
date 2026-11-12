@@ -9,6 +9,7 @@ import { createBudget } from './budget.js';
 import { createRouter } from './router.js';
 import { createPrompts } from './prompts.js';
 import { createContext } from './context.js';
+import { createFreshness } from './freshness.js';
 import { createAppRegistry, createYap } from './apps.js';
 import { dialog } from './ui.js';
 import { normalizeName } from './parse.js';
@@ -42,7 +43,7 @@ export function detectChannels(channels) {
   return found;
 }
 
-export function createEngine({ bot, config = {}, store = createMemoryStore(), log = createLogger(), appsDir = path.join(ROOT, 'apps') } = {}) {
+export function createEngine({ bot, config = {}, store = createMemoryStore(), log = createLogger(), appsDir = path.join(ROOT, 'apps'), freshness: freshnessOptions = {} } = {}) {
   const apps = createAppRegistry();
   const settings = createSettings({ store, apps });
   const isBotOwner = (uid) => !!uid && uid === (config.ownerId || bot.me?.bot?.owner_id);
@@ -84,6 +85,7 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
   const engine = {
     bot, config, store, log, apps, settings, perms, caps, budget, prompts, yap, services, cache, stats, startedAt, VERSION,
     router: null,
+    freshness: null,
     dmRoutes: [],
     contextFor: (source, opts) => createContext(engine, source, opts),
     service: (id) => services.get(id) || null,
@@ -127,6 +129,8 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
   };
 
   bot.yapos = engine;
+  engine.freshness = createFreshness({ bot, engine, log, ...freshnessOptions });
+  engine.freshness.install();
   engine.router = createRouter({ bot, engine, log });
   engine.router.attach();
 
@@ -148,7 +152,7 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
 
   bot.on('message', (msg) => {
     stats.events++;
-    if (prompts.offer(msg)) return;
+    if (!msg.yaposLate && prompts.offer(msg)) return;
     if (msg.command) stats.commands++;
   });
   bot.on('command', () => { stats.commands++; });

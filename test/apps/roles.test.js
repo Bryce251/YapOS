@@ -619,7 +619,7 @@ test('a member pressing staff buttons on a panel they opened themselves is still
 
   const tile = await h.click('yo:system:open:roles', { user: IDS.member, messageId: myPanel });
   assert.match(h.textOf(last(tile)), /Admins post role menus/);
-  assert.equal(h.allButtons(tile).length, 0);
+  assert.deepEqual(h.allButtons(tile).map((b) => b.custom_id), ['yo:system:home']);
   const shown = h.fake.messagesIn(CH.general).find((x) => x.id === myPanel);
   assert.ok(!h.allButtons([shown]).some((b) => b.custom_id.startsWith('yo:roles:')), 'no editor buttons leak onto the home screen');
 });

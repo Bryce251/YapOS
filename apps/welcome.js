@@ -13,6 +13,8 @@ const BURST_LIMIT = 10;
 const BURST_QUIET_MS = 4_000;
 const BURST_MAX_WAIT_MS = 20_000;
 const BURST_NAMES = 3;
+const LATE_WAIT_MS = 5_000;
+const PLACEHOLDERS = ['user', 'username', 'server', 'count', 'count_ord'];
 const ISSUE_KEEP = 3;
 const NAME_MAX = 64;
 const STAFF_PERMS = ['administrator', 'manage_server', 'manage_roles', 'manage_channels', 'manage_messages', 'manage_webhooks', 'kick_members', 'ban_members', 'timeout_members', 'mention_everyone', 'move_members'];
@@ -99,7 +101,7 @@ const PRESETS = {
 const runtimes = new WeakMap();
 
 function runtime(engine) {
-  if (!runtimes.has(engine)) runtimes.set(engine, { bursts: new Map(), logged: new Map() });
+  if (!runtimes.has(engine)) runtimes.set(engine, { bursts: new Map(), logged: new Map(), late: new Map() });
   return runtimes.get(engine);
 }
 
@@ -285,6 +287,56 @@ function queueBurst(engine, sid, person) {
   b.timer.unref?.();
 }
 
+function lateText(people, total) {
+  const tags = people.map((p) => `<@${p.id}>`);
+  let who;
+  if (total <= 1) who = tags[0];
+  else if (total <= BURST_NAMES && tags.length === total) who = `${tags.slice(0, -1).join(', ')} and ${tags[tags.length - 1]}`;
+  else who = `${tags.slice(0, 2).join(', ')} and ${total - 2} others`;
+  return `While I was offline, ${total} ${total === 1 ? 'person' : 'people'} joined: welcome ${who}!`;
+}
+
+async function flushLate(engine, sid) {
+  const { late } = runtime(engine);
+  const batch = late.get(sid);
+  if (!batch) return null;
+  late.delete(sid);
+  if (batch.timer) clearTimeout(batch.timer);
+  if (!batch.total || !engine.settings.isEnabled(sid, ID)) return null;
+  const cfg = engine.settings.appConfig(sid, ID);
+  if (!cfg.join) return null;
+  const ch = await joinChannel(engine, sid, cfg);
+  if (!ch) return null;
+  try {
+    return await engine.budget.send({ serverId: sid, channelId: ch.id, content: lateText(batch.people, batch.total), opts: {}, priority: 'normal' });
+  } catch (e) {
+    await logOnce(engine, sid, 'send', "I couldn't post welcome messages", explain(e, { action: 'post in', target: `#${ch.name}`, perm: 'send_messages' }).body);
+    return null;
+  }
+}
+
+function queueLate(engine, sid, person) {
+  const { late } = runtime(engine);
+  if (!late.has(sid)) late.set(sid, { ids: new Set(), people: [], total: 0, timer: null });
+  const batch = late.get(sid);
+  if (batch.ids.has(person.id)) return;
+  batch.ids.add(person.id);
+  batch.total += 1;
+  if (batch.people.length < BURST_NAMES) batch.people.push(person);
+  if (batch.timer) return;
+  batch.timer = setTimeout(() => { flushLate(engine, sid).catch((e) => engine.log.warn(`[welcome] late batch failed: ${e?.message}`)); }, LATE_WAIT_MS);
+  batch.timer.unref?.();
+}
+
+function placeholderProblem(text) {
+  for (const m of String(text ?? '').matchAll(/\{(\w+)\}/g)) {
+    if (PLACEHOLDERS.includes(m[1])) continue;
+    const guess = didYouMean(m[1], PLACEHOLDERS, { limit: 1 })[0];
+    return `{${clip(m[1], 30)}} isn't a placeholder I know.${guess ? ` Did you mean {${guess}}?` : ''}\n-# Words you can use: ${PLACEHOLDERS.map((p) => `{${p}}`).join(' ')}`;
+  }
+  return null;
+}
+
 async function postJoin(ctx, ch, msg) {
   try {
     return await ctx.send(ch.id, msg, { priority: 'normal' });
@@ -298,6 +350,11 @@ async function onJoin(ctx, ev) {
   const { engine } = ctx;
   const sid = ev.server_id;
   const cfg = ctx.config();
+  if (ev.yaposLate) {
+    if (cfg.join) queueLate(engine, sid, { id: ev.user_id, username: ev.username });
+    if (cfg.autoroles?.length) await giveAutoroles(engine, sid, ev.user_id, cfg);
+    return;
+  }
   const bursting = noteJoin(engine, sid);
   const server = await serverName(engine, sid);
   const count = ev.member_count || (await memberCount(engine, sid));
@@ -317,7 +374,7 @@ async function onJoin(ctx, ev) {
 async function onLeave(ctx, ev) {
   const { engine } = ctx;
   const cfg = ctx.config();
-  if (!cfg.leave) return;
+  if (!cfg.leave || ev.yaposLate) return;
   const ch = await leaveChannel(engine, ev.server_id, cfg);
   if (!ch) return;
   const server = await serverName(engine, ev.server_id);
@@ -401,7 +458,7 @@ async function previewView(ctx) {
   const msg = joinMessage(cfg, v);
   const where = ch ? `<#${ch.id}>` : 'no channel yet';
   const lines = [
-    cfg.join ? `This is how new members are greeted in ${where}. Only you can see this.` : 'Join messages are **off** right now, but this is how they would look.',
+    cfg.join ? `This is how new members are greeted in ${where}. This is only a preview, so nothing was posted there.` : 'Join messages are **off** right now, but this is how they would look.',
     msg.content && cfg.card ? `Message: ${msg.content}` : '',
     cfg.card ? '' : `\n${msg.content}`,
   ].filter(Boolean);
@@ -561,6 +618,10 @@ async function saveForm(ctx) {
   if (text('leave')) patch.leaveText = clip(text('leave'), 1000);
   if (text('dm')) patch.dmText = clip(text('dm'), 1000);
   if (text('title')) patch.cardTitle = clip(text('title'), 200);
+  for (const key of ['joinText', 'leaveText', 'dmText', 'cardTitle']) {
+    const problem = placeholderProblem(patch[key]);
+    if (problem) return ctx.warn('Nothing saved yet', `${problem}\nFix it and save again.`, { components: [row(button('Edit messages', cid('edit'), 'primary', '📝'))] });
+  }
   let refused = null;
   const img = text('image');
   const fromChat = !ctx.source?.custom_id;
@@ -648,6 +709,8 @@ async function setFlag(ctx, key, value, label) {
 async function setText(ctx, key, text, label) {
   const t = text.trim();
   if (!t) return ctx.warn('What should it say?', `Type the message after the command, like \`/welcome text Welcome {user}!\`.`);
+  const problem = placeholderProblem(t);
+  if (problem) return ctx.warn('Nothing saved yet', problem);
   const prev = ctx.config()[key];
   ctx.patchConfig({ [key]: clip(t, 1000) });
   const undo = undoFor(ctx, label.toLowerCase(), { [key]: prev });
@@ -858,6 +921,7 @@ export const { setup, teardown, check } = defineApp({
 
   services: (engine) => ({
     flushBursts: (sid) => flushBurst(engine, sid),
+    flushLate: (sid) => flushLate(engine, sid),
     checkImage,
     pending: (sid) => runtime(engine).bursts.get(sid)?.total || 0,
   }),
@@ -881,9 +945,11 @@ export const { setup, teardown, check } = defineApp({
   ],
 
   dispose(engine) {
-    const { bursts, logged } = runtime(engine);
+    const { bursts, logged, late } = runtime(engine);
     for (const b of bursts.values()) if (b.timer) clearTimeout(b.timer);
+    for (const b of late.values()) if (b.timer) clearTimeout(b.timer);
     bursts.clear();
+    late.clear();
     logged.clear();
   },
 });

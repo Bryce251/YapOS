@@ -1,5 +1,5 @@
 import { defineApp } from '../engine/apps.js';
-import { card, dialog, button, row, rows, select, v2, onOff, bar, ICONS } from '../engine/ui.js';
+import { card, dialog, button, row, rows, select, bar, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
 import { formatDuration, didYouMean, tokenize } from '../engine/parse.js';
 import { VERSION } from '../engine/config.js';
@@ -36,45 +36,95 @@ async function toggleApp(ctx) {
   return ctx.update(appsView(ctx.engine, ctx.serverId));
 }
 
+const HOME_ID = cid('home');
+const MAX_ROWS = 5;
+const MAX_IN_ROW = 5;
+const TILE_ROWS = MAX_ROWS - 1;
+const DEFAULT_PANEL_PERM = { mod: 'mod', automod: 'mod', welcome: 'admin', roles: 'admin', setup: 'admin' };
+
 function appTiles(engine, sid) {
   return engine.apps.list().filter((a) => a.meta.id !== ID && a.def.panel && engine.settings.isEnabled(sid, a.meta.id));
 }
 
-async function homeLayout(ctx) {
-  const { engine } = ctx;
-  const tiles = appTiles(engine, ctx.serverId);
-  const core = ctx.core();
-  const level = await ctx.level();
-  const header = `## ${ICONS.system} ${VERSION.full}\nYour server's operating system.`;
-  const parts = [v2.text(header), v2.separator()];
-  for (const a of tiles.slice(0, 8)) {
-    parts.push(v2.section([`**${a.meta.icon} ${a.meta.name}**\n${a.meta.description}`], v2.button('Open', cid('open', a.meta.id), 'secondary')));
-  }
-  if (!tiles.length) parts.push(v2.text('No apps with a panel are installed yet. An admin can add some with **/apps**.'));
-  parts.push(v2.separator());
-  const quick = [v2.button('Help', cid('help'), 'secondary', '❔')];
-  if (engine.isBotOwner(ctx.userId)) quick.push(v2.button('Status', cid('status'), 'secondary', '📊'));
-  if (engine.perms.atLeast(level, 'admin')) quick.unshift(v2.button('Apps', cid('apps'), 'primary', '🧩'));
-  parts.push(v2.row(...quick));
-  return [v2.container(parts, 'system')];
+function panelPerm(engine, a) {
+  const asked = String(a.def.panelPerm ?? DEFAULT_PANEL_PERM[a.meta.id] ?? 'member').toLowerCase();
+  return engine.perms.LEVELS.includes(asked) ? asked : 'member';
 }
 
-function homeEmbed(ctx, tiles, isAdmin) {
-  const lines = tiles.map((a) => `${a.meta.icon} **${a.meta.name}**: ${a.meta.description}`);
-  const btns = tiles.slice(0, 15).map((a) => button(a.meta.name, cid('open', a.meta.id), 'secondary', a.meta.icon));
-  const extra = [button('Help', cid('help'), 'secondary', '❔')];
-  if (ctx.engine.isBotOwner(ctx.userId)) extra.push(button('Status', cid('status'), 'secondary', '📊'));
-  if (isAdmin) extra.unshift(button('Apps', cid('apps'), 'primary', '🧩'));
+function visibleTiles(engine, sid, level) {
+  return appTiles(engine, sid).filter((a) => engine.perms.atLeast(level, panelPerm(engine, a)));
+}
+
+async function homeView(ctx) {
+  const { engine } = ctx;
+  const level = await ctx.level();
+  const isAdmin = engine.perms.atLeast(level, 'admin');
+  const tiles = visibleTiles(engine, ctx.serverId, level);
+  const shown = tiles.slice(0, TILE_ROWS * MAX_IN_ROW);
+  const lines = tiles.map((a) => `${a.meta.icon} **${a.meta.name}** · ${a.meta.description}`);
+  const intro = tiles.length ? "Your server's operating system. Pick an app to open it right here." : "Your server's operating system.";
+  const empty = isAdmin ? 'No apps with a panel are installed yet. Add some with **🧩 Apps**.' : 'Nothing to open here yet. Try **❔ Help** to see what I can do.';
+  const more = tiles.length > shown.length ? `\n-# More apps: type **/yap** and the app's name.` : '';
+  const body = `${intro}\n\n${lines.length ? lines.join('\n') : empty}${more}`;
+  const quick = [button('Help', cid('help'), 'secondary', '❔')];
+  if (isAdmin) quick.push(button('Apps', cid('apps'), 'primary', '🧩'));
+  if (engine.isBotOwner(ctx.userId)) quick.push(button('Status', cid('status'), 'secondary', '📊'));
   return {
-    embeds: [card({ title: `${ICONS.system} ${VERSION.full}`, body: lines.join('\n') || 'No apps with a panel are installed yet.', color: 'system' })],
-    components: [...rows(btns).slice(0, 4), row(extra)],
+    content: '',
+    embeds: [card({ title: `${ICONS.system} ${VERSION.full}`, body, color: 'system' })],
+    components: [...rows(shown.map((a) => button(a.meta.name, cid('open', a.meta.id), 'secondary', a.meta.icon))).slice(0, TILE_ROWS), row(quick)],
   };
 }
 
 async function showHome(ctx) {
-  const isAdmin = ctx.engine.perms.atLeast(await ctx.level(), 'admin');
-  const fallback = () => ctx.reply(homeEmbed(ctx, appTiles(ctx.engine, ctx.serverId), isAdmin));
-  return ctx.engine.caps.attempt(ctx.serverId, 'v2', async () => ctx.reply({ layout: await homeLayout(ctx) }), fallback);
+  return ctx.reply(await homeView(ctx));
+}
+
+async function goHome(ctx) {
+  if (!ctx.serverId) return ctx.warn('Servers only', 'The home screen lives inside a server. Try **/menu** there.');
+  const view = await homeView(ctx);
+  if (ctx.source?.message_id) return ctx.update(view);
+  return ctx.reply(view);
+}
+
+const isButton = (c) => c && (c.type === 'button' || c.type === 2);
+const isButtonRow = (c) => c && (c.type === 'row' || c.type === 1) && Array.isArray(c.components) && c.components.every(isButton);
+const hasHome = (list) => list.some(function walk(c) { return !!c && (c.custom_id === HOME_ID || (c.components || []).some(walk)); });
+
+function withHomeRow(components) {
+  const list = Array.isArray(components) ? components.filter(Boolean) : [];
+  if (hasHome(list)) return list;
+  const home = button('Home', HOME_ID, 'secondary', '⬅️');
+  if (list.length < MAX_ROWS) return [...list, row(home)];
+  const last = list[list.length - 1];
+  if (isButtonRow(last) && last.components.length < MAX_IN_ROW) return [...list.slice(0, -1), { ...last, components: [...last.components, home] }];
+  return null;
+}
+
+function asPayload(payload, opts) {
+  if (payload == null) return { content: '', ...opts };
+  if (typeof payload === 'string') return { content: payload, ...opts };
+  return { ...payload, ...opts };
+}
+
+function showInPlace(appCtx) {
+  const original = {};
+  for (const name of ['reply', 'ephemeral', 'panel', 'update']) original[name] = appCtx[name];
+  const edit = original.update;
+  for (const name of ['reply', 'ephemeral', 'panel', 'update']) {
+    appCtx[name] = async (payload, opts) => {
+      const p = asPayload(payload, opts);
+      const components = !p.layout && !(Array.isArray(p.files) && p.files.length) ? withHomeRow(p.components) : null;
+      if (!components) return original[name === 'update' ? 'reply' : name](payload, opts);
+      try {
+        return await edit({ content: p.content ?? '', embeds: p.embeds ?? [], components });
+      } catch (e) {
+        appCtx.engine.log.debug('could not open the app in place', e?.message);
+        return original[name === 'update' ? 'reply' : name](payload, opts);
+      }
+    };
+  }
+  return appCtx;
 }
 
 function helpView(engine, sid, asked) {
@@ -129,7 +179,7 @@ async function statusView(ctx) {
 }
 
 async function showStatus(ctx) {
-  if (!ctx.engine.isBotOwner(ctx.userId)) return ctx.warn('Not allowed', "Only YapOS's owner can open the system monitor.");
+  if (!ctx.engine.isBotOwner(ctx.userId)) return ctx.ephemeral({ embeds: [dialog.denied('botowner', { body: "Only YapOS's owner can open the system monitor." })] });
   return ctx.ephemeral(await statusView(ctx));
 }
 
@@ -178,7 +228,8 @@ async function openApp(ctx, asked) {
   if (!ctx.serverId) return ctx.warn('Servers only', 'App panels open inside a server. Try **/menu** there.');
   if (!ctx.engine.settings.isEnabled(ctx.serverId, appId)) return ctx.warn(`${a.meta.name} isn't installed here`, 'An admin can install it with **/apps**.');
   const appCtx = ctx.engine.contextFor(ctx.source, { app: appId, args: '' });
-  return a.def.panel(appCtx);
+  const onHome = ctx.kind !== 'select' && ctx.kind !== 'modal_submit' && !!ctx.source?.message_id && typeof ctx.source.update === 'function';
+  return a.def.panel(onHome ? showInPlace(appCtx) : appCtx);
 }
 
 export const { setup, teardown, check } = defineApp({
@@ -199,6 +250,7 @@ export const { setup, teardown, check } = defineApp({
 
   components: {
     open: { run: (ctx) => openApp(ctx, ctx.argv[0]) },
+    home: { run: goHome },
     help: { run: (ctx) => sendWithSelectFallback(ctx, helpView(ctx.engine, ctx.serverId)) },
     helppick: { run: (ctx) => sendWithSelectFallback(ctx, helpView(ctx.engine, ctx.serverId, Array.isArray(ctx.values) ? ctx.values[0] : null)) },
     helpapp: { run: (ctx) => sendWithSelectFallback(ctx, helpView(ctx.engine, ctx.serverId, ctx.argv[0])) },
@@ -222,5 +274,5 @@ export const { setup, teardown, check } = defineApp({
     },
   },
 
-  help: ['/menu shows a tile for every installed app.', '/status shows the connection, message budget and which testing features work on this server.'],
+  help: ['/menu shows a tile for every app you can use. Tiles open right on the home screen, and **⬅️ Home** brings you back.', '/status shows the connection, message budget and which testing features work on this server.'],
 });

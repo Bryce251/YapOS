@@ -12,17 +12,16 @@ test('every command fits Yapin limits and the total stays well under 100', async
   }
 });
 
-test('/menu shows the home screen as Components V2, with an embed fallback', async () => {
-  const h = await createHarness();
-  const ans = await h.slash('menu', '', { user: IDS.admin });
-  assert.equal(ans.length, 1);
-  assert.equal(ans[0].flags, 32768);
-  assert.match(h.textOf(ans[0]), /YapOS 1\.0 'Boot'/);
-  const h2 = await createHarness({ features: { v2: false } });
-  const ans2 = await h2.slash('menu', '', { user: IDS.admin });
-  const last = ans2[ans2.length - 1];
-  assert.ok(last.embeds?.length, 'falls back to an embed');
-  assert.equal(h2.engine.caps.state(IDS.server, 'v2'), false);
+test('/menu shows the home screen as an embed card with tile buttons, V2 or not', async () => {
+  for (const features of [{}, { v2: false }]) {
+    const h = await createHarness({ features });
+    const ans = await h.slash('menu', '', { user: IDS.admin });
+    assert.equal(ans.length, 1);
+    assert.notEqual(ans[0].flags, 32768);
+    assert.equal(ans[0].embeds[0].title, "🖥️ YapOS 1.0 'Boot'");
+    assert.ok(ans[0].components.length <= 5);
+    assert.deepEqual(ans[0].components[ans[0].components.length - 1].components.map((b) => b.custom_id), ['yo:system:help', 'yo:system:apps']);
+  }
 });
 
 test('/menu typed in chat works too', async () => {
@@ -317,8 +316,9 @@ test('an app tile opens that app for the person who clicked, and the new panel i
   assert.deepEqual(seen.panel, []);
   const opened = await h.click(tile.custom_id, { user: IDS.admin, messageId: tile.messageId });
   assert.deepEqual(seen.panel, [IDS.admin]);
+  assert.equal(opened[0].type, 'update');
   const poke = h.allButtons(opened).find((b) => b.custom_id === 'yo:demo:poke');
-  const stranger = await h.click(poke.custom_id, { user: IDS.member, messageId: poke.messageId });
+  const stranger = await h.click(poke.custom_id, { user: IDS.member, messageId: tile.messageId });
   assert.match(h.textOf(stranger[0]), /Not your panel/);
   await h.click(tile.custom_id, { user: IDS.member });
   assert.deepEqual(seen.panel, [IDS.admin, IDS.member], 'a leftover tile runs the app as the clicker, never as the opener');
@@ -582,10 +582,10 @@ test('an uninstalled app stays closed to old buttons, tiles and typed words', as
   const tile = h.allButtons(home).find((b) => b.custom_id === 'yo:system:open:demo');
   const opened = await h.click(tile.custom_id, { user: IDS.member, messageId: tile.messageId });
   const poke = h.allButtons(opened).find((b) => b.custom_id === 'yo:demo:poke');
-  assert.ok(poke.messageId);
+  assert.ok(poke);
   await h.click('yo:system:toggle:demo:off', { user: IDS.admin });
   const before = seen.panel.length;
-  const stalePoke = await h.click(poke.custom_id, { user: IDS.member, messageId: poke.messageId });
+  const stalePoke = await h.click(poke.custom_id, { user: IDS.member, messageId: tile.messageId });
   assert.match(h.textOf(stalePoke[0]), /isn't installed here/);
   const staleTile = await h.click(tile.custom_id, { user: IDS.member, messageId: tile.messageId });
   assert.match(h.textOf(staleTile[0]), /isn't installed here/);
@@ -631,7 +631,7 @@ test('a second ordinary member gets their own working home, help and app panel',
   const opened = await h.click(tile.custom_id, { user: IDS.member2, messageId: tile.messageId });
   assert.deepEqual(seen.panel, [IDS.member2]);
   const poke = h.allButtons(opened).find((b) => b.custom_id === 'yo:demo:poke');
-  const poked = await h.click(poke.custom_id, { user: IDS.member2, messageId: poke.messageId });
+  const poked = await h.click(poke.custom_id, { user: IDS.member2, messageId: tile.messageId });
   assert.match(h.textOf(poked[0]), /Poked/);
   const help = await h.slash('help', 'demo', { user: IDS.member2 });
   assert.match(h.textOf(help[0]), /A sample app for tests/);
@@ -685,4 +685,162 @@ test('without a bot owner setting, the owner on record with Yapin\' is the bot o
   assert.equal(h.engine.isBotOwner(IDS.admin), false);
   assert.equal(h.engine.isBotOwner(IDS.bot), false);
   assert.equal(h.engine.isBotOwner(null), false);
+});
+
+const tileIds = (h, where) => h.allButtons(where).filter((b) => b.custom_id.startsWith('yo:system:open:')).map((b) => b.custom_id.split(':')[3]).sort();
+const messageById = (h, id) => h.sent().find((m) => m.id === id);
+const BOOT = "🖥️ YapOS 1.0 'Boot'";
+
+test('the home screen only shows tiles each person can use', async () => {
+  const h = await createHarness();
+  const memberAns = await h.slash('menu', '', { user: IDS.member });
+  const member = tileIds(h, memberAns);
+  for (const id of ['mod', 'automod', 'welcome', 'roles']) assert.ok(!member.includes(id), `members do not see ${id}`);
+  for (const id of ['levels', 'tickets', 'studio']) assert.ok(member.includes(id), `members see ${id}`);
+  assert.ok(!h.textOf(memberAns[0]).includes('**Mod**'), 'the list matches the tiles');
+  const mod = tileIds(h, await h.slash('menu', '', { user: IDS.mod }));
+  for (const id of ['mod', 'automod', 'levels', 'tickets', 'studio']) assert.ok(mod.includes(id), `mods see ${id}`);
+  for (const id of ['welcome', 'roles']) assert.ok(!mod.includes(id), `mods do not see ${id}`);
+  const adminAns = await h.slash('menu', '', { user: IDS.admin });
+  const admin = tileIds(h, adminAns);
+  for (const id of ['mod', 'automod', 'welcome', 'roles', 'levels', 'tickets', 'studio']) assert.ok(admin.includes(id), `admins see ${id}`);
+  assert.match(h.textOf(adminAns[0]), /🛡️ \*\*Mod\*\* · /);
+});
+
+test('an app can say who its tile is for with panelPerm', async () => {
+  const { defineApp } = await import('../../engine/apps.js');
+  const h = await createHarness({ apps: [] });
+  const make = (id, panelPerm) => defineApp({ id, name: id, icon: '🧪', description: 'Test app.', panelPerm, panel: (ctx) => ctx.info('Hi', 'There') });
+  for (const [id, perm] of [['staffonly', 'mod'], ['everyone', undefined], ['mod', 'member'], ['odd', 'wizard']]) await make(id, perm).setup(h.bot);
+  assert.deepEqual(tileIds(h, await h.slash('menu', '', { user: IDS.member })), ['everyone', 'mod', 'odd']);
+  assert.deepEqual(tileIds(h, await h.slash('menu', '', { user: IDS.mod })), ['everyone', 'mod', 'odd', 'staffonly']);
+});
+
+test('a tile opens its app on the same message, with a way home', async () => {
+  const { h, seen } = await withDemo();
+  const home = await h.slash('menu', '', { user: IDS.member });
+  const tile = h.allButtons(home).find((b) => b.custom_id === 'yo:system:open:demo');
+  const before = h.sent().length;
+  const opened = await h.click(tile.custom_id, { user: IDS.member, messageId: tile.messageId });
+  assert.deepEqual(seen.panel, [IDS.member]);
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].type, 'update');
+  assert.equal(h.sent().length, before, 'no new message');
+  const msg = messageById(h, tile.messageId);
+  assert.equal(msg.content, 'Demo panel');
+  assert.deepEqual(msg.embeds, []);
+  assert.deepEqual(h.allButtons([msg]).map((b) => b.custom_id), ['yo:demo:poke', 'yo:system:home']);
+  assert.equal(msg.components.length, 2, 'Home sits on its own row');
+  assert.equal(h.engine.router.panelOwner(tile.messageId), IDS.member, 'the lock stays with the opener');
+  const stranger = await h.click('yo:system:home', { user: IDS.member2, messageId: tile.messageId });
+  assert.match(h.textOf(stranger[0]), /Not your panel/);
+  const strangerTile = await h.click(tile.custom_id, { user: IDS.member2, messageId: tile.messageId });
+  assert.match(h.textOf(strangerTile[0]), /Not your panel/);
+  const back = await h.click('yo:system:home', { user: IDS.member, messageId: tile.messageId });
+  assert.equal(back[0].type, 'update');
+  assert.equal(h.sent().length, before);
+  assert.equal(messageById(h, tile.messageId).embeds[0].title, BOOT);
+  assert.ok(h.allButtons([messageById(h, tile.messageId)]).some((b) => b.custom_id === 'yo:system:open:demo'));
+  const again = await h.click(tile.custom_id, { user: IDS.member, messageId: tile.messageId });
+  assert.equal(again[0].type, 'update');
+  assert.equal(h.sent().length, before);
+  assert.deepEqual(seen.panel, [IDS.member, IDS.member]);
+});
+
+test('real app tiles open in place for the person allowed to use them', async () => {
+  const h = await createHarness();
+  for (const [user, id] of [[IDS.mod, 'mod'], [IDS.mod, 'automod'], [IDS.admin, 'welcome'], [IDS.admin, 'roles'], [IDS.member, 'levels'], [IDS.member, 'studio']]) {
+    const home = await h.slash('menu', '', { user });
+    const tile = h.allButtons(home).find((b) => b.custom_id === `yo:system:open:${id}`);
+    assert.ok(tile, id);
+    const before = h.sent().length;
+    const opened = await h.click(tile.custom_id, { user, messageId: tile.messageId });
+    assert.equal(opened[0].type, 'update', id);
+    assert.equal(h.sent().length, before, `${id} opened without a new message`);
+    const msg = messageById(h, tile.messageId);
+    assert.ok(h.allButtons([msg]).some((b) => b.custom_id === 'yo:system:home'), `${id} has a way home`);
+    assert.ok(msg.components.length <= 5, id);
+  }
+});
+
+test('a home screen typed in chat opens tiles in place too', async () => {
+  const { h } = await withDemo();
+  await h.message('/menu', { user: IDS.member });
+  const home = h.lastSent(IDS.channels.general);
+  assert.ok(h.allButtons([home]).some((b) => b.custom_id === 'yo:system:open:demo'));
+  const before = h.sent().length;
+  const opened = await h.click('yo:system:open:demo', { user: IDS.member, messageId: home.id });
+  assert.equal(opened[0].type, 'update');
+  assert.equal(h.sent().length, before);
+  assert.match(h.textOf(messageById(h, home.id)), /Demo panel/);
+  const stranger = await h.click('yo:system:open:demo', { user: IDS.member2, messageId: home.id });
+  assert.match(h.textOf(stranger[0]), /Not your panel/);
+});
+
+async function withPanels() {
+  const { defineApp } = await import('../../engine/apps.js');
+  const h = await createHarness({ apps: [] });
+  const btn = (id) => ({ type: 'button', style: 'secondary', label: id, custom_id: `yo:demo:${id}` });
+  const fullRow = (r) => ({ type: 'row', components: [0, 1, 2, 3, 4].map((n) => btn(`b${r}${n}`)) });
+  const panels = {
+    roomy: (ctx) => ctx.ephemeral({ content: 'Roomy', components: [fullRow(0), fullRow(1), fullRow(2), fullRow(3), { type: 'row', components: [btn('last')] }] }),
+    packed: (ctx) => ctx.ephemeral({ content: 'Packed', components: [0, 1, 2, 3, 4].map(fullRow) }),
+    plain: (ctx) => ctx.info('Just words', 'Nothing to press here.'),
+    layout: (ctx) => ctx.reply({ layout: [{ type: 17, components: [{ type: 10, content: 'V2 panel' }] }] }),
+    filed: (ctx) => ctx.reply({ content: 'Here is a file', files: [{ name: 'a.txt', data: Buffer.from('hi') }] }),
+  };
+  for (const [id, panel] of Object.entries(panels)) await defineApp({ id, name: id, icon: '🧪', description: 'Test app.', panel }).setup(h.bot);
+  const home = await h.slash('menu', '', { user: IDS.admin });
+  const open = async (id) => {
+    const tile = h.allButtons(home).find((b) => b.custom_id === `yo:system:open:${id}`);
+    const before = h.sent().length;
+    const ans = await h.click(tile.custom_id, { user: IDS.admin, messageId: tile.messageId });
+    return { ans, tile, added: h.sent().length - before, msg: messageById(h, tile.messageId) };
+  };
+  return { h, open };
+}
+
+test('a full panel still gets a way home, merged into its last row or by falling back', async () => {
+  const { h, open } = await withPanels();
+  const roomy = await open('roomy');
+  assert.equal(roomy.ans[0].type, 'update');
+  assert.equal(roomy.msg.components.length, 5);
+  assert.deepEqual(roomy.msg.components[4].components.map((b) => b.custom_id), ['yo:demo:last', 'yo:system:home']);
+  await h.click('yo:system:home', { user: IDS.admin, messageId: roomy.tile.messageId });
+  const packed = await open('packed');
+  assert.equal(packed.added, 1, 'a full panel opens as its own message, like before');
+  assert.notEqual(packed.ans[0].type, 'update');
+  assert.equal(packed.msg.embeds[0].title, BOOT, 'the home screen stays as it was');
+  const posted = h.lastSent(IDS.channels.general);
+  assert.equal(posted.content, 'Packed');
+  assert.equal(h.engine.router.panelOwner(posted.id), IDS.admin);
+});
+
+test('a panel with no buttons opens in place with a Home row', async () => {
+  const { open } = await withPanels();
+  const plain = await open('plain');
+  assert.equal(plain.ans[0].type, 'update');
+  assert.equal(plain.added, 0);
+  assert.match(plain.msg.embeds[0].description, /Nothing to press here/);
+  assert.deepEqual(plain.msg.components.map((r) => r.components.map((b) => b.custom_id)), [['yo:system:home']]);
+});
+
+test('panels with a V2 layout or files fall back to a new message', async () => {
+  const { h, open } = await withPanels();
+  const layout = await open('layout');
+  assert.notEqual(layout.ans[0].type, 'update');
+  assert.equal(layout.msg.embeds[0].title, BOOT);
+  assert.match(h.textOf(layout.ans[0]), /V2 panel/);
+  const filed = await open('filed');
+  assert.ok(!filed.ans.some((a) => a.type === 'update'));
+  assert.equal(filed.msg.embeds[0].title, BOOT);
+});
+
+test('the Home button rebuilds the home screen for whoever presses it', async () => {
+  const { h } = await withDemo();
+  const forged = await h.click('yo:system:home', { user: IDS.member });
+  assert.match(h.textOf(forged[forged.length - 1]), /YapOS 1\.0 'Boot'/);
+  assert.ok(!h.allButtons(forged).some((b) => b.custom_id === 'yo:system:apps'), 'no staff buttons for members');
+  const noServer = await h.click('yo:system:home', { user: IDS.member, server: null });
+  assert.match(h.textOf(noServer[0]), /Servers only/);
 });

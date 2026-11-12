@@ -1,3 +1,4 @@
+// @ts-self-types="./yapper.d.ts"
 /**
  * Yapin’ bot SDK, one file, no dependencies. Node 18+, Bun and Deno.
  *
@@ -20,10 +21,29 @@
  * Docs: https://www.yapin.gg/developers
  */
 /** SDK version, stamped from public/sdk/version.json by scripts/sdk-build.mjs (same as the npm package "yapin"). */
-export const VERSION = '1.6.0';
+export const VERSION = '1.7.0';
 /** Embeds, buttons and rows can be builders or plain objects. */
 /** Message flag for Components V2 layouts (IS_COMPONENTS_V2, 1 << 15). */
 export const IS_COMPONENTS_V2 = 1 << 15;
+
+// ---- what is this? Every object from the API and gateway has "object": 'user', 'channel', 'role' … ----
+const isKind = (x, kind) => !!x && typeof x === 'object' && x.object === kind;
+/** A user (or bot) profile. */
+export function isUser(x) { return isKind(x, 'user'); }
+/** A server member (a profile with nickname, roles, joined_at). */
+export function isMember(x) { return isKind(x, 'member'); }
+/** A server. */
+export function isServer(x) { return isKind(x, 'server'); }
+/** A text or voice channel. */
+export function isChannel(x) { return isKind(x, 'channel'); }
+/** A thread or forum post. */
+export function isThread(x) { return isKind(x, 'thread'); }
+/** A category. */
+export function isCategory(x) { return isKind(x, 'category'); }
+/** A role. */
+export function isRole(x) { return isKind(x, 'role'); }
+/** A message. */
+export function isMessage(x) { return isKind(x, 'message'); }
 const plain = (x) => (x && typeof x.toJSON === 'function' ? x.toJSON() : x);
 const list = (v) => (v === undefined ? undefined : v === null ? null : [].concat(v).map(plain));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -201,7 +221,10 @@ export class Bot {
 
   /**
    * Listen for an event: "message", "command", "dm_message", "member_join", "member_leave", "reaction_add", "reaction_remove",
-   * "voice_join", "voice_leave", "invite_create", "invite_delete", "interaction", "test", "ready", "error".
+   * "voice_join", "voice_leave", "invite_create", "invite_delete", "interaction", "channel_create", "channel_update",
+   * "channel_delete", "thread_create", "thread_update", "thread_delete", "category_create", "category_update",
+   * "category_delete", "test", "ready", "error".
+   * Channel, thread and category events are in testing (flag bot_api_round2): their data is the channel object.
    * member_join also has invite_code and inviter_id when known (bots with Manage Server).
    * dm_message is someone DMing the bot: a message with msg.reply / msg.say that answer in the DM, and msg.dm = true.
    */
@@ -625,6 +648,14 @@ export class Bot {
   async members(serverId, after) { return (await this.api('GET', `/servers/${serverId}/members?limit=200${after ? `&after=${after}` : ''}`)).members; }
   /** Recent messages in a channel, oldest first. Each has its `author` profile ({ id, username, display_name, … }). @see https://www.yapin.gg/developers/api/messages#get-channels-id-messages */
   async messages(channelId, limit = 50) { return withAuthors(await this.api('GET', `/channels/${channelId}/messages?limit=${limit}`)); }
+  /**
+   * What an id is: await bot.resolve(id) -> { id, object: 'channel' | 'user' | 'role' | …, server_id, channel_id } or
+   * null (unknown, or something the bot can't see). 120 a minute per bot. In testing (flag bot_api_round2).
+   * @see https://www.yapin.gg/developers/api/users#get-resolve-id
+   */
+  async resolve(id) {
+    try { return await this.api('GET', `/resolve/${encodeURIComponent(String(id))}`); } catch (e) { if (e.status === 404) return null; throw e; }
+  }
   /** Someone's public profile. @see https://www.yapin.gg/developers/api/users#get-users-id */
   async user(userId) { return (await this.api('GET', `/users/${userId}`)).user; }
   /**
@@ -736,6 +767,23 @@ export class Bot {
   }
   /** @see https://www.yapin.gg/developers/api/roles#delete-servers-id-roles-rid */
   async deleteRole(serverId, roleId) { return this.api('DELETE', `/servers/${serverId}/roles/${roleId}`); }
+  /** One role (in testing, flag bot_api_round2). @see https://www.yapin.gg/developers/api/roles#get-servers-id-roles-rid */
+  async getRole(serverId, roleId) { return (await this.api('GET', `/servers/${serverId}/roles/${roleId}`)).role; }
+  /**
+   * Put roles in this order, top first: reorderRoles(server, [modsId, helpersId]). Roles you leave out keep their order
+   * below these; roles at or above the bot's own stay put. Returns every role, top first. In testing (bot_api_round2).
+   * @see https://www.yapin.gg/developers/api/roles#patch-servers-id-roles
+   */
+  async reorderRoles(serverId, roleIds) { return (await this.api('PATCH', `/servers/${serverId}/roles`, { ids: roleIds })).roles; }
+  /**
+   * What someone can do, worked out like the app does: getPermissions(server, user) for the server, or with a channel
+   * for that channel (overrides included). { object: 'permissions', owner, administrator, permissions: { kick_members: true, … } }.
+   * In testing (bot_api_round2).
+   */
+  async getPermissions(serverId, userId, channelId = null) {
+    const path = channelId ? `/channels/${channelId}/permissions/${userId}` : `/servers/${serverId}/members/${userId}/permissions`;
+    return (await this.api('GET', path)).permissions;
+  }
   // ---- custom emojis (Manage Emoji; 30 changes a minute per bot; in testing, flag bot_emojis) ----
   /** The server's custom emojis: { emojis: [{ id, name, animated, url, … }], limit } (limit = emoji slots). @see https://www.yapin.gg/developers/api/emojis#get-servers-id-emojis */
   async emojis(serverId) { return this.api('GET', `/servers/${serverId}/emojis`); }
@@ -790,12 +838,12 @@ export class Bot {
   /**
    * Allow or deny permissions for a role (or 'everyone') in one channel: setChannelPermissions(ch, roleId,
    * { allow: ['send_messages'], deny: ['view_channel'] }). Empty lists remove the override.
-   * @see https://www.yapin.gg/developers/api/channels#put-channels-id-permissions-role
+   * @see https://www.yapin.gg/developers/api/channels#put-channels-id-permissions-target
    */
   async setChannelPermissions(channelId, roleId, { allow = [], deny = [] } = {}) {
     return this.api('PUT', `/channels/${channelId}/permissions/${roleId}`, { allow, deny });
   }
-  /** @see https://www.yapin.gg/developers/api/channels#delete-channels-id-permissions-role */
+  /** @see https://www.yapin.gg/developers/api/channels#delete-channels-id-permissions-target */
   async clearChannelPermissions(channelId, roleId) { return this.api('DELETE', `/channels/${channelId}/permissions/${roleId}`); }
   /** The same for a whole category (its channels follow it unless they have their own). @see https://www.yapin.gg/developers/api/channels#put-servers-id-categories-cid-permissions-role */
   async setCategoryPermissions(serverId, categoryId, roleId, { allow = [], deny = [] } = {}) {
@@ -803,6 +851,29 @@ export class Bot {
   }
   /** @see https://www.yapin.gg/developers/api/channels#delete-servers-id-categories-cid-permissions-role */
   async clearCategoryPermissions(serverId, categoryId, roleId) { return this.api('DELETE', `/servers/${serverId}/categories/${categoryId}/permissions/${roleId}`); }
+  // ---- overrides, round 2 (in testing, flag bot_api_round2): target is a role id or 'everyone' ----
+  /** A channel's overrides: [{ object: 'override', type: 'role' | 'everyone', id, role_id, allow, deny, channel_id }]. @see https://www.yapin.gg/developers/api/channels#get-channels-id-overrides */
+  async getOverrides(channelId) { return (await this.api('GET', `/channels/${channelId}/overrides`)).overrides; }
+  /**
+   * setOverride(channel, roleId or 'everyone', { allow: ['send_messages'], deny: ['view_channel'] }). Empty lists remove it.
+   * Same rules as a person: only roles below the bot's top role, only permissions the bot has itself.
+   * @see https://www.yapin.gg/developers/api/channels#put-channels-id-overrides-target
+   */
+  async setOverride(channelId, target, { allow = [], deny = [] } = {}) {
+    const out = await this.api('PUT', `/channels/${channelId}/overrides/${target}`, { allow, deny });
+    return out.override ?? null;
+  }
+  /** @see https://www.yapin.gg/developers/api/channels#delete-channels-id-overrides-target */
+  async deleteOverride(channelId, target) { return this.api('DELETE', `/channels/${channelId}/overrides/${target}`); }
+  /** A category's overrides (its channels follow them unless they set their own). @see https://www.yapin.gg/developers/api/channels#get-categories-id-overrides */
+  async getCategoryOverrides(categoryId) { return (await this.api('GET', `/categories/${categoryId}/overrides`)).overrides; }
+  /** @see https://www.yapin.gg/developers/api/channels#put-categories-id-overrides-target */
+  async setCategoryOverride(categoryId, target, { allow = [], deny = [] } = {}) {
+    const out = await this.api('PUT', `/categories/${categoryId}/overrides/${target}`, { allow, deny });
+    return out.override ?? null;
+  }
+  /** @see https://www.yapin.gg/developers/api/channels#delete-categories-id-overrides-target */
+  async deleteCategoryOverride(categoryId, target) { return this.api('DELETE', `/categories/${categoryId}/overrides/${target}`); }
   /** Set someone's nickname ('' clears it). @see https://www.yapin.gg/developers/api/moderation#patch-servers-id-members-uid */
   async setNickname(serverId, userId, nickname) { return this.api('PATCH', `/servers/${serverId}/members/${userId}`, { nickname }); }
   /** @see https://www.yapin.gg/developers/api/moderation#post-servers-id-kick */
@@ -1219,7 +1290,9 @@ export class Bot {
       msg.dm_channel_id ||= data.channel_id;
       await this.emit('dm_message', msg);
     } else {
-      await this.emit(ev.type, { ...data, type: ev.type });
+      // A channel / thread event's data has its own type (text, voice, thread): kept, the event name is in .event.
+      const own = (data.object === 'channel' || data.object === 'thread') && typeof data.type === 'string';
+      await this.emit(ev.type, { ...data, type: own ? data.type : ev.type, event: ev.type });
     }
   }
 

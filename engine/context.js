@@ -150,9 +150,9 @@ export function createContext(engine, source, { app = null, kind, args, values }
     error: (title, body, extra) => ctx.ephemeral({ embeds: [dialog.error(title, body)], ...extra }),
 
     async fail(err, explainCtx = {}) {
-      const { title, body } = explain(err, explainCtx);
+      const { title, body, embed } = explain(err, explainCtx);
       if (!err?.friendly) log.error(`[${app || 'core'}] ${type} failed:`, err);
-      try { await ctx.error(title, body); } catch (e) { log.debug('could not show error dialog', e?.message); }
+      try { await ctx.ephemeral({ embeds: [embed || dialog.error(title, body)] }); } catch (e) { log.debug('could not show error dialog', e?.message); }
     },
 
     async form({ id, title, fields, action }) {

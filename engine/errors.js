@@ -1,3 +1,5 @@
+import { denied } from './ui.js';
+
 export const PERM_NAMES = {
   administrator: 'Administrator', manage_server: 'Manage Server', manage_roles: 'Manage Roles', manage_channels: 'Manage Channels',
   manage_messages: 'Manage Messages', manage_webhooks: 'Manage Webhooks', manage_emojis: 'Manage Emoji', manage_events: 'Manage Events',
@@ -9,16 +11,23 @@ export const PERM_NAMES = {
 export const permName = (p) => PERM_NAMES[p] || String(p).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
 export class FriendlyError extends Error {
-  constructor(message, { title = "Couldn't do that", hint } = {}) {
+  constructor(message, { title = "Couldn't do that", hint, need } = {}) {
     super(message);
     this.friendly = true;
     this.title = title;
     this.hint = hint;
+    if (need) {
+      this.need = need;
+      this.denied = true;
+    }
   }
 }
 export const friendly = (message, opts) => new FriendlyError(message, opts);
 
 export function explain(err, ctx = {}) {
+  if (err?.friendly && err.denied) {
+    return { title: err.title, body: err.message + (err.hint ? `\n-# ${err.hint}` : ''), denied: err.need, embed: denied(err.need, { body: err.message, hint: err.hint }) };
+  }
   if (err?.friendly) return { title: err.title, body: err.message + (err.hint ? `\n\n-# ${err.hint}` : '') };
   const status = err?.status;
   const raw = String(err?.message || '');

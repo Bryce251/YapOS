@@ -353,7 +353,12 @@ export async function settle(rounds = 6) {
   }
 }
 
-export async function createHarness({ verified = false, store = createMemoryStore(), appsDir = APPS_DIR, loadApps = true, apps = null, features = {} } = {}) {
+export function eventStamp({ createdAt = null, lateBy = 0 } = {}) {
+  if (createdAt !== null && createdAt !== undefined) return new Date(typeof createdAt === 'number' ? createdAt : Date.parse(createdAt)).toISOString();
+  return new Date(Date.now() - (Number(lateBy) || 0)).toISOString();
+}
+
+export async function createHarness({ verified = false, store = createMemoryStore(), appsDir = APPS_DIR, loadApps = true, apps = null, features = {}, freshness = {} } = {}) {
   const fake = createFakeYapin();
   Object.assign(fake.features, features);
   const bot = new Bot('yb_test_token_not_real', { log: false, gateway: false });
@@ -361,7 +366,7 @@ export async function createHarness({ verified = false, store = createMemoryStor
   bot.me = await fake.api('GET', '/me');
   const lines = [];
   const log = createLogger({ level: process.env.YAPOS_TEST_LOG || 'warn', sink: (lvl, line) => { lines.push(line); if (process.env.YAPOS_TEST_LOG) console.log(line); } });
-  const engine = createEngine({ bot, config: { verified }, store, log, appsDir });
+  const engine = createEngine({ bot, config: { verified }, store, log, appsDir, freshness });
   if (loadApps) await engine.load(apps ? [...new Set(['system', ...apps])] : null);
 
   let evId = 1000;
@@ -372,7 +377,7 @@ export async function createHarness({ verified = false, store = createMemoryStor
     bot, engine, fake, store, log, lines, IDS,
     settle,
 
-    async message(content, { user = IDS.member, channel = IDS.channels.general, server = S, replyTo = null, authorAsString = false, authorBot = false, attachment = null } = {}) {
+    async message(content, { user = IDS.member, channel = IDS.channels.general, server = S, replyTo = null, authorAsString = false, authorBot = false, attachment = null, createdAt = null, lateBy = 0 } = {}) {
       const stored = fake.addUserMessage(channel, user, content);
       stored.attachment_path = attachment;
       const data = {
@@ -383,23 +388,23 @@ export async function createHarness({ verified = false, store = createMemoryStor
       };
       const cmd = /^[/!]([a-z0-9_-]{1,32})(?:\s+([\s\S]*))?$/i.exec(content);
       if (cmd && bot.commands.has(cmd[1].toLowerCase())) { data.command = cmd[1].toLowerCase(); data.args = (cmd[2] || '').trim(); }
-      await bot.handle({ id: ++evId, type: 'message', data, created_at: data.created_at });
+      await bot.handle({ id: ++evId, type: 'message', data, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
       return data;
     },
 
-    async slash(command, args = '', { user = IDS.member, channel = IDS.channels.general, server = S } = {}) {
+    async slash(command, args = '', { user = IDS.member, channel = IDS.channels.general, server = S, createdAt = null, lateBy = 0 } = {}) {
       const data = { id: uuid(2), token: `tok${evId}`, command, args, channel_id: channel, server_id: server, user_id: user, username: nameOf(user), expires_at: null };
       fake.pendingInteractions.set(data.id, data);
-      await bot.handle({ id: ++evId, type: 'command', data });
+      await bot.handle({ id: ++evId, type: 'command', data, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
       return h.answersFor(data.id);
     },
 
-    async click(customId, { user = IDS.member, channel = IDS.channels.general, server = S, messageId = null, type = 'button', values } = {}) {
+    async click(customId, { user = IDS.member, channel = IDS.channels.general, server = S, messageId = null, type = 'button', values, createdAt = null, lateBy = 0 } = {}) {
       const data = { id: uuid(3), token: `tok${evId}`, type, custom_id: customId, values: values ?? (type === 'button' ? undefined : []), message_id: messageId, channel_id: channel, server_id: server, user_id: user, username: nameOf(user), expires_at: null };
       fake.pendingInteractions.set(data.id, data);
-      await bot.handle({ id: ++evId, type: 'interaction', data });
+      await bot.handle({ id: ++evId, type: 'interaction', data, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
       return h.answersFor(data.id);
     },
@@ -412,20 +417,20 @@ export async function createHarness({ verified = false, store = createMemoryStor
       return h.click(found.custom_id, { messageId: found.messageId, channel: found.channelId ?? opts.channel ?? IDS.channels.general, ...opts });
     },
 
-    async join(userId, { username = 'newbie', server = S, invite_code = null } = {}) {
+    async join(userId, { username = 'newbie', server = S, invite_code = null, createdAt = null, lateBy = 0 } = {}) {
       if (!fake.memberOf(server, userId)) fake.state.members[server].push({ id: userId, username, display_name: username, nickname: null, roles: [], joined_at: new Date(fake.clock.t).toISOString() });
       const member_count = fake.state.members[server].length;
-      await bot.handle({ id: ++evId, type: 'member_join', data: { server_id: server, channel_id: null, user_id: userId, username, joined_at: new Date(fake.clock.t).toISOString(), member_count, invite_code } });
+      await bot.handle({ id: ++evId, type: 'member_join', data: { server_id: server, channel_id: null, user_id: userId, username, joined_at: new Date(fake.clock.t).toISOString(), member_count, invite_code }, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
     },
-    async leave(userId, { server = S } = {}) {
+    async leave(userId, { server = S, createdAt = null, lateBy = 0 } = {}) {
       const m = fake.memberOf(server, userId);
       fake.state.members[server] = fake.state.members[server].filter((x) => x.id !== userId);
-      await bot.handle({ id: ++evId, type: 'member_leave', data: { server_id: server, channel_id: null, user_id: userId, username: m?.username || 'gone', joined_at: null, member_count: fake.state.members[server].length } });
+      await bot.handle({ id: ++evId, type: 'member_leave', data: { server_id: server, channel_id: null, user_id: userId, username: m?.username || 'gone', joined_at: null, member_count: fake.state.members[server].length }, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
     },
-    async react(messageId, emoji, { user = IDS.member, channel = IDS.channels.general, server = S, remove = false } = {}) {
-      await bot.handle({ id: ++evId, type: remove ? 'reaction_remove' : 'reaction_add', data: { message_id: messageId, channel_id: channel, server_id: server, user_id: user, username: nameOf(user), emoji, message_author_id: IDS.bot } });
+    async react(messageId, emoji, { user = IDS.member, channel = IDS.channels.general, server = S, remove = false, createdAt = null, lateBy = 0 } = {}) {
+      await bot.handle({ id: ++evId, type: remove ? 'reaction_remove' : 'reaction_add', data: { message_id: messageId, channel_id: channel, server_id: server, user_id: user, username: nameOf(user), emoji, message_author_id: IDS.bot }, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
     },
     addSecondAdmin() {
@@ -434,22 +439,22 @@ export async function createHarness({ verified = false, store = createMemoryStor
       return IDS.admin2;
     },
 
-    async voiceJoin(userId, { channel = IDS.channels.voice, server = S } = {}) {
+    async voiceJoin(userId, { channel = IDS.channels.voice, server = S, createdAt = null, lateBy = 0 } = {}) {
       (fake.state.voice[channel] ||= new Set()).add(userId);
-      await bot.handle({ id: ++evId, type: 'voice_join', data: { user_id: userId, channel_id: channel, server_id: server } });
+      await bot.handle({ id: ++evId, type: 'voice_join', data: { user_id: userId, channel_id: channel, server_id: server }, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
     },
-    async voiceLeave(userId, { channel = IDS.channels.voice, server = S } = {}) {
+    async voiceLeave(userId, { channel = IDS.channels.voice, server = S, createdAt = null, lateBy = 0 } = {}) {
       fake.state.voice[channel]?.delete(userId);
-      await bot.handle({ id: ++evId, type: 'voice_leave', data: { user_id: userId, channel_id: channel, server_id: server } });
+      await bot.handle({ id: ++evId, type: 'voice_leave', data: { user_id: userId, channel_id: channel, server_id: server }, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
     },
 
-    async dm(content, { user = IDS.member, attachments = [] } = {}) {
+    async dm(content, { user = IDS.member, attachments = [], createdAt = null, lateBy = 0 } = {}) {
       const cid = `d${user.slice(1)}`;
       fake.state.dms[cid] = user;
       const files = attachments.map((a) => ({ path: a.path, name: a.name ?? null, size: a.size ?? null, width: a.width ?? null, height: a.height ?? null, voice_secs: a.voice_secs ?? null }));
-      await bot.handle({ id: ++evId, type: 'dm_message', data: { id: uuid(4), channel_id: cid, dm_channel_id: cid, server_id: null, is_dm: true, dm: true, author_id: user, author: nameOf(user), author_name: nameOf(user), content, attachment: files[0]?.path ?? null, attachments: files, created_at: new Date().toISOString(), author_bot: false } });
+      await bot.handle({ id: ++evId, type: 'dm_message', data: { id: uuid(4), channel_id: cid, dm_channel_id: cid, server_id: null, is_dm: true, dm: true, author_id: user, author: nameOf(user), author_name: nameOf(user), content, attachment: files[0]?.path ?? null, attachments: files, created_at: eventStamp({ createdAt, lateBy }), author_bot: false }, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
     },
 
