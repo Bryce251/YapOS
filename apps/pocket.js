@@ -579,7 +579,7 @@ async function welcomeBack(engine, msg, uid, now) {
 
 const isBookmark = (emoji) => {
   const e = String(emoji ?? '');
-  return e.includes('🔖') || /^:?bookmark:?$/i.test(e);
+  return e.includes('💬') || /^:?speech_balloon:?$/i.test(e);
 };
 
 async function onReaction(ctx, ev) {
@@ -630,7 +630,7 @@ async function onReaction(ctx, ev) {
     { name: 'Sent', value: Number.isFinite(sentAt) ? whenAt(sentAt, tzOf(user)) : 'unknown', inline: true },
   ];
   if (attachment) fields.push({ name: 'Attachment', value: clip(attachment, 200), inline: false });
-  const embed = card({ title: `🔖 Bookmark from ${clip(channel ? `#${channel.name}` : 'a server', 200)}`, body: m.content ? clip(m.content, 3800) : '*(no text)*', fields, color: 'pocket', footer: 'Saved with 🔖 · YapOS Pocket' });
+  const embed = card({ title: `💬 Bookmark from ${clip(channel ? `#${channel.name}` : 'a server', 200)}`, body: m.content ? clip(m.content, 3800) : '*(no text)*', fields, color: 'pocket', footer: 'Saved with 💬 · YapOS Pocket' });
 
   try {
     const dm = await engine.bot.dm(uid);
@@ -727,7 +727,7 @@ function homeView(engine, uid, { inServer = false, notice = '' } = {}) {
     { name: '💤 AFK', value: afk ? `On: ${plain(clip(afk.reason, 60))}\n-# since ${ago(now - afk.since)}` : 'Off', inline: true },
     { name: '📝 Notes', value: `${user.notes.length} of ${MAX_NOTES}${preview(user.notes, (n) => `• ${clip(oneLine(plain(n.text)), 40)}`)}`, inline: true },
     { name: '☑️ To-dos', value: `${open.length} open · ${done} done${preview(open, (t) => `⬜ ${clip(oneLine(plain(t.text)), 40)}`)}`, inline: true },
-    { name: '🔖 Bookmarks', value: `${user.bookmarks.total || 0} sent to your DMs\n-# React 🔖 to any message`, inline: true },
+    { name: '💬 Bookmarks', value: `${user.bookmarks.total || 0} sent to your DMs\n-# React 💬 to any message`, inline: true },
   ];
   const intro = inServer ? 'Your personal assistant. Only you can press these buttons.\n-# Want it private? Type **pocket** in my DMs.' : 'Your personal assistant. Type **help** to see everything you can tell me.';
   const btns = [
@@ -991,7 +991,7 @@ function helpCard(engine) {
     content: "👋 Hi! I'm **YapOS Pocket**, your personal assistant.",
     embeds: [card({
       title: `${ICONS.pocket} What you can type here`,
-      body: `${lines.join('\n')}\n\n-# In a server: **/remind**, **/afk**, **/pocket**, and react 🔖 to any message to get a copy in your DMs.`,
+      body: `${lines.join('\n')}\n\n-# In a server: **/remind**, **/afk**, **/pocket**, and react 💬 to any message to get a copy in your DMs.`,
       color: 'pocket',
     })],
   };
@@ -1149,7 +1149,7 @@ export const { setup, teardown, check } = defineApp({
   help: [
     'Reminders come by DM. If your DMs are closed, I mention you in the channel where you set it. Up to 10 repeating ones each.',
     'Times use your time zone: `/pocket tz Europe/London` (UTC until you set one).',
-    'React 🔖 to any message and I DM you a copy (up to 20 an hour).',
+    'React 💬 to any message and I DM you a copy (up to 20 an hour).',
     'Everything works in my DMs too: type **help** there.',
   ],
 

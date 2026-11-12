@@ -37,7 +37,7 @@ Needs Node.js 18 or newer (22+ so the live gateway is used; older versions fall 
 | Tools | `/tag` (or type `!name`) `/embed` `/schedule` |
 | Voice | `/voice` |
 | Games | `/game` `/trivia` |
-| Pocket | `/remind` `/afk` `/pocket` (also in DMs: `remind`, `note`, `todo`, `tz`, `afk`, `help`; react 🔖 to bookmark a message) |
+| Pocket | `/remind` `/afk` `/pocket` (also in DMs: `remind`, `note`, `todo`, `tz`, `afk`, `help`; react 💬 to bookmark a message) |
 
 39 commands in all. Every hub command opens a panel. Most also take typed shortcuts, like `/mod timeout @sam 10m spam`, and `/yap` understands plain words: `/yap timeout @sam 10m`.
 
@@ -54,7 +54,7 @@ Put the bot's role **above** the roles it should manage or moderate, and tick wh
 | Economy | Manage Roles only for shop items that give a role |
 | Voice | Manage Channels, Manage Roles and Move Members, with the bot's role above the room roles |
 | Engage, Tools, Games | Send Messages and Embed Links in the channels they post to |
-| Pocket | Read Message History for 🔖 bookmarks; reminders arrive by DM |
+| Pocket | Read Message History for 💬 bookmarks; reminders arrive by DM |
 
 ## Tests
 

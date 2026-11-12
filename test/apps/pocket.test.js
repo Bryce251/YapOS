@@ -488,10 +488,10 @@ test('AFK is skipped where Pocket is uninstalled', async () => {
   assert.match(lastText(h, cmd), /isn't installed here/);
 });
 
-test('bookmarks: reacting 🔖 DMs a copy, at most 20 an hour, duplicates ignored', async () => {
+test('bookmarks: reacting 💬 DMs a copy, at most 20 an hour, duplicates ignored', async () => {
   const h = await make();
   const msg = await h.message('the answer is 42', { user: IDS.member2, attachment: 'abc/notes.txt' });
-  await h.react(msg.id, '🔖', { user: IDS.member });
+  await h.react(msg.id, '💬', { user: IDS.member });
   const dms = h.sent(dmOf(IDS.member));
   assert.equal(dms.length, 1);
   const text = h.textOf(dms[0]);
@@ -501,18 +501,18 @@ test('bookmarks: reacting 🔖 DMs a copy, at most 20 an hour, duplicates ignore
   assert.match(text, /Test Town/);
   assert.match(text, /notes\.txt/);
   assert.match(text, /\(UTC\)/);
-  await h.react(msg.id, '🔖', { user: IDS.member });
+  await h.react(msg.id, '💬', { user: IDS.member });
   assert.equal(h.sent(dmOf(IDS.member)).length, 1, 'the same message twice is ignored');
   await h.react(msg.id, '👍', { user: IDS.member });
   assert.equal(h.sent(dmOf(IDS.member)).length, 1, 'other emoji do nothing');
   for (let i = 0; i < 25; i++) {
     const m = await h.message(`msg ${i}`, { user: IDS.member2 });
-    await h.react(m.id, '🔖', { user: IDS.member });
+    await h.react(m.id, '💬', { user: IDS.member });
   }
   assert.equal(h.sent(dmOf(IDS.member)).length, 20, '20 an hour');
   await h.advance(HOUR + 1000);
   const m = await h.message('fresh', { user: IDS.member2 });
-  await h.react(m.id, '🔖', { user: IDS.member });
+  await h.react(m.id, '💬', { user: IDS.member });
   assert.equal(h.sent(dmOf(IDS.member)).length, 21, 'allowed again after an hour');
   assert.equal(h.engine.store.get('pocket', IDS.member).bookmarks.total, 21);
 });
@@ -521,11 +521,11 @@ test('bookmarks: closed DMs or a missing message do nothing and do not crash', a
   const h = await make();
   const msg = await h.message('hi', { user: IDS.member2 });
   h.fake.features.dms = false;
-  await h.react(msg.id, '🔖', { user: IDS.member });
+  await h.react(msg.id, '💬', { user: IDS.member });
   assert.equal(h.sent(G).length, 0, 'nothing is posted in the channel');
   assert.equal(h.engine.store.get('pocket', IDS.member, null)?.bookmarks?.total ?? 0, 0);
   h.fake.features.dms = true;
-  await h.react('00000000-0000-4000-8000-00000000dead', '🔖', { user: IDS.member });
+  await h.react('00000000-0000-4000-8000-00000000dead', '💬', { user: IDS.member });
   assert.equal(h.sent().length, 0);
 });
 
@@ -560,11 +560,11 @@ test('restart: notes, todos, tz and AFK survive on the same store', async () => 
   assert.equal(dmTexts(b).filter((t) => /water/.test(t)).length, 1);
 });
 
-test('review: many 🔖 reactions at once still stop at 20 an hour', async () => {
+test('review: many 💬 reactions at once still stop at 20 an hour', async () => {
   const h = await make();
   const msgs = [];
   for (let i = 0; i < 25; i++) msgs.push(await h.message(`burst ${i}`, { user: IDS.member2 }));
-  await Promise.all(msgs.map((m) => h.react(m.id, '🔖', { user: IDS.member })));
+  await Promise.all(msgs.map((m) => h.react(m.id, '💬', { user: IDS.member })));
   assert.equal(h.sent(dmOf(IDS.member)).length, 20);
   assert.equal(h.engine.store.get('pocket', IDS.member).bookmarks.total, 20);
 });
@@ -573,10 +573,10 @@ test('review: a closed-DM bookmark does not use up the hourly allowance', async 
   const h = await make();
   const msg = await h.message('keep this', { user: IDS.member2 });
   h.fake.features.dms = false;
-  await h.react(msg.id, '🔖', { user: IDS.member });
+  await h.react(msg.id, '💬', { user: IDS.member });
   assert.equal(h.engine.store.get('pocket', IDS.member).bookmarks.times.length, 0);
   h.fake.features.dms = true;
-  await h.react(msg.id, '🔖', { user: IDS.member });
+  await h.react(msg.id, '💬', { user: IDS.member });
   assert.equal(h.sent(dmOf(IDS.member)).length, 1, 'the same message can be saved once DMs open');
 });
 
@@ -628,4 +628,10 @@ test('review: "10 minutes stretch" and "2 hours call" are understood', () => {
   assert.equal(parseWhen('10 minutes stretch', { now }).at, now + 10 * 60_000);
   assert.equal(parseWhen('2 hours call', { now }).text, 'call');
   assert.equal(new Date(parseWhen('5 pm tea', { now }).at).toISOString(), '2026-11-07T17:00:00.000Z');
+});
+test('the old bookmark emoji no longer sends a copy, only the speech bubble does', async () => {
+  const h = await createHarness({ apps: ['pocket'] });
+  const msg = h.fake.addUserMessage(IDS.channels.general, IDS.member2, 'save me');
+  await h.react(msg.id, '🔖', { user: IDS.member });
+  assert.equal(Object.keys(h.fake.state.dms).length, 0, 'no DM for the old emoji');
 });
