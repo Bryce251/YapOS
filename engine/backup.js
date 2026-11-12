@@ -158,7 +158,7 @@ export function createBackups({ dir, store = null, log = null, now = () => new D
       }
 
       const removed = { daily: prune(dailyDir, keepDaily), weekly: prune(weeklyDir, keepWeekly) };
-      log?.info(`backed up ${plural(copied.files, 'file')} from ${plural(Object.keys(copied.namespaces).length + copied.legacy.length, 'app')} to data/backups/daily/${date}${weekly ? ' and made this week\'s copy' : ''}`);
+      log?.info(`backed up ${plural(copied.files, 'file')} from ${plural(Object.keys(copied.namespaces).length + copied.legacy.length, 'app')} to ${path.join(backupRoot, 'daily', date)}${weekly ? ' and made this week\'s copy' : ''}`);
       return { ok: true, date, files: copied.files, bytes: copied.bytes, weekly, removed, path: final };
     } catch (e) {
       try { log?.error(`The daily backup didn't finish (${e?.message || e}). Your data is safe; YapOS will try again later.`); } catch {}

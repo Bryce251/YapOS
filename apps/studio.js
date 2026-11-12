@@ -7,6 +7,7 @@ import path from 'node:path';
 import { defineApp } from '../engine/apps.js';
 import { card } from '../engine/ui.js';
 import { friendly, looksLikeFeatureOff } from '../engine/errors.js';
+import { bundledFontPath, textMeasure, renderInWorker, LIMITS } from '../engine/imaging.js';
 
 const ID = 'studio';
 const ICON = '🎬';
@@ -25,6 +26,8 @@ const PROBE_TIMEOUT_MS = 8000;
 const REPROBE_MS = 5 * 60_000;
 const MAX_REDIRECTS = 3;
 const CONCURRENCY = 2;
+const JS_CONCURRENCY = 1;
+const WORKER_LIMITS = { maxOldGenerationSizeMb: 48, maxYoungGenerationSizeMb: 16 };
 const QUEUE_LIMIT = 20;
 const COOLDOWN_MS = 10_000;
 const FILES_PER_MINUTE = 20;
@@ -243,10 +246,10 @@ export function sniffImage(buf) {
 
 function exifOrientation(buf, start, end) {
   try {
-    if (buf.toString('latin1', start, start + 6) !== 'Exif\0\0') return 1;
+    if (buf.toString('latin1', start, start + 6) !== 'Exif\0\0') return null;
     const tiff = start + 6;
     const order = buf.toString('latin1', tiff, tiff + 2);
-    if (order !== 'II' && order !== 'MM') return 1;
+    if (order !== 'II' && order !== 'MM') return null;
     const le = order === 'II';
     const u16 = (o) => (le ? buf.readUInt16LE(o) : buf.readUInt16BE(o));
     const u32 = (o) => (le ? buf.readUInt32LE(o) : buf.readUInt32BE(o));
@@ -269,6 +272,7 @@ function exifOrientation(buf, start, end) {
 function jpegSize(buf) {
   let i = 2;
   let orientation = 1;
+  let exif = false;
   while (i + 4 <= buf.length) {
     if (buf[i] !== 0xff) { i++; continue; }
     const marker = buf[i + 1];
@@ -276,7 +280,10 @@ function jpegSize(buf) {
     if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) { i += 2; continue; }
     const len = buf.readUInt16BE(i + 2);
     if (len < 2) return null;
-    if (marker === 0xe1) orientation = exifOrientation(buf, i + 4, Math.min(buf.length, i + 2 + len));
+    if (marker === 0xe1 && !exif) {
+      const v = exifOrientation(buf, i + 4, Math.min(buf.length, i + 2 + len));
+      if (v != null) { orientation = v; exif = true; }
+    }
     const isFrame = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
     if (isFrame) {
       if (i + 9 > buf.length) return null;
@@ -473,19 +480,24 @@ export async function findFfmpeg(env = process.env) {
 const unreadable = () => friendly("That file doesn't look like a picture I can read. I work with PNG, JPG, GIF and WebP.", { title: "I couldn't read that picture" });
 const tooHeavy = () => friendly('That picture is over 15 MB. Try a smaller one.', { title: 'That picture is too big' });
 
-async function prepareJob({ dir, input, type, size, kind, text, fontFile, pass }) {
+export function rendererMode(env = process.env) {
+  return String(env.YAPOS_STUDIO_RENDERER || '').trim().toLowerCase() === 'ffmpeg' ? 'ffmpeg' : 'js';
+}
+
+async function prepareJob({ dir, input, type, size, kind, text, fontFile, measure, pass }) {
   const out = outputSize({ width: size.width, height: size.height, maxWidth: pass.maxWidth, minWidth: kind === 'caption' ? MIN_CAPTION_WIDTH : 0, maxArea: size.animated ? ANIMATED_AREA : Infinity });
   const job = {
     kind, type, dir, input,
     output: path.join(dir, `out-${pass.maxWidth}.gif`),
     outWidth: out.width, outHeight: out.height,
     orientation: size.orientation, animated: size.animated,
+    srcWidth: size.orientation >= 5 ? size.height : size.width, srcHeight: size.orientation >= 5 ? size.width : size.height,
     fps: pass.fps, seconds: MAX_SECONDS, maxWidth: pass.maxWidth,
     fontFile: null, layout: null, lineFiles: [],
   };
   if (kind !== 'caption') return job;
   job.fontFile = fontFile;
-  job.layout = wrapText(drawable(text, fontFile), { width: out.width, fontFile });
+  job.layout = wrapText(drawable(text, fontFile), measure ? { width: out.width, fontFile, measure } : { width: out.width, fontFile });
   for (const [i, line] of job.layout.lines.entries()) {
     const file = path.join(dir, `line-${pass.maxWidth}-${i}.txt`);
     await fsp.writeFile(file, line, { encoding: 'utf8', flag: 'wx' });
@@ -507,7 +519,7 @@ export async function sweepStale(tmpRoot = os.tmpdir(), now = Date.now(), maxAge
   return removed;
 }
 
-export async function renderImage({ renderer, kind, data, text = '', fontFile = null, tmpRoot = os.tmpdir(), onJob = null }) {
+export async function renderImage({ renderer, kind, data, text = '', fontFile = null, measure = null, tmpRoot = os.tmpdir(), onJob = null }) {
   const type = sniffImage(data);
   if (!type) throw unreadable();
   const size = imageSize(data, type);
@@ -519,7 +531,7 @@ export async function renderImage({ renderer, kind, data, text = '', fontFile = 
     const input = path.join(dir, `in.${type}`);
     await fsp.writeFile(input, data, { flag: 'wx' });
     for (const pass of PASSES) {
-      const job = await prepareJob({ dir, input, type, size, kind, text, fontFile, pass });
+      const job = await prepareJob({ dir, input, type, size, kind, text, fontFile, measure, pass });
       onJob?.(job);
       await renderer(job);
       const stat = await fsp.lstat(job.output).catch(() => null);
@@ -541,8 +553,8 @@ function stateOf(engine) {
   if (!st) {
     st = {
       fetch: (...a) => globalThis.fetch(...a),
-      renderer: null, ffmpeg: null, probing: null, probedAt: 0, font: undefined,
-      running: 0, waiting: [], users: new Map(), sends: [], sent: [], bursts: new Map(), jobs: new Set(), children: new Set(),
+      mode: rendererMode(), renderer: null, ffmpeg: null, probing: null, probedAt: 0, font: undefined, measure: undefined,
+      running: 0, waiting: [], users: new Map(), sends: [], sent: [], bursts: new Map(), jobs: new Set(), children: new Set(), workers: new Set(),
       limits: { downloadMs: DOWNLOAD_TIMEOUT_MS, renderMs: FFMPEG_TIMEOUT_MS },
       counts: { done: 0, failed: 0, refused: 0 },
     };
@@ -567,9 +579,9 @@ function detect(engine) {
   return st.probing;
 }
 
-async function ffmpegReady(engine) {
+async function rendererReady(engine) {
   const st = stateOf(engine);
-  if (st.renderer) return true;
+  if (st.renderer || st.mode === 'js') return true;
   if (!st.probing) detect(engine);
   let found = await st.probing;
   if (!found && Date.now() - st.probedAt > REPROBE_MS) found = await detect(engine);
@@ -577,9 +589,19 @@ async function ffmpegReady(engine) {
 }
 
 function fontOf(st) {
-  if (st.font === undefined || (st.font && !fs.existsSync(st.font))) st.font = findFont();
+  if (st.font === undefined || (st.font && !fs.existsSync(st.font))) st.font = st.mode === 'js' ? bundledFontPath() : findFont();
   return st.font;
 }
+
+function measureOf(st) {
+  if (st.mode !== 'js') return null;
+  const font = fontOf(st);
+  if (!font) return null;
+  if (!st.measure || st.measure.font !== font) st.measure = { font, fn: textMeasure(font) };
+  return st.measure.fn;
+}
+
+const slots = (st) => (st.mode === 'js' && !st.renderer ? JS_CONCURRENCY : CONCURRENCY);
 
 async function readLimited(res, maxBytes, signal) {
   if (!res.body?.getReader) throw new Error('the download has no readable body');
@@ -641,22 +663,48 @@ async function download(engine, url) {
   }
 }
 
+export function workerJob(job) {
+  const layout = job.layout ? { lines: [...job.layout.lines], fontSize: job.layout.fontSize, baselines: [...job.layout.baselines], barHeight: job.layout.barHeight } : null;
+  return { kind: job.kind, type: job.type, outWidth: job.outWidth, outHeight: job.outHeight, orientation: job.orientation, animated: job.animated, srcWidth: job.srcWidth ?? null, srcHeight: job.srcHeight ?? null, fps: job.fps, seconds: job.seconds, layout, fontPath: job.fontFile };
+}
+
 function defaultRenderer(engine) {
   const st = stateOf(engine);
+  if (st.mode === 'js') {
+    return async (job) => {
+      const input = await fsp.readFile(job.input);
+      const result = await renderInWorker(input, workerJob(job), { timeoutMs: st.limits.renderMs, resourceLimits: WORKER_LIMITS, track: st.workers });
+      await fsp.writeFile(job.output, Buffer.from(result.output), { flag: 'wx' });
+    };
+  }
   return (job) => runProcess(st.ffmpeg, buildArgs(job), { cwd: job.dir, timeoutMs: st.limits.renderMs, children: st.children });
 }
+
+const IMAGING_PROBLEMS = {
+  pixels: () => friendly(`That picture is too big for me to work with. The most I can handle is ${MAX_SIDE}×${MAX_SIDE}.`, { title: 'That picture is too big' }),
+  'animated-pixels': () => friendly('That animated GIF is too big for me to keep moving. Try one under 2048×2048.', { title: 'That GIF is too big' }),
+  memory: () => friendly('That picture needs more memory than I have. Try a smaller one.', { title: 'That picture is too big' }),
+  'big-still': () => friendly(`That picture is too big for me to work with. Try one under ${LIMITS.maxStillSide}×${LIMITS.maxStillSide}.`, { title: 'That picture is too big' }),
+  frames: () => friendly(`That GIF has too many frames for me. Try one with fewer than ${LIMITS.maxGifFrames}.`, { title: 'That GIF is too long' }),
+  'webp-animated': () => friendly("I can't read animated WebP pictures yet. Send it as a GIF and I'll keep it moving.", { title: "I couldn't read that picture" }),
+  unsupported: () => friendly("That picture is saved in a way I can't read. Try saving it as PNG or JPG and send it again.", { title: "I couldn't read that picture" }),
+  font: () => friendly("My caption font is missing. The bot's owner needs to reinstall the bot's packages. `gif` still works.", { title: 'No caption font' }),
+  ERR_WORKER_OUT_OF_MEMORY: () => friendly('That picture needs more memory than I have. Try a smaller one.', { title: 'That picture is too big' }),
+};
 
 function renderProblem(engine, e) {
   if (e?.friendly) return e;
   engine.log.warn('[studio] render failed:', e?.message || e, e?.stderr ? `\n${String(e.stderr).trim()}` : '');
   if (e?.timedOut) return friendly('That one took too long to make, so I stopped. Try a smaller or shorter picture.', { title: 'That took too long' });
+  if (e?.code && Object.hasOwn(IMAGING_PROBLEMS, e.code)) return IMAGING_PROBLEMS[e.code]();
   if (e?.code === 'ENOENT') return friendly("My GIF maker (ffmpeg) isn't available right now. The bot's owner needs to install it.", { title: "Studio isn't ready" });
   return friendly("I couldn't turn that picture into a GIF. It may be damaged, or a kind I can't read. Try another one.", { title: "That didn't work" });
 }
 
 function produce(engine, { kind, data, text, tmpRoot, onJob }) {
   const st = stateOf(engine);
-  return renderImage({ renderer: st.renderer || defaultRenderer(engine), kind, data, text, fontFile: kind === 'caption' ? fontOf(st) : null, tmpRoot, onJob });
+  const caption = kind === 'caption';
+  return renderImage({ renderer: st.renderer || defaultRenderer(engine), kind, data, text, fontFile: caption ? fontOf(st) : null, measure: caption ? measureOf(st) : null, tmpRoot, onJob });
 }
 
 function ownAttachments(src) {
@@ -706,14 +754,14 @@ async function tell(ctx, err) {
 }
 
 function pump(st) {
-  while (st.running < CONCURRENCY && st.waiting.length) {
+  while (st.running < slots(st) && st.waiting.length) {
     st.running++;
     st.waiting.shift()();
   }
 }
 
 function enqueue(st, task) {
-  const position = st.running >= CONCURRENCY ? st.waiting.length + 1 : 0;
+  const position = st.running >= slots(st) ? st.waiting.length + 1 : 0;
   const done = new Promise((resolve) => {
     st.waiting.push(() => {
       Promise.resolve().then(task).catch(() => {}).finally(() => {
@@ -766,6 +814,7 @@ function refusal(engine, ctx, kind, image, caption) {
   if (!attachmentUrl(image.path)) return friendly("I can't find where that picture lives. Try sending it again.", { title: "I couldn't get the picture" });
   if (kind === 'caption' && !caption.text) return friendly(`Tell me what to write. ${howTo(ctx)}`, { title: 'What should the caption say?' });
   if (kind === 'caption' && !drawable(caption.text, fontOf(st))) return friendly("My caption font can't write those characters (emoji and some alphabets are missing from it). Try plain letters and numbers.", { title: "I can't write that caption" });
+  if (kind === 'caption' && !st.renderer && !fontOf(st) && st.mode === 'js') return IMAGING_PROBLEMS.font();
   if (kind === 'caption' && !st.renderer && !fontOf(st)) return friendly("I don't have a font to write captions with. The bot's owner can point me at one by setting YAPOS_FONT to a .ttf file. `gif` still works.", { title: 'No caption font' });
   if (engine.caps.state(ctx.serverId, 'files') === false) return filesOff();
   const user = st.users.get(ctx.userId);
@@ -843,7 +892,7 @@ async function request(ctx, kind, rawText) {
     const title = replied ? 'That message has no picture' : 'I need a picture';
     return tell(ctx, friendly(`${howTo(ctx)}\n\n-# ${HOW_LIMITS}`, { title }));
   }
-  if (!(await ffmpegReady(engine))) {
+  if (!(await rendererReady(engine))) {
     st.counts.refused++;
     return tell(ctx, friendly("Studio needs a program called ffmpeg, and it isn't installed on the computer I run on. The bot's owner needs to install ffmpeg and restart me.", { title: "Studio isn't ready" }));
   }
@@ -903,13 +952,17 @@ export const { setup, teardown, check } = defineApp({
     return {
       setFetch: (fn) => { st.fetch = fn || ((...a) => globalThis.fetch(...a)); },
       setRenderer: (fn) => { st.renderer = fn || null; },
-      wrapText: (text, opts = {}) => wrapText(text, { fontFile: fontOf(st), ...opts }),
+      wrapText: (text, opts = {}) => {
+        const measure = measureOf(st);
+        return wrapText(text, { fontFile: fontOf(st), ...(measure ? { measure } : {}), ...opts });
+      },
       buildArgs,
       stats: () => ({
         running: st.running, waiting: st.waiting.length, ...st.counts,
-        filesLastMinute: sendsInWindow(st, Date.now()), sentLastMinute: inWindow(st.sent, Date.now()), processes: st.children.size, ffmpeg: st.ffmpeg, font: fontOf(st),
+        filesLastMinute: sendsInWindow(st, Date.now()), sentLastMinute: inWindow(st.sent, Date.now()), processes: st.children.size + st.workers.size, ffmpeg: st.ffmpeg, font: fontOf(st),
+        renderer: st.renderer ? 'custom' : st.mode, concurrency: slots(st),
       }),
-      ready: () => ffmpegReady(engine),
+      ready: () => rendererReady(engine),
       setLimits: (limits = {}) => { st.limits = { downloadMs: DOWNLOAD_TIMEOUT_MS, renderMs: FFMPEG_TIMEOUT_MS, ...limits }; },
       sweep: (tmpRoot, now, maxAgeMs) => sweepStale(tmpRoot, now, maxAgeMs),
       produce: (job) => produce(engine, job),
@@ -924,12 +977,15 @@ export const { setup, teardown, check } = defineApp({
   ],
 
   init: (engine) => {
-    detect(engine);
+    const st = stateOf(engine);
+    if (st.mode === 'ffmpeg') detect(engine);
+    else engine.log.info(`[studio] making GIFs with the built-in renderer${fontOf(st) ? '' : ' (the caption font is missing, so only gif works)'}`);
     sweepStale().then((removed) => { if (removed) engine.log.info(`[studio] cleared ${removed} leftover work folder${removed === 1 ? '' : 's'}`); }).catch(() => {});
   },
   dispose: (engine) => {
     const st = states.get(engine);
     if (st) for (const child of st.children) { try { child.kill('SIGKILL'); } catch { st.children.delete(child); } }
+    if (st) for (const worker of st.workers) { worker.terminate().catch(() => {}); st.workers.delete(worker); }
     states.delete(engine);
   },
 });

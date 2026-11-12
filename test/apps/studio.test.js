@@ -5,8 +5,16 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import zlib from 'node:zlib';
 import { createHarness, IDS, uuid } from '../harness.js';
 import { customId } from '../../engine/router.js';
+import pngjs from 'pngjs';
+import jpegjs from 'jpeg-js';
+import gifenc from 'gifenc';
+import omggif from 'omggif';
+import { gifSchedule, renderInWorker, bundledFontPath, textMeasure, LIMITS } from '../../engine/imaging.js';
+import { decodeJpeg } from '../../engine/imaging-jpeg.js';
+import { decodePng, readPngChunks } from '../../engine/imaging-png.js';
 import {
   wrapText, cleanCaption, fontSizeFor, minFontSizeFor, measureText, fontMetrics, filterPath, buildArgs, sniffImage, imageSize,
   extensionOf, attachmentUrl, isAllowedUrl, outputSize, parseDm, drawable, findFont, findFfmpeg, sweepStale, FONT_CANDIDATES, PASSES,
@@ -945,11 +953,44 @@ test('when file sending is off, people are told plainly and it is not retried', 
   assert.equal(filesIn(cid).length, 0);
 });
 
-test('without ffmpeg every request gets a plain message and it is logged once', async () => {
+async function withFfmpegRenderer(fn) {
+  const before = process.env.YAPOS_STUDIO_RENDERER;
+  process.env.YAPOS_STUDIO_RENDERER = 'ffmpeg';
+  try {
+    return await fn();
+  } finally {
+    if (before === undefined) delete process.env.YAPOS_STUDIO_RENDERER;
+    else process.env.YAPOS_STUDIO_RENDERER = before;
+  }
+}
+
+test('the built-in renderer is the default, needs no ffmpeg and says so in the log', async () => {
   const before = process.env.YAPOS_FFMPEG;
   process.env.YAPOS_FFMPEG = path.join(os.tmpdir(), 'yapos-no-such-ffmpeg-binary');
   try {
     const h = await createHarness({ apps: ['studio'] });
+    const svc = h.engine.service('studio');
+    assert.equal(await svc.ready(), true);
+    const stats = svc.stats();
+    assert.equal(stats.renderer, 'js');
+    assert.equal(stats.concurrency, 1);
+    assert.ok(stats.font && stats.font.endsWith('RobotoCondensed_700Bold.ttf'));
+    assert.equal(h.lines.filter((l) => /ffmpeg/i.test(l)).length, 0);
+    svc.setRenderer(async () => {});
+    assert.equal(svc.stats().renderer, 'custom');
+    svc.setRenderer(null);
+  } finally {
+    if (before === undefined) delete process.env.YAPOS_FFMPEG;
+    else process.env.YAPOS_FFMPEG = before;
+  }
+});
+
+test('with the ffmpeg renderer chosen but missing, every request gets a plain message and it is logged once', async () => {
+  const before = process.env.YAPOS_FFMPEG;
+  process.env.YAPOS_FFMPEG = path.join(os.tmpdir(), 'yapos-no-such-ffmpeg-binary');
+  try {
+    const h = await withFfmpegRenderer(() => createHarness({ apps: ['studio'] }));
+    assert.equal(h.engine.service('studio').stats().renderer, 'ffmpeg');
     const svc = h.engine.service('studio');
     let fetched = 0;
     svc.setFetch(async () => { fetched++; return new Response(png(10, 10)); });
@@ -1400,9 +1441,10 @@ async function realSetup() {
       fast: gen(['-i', 'testsrc=size=64x48:rate=30', '-t', '14'], 'fast.gif'),
     };
   }
-  const h = await createHarness({ apps: ['studio'] });
+  const h = await withFfmpegRenderer(() => createHarness({ apps: ['studio'] }));
   const svc = h.engine.service('studio');
   assert.equal(await svc.ready(), true);
+  assert.equal(svc.stats().renderer, 'ffmpeg');
   const check = async (buf, name) => {
     assert.ok(['GIF89a', 'GIF87a'].includes(buf.toString('latin1', 0, 6)), 'starts with a GIF header');
     assert.ok(buf.length > 300 && buf.length < 9.5 * MB, `sensible size (${buf.length})`);
@@ -1620,4 +1662,498 @@ test('real ffmpeg: the output stops growing just past the size limit and tall an
   assert.ok(info.width * info.height <= 480 * 640 * 1.02, `${info.width}x${info.height}`);
   assert.ok(info.frames > 1);
   assert.ok(Math.abs(info.height / info.width - 2000 / 480) < 0.05);
+});
+
+const RED = [230, 20, 20];
+const BLUE = [20, 40, 220];
+const GREEN = [20, 200, 40];
+const YELLOW = [240, 220, 30];
+
+function pngOf(width, height, paint) {
+  const img = new pngjs.PNG({ width, height });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const [r, g, b, a = 255] = paint(x, y);
+      img.data.set([r, g, b, a], (y * width + x) * 4);
+    }
+  }
+  return pngjs.PNG.sync.write(img);
+}
+
+function jpegOf(width, height, paint, orientation = null) {
+  const data = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) data.set([...paint(x, y), 255], (y * width + x) * 4);
+  const jpg = jpegjs.encode({ data, width, height }, 92).data;
+  return orientation ? Buffer.concat([jpg.subarray(0, 2), exifSegment(orientation), jpg.subarray(2)]) : jpg;
+}
+
+function gifOf(width, height, frames) {
+  const gif = gifenc.GIFEncoder();
+  for (const f of frames) {
+    const palette = [f.color, [0, 0, 0]];
+    const index = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) index[y * width + x] = f.clear?.(x, y) ? 1 : 0;
+    gif.writeFrame(index, width, height, { palette, delay: f.delay * 10, transparent: !!f.clear, transparentIndex: 1, dispose: f.dispose ?? 1, repeat: 0 });
+  }
+  gif.finish();
+  return Buffer.from(gif.bytes());
+}
+
+function readGif(buf) {
+  const reader = new omggif.GifReader(buf);
+  const frames = [];
+  const canvas = new Uint8Array(reader.width * reader.height * 4);
+  for (let i = 0; i < reader.numFrames(); i++) {
+    const info = reader.frameInfo(i);
+    reader.decodeAndBlitFrameRGBA(i, canvas);
+    frames.push({ delay: info.delay, disposal: info.disposal, pixels: Uint8Array.from(canvas) });
+    if (info.disposal === 2) canvas.fill(0);
+  }
+  const at = (frame, x, y) => { const i = (y * reader.width + x) * 4; return [...frames[frame].pixels.subarray(i, i + 4)]; };
+  return { width: reader.width, height: reader.height, frames, at };
+}
+
+const near = (got, want, tol = 40) => Math.abs(got[0] - want[0]) <= tol && Math.abs(got[1] - want[1]) <= tol && Math.abs(got[2] - want[2]) <= tol && (got[3] ?? 255) === 255;
+
+async function jsStudio() {
+  const h = await createHarness({ apps: ['studio'] });
+  const svc = h.engine.service('studio');
+  assert.equal(svc.stats().renderer, 'js');
+  return { h, svc };
+}
+
+test('built-in renderer: a still PNG gets a white caption bar with dark text above the picture', async () => {
+  const { svc } = await jsStudio();
+  const data = pngOf(320, 240, (x) => (x < 160 ? RED : BLUE));
+  let job = null;
+  const out = await svc.produce({ kind: 'caption', data, text: 'when the code works first try', onJob: (j) => { job = j; } });
+  const gif = readGif(out);
+  const bar = job.layout.barHeight;
+  assert.equal(gif.width, 320);
+  assert.equal(gif.height, 240 + bar);
+  assert.equal(gif.frames.length, 1);
+  assert.equal(bar, svc.wrapText('when the code works first try', { width: 320 }).barHeight);
+  for (const y of [0, 1, 2, bar - 1]) for (let x = 0; x < 320; x += 7) assert.deepEqual(gif.at(0, x, y), [255, 255, 255, 255], `bar pixel ${x},${y}`);
+  let dark = 0;
+  for (let y = 0; y < bar; y++) for (let x = 0; x < 320; x++) if (gif.at(0, x, y)[0] < 60) dark++;
+  assert.ok(dark > 300, `text pixels (${dark})`);
+  for (let x = 0; x < 20; x++) assert.deepEqual(gif.at(0, x, Math.floor(bar / 2)), [255, 255, 255, 255], 'margin stays white');
+  assert.ok(near(gif.at(0, 40, bar + 120), RED), `left is red ${gif.at(0, 40, bar + 120)}`);
+  assert.ok(near(gif.at(0, 280, bar + 120), BLUE), `right is blue ${gif.at(0, 280, bar + 120)}`);
+});
+
+test('built-in renderer: text is measured with the bundled font, kerning included', () => {
+  const font = bundledFontPath();
+  assert.ok(font && fs.existsSync(font));
+  const measure = textMeasure(font);
+  assert.ok(measure('AV', 100) < measure('A', 100) + measure('V', 100), 'AV is kerned');
+  assert.ok(measure('Hello there', 40) > 60);
+  assert.equal(measure('😀', 40), 0);
+  const layout = wrapText('a fairly long caption that should wrap onto more than one line here', { width: 320, measure });
+  assert.ok(layout.lines.length > 1);
+  for (const l of layout.lines) assert.ok(measure(l, layout.fontSize) <= 320 - 2 * layout.margin);
+});
+
+test('built-in renderer: a sideways JPEG is turned upright using its EXIF orientation', async () => {
+  const { svc } = await jsStudio();
+  const data = jpegOf(80, 100, (x, y) => (y < 50 ? RED : GREEN), 6);
+  assert.deepEqual(imageSize(data), { width: 100, height: 80, orientation: 6, animated: false });
+  const gif = readGif(await svc.produce({ kind: 'gif', data }));
+  assert.deepEqual([gif.width, gif.height, gif.frames.length], [100, 80, 1]);
+  assert.ok(near(gif.at(0, 85, 40), RED), `right side is red ${gif.at(0, 85, 40)}`);
+  assert.ok(near(gif.at(0, 15, 40), GREEN), `left side is green ${gif.at(0, 15, 40)}`);
+});
+
+test('built-in renderer: big photos are decoded at a reduced scale and still match', () => {
+  const data = jpegOf(1600, 1200, (x, y) => (x < 800 ? RED : y < 600 ? BLUE : GREEN));
+  const full = decodeJpeg(data);
+  assert.deepEqual([full.width, full.height, full.scale], [1600, 1200, 1]);
+  assert.deepEqual(decodeJpeg(data, { needWidth: 480, needHeight: 360 }).scale, 2);
+  const small = decodeJpeg(data, { needWidth: 200, needHeight: 150 });
+  assert.deepEqual([small.width, small.height, small.scale], [200, 150, 8]);
+  const px = (img, x, y) => [...img.data.subarray((y * img.width + x) * 3, (y * img.width + x) * 3 + 3)];
+  assert.ok(near(px(small, 50, 75), RED));
+  assert.ok(near(px(small, 150, 37), BLUE));
+  assert.ok(near(px(small, 150, 112), GREEN));
+  assert.ok(near(px(full, 400, 600), RED));
+});
+
+test('built-in renderer: an animated GIF keeps its frames, delays, transparency and disposal', async () => {
+  const { svc } = await jsStudio();
+  const data = gifOf(64, 48, [
+    { color: RED, delay: 10 },
+    { color: BLUE, delay: 20, dispose: 2 },
+    { color: GREEN, delay: 30, clear: (x) => x >= 32 },
+    { color: YELLOW, delay: 40 },
+  ]);
+  const gif = readGif(await svc.produce({ kind: 'gif', data }));
+  assert.deepEqual([gif.width, gif.height], [64, 48]);
+  assert.deepEqual(gif.frames.map((f) => f.delay), [10, 20, 30, 40]);
+  assert.ok(near(gif.at(0, 10, 10), RED));
+  assert.ok(near(gif.at(1, 50, 30), BLUE));
+  assert.ok(near(gif.at(2, 10, 10), GREEN));
+  assert.equal(gif.at(2, 50, 30)[3], 0, 'the cleared half stays see-through');
+  assert.ok(near(gif.at(3, 50, 30), YELLOW));
+
+  const kept = readGif(await svc.produce({ kind: 'gif', data: gifOf(64, 48, [{ color: RED, delay: 10 }, { color: GREEN, delay: 10, clear: (x) => x >= 32 }]) }));
+  assert.ok(near(kept.at(1, 10, 10), GREEN));
+  assert.ok(near(kept.at(1, 50, 10), RED), 'without disposal the old frame shows through');
+
+  const restored = readGif(await svc.produce({ kind: 'gif', data: gifOf(64, 48, [{ color: RED, delay: 10 }, { color: BLUE, delay: 10, dispose: 3, clear: (x) => x < 32 }, { color: GREEN, delay: 10, clear: (x) => x < 48 }]) }));
+  assert.ok(near(restored.at(1, 50, 10), BLUE));
+  assert.ok(near(restored.at(2, 50, 10), GREEN));
+  assert.ok(near(restored.at(2, 40, 10), RED), 'disposal 3 puts the earlier frame back');
+});
+
+test('built-in renderer: an animated caption keeps the bar on every frame', async () => {
+  const { svc } = await jsStudio();
+  const data = gifOf(160, 120, [{ color: RED, delay: 10 }, { color: BLUE, delay: 10 }, { color: GREEN, delay: 10 }]);
+  let job = null;
+  const gif = readGif(await svc.produce({ kind: 'caption', data, text: 'moving', onJob: (j) => { job = j; } }));
+  const bar = job.layout.barHeight;
+  assert.equal(gif.width, 240);
+  assert.equal(gif.height, 180 + bar);
+  assert.equal(gif.frames.length, 3);
+  for (let f = 0; f < 3; f++) {
+    assert.deepEqual(gif.at(f, 2, 2), [255, 255, 255, 255]);
+    let dark = 0;
+    for (let y = 0; y < bar; y++) for (let x = 0; x < 240; x++) if (gif.at(f, x, y)[0] < 60) dark++;
+    assert.ok(dark > 50, `frame ${f} has text (${dark})`);
+  }
+  assert.ok(near(gif.at(0, 120, bar + 90), RED));
+  assert.ok(near(gif.at(1, 120, bar + 90), BLUE));
+  assert.ok(near(gif.at(2, 120, bar + 90), GREEN));
+});
+
+test('built-in renderer: fast GIFs drop frames to the pass fps and long ones stop at 12 seconds', async () => {
+  const sched = gifSchedule(Array(30).fill(2), 15);
+  assert.ok(sched.length >= 8 && sched.length <= 10, `${sched.length} frames`);
+  assert.equal(sched.reduce((a, s) => a + s.delay, 0), 60);
+  assert.ok(sched.every((s) => s.delay >= 6));
+  assert.equal(gifSchedule(Array(90).fill(7).map((d, i) => (i % 3 === 2 ? 6 : d)), 15).length, 90);
+  const long = gifSchedule(Array(200).fill(10), 15);
+  assert.equal(long.length, 120);
+  assert.equal(long.reduce((a, s) => a + s.delay, 0), 1200);
+  assert.deepEqual(gifSchedule([0, 1, 0], 15).map((s) => s.delay), [10, 10, 10]);
+
+  const { svc } = await jsStudio();
+  const colours = [RED, BLUE, GREEN, YELLOW];
+  const fast = gifOf(32, 24, Array.from({ length: 40 }, (_, i) => ({ color: colours[i % 4], delay: 2 })));
+  const out = readGif(await svc.produce({ kind: 'gif', data: fast }));
+  assert.ok(out.frames.length < 40 && out.frames.length >= 10, `${out.frames.length} frames`);
+  assert.equal(out.frames.reduce((a, f) => a + f.delay, 0), 80);
+});
+
+function noisyGif(width, height, count) {
+  const gif = gifenc.GIFEncoder();
+  const palette = Array.from({ length: 256 }, (_, i) => [i, (i * 7) & 255, (i * 13) & 255]);
+  let seed = 7;
+  for (let f = 0; f < count; f++) {
+    const index = new Uint8Array(width * height);
+    for (let i = 0; i < index.length; i++) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; index[i] = seed >> 23; }
+    gif.writeFrame(index, width, height, { palette: f === 0 ? palette : undefined, delay: 70, repeat: 0 });
+  }
+  gif.finish();
+  return Buffer.from(gif.bytes());
+}
+
+test('built-in renderer: the bot keeps answering while a heavy GIF renders, and only one render runs', async () => {
+  const { svc } = await jsStudio();
+  const data = noisyGif(480, 640, 24);
+  let last = Date.now();
+  let worst = 0;
+  let ticks = 0;
+  const timer = setInterval(() => { const now = Date.now(); worst = Math.max(worst, now - last); last = now; ticks++; }, 10);
+  let most = 0;
+  const watch = setInterval(() => { most = Math.max(most, svc.stats().processes); }, 5);
+  const started = Date.now();
+  try {
+    const outs = await Promise.all([svc.produce({ kind: 'gif', data }), svc.produce({ kind: 'caption', data, text: 'busy' })]);
+    for (const out of outs) assert.equal(out.toString('latin1', 0, 6), 'GIF89a');
+  } finally {
+    clearInterval(timer);
+    clearInterval(watch);
+  }
+  const took = Date.now() - started;
+  assert.ok(took > 200, `the render took a while (${took} ms)`);
+  assert.ok(worst < 250, `longest pause ${worst} ms`);
+  assert.ok(ticks > took / 40, `${ticks} ticks in ${took} ms`);
+  assert.equal(most, 1);
+  assert.equal(svc.stats().processes, 0);
+});
+
+test('built-in renderer: a render that runs out of time is stopped and the worker is gone', async () => {
+  const { h, svc } = await jsStudio();
+  const data = noisyGif(480, 640, 30);
+  svc.setLimits({ renderMs: 50 });
+  let job = null;
+  await assert.rejects(svc.produce({ kind: 'gif', data, onJob: (j) => { job = j; } }), (e) => e.timedOut === true);
+  assert.equal(svc.stats().processes, 0);
+  assert.equal(fs.existsSync(job.dir), false);
+  svc.setFetch(async () => new Response(data, { status: 200 }));
+  await h.dm('gif', { attachments: [pic({ path: 'abc/noise.gif', name: 'noise.gif', width: 480, height: 640 })] });
+  await svc.idle();
+  await h.settle();
+  assert.match(h.textOf(h.lastSent(dmOf(IDS.member))), /took too long/);
+  svc.setLimits();
+  const ok = await svc.produce({ kind: 'gif', data: gifOf(16, 16, [{ color: RED, delay: 10 }, { color: BLUE, delay: 10 }]) });
+  assert.equal(readGif(ok).frames.length, 2);
+});
+
+test('built-in renderer: pictures that are too big or broken are refused kindly', async () => {
+  const { h, svc } = await jsStudio();
+  const huge = gifOf(2100, 2100, [{ color: RED, delay: 10 }, { color: BLUE, delay: 10 }]);
+  await assert.rejects(svc.produce({ kind: 'gif', data: huge }), (e) => e.code === 'animated-pixels');
+  svc.setFetch(async () => new Response(huge, { status: 200 }));
+  await h.dm('gif', { attachments: [pic({ path: 'abc/huge.gif', name: 'huge.gif', width: null, height: null })] });
+  await svc.idle();
+  await h.settle();
+  assert.match(h.textOf(h.lastSent(dmOf(IDS.member))), /too big for me to keep moving/);
+
+  const tooWide = png(5000, 300);
+  await assert.rejects(svc.produce({ kind: 'gif', data: tooWide }), (e) => e.friendly && /5000×300/.test(e.message));
+
+  const broken = Buffer.concat([pngOf(64, 64, () => RED).subarray(0, 60), Buffer.from('not picture data at all '.repeat(20))]);
+  svc.setFetch(async () => new Response(broken, { status: 200 }));
+  await h.dm('gif', { user: IDS.member2, attachments: [pic()] });
+  await svc.idle();
+  await h.settle();
+  const text = h.textOf(h.lastSent(dmOf(IDS.member2)));
+  assert.match(text, /couldn't turn that picture into a GIF/);
+  assert.ok(!/Error|zlib|IDAT|header/.test(text));
+  assert.equal(svc.stats().processes, 0);
+});
+
+test('built-in renderer: the whole DM flow sends a real captioned GIF', async () => {
+  const { h, svc } = await jsStudio();
+  svc.setFetch(async () => new Response(jpegOf(640, 480, (x) => (x < 320 ? GREEN : YELLOW)), { status: 200 }));
+  await h.dm('caption it really works 😀', { attachments: [pic({ path: 'abc/photo.jpg', name: 'photo.jpg', width: 640, height: 480 })] });
+  await svc.idle();
+  await h.settle();
+  const sent = h.sent(dmOf(IDS.member)).filter((m) => m.files?.length);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].files[0].name, 'caption.gif');
+  assert.equal(svc.stats().done, 1);
+});
+
+test('built-in renderer: renderInWorker can be used on its own', async () => {
+  const font = bundledFontPath();
+  const layout = wrapText('hi', { width: 64, measure: textMeasure(font) });
+  const result = await renderInWorker(pngOf(64, 32, () => BLUE), { kind: 'caption', type: 'png', outWidth: 64, outHeight: 32, orientation: 1, animated: false, fps: 15, seconds: 12, layout, fontPath: font });
+  const gif = readGif(Buffer.from(result.output));
+  assert.deepEqual([gif.width, gif.height], [64, 32 + layout.barHeight]);
+  assert.ok(near(gif.at(0, 32, layout.barHeight + 16), BLUE));
+});
+
+test('built-in renderer: still WebP pictures are read', { skip: noFfmpeg }, async () => {
+  const { svc } = await jsStudio();
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'yapos-studio-test-'));
+  try {
+    const file = path.join(dir, 'still.webp');
+    const r = spawnSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=red:size=120x90', '-frames:v', '1', file], { windowsHide: true });
+    assert.equal(r.status, 0, String(r.stderr));
+    const gif = readGif(await svc.produce({ kind: 'gif', data: fs.readFileSync(file) }));
+    assert.deepEqual([gif.width, gif.height], [120, 90]);
+    assert.ok(near(gif.at(0, 60, 45), [255, 0, 0]), `${gif.at(0, 60, 45)}`);
+    const { bomb } = webpBomb(FFMPEG, dir);
+    await assert.rejects(svc.produce({ kind: 'gif', data: bomb }), (e) => e.code === 'pixels');
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+function gifPaint(width, height, frames) {
+  const gif = gifenc.GIFEncoder();
+  for (const f of frames) {
+    const index = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) index[y * width + x] = f.paint(x, y);
+    gif.writeFrame(index, width, height, { palette: f.palette, delay: (f.delay ?? 10) * 10, transparent: f.transparent != null, transparentIndex: f.transparent ?? 0, dispose: f.dispose ?? 1, repeat: 0 });
+  }
+  gif.finish();
+  return Buffer.from(gif.bytes());
+}
+
+function withScreen(buf, width, height) {
+  const out = Buffer.from(buf);
+  out.writeUInt16LE(width, 6);
+  out.writeUInt16LE(height, 8);
+  return out;
+}
+
+function dropControl(buf, keepFrames) {
+  let i = 13;
+  if (buf[10] & 0x80) i += 3 * (1 << ((buf[10] & 7) + 1));
+  const parts = [buf.subarray(0, i)];
+  const skip = (j) => { while (buf[j]) j += buf[j] + 1; return j + 1; };
+  let frame = 0;
+  while (i < buf.length) {
+    if (buf[i] === 0x21) {
+      const end = skip(i + 2);
+      if (buf[i + 1] !== 0xf9 || keepFrames.includes(frame)) parts.push(buf.subarray(i, end));
+      i = end;
+    } else if (buf[i] === 0x2c) {
+      const flags = buf[i + 9];
+      let end = i + 10;
+      if (flags & 0x80) end += 3 * (1 << ((flags & 7) + 1));
+      end = skip(end + 1);
+      parts.push(buf.subarray(i, end));
+      frame++;
+      i = end;
+    } else {
+      parts.push(buf.subarray(i));
+      break;
+    }
+  }
+  return Buffer.concat(parts);
+}
+
+function pngChunk(type, body = Buffer.alloc(0)) {
+  const b = Buffer.alloc(12 + body.length);
+  b.writeUInt32BE(body.length, 0);
+  b.write(type, 4, 'latin1');
+  body.copy(b, 8);
+  return b;
+}
+
+function pngHeader(width, height, depth = 8, colorType = 6) {
+  const body = Buffer.alloc(13);
+  body.writeUInt32BE(width, 0);
+  body.writeUInt32BE(height, 4);
+  body[8] = depth;
+  body[9] = colorType;
+  return pngChunk('IHDR', body);
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+test('built-in renderer: a GIF frame that goes past the picture edge is cut off, not refused', async () => {
+  const { h, svc } = await jsStudio();
+  const frames = [
+    { palette: [RED, BLUE], paint: (x) => (x < 20 ? 0 : 1) },
+    { palette: [GREEN, YELLOW], paint: (x) => (x < 20 ? 0 : 1) },
+    { palette: [BLUE, RED], paint: (x) => (x < 20 ? 0 : 1) },
+  ];
+  const data = withScreen(gifPaint(40, 40, frames), 38, 38);
+  assert.deepEqual(imageSize(data), { width: 38, height: 38, orientation: 1, animated: true });
+  svc.setFetch(async () => new Response(data, { status: 200 }));
+  await h.dm('gif', { attachments: [pic({ path: 'abc/edge.gif', name: 'edge.gif', width: 38, height: 38 })] });
+  await svc.idle();
+  await h.settle();
+  assert.equal(h.sent(dmOf(IDS.member)).filter((m) => m.files?.length).length, 1);
+
+  const gif = readGif(await svc.produce({ kind: 'gif', data }));
+  assert.deepEqual([gif.width, gif.height, gif.frames.length], [38, 38, 3]);
+  for (const y of [0, 20, 37]) {
+    assert.ok(near(gif.at(0, 10, y), RED), `frame 0 left at row ${y}: ${gif.at(0, 10, y)}`);
+    assert.ok(near(gif.at(0, 30, y), BLUE), `frame 0 right at row ${y}: ${gif.at(0, 30, y)}`);
+    assert.ok(near(gif.at(1, 10, y), GREEN));
+    assert.ok(near(gif.at(1, 37, y), YELLOW));
+    assert.ok(near(gif.at(2, 19, y), BLUE));
+  }
+
+  const still = readGif(await svc.produce({ kind: 'gif', data: withScreen(gifPaint(40, 40, frames.slice(0, 1)), 38, 38) }));
+  assert.deepEqual([still.width, still.height, still.frames.length], [38, 38, 1]);
+  assert.ok(near(still.at(0, 10, 37), RED));
+  assert.ok(near(still.at(0, 30, 37), BLUE));
+});
+
+test('built-in renderer: a GIF frame without its own timing block is drawn solid, kept and shown for 0.1 s', async () => {
+  const { svc } = await jsStudio();
+  const source = gifPaint(64, 48, [
+    { palette: [RED, [0, 0, 0]], paint: () => 0, transparent: 1, dispose: 2, delay: 100 },
+    { palette: [BLUE, GREEN], paint: (x) => (x < 32 ? 0 : 1) },
+    { palette: [YELLOW, GREEN], paint: (x) => (x < 16 ? 0 : 1) },
+  ]);
+  const data = dropControl(source, [0]);
+  assert.ok(data.length < source.length);
+  assert.equal(gifFrames(data), 3);
+  const gif = readGif(await svc.produce({ kind: 'gif', data }));
+  assert.deepEqual(gif.frames.map((f) => f.delay), [100, 10, 10]);
+  assert.ok(near(gif.at(0, 10, 10), RED));
+  assert.ok(near(gif.at(1, 10, 10), BLUE));
+  assert.ok(near(gif.at(1, 50, 10), GREEN), `index 1 is solid on a frame with no timing block: ${gif.at(1, 50, 10)}`);
+  assert.ok(near(gif.at(2, 10, 10), YELLOW));
+  assert.ok(near(gif.at(2, 50, 10), GREEN));
+});
+
+test('an Exif orientation is kept when an XMP block follows or comes before it', async () => {
+  const xmp = (() => {
+    const body = Buffer.from('http://ns.adobe.com/xap/1.0/\0<x:xmpmeta xmlns:x="adobe:ns:meta/"/>', 'latin1');
+    const head = Buffer.alloc(4);
+    head.writeUInt16BE(0xffe1, 0);
+    head.writeUInt16BE(body.length + 2, 2);
+    return Buffer.concat([head, body]);
+  })();
+  const sof = jpegHead(200, 100).subarray(2);
+  const soi = Buffer.from([0xff, 0xd8]);
+  assert.deepEqual(imageSize(Buffer.concat([soi, exifSegment(6), xmp, sof])), { width: 100, height: 200, orientation: 6, animated: false });
+  assert.deepEqual(imageSize(Buffer.concat([soi, xmp, exifSegment(8), sof])), { width: 100, height: 200, orientation: 8, animated: false });
+  assert.deepEqual(imageSize(Buffer.concat([soi, exifSegment(6), exifSegment(1), sof])).orientation, 6);
+  assert.deepEqual(imageSize(Buffer.concat([soi, xmp, sof])), { width: 200, height: 100, orientation: 1, animated: false });
+
+  const { svc } = await jsStudio();
+  const plain = jpegOf(80, 100, (x, y) => (y < 50 ? RED : GREEN));
+  const data = Buffer.concat([plain.subarray(0, 2), exifSegment(6), xmp, plain.subarray(2)]);
+  assert.deepEqual(imageSize(data), { width: 100, height: 80, orientation: 6, animated: false });
+  const gif = readGif(await svc.produce({ kind: 'gif', data }));
+  assert.deepEqual([gif.width, gif.height], [100, 80]);
+  assert.ok(near(gif.at(0, 85, 40), RED), `right side is red ${gif.at(0, 85, 40)}`);
+  assert.ok(near(gif.at(0, 15, 40), GREEN), `left side is green ${gif.at(0, 15, 40)}`);
+});
+
+test('built-in renderer: a PNG with a second header is refused before any big memory is used', async () => {
+  const idat = pngChunk('IDAT', zlib.deflateSync(Buffer.alloc(5)));
+  const sneaky = Buffer.concat([PNG_SIGNATURE, pngHeader(1, 1), pngHeader(16777216, 1, 16, 6), idat, pngChunk('IEND')]);
+  assert.ok(sneaky.length < 120);
+  assert.deepEqual(imageSize(sneaky), { width: 1, height: 1, orientation: 1, animated: false });
+  assert.throws(() => readPngChunks(sneaky), /more than one header/);
+  assert.throws(() => readPngChunks(Buffer.concat([PNG_SIGNATURE, idat, pngHeader(1, 1), pngChunk('IEND')])), /header is not first/);
+  assert.throws(() => readPngChunks(Buffer.concat([PNG_SIGNATURE, pngChunk('PLTE', Buffer.alloc(3)), pngHeader(1, 1), idat])), /header is not first/);
+
+  const onRow = () => {};
+  await assert.rejects(decodePng(Buffer.concat([PNG_SIGNATURE, pngHeader(8192, 2), idat, pngChunk('IEND')]), { maxPixels: 4096 * 4096, onRow }), (e) => e.code === 'pixels');
+  await assert.rejects(decodePng(pngOf(8, 4, () => RED), { expectWidth: 4, expectHeight: 8, onRow }), (e) => e.code === 'pixels');
+
+  const { h, svc } = await jsStudio();
+  const before = process.memoryUsage().rss;
+  await assert.rejects(svc.produce({ kind: 'gif', data: sneaky }), (e) => e.code === 'decode' && /more than one header/.test(e.message));
+  assert.ok(process.memoryUsage().rss - before < 64 * MB, 'no big buffers were made');
+  svc.setFetch(async () => new Response(sneaky, { status: 200 }));
+  await h.dm('gif', { attachments: [pic()] });
+  await svc.idle();
+  await h.settle();
+  assert.match(h.textOf(h.lastSent(dmOf(IDS.member))), /couldn't turn that picture into a GIF/);
+
+  const job = { kind: 'gif', type: 'png', outWidth: 32, outHeight: 16, orientation: 1, animated: false, fps: 15, seconds: 12, layout: null, fontPath: null };
+  await assert.rejects(renderInWorker(pngOf(64, 32, () => BLUE), { ...job, srcWidth: 32, srcHeight: 16 }), (e) => e.code === 'pixels');
+  const ok = await renderInWorker(pngOf(64, 32, () => BLUE), { ...job, srcWidth: 64, srcHeight: 32 });
+  assert.deepEqual([readGif(Buffer.from(ok.output)).width, readGif(Buffer.from(ok.output)).height], [32, 16]);
+});
+
+test('built-in renderer: the worker memory budget refuses GIFs with thousands of frames and huge still pictures', async () => {
+  assert.ok(LIMITS.maxCoefBytes <= 40 * MB);
+  assert.ok(4096 * 4096 * 3 * 2 > LIMITS.maxCoefBytes, 'a 4:4:4 progressive 16 MP photo is refused');
+  assert.ok(4000 * 3000 * 1.5 * 2 <= LIMITS.maxCoefBytes, 'a 12 MP 4:2:0 progressive photo still fits');
+  assert.ok(LIMITS.maxWebpPixels <= 8.5 * 1024 * 1024);
+  assert.ok(LIMITS.maxStillGifPixels <= 8.5 * 1024 * 1024);
+
+  const { h, svc } = await jsStudio();
+  const many = gifPaint(1, 1, Array.from({ length: LIMITS.maxGifFrames + 1 }, (_, i) => ({ palette: [i % 2 ? RED : BLUE, [0, 0, 0]], paint: () => 0, delay: 2 })));
+  await assert.rejects(svc.produce({ kind: 'gif', data: many }), (e) => e.code === 'frames');
+  const enough = gifPaint(1, 1, Array.from({ length: 50 }, (_, i) => ({ palette: [i % 2 ? RED : BLUE, [0, 0, 0]], paint: () => 0, delay: 2 })));
+  assert.ok(readGif(await svc.produce({ kind: 'gif', data: enough })).frames.length > 1);
+
+  const bigStill = withScreen(gifPaint(1, 1, [{ palette: [RED, BLUE], paint: () => 0 }]), 3000, 3000);
+  await assert.rejects(svc.produce({ kind: 'gif', data: bigStill }), (e) => e.code === 'big-still');
+
+  svc.setFetch(async () => new Response(many, { status: 200 }));
+  await h.dm('gif', { attachments: [pic({ path: 'abc/long.gif', name: 'long.gif', width: 1, height: 1 })] });
+  await svc.idle();
+  await h.settle();
+  assert.match(h.textOf(h.lastSent(dmOf(IDS.member))), /too many frames/);
+  svc.setFetch(async () => new Response(bigStill, { status: 200 }));
+  await h.dm('gif', { user: IDS.member2, attachments: [pic({ path: 'abc/big.gif', name: 'big.gif', width: 3000, height: 3000 })] });
+  await svc.idle();
+  await h.settle();
+  assert.match(h.textOf(h.lastSent(dmOf(IDS.member2))), /Try one under 2880×2880/);
 });

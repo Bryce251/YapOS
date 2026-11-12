@@ -11,5 +11,16 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "@expo-google-fonts/roboto-condensed": "0.4.2",
+    "@jsquash/webp": "1.5.0",
+    "gifenc": "1.0.3",
+    "omggif": "1.0.10",
+    "opentype.js": "2.0.0",
+    "pngjs": "7.0.0"
+  },
+  "devDependencies": {
+    "jpeg-js": "0.4.4"
   }
 }

@@ -31,7 +31,7 @@ Needs Node.js 18 or newer (22+ so the live gateway is used; older versions fall 
 | Roles | `/roles` |
 | Levels | `/rank` `/leaderboard` `/levels` |
 | Tickets | `/ticket` `/tickets` |
-| Studio | `/caption` `/gif` (needs ffmpeg installed) |
+| Studio | `/caption` `/gif` (works anywhere, no ffmpeg needed) |
 | Economy | `/daily` `/beg` `/balance` `/shop` `/economy` |
 | Engage | `/poll` `/giveaway` |
 | Starboard | `/starboard` (react ⭐ to send great messages to a hall of fame) |
@@ -73,5 +73,6 @@ Runs the whole bot offline against a simulated Yapin' server: messages, slash co
 | `token` | `YAPPER_BOT_TOKEN` | |
 | `verified` | `YAPOS_VERIFIED` | `false` (300 messages/min once verified) |
 | `ownerId` | `YAPOS_OWNER_ID` | |
-| `dataDir` | `YAPOS_DATA_DIR` | `data` |
+| `dataDir` | `YAPOS_DATA_DIR` | `data` (use `/data` on Yapin' Bot hosting, the only folder kept when the code updates) |
 | `gateway` | `YAPOS_GATEWAY` | `true` |
+| | `YAPOS_STUDIO_RENDERER` | built in (set `ffmpeg` to use ffmpeg instead, with `YAPOS_FFMPEG` for its path) |
