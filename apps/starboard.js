@@ -4,6 +4,7 @@ import { customId } from '../engine/router.js';
 import { tokenize, clip } from '../engine/parse.js';
 import { messageFiles, messageLink, isPicture } from '../engine/links.js';
 import { explain } from '../engine/errors.js';
+import { accept, reject, isBlank, boolField, channelById } from '../engine/dashboard.js';
 
 const ID = 'starboard';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -239,23 +240,32 @@ function infoView(ctx) {
 
 async function setChannel(ctx, token) {
   const ch = await ctx.findChannel(token);
-  if (!ch) return ctx.warn("I couldn't find that channel", 'Mention it like `/starboard #starboard`, or type its name.');
+  if (!ch) return ctx.warn("I couldn't find that channel", CHANNEL_HELP);
   const can = await ctx.engine.perms.botCan(ctx.serverId, 'send_messages', 'embed_links').catch(() => ({ ok: true }));
   ctx.patchConfig({ channelId: ch.id });
   const warn = can.ok === false ? `\n-# I may be missing **Send Messages** or **Embed Links**. Check my role can post in <#${ch.id}>.` : '';
   return ctx.ok('Starboard is on', `Messages with **${clampThreshold(ctx.config().threshold)}** ${ctx.config().emoji || DEFAULT_EMOJI} go to <#${ch.id}>.${warn}`);
 }
 
-function setThreshold(ctx, raw) {
+const THRESHOLD_HELP = `Pick a whole number from 1 to ${MAX_THRESHOLD}, like \`/starboard 5\`.`;
+const EMOJI_HELP = 'Send one emoji, like `/starboard emoji 🌟`.';
+const CHANNEL_HELP = 'Mention it like `/starboard #starboard`, or type its name.';
+
+function checkThreshold(raw) {
   const n = Number(String(raw ?? '').trim());
-  if (!Number.isInteger(n) || n < 1 || n > MAX_THRESHOLD) return ctx.warn('How many stars?', `Pick a whole number from 1 to ${MAX_THRESHOLD}, like \`/starboard 5\`.`);
+  return Number.isInteger(n) && n >= 1 && n <= MAX_THRESHOLD ? n : null;
+}
+
+function setThreshold(ctx, raw) {
+  const n = checkThreshold(raw);
+  if (n === null) return ctx.warn('How many stars?', THRESHOLD_HELP);
   ctx.patchConfig({ threshold: n });
   return ctx.ok('Saved', `A message needs **${n}** ${ctx.config().emoji || DEFAULT_EMOJI} to reach the starboard.`);
 }
 
 function setEmoji(ctx, raw) {
   const e = cleanEmoji(raw);
-  if (!e) return ctx.warn("That emoji didn't work", 'Send one emoji, like `/starboard emoji 🌟`.');
+  if (!e) return ctx.warn("That emoji didn't work", EMOJI_HELP);
   ctx.patchConfig({ emoji: e });
   return ctx.ok('Saved', `People now react with ${e} to star messages.`);
 }
@@ -286,6 +296,35 @@ async function runStarboard(ctx) {
 
 const admin = (run) => ({ perm: 'admin', run: async (ctx) => { await ctx.require('admin'); return run(ctx); } });
 const refresh = (ctx) => ctx.update(settingsView(ctx));
+
+const DASHBOARD = [
+  {
+    key: 'channelId', label: 'Starboard channel', type: 'channel', web: true,
+    help: 'Where starred messages are copied. Empty turns the starboard off.',
+    validate: async (ctx, v) => {
+      if (isBlank(v)) return accept(null);
+      const ch = await channelById(ctx, v);
+      return ch ? accept(ch.id) : reject(CHANNEL_HELP);
+    },
+  },
+  {
+    key: 'emoji', label: 'Star emoji', type: 'emoji', web: true, maxLength: 80,
+    help: 'The reaction people use to star a message.',
+    validate: (ctx, v) => {
+      const e = typeof v === 'string' && v.length <= 80 ? cleanEmoji(v) : null;
+      return e ? accept(e) : reject(EMOJI_HELP);
+    },
+  },
+  {
+    key: 'threshold', label: 'Stars needed', type: 'number', web: true, min: 1, max: MAX_THRESHOLD, step: 1,
+    help: 'How many star reactions a message needs to reach the starboard.',
+    validate: (ctx, v) => {
+      const n = checkThreshold(v);
+      return n === null ? reject(THRESHOLD_HELP) : accept(n);
+    },
+  },
+  boolField({ key: 'selfStar', label: 'Count own stars', help: "Whether a member's star on their own message counts." }),
+];
 
 export const { setup, teardown, check } = defineApp({
   id: ID,
@@ -325,6 +364,8 @@ export const { setup, teardown, check } = defineApp({
   yap: [
     { words: ['starboard', 'stars', 'hof'], run: runStarboard },
   ],
+
+  dashboard: DASHBOARD,
 
   panel: async (ctx) => {
     const admin = ctx.engine.perms.atLeast(await ctx.level().catch(() => 'member'), 'admin');

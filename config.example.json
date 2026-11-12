@@ -3,5 +3,7 @@
   "verified": false,
   "ownerId": "",
   "dataDir": "data",
-  "gateway": true
+  "gateway": true,
+  "dashboardUrl": "",
+  "dashboardSecret": ""
 }

@@ -4,6 +4,7 @@ import { customId } from '../engine/router.js';
 import { formatDuration, didYouMean, tokenize } from '../engine/parse.js';
 import { VERSION } from '../engine/config.js';
 import { VERSION as SDK_VERSION } from '../engine/sdk.js';
+import { accept, reject, toBool, plainObject, SLUG_RE } from '../engine/dashboard.js';
 
 const ID = 'system';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -232,6 +233,46 @@ async function openApp(ctx, asked) {
   return a.def.panel(onHome ? showInPlace(appCtx) : appCtx);
 }
 
+const SLUG_HELP = 'Use 3 to 32 lowercase letters, numbers or dashes, like my-server.';
+
+function validatePublicPage(ctx, v) {
+  if (!plainObject(v)) return reject('Turn the public page on or off.');
+  const on = toBool(v.enabled);
+  if (on === null) return reject('Turn the public page on or off.');
+  const cur = ctx.core().publicPage;
+  let slug = plainObject(cur) && typeof cur.slug === 'string' ? cur.slug : null;
+  if (v.slug !== undefined && v.slug !== null && v.slug !== '') {
+    const typed = typeof v.slug === 'string' ? v.slug.trim() : '';
+    if (!SLUG_RE.test(typed)) return reject(SLUG_HELP);
+    slug = typed;
+  }
+  if (on && !slug) return reject(`Pick a link name for the page first. ${SLUG_HELP}`);
+  return accept({ enabled: on, slug });
+}
+
+async function savePublicPage(ctx, value) {
+  const { engine, serverId } = ctx;
+  const prev = engine.settings.core(serverId).publicPage ?? null;
+  engine.settings.patchCore(serverId, { publicPage: value });
+  const r = value.enabled ? await engine.dashboard?.publishPublic(serverId) : await engine.dashboard?.unpublishPublic(serverId);
+  if (r?.ok) return undefined;
+  engine.settings.patchCore(serverId, { publicPage: prev });
+  if (r?.status === 409) return { error: 'That link name is taken. Pick another one.' };
+  return { error: "I couldn't update the public page right now. Try again in a minute." };
+}
+
+const DASHBOARD = [
+  {
+    key: 'publicPage', label: 'Public page', type: 'complex', web: true,
+    default: { enabled: false, slug: null },
+    help: 'A public leaderboard page for this server: levels, coins and last month\'s Wrapped. Off until you turn it on.',
+    note: 'Change it on the Public page tab.',
+    read: (cfg, core) => (plainObject(core.publicPage) ? { enabled: core.publicPage.enabled === true, slug: core.publicPage.slug ?? null } : { enabled: false, slug: null }),
+    validate: validatePublicPage,
+    save: savePublicPage,
+  },
+];
+
 export const { setup, teardown, check } = defineApp({
   id: ID,
   name: 'System',
@@ -279,6 +320,8 @@ export const { setup, teardown, check } = defineApp({
       await msg.reply(`👋 Hi! I'm ${VERSION.full}. **YapOS Pocket**, my DM assistant, isn't switched on right now. In a server, try **/menu**.`).catch(() => {});
     },
   },
+
+  dashboard: DASHBOARD,
 
   help: ['/menu shows a tile for every app you can use. Tiles open right on the home screen, and **⬅️ Home** brings you back.', '/status shows the connection, message budget and which testing features work on this server.'],
 });

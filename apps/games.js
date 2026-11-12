@@ -3,6 +3,7 @@ import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
 import { tokenize, didYouMean, clip } from '../engine/parse.js';
+import { accept as acceptValue, reject as rejectValue, boolField } from '../engine/dashboard.js';
 
 const ID = 'games';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -1404,6 +1405,39 @@ function wholeNumber(text) {
   return /^\d+$/.test(s) ? Number(s) : NaN;
 }
 
+const MAXBET_HELP = `Use a whole number from 1 to ${MAX_BET_LIMIT.toLocaleString('en-US')}, like \`/game maxbet 500\`.`;
+const PRIZE_HELP = 'Use a whole number of coins, like `/game prize 50`, or `0` to turn it off.';
+
+function checkMaxBet(raw) {
+  const n = wholeNumber(raw);
+  return Number.isInteger(n) && n >= 1 && n <= MAX_BET_LIMIT ? n : null;
+}
+
+function checkPrize(raw) {
+  const n = /^off$/i.test(String(raw ?? '')) ? 0 : wholeNumber(raw);
+  return Number.isInteger(n) && n >= 0 && n <= MAX_BET_LIMIT ? n : null;
+}
+
+const DASHBOARD = [
+  boolField({ key: 'bets', label: 'Allow coin bets', help: "Lets players add 'bet 50' to a game to play for Economy coins." }),
+  {
+    key: 'maxBet', label: 'Biggest bet allowed', type: 'number', web: true, min: 1, max: MAX_BET_LIMIT, step: 1,
+    help: 'The largest number of coins one player can bet on a game.',
+    validate: (ctx, v) => {
+      const n = checkMaxBet(v);
+      return n === null ? rejectValue(MAXBET_HELP) : acceptValue(n);
+    },
+  },
+  {
+    key: 'triviaPrize', label: 'Trivia round prize (coins)', type: 'number', web: true, min: 0, max: MAX_BET_LIMIT, step: 1,
+    help: 'Coins paid to the winner of a trivia round of 3 or more questions. 0 turns it off.',
+    validate: (ctx, v) => {
+      const n = checkPrize(v);
+      return n === null ? rejectValue(PRIZE_HELP) : acceptValue(n);
+    },
+  },
+];
+
 async function adminSetting(ctx, sub, rest) {
   await ctx.require('admin');
   const { engine } = ctx;
@@ -1416,14 +1450,14 @@ async function adminSetting(ctx, sub, rest) {
     return ctx.ok('Saved', next ? 'People can bet coins on games now.' : 'Betting is off. Games still work without bets.');
   }
   if (sub === 'maxbet') {
-    const n = wholeNumber(rest[0]);
-    if (!Number.isInteger(n) || n < 1 || n > MAX_BET_LIMIT) return ctx.warn("That didn't work", `Use a whole number from 1 to ${MAX_BET_LIMIT.toLocaleString('en-US')}, like \`/game maxbet 500\`.`);
+    const n = checkMaxBet(rest[0]);
+    if (n === null) return ctx.warn("That didn't work", MAXBET_HELP);
     ctx.patchConfig({ maxBet: n });
     return ctx.ok('Saved', `The biggest bet is now ${money(engine, sid, n)}.`);
   }
   if (sub === 'prize') {
-    const n = /^off$/i.test(rest[0] || '') ? 0 : wholeNumber(rest[0]);
-    if (!Number.isInteger(n) || n < 0 || n > MAX_BET_LIMIT) return ctx.warn("That didn't work", 'Use a whole number of coins, like `/game prize 50`, or `0` to turn it off.');
+    const n = checkPrize(rest[0]);
+    if (n === null) return ctx.warn("That didn't work", PRIZE_HELP);
     ctx.patchConfig({ triviaPrize: n });
     return ctx.ok('Saved', n ? `The winner of a trivia round (${PRIZE_ROUND_MIN}+ questions) gets ${money(engine, sid, n)}.` : 'Trivia rounds give no coins now.');
   }
@@ -1489,6 +1523,8 @@ export const { setup, teardown, check } = defineApp({
     maxBet: 1000,
     triviaPrize: 25,
   },
+
+  dashboard: DASHBOARD,
 
   commands: {
     game: { description: 'Play someone: /game tictactoe @sam, /game connect4 @sam, /game rps @sam bet 50, /game list', run: (ctx) => runGame(ctx, ctx.argv) },

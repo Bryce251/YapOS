@@ -24,13 +24,26 @@ export function loadConfig({ root = ROOT, env = process.env } = {}) {
   if (env.YAPOS_OWNER_ID) cfg.ownerId = env.YAPOS_OWNER_ID.trim();
   if (env.YAPOS_DATA_DIR) cfg.dataDir = env.YAPOS_DATA_DIR;
   if (env.YAPOS_GATEWAY) cfg.gateway = !/^(0|false|no|off)$/i.test(env.YAPOS_GATEWAY);
+  if (env.YAPOS_DASHBOARD_URL) cfg.dashboardUrl = env.YAPOS_DASHBOARD_URL.trim();
+  if (env.YAPOS_DASHBOARD_SECRET) cfg.dashboardSecret = env.YAPOS_DASHBOARD_SECRET.trim();
+  cfg.dashboardUrl = typeof cfg.dashboardUrl === 'string' ? cfg.dashboardUrl.trim() : '';
+  cfg.dashboardSecret = typeof cfg.dashboardSecret === 'string' ? cfg.dashboardSecret.trim() : '';
+  hideSecret(cfg.dashboardSecret);
   cfg.dataPath = path.isAbsolute(cfg.dataDir) ? cfg.dataDir : path.join(root, cfg.dataDir);
   if (cfg.token && cfg.token.startsWith('yb_paste')) cfg.token = '';
   return cfg;
 }
 
+const SECRETS = new Set();
+
+export function hideSecret(value) {
+  if (typeof value === 'string' && value.trim().length >= 6) SECRETS.add(value.trim());
+}
+
 export function redact(text) {
-  return String(text)
+  let out = String(text);
+  for (const s of SECRETS) out = out.split(s).join('[hidden]');
+  return out
     .replace(/yb_[A-Za-z0-9_\-.]+/g, 'yb_[hidden]')
     .replace(/yo_[A-Za-z0-9_\-.]{8,}/g, 'yo_[hidden]')
     .replace(/(\/interactions\/[^/\s]+\/)[^/\s]+/g, '$1[hidden]')

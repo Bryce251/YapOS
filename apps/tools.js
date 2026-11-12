@@ -1488,6 +1488,8 @@ export const { setup, teardown, check } = defineApp({
     { words: ['schedule', 'scheduled'], run: runSchedule },
   ],
 
+  dashboard: [],
+
   panel,
 
   help: [

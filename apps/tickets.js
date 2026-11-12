@@ -3,6 +3,7 @@ import { card, dialog, button, row, rows, select, freeze, ICONS } from '../engin
 import { customId } from '../engine/router.js';
 import { tokenize, clip, normalizeName, didYouMean, parseBool, fuzzyFind, formatDuration, ID_RE } from '../engine/parse.js';
 import { explain, looksLikeFeatureOff } from '../engine/errors.js';
+import { accept, reject, isBlank, boolField, idList, safeId, plainObject, channelById, roleById } from '../engine/dashboard.js';
 
 const ID = 'tickets';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -1435,6 +1436,12 @@ async function askPanelChannel(ctx) {
   return engine.caps.attempt(ctx.serverId, 'selects', asSelect, asButtons);
 }
 
+function categoryMissing(cats, text) {
+  const names = cats.map((c) => c.name);
+  const guess = didYouMean(text, names);
+  return `${cats.length ? `Categories here: ${names.map((n) => `**${n}**`).join(', ')}.` : 'This server has no channel categories yet. Make one in Server settings, then try again.'}${guess.length ? `\nDid you mean **${guess[0]}**?` : ''}`;
+}
+
 async function setCategory(ctx, text) {
   if (!text || OFF_WORDS.test(text)) {
     ctx.patchConfig({ categoryId: null, categoryName: null });
@@ -1442,11 +1449,7 @@ async function setCategory(ctx, text) {
   }
   const cats = await ctx.bot.categories(ctx.serverId).catch(() => []) || [];
   const hit = cats.find((c) => c.id === text) || fuzzyFind(text, cats)?.item;
-  if (!hit) {
-    const names = cats.map((c) => c.name);
-    const guess = didYouMean(text, names);
-    return ctx.warn("I couldn't find that category", `${cats.length ? `Categories here: ${names.map((n) => `**${n}**`).join(', ')}.` : 'This server has no channel categories yet. Make one in Server settings, then try again.'}${guess.length ? `\nDid you mean **${guess[0]}**?` : ''}`);
-  }
+  if (!hit) return ctx.warn("I couldn't find that category", categoryMissing(cats, text));
   ctx.patchConfig({ categoryId: hit.id, categoryName: hit.name });
   return ctx.ok('Category set', `New tickets go in **${hit.name}**.`);
 }
@@ -1479,9 +1482,16 @@ async function setLog(ctx, text) {
   return ctx.ok('Ticket log set', `Transcripts and ticket notes go to <#${ch.id}>.`);
 }
 
-async function setLimit(ctx, text) {
+const LIMIT_HELP = `Use a whole number from 1 to ${MAX_LIMIT}, like \`/tickets limit 1\`.`;
+
+function checkLimit(text) {
   const n = Number(String(text || '').trim());
-  if (!Number.isInteger(n) || n < 1 || n > MAX_LIMIT) return ctx.warn("That number didn't work", `Use a whole number from 1 to ${MAX_LIMIT}, like \`/tickets limit 1\`.`);
+  return Number.isInteger(n) && n >= 1 && n <= MAX_LIMIT ? n : null;
+}
+
+async function setLimit(ctx, text) {
+  const n = checkLimit(text);
+  if (n === null) return ctx.warn("That number didn't work", LIMIT_HELP);
   ctx.patchConfig({ limit: n });
   return ctx.ok('Limit saved', `Each person can have ${plural(n, 'open ticket')} at a time.`);
 }
@@ -1519,6 +1529,13 @@ function findType(cfg, word) {
   return types.find((t) => t.id === w || normalizeName(t.name) === w) || types.find((t) => normalizeName(t.name).split('-')[0] === w) || null;
 }
 
+function typeStaffProblem(roles, sid) {
+  if (roles.length > MAX_TYPE_STAFF) return { title: 'That is a lot of roles', body: `Each type can have up to ${MAX_TYPE_STAFF} extra staff roles.` };
+  const auto = roles.find((r) => r.auto && r.auto !== 'none') || roles.find((r) => /^@?everyone$/i.test(r.name) || r.id === sid);
+  if (auto) return { title: "That role can't be ticket staff", body: `**${auto.name}** is given to everyone automatically, so every member would see these tickets.` };
+  return null;
+}
+
 async function setTypeStaff(ctx, typeId, tokens) {
   const cfg = ctx.config();
   const types = typesOf(cfg);
@@ -1533,9 +1550,8 @@ async function setTypeStaff(ctx, typeId, tokens) {
     }
     if (missing.length) return ctx.warn("I couldn't find some roles", `No role matches ${missing.map((x) => `**${clip(x, 30)}**`).join(', ')}. Mention them, like @Helpers.`);
     roles = roles.filter((r, i) => roles.findIndex((x) => x.id === r.id) === i);
-    if (roles.length > MAX_TYPE_STAFF) return ctx.warn('That is a lot of roles', `Each type can have up to ${MAX_TYPE_STAFF} extra staff roles.`);
-    const auto = roles.find((r) => r.auto && r.auto !== 'none') || roles.find((r) => /^@?everyone$/i.test(r.name) || r.id === ctx.serverId);
-    if (auto) return ctx.warn("That role can't be ticket staff", `**${auto.name}** is given to everyone automatically, so every member would see these tickets.`);
+    const problem = typeStaffProblem(roles, ctx.serverId);
+    if (problem) return ctx.warn(problem.title, problem.body);
   }
   const next = types.map((t) => (t.id === type.id ? { ...t, staffRoles: roles.map((r) => r.id) } : t));
   ctx.patchConfig({ types: next });
@@ -1697,6 +1713,98 @@ async function showPanel(ctx) {
   return openPrompt(ctx);
 }
 
+const ROLES_MISSING = (ids) => `No role matches ${ids.map((m) => `**${clip(m, 30)}**`).join(', ') || 'that'}. Mention them, like @Moderator.`;
+
+async function rolesFrom(ctx, v) {
+  const ids = idList(v);
+  if (!ids) return { error: ROLES_MISSING([]) };
+  const found = [];
+  const missing = [];
+  for (const id of ids) {
+    const r = await roleById(ctx, id);
+    if (r) found.push(r); else missing.push(id);
+  }
+  if (missing.length) return { error: ROLES_MISSING(missing) };
+  return { roles: found.filter((r, i) => found.findIndex((x) => x.id === r.id) === i) };
+}
+
+const DASHBOARD = [
+  {
+    key: 'staffRoles', label: 'Ticket staff roles', type: 'roles', web: true,
+    help: 'Roles that see and handle every new ticket. Empty means anyone who is a mod or admin.',
+    validate: async (ctx, v) => {
+      const r = await rolesFrom(ctx, v);
+      return r.error ? reject(r.error) : accept(uniq(r.roles.map((x) => x.id)));
+    },
+  },
+  {
+    key: 'logChannelId', label: 'Ticket log channel', type: 'channel', web: true,
+    help: 'Where transcripts, close summaries and ratings go. Empty uses the server log channel.',
+    validate: async (ctx, v) => {
+      if (isBlank(v) || (typeof v === 'string' && OFF_WORDS.test(v.trim()))) return accept(null);
+      const ch = await channelById(ctx, v);
+      return ch ? accept(ch.id) : reject('Mention it, like `/tickets log #ticket-logs`.');
+    },
+  },
+  {
+    key: 'categoryId', label: 'Ticket category', type: 'category', web: true,
+    help: 'The channel category new tickets go in. Empty puts them at the top of the channel list.',
+    validate: async (ctx, v) => {
+      if (isBlank(v) || (typeof v === 'string' && OFF_WORDS.test(v.trim()))) return accept(null);
+      const cats = await ctx.bot.categories(ctx.serverId).catch(() => []) || [];
+      const id = safeId(v);
+      const hit = id ? cats.find((c) => c.id === id) : null;
+      return hit ? accept(hit.id) : reject(categoryMissing(cats, String(v)));
+    },
+    save: async (ctx, value) => {
+      if (!value) { ctx.patchConfig({ categoryId: null, categoryName: null }); return { applied: { categoryId: null, categoryName: null } }; }
+      const cats = await ctx.bot.categories(ctx.serverId).catch(() => []) || [];
+      const hit = cats.find((c) => c.id === value);
+      if (!hit) return { error: categoryMissing(cats, value) };
+      ctx.patchConfig({ categoryId: hit.id, categoryName: hit.name });
+      return { applied: { categoryId: hit.id, categoryName: hit.name } };
+    },
+  },
+  { key: 'categoryName', label: 'Ticket category name', type: 'string', web: false, help: 'Shown in the panel.', note: 'Set together with the ticket category.' },
+  {
+    key: 'limit', label: 'Open tickets per person', type: 'number', web: true, min: 1, max: MAX_LIMIT, step: 1,
+    help: 'How many open tickets one person can have at a time.',
+    validate: (ctx, v) => {
+      const n = checkLimit(v);
+      return n === null ? reject(LIMIT_HELP) : accept(n);
+    },
+  },
+  boolField({ key: 'pingStaff', label: 'Ping staff on new tickets', help: 'New tickets mention the staff roles.' }),
+  { key: 'autoCloseHours', label: 'Auto-close quiet tickets after (hours)', type: 'number', web: false, min: 0, max: MAX_AUTOCLOSE_HOURS, help: '0 keeps quiet tickets open.', note: 'Change it in the server with /tickets autoclose 48, so open tickets get rescheduled.' },
+  { key: 'types', label: 'Ticket types', type: 'complex', web: false, help: 'The kinds of tickets people can open, with their questions.', note: 'Edit them in the server with /tickets types, which also updates the posted panel.' },
+  {
+    key: 'typeStaff', label: 'Extra staff per type', type: 'complex', web: true,
+    help: 'Extra roles that see new tickets of one type, on top of the main ticket staff.',
+    read: (cfg) => Object.fromEntries(typesOf(cfg).map((t) => [t.id, t.staffRoles])),
+    validate: async (ctx, v) => {
+      if (!plainObject(v)) return reject('Pick roles for each ticket type.');
+      const types = typesOf(ctx.config());
+      const out = {};
+      for (const [typeId, list] of Object.entries(v)) {
+        if (!types.some((t) => t.id === typeId)) return reject('Open `/tickets` again to see the current types.');
+        const r = await rolesFrom(ctx, list);
+        if (r.error) return reject(r.error);
+        const problem = typeStaffProblem(r.roles, ctx.serverId);
+        if (problem) return reject(problem.body);
+        out[typeId] = r.roles.map((x) => x.id);
+      }
+      return accept(out);
+    },
+    save: (ctx, value) => {
+      const next = typesOf(ctx.config()).map((t) => (Object.hasOwn(value, t.id) ? { ...t, staffRoles: value[t.id] } : t));
+      ctx.patchConfig({ types: next });
+      return { applied: { typeStaff: Object.fromEntries(next.map((t) => [t.id, t.staffRoles])) } };
+    },
+  },
+  { key: 'panelChannelId', label: 'Open-ticket panel channel', type: 'channel', web: false, help: 'Where the Open a ticket panel is posted.', note: 'Post the panel in the server with /tickets panel #channel.' },
+  { key: 'panelMessageId', label: 'Open-ticket panel message', type: 'string', web: false, help: 'The posted panel message.', note: 'Set when the panel is posted with /tickets panel #channel.' },
+];
+
 export const { setup, teardown, check } = defineApp({
   id: ID,
   name: 'Tickets',
@@ -1717,6 +1825,8 @@ export const { setup, teardown, check } = defineApp({
     panelMessageId: null,
     autoCloseHours: 0,
   },
+
+  dashboard: DASHBOARD,
 
   jobs: {
     quietwarn: quietWarnJob,

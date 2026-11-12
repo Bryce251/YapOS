@@ -3,6 +3,7 @@ import { card, dialog, button, row, select, onOff, ICONS } from '../engine/ui.js
 import { customId } from '../engine/router.js';
 import { tokenize, didYouMean, roleId as parseRoleId, channelId as parseChannelId, formatDuration, clip } from '../engine/parse.js';
 import { looksLikeFeatureOff } from '../engine/errors.js';
+import { accept, reject, toBool, plainObject, idList, channelById, roleById } from '../engine/dashboard.js';
 
 const ID = 'automod';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -840,6 +841,12 @@ async function setFilter(ctx, key, on) {
   return changed(ctx, `${f.label} ${value ? 'on' : 'off'}`, `${f.emoji} **${f.label}** is now ${value ? 'on' : 'off'}.${hint}`, before);
 }
 
+function freshWords(list, items) {
+  return items.filter((w) => normalizeWord(w) && !list.some((x) => normalizeWord(x) === normalizeWord(w)));
+}
+
+const DOMAIN_HELP = 'Use just the site name, like `example.com`.';
+
 async function wordsCommand(ctx, rest) {
   const sub = (rest[0] || 'list').toLowerCase();
   const cfg = ctx.config();
@@ -853,7 +860,7 @@ async function wordsCommand(ctx, rest) {
   const before = snapshot(ctx);
   if (/^(add|\+|block|ban)$/.test(sub)) {
     if (!items.length) return ctx.warn('Which word?', 'Try `/automod words add badword` (commas for several).');
-    const fresh = items.filter((w) => normalizeWord(w) && !list.some((x) => normalizeWord(x) === normalizeWord(w)));
+    const fresh = freshWords(list, items);
     if (!fresh.length) return ctx.info('Already on the list', 'Those words are already filtered.');
     const next = [...list, ...fresh].slice(0, 500);
     ctx.patchConfig({ words: { ...cfg.words, list: next }, filters: { ...cfg.filters, words: true } });
@@ -884,7 +891,7 @@ async function linksCommand(ctx, rest) {
   if (/^(list|show)$/.test(sub)) return ctx.info('Allowed sites', allow.length ? allow.join(', ') : 'None yet. Add one with `/automod links allow example.com`.');
   await ctx.require('admin');
   const domains = rest.slice(1).map(cleanDomain);
-  if (rest.slice(1).length && domains.some((d) => !d)) return ctx.warn("That doesn't look like a website", 'Use just the site name, like `example.com`.');
+  if (rest.slice(1).length && domains.some((d) => !d)) return ctx.warn("That doesn't look like a website", DOMAIN_HELP);
   const before = snapshot(ctx);
   if (/^(allow|add|\+|whitelist|permit)$/.test(sub)) {
     if (!domains.length) return ctx.warn('Which site?', 'Try `/automod links allow example.com`.');
@@ -994,11 +1001,17 @@ async function actionCommand(ctx, rest) {
   return changed(ctx, `${FILTERS[key].label}: ${a.label}`, `${a.emoji} ${a.blurb}${notes.length ? `\n${notes.join('\n')}` : ''}`, before);
 }
 
-async function strictCommand(ctx, level) {
+const STRICT_ALIASES = { low: 'relaxed', light: 'relaxed', chill: 'relaxed', lenient: 'relaxed', medium: 'normal', default: 'normal', high: 'strict', tough: 'strict', hard: 'strict' };
+const STRICT_HELP = 'Use **relaxed**, **normal** or **strict**, like `/automod strictness strict`.';
+
+function strictnessOf(level) {
   const key = String(level || '').toLowerCase();
-  const alias = { low: 'relaxed', light: 'relaxed', chill: 'relaxed', lenient: 'relaxed', medium: 'normal', default: 'normal', high: 'strict', tough: 'strict', hard: 'strict' };
-  const k = own(STRICTNESS, key) ? key : own(alias, key) ? alias[key] : null;
-  if (!k) return ctx.warn('Pick a strictness', 'Use **relaxed**, **normal** or **strict**, like `/automod strictness strict`.');
+  return own(STRICTNESS, key) ? key : own(STRICT_ALIASES, key) ? STRICT_ALIASES[key] : null;
+}
+
+async function strictCommand(ctx, level) {
+  const k = strictnessOf(level);
+  if (!k) return ctx.warn('Pick a strictness', STRICT_HELP);
   await ctx.require('admin');
   const before = snapshot(ctx);
   ctx.patchConfig({ strictness: k });
@@ -1138,6 +1151,182 @@ async function runYap(ctx) {
   if (ctx.word === 'filter') { ctx.argv = ['words', ...ctx.argv]; return runAutomod(ctx); }
   return runAutomod(ctx);
 }
+
+const RAID_NO_CHANNELS = "It watches joins, not channels, so it can't skip a channel. Exempt channels from the message filters instead, like `/automod exempt links #media`.";
+const NO_CHANNEL_MATCH = 'Mention a channel, like #media.';
+
+const wholeIn = (key, label, help, min, max) => ({
+  key, label, help, type: 'number', web: true, min, max, step: 1,
+  validate: (ctx, v) => {
+    const n = typeof v === 'number' ? v : /^\s*\d+\s*$/.test(String(v ?? '')) ? Number(v) : NaN;
+    return Number.isInteger(n) && n >= min && n <= max ? accept(n) : reject(`Use a whole number from ${min} to ${max}.`);
+  },
+});
+
+function textList(v) {
+  if (Array.isArray(v)) return v.every((x) => typeof x === 'string') ? v.map((x) => x.trim()).filter(Boolean) : null;
+  if (typeof v === 'string') return v.split(/[,\n]+/).map((x) => x.trim()).filter(Boolean);
+  return v === null || v === undefined ? [] : null;
+}
+
+async function textChannelIds(ctx, v) {
+  const ids = idList(v);
+  if (!ids) return { error: NO_CHANNEL_MATCH };
+  const out = [];
+  for (const id of ids) {
+    const ch = await channelById(ctx, id);
+    if (!ch) return { error: `I couldn't find ${clip(id, 60)}. ${NO_CHANNEL_MATCH}` };
+    out.push(ch.id);
+  }
+  return { ids: [...new Set(out)] };
+}
+
+const DASHBOARD = [
+  {
+    key: 'strictness', label: 'Strictness', type: 'select', web: true,
+    help: 'Scales the flood, duplicate and mention limits, and sets the caps threshold.',
+    options: Object.entries(STRICTNESS).map(([value, s]) => ({ value, label: s.label })),
+    validate: (ctx, v) => {
+      const k = strictnessOf(v);
+      return k ? accept(k) : reject(STRICT_HELP);
+    },
+  },
+  {
+    key: 'filters', label: 'Filters on/off', type: 'complex', web: true,
+    help: 'Turns each filter on or off: spam and flood, mass mentions, caps, links, invites, the word filter and the raid shield.',
+    validate: (ctx, v) => {
+      if (!plainObject(v)) return reject('Pick filters to turn on or off.');
+      const out = {};
+      for (const [k, on] of Object.entries(v)) {
+        if (!own(FILTERS, k)) return reject(`Pick one of ${Object.keys(FILTERS).map((f) => `**${f}**`).join(', ')}.`);
+        const b = toBool(on);
+        if (b === null) return reject('Use on or off.');
+        out[k] = b;
+      }
+      return accept(out);
+    },
+    save: (ctx, value) => {
+      const filters = { ...ctx.config().filters, ...value };
+      ctx.patchConfig({ filters });
+      return { applied: { filters } };
+    },
+  },
+  {
+    key: 'actions', label: 'What each filter does', type: 'complex', web: true,
+    options: Object.entries(ACTIONS).map(([value, a]) => ({ value, label: a.label })),
+    help: 'Per filter: delete, delete plus warn, delete plus a 10 minute timeout, delete plus kick, or log only.',
+    validate: (ctx, v) => {
+      if (!plainObject(v)) return reject('Pick an action for each filter.');
+      const out = {};
+      for (const [k, a] of Object.entries(v)) {
+        if (k === 'raid') return reject("It pauses chat for everyone instead of acting on one person's message.");
+        if (!ACTION_FILTERS.includes(k)) return reject(`Pick one of ${ACTION_FILTERS.map((f) => `**${f}**`).join(', ')}, like \`/automod action links timeout\`.`);
+        const action = typeof a === 'string' ? actionFromWords([a]) : null;
+        if (!action) return reject(`Use **delete**, **warn**, **timeout**, **kick** or **log**, like \`/automod action ${k} timeout\`.`);
+        out[k] = action;
+      }
+      return accept(out);
+    },
+    save: (ctx, value) => {
+      const actions = { ...cleanActions(ctx.config()), ...value };
+      ctx.patchConfig({ actions });
+      return { applied: { actions } };
+    },
+  },
+  {
+    key: 'filterExempt', label: 'Per-filter skipped channels', type: 'complex', web: true,
+    help: 'Channels where one filter is skipped while the others still check them.',
+    validate: async (ctx, v) => {
+      if (!plainObject(v)) return reject('Pick channels for each filter.');
+      const out = {};
+      for (const [k, list] of Object.entries(v)) {
+        if (k === 'raid') return reject(RAID_NO_CHANNELS);
+        if (!ACTION_FILTERS.includes(k)) return reject(`Pick one of ${ACTION_FILTERS.map((f) => `**${f}**`).join(', ')}.`);
+        const r = await textChannelIds(ctx, list);
+        if (r.error) return reject(r.error);
+        if (r.ids.length > MAX_FILTER_EXEMPT) return reject(`Each filter can skip up to ${MAX_FILTER_EXEMPT} channels. Remove a few first.`);
+        out[k] = r.ids;
+      }
+      return accept(out);
+    },
+    save: (ctx, value) => {
+      const filterExempt = { ...cleanFilterExempt(ctx.config()), ...value };
+      ctx.patchConfig({ filterExempt });
+      return { applied: { filterExempt } };
+    },
+  },
+  {
+    key: 'exempt.channels', label: 'Channels exempt from all filters', type: 'channels', web: true, max: 50,
+    help: 'Automod ignores every message in these channels.',
+    validate: async (ctx, v) => {
+      const r = await textChannelIds(ctx, v);
+      return r.error ? reject(r.error) : accept(r.ids.slice(0, 50));
+    },
+    save: (ctx, value) => { ctx.patchConfig({ exempt: { channels: value, roles: [...ctx.config().exempt.roles] } }); },
+  },
+  {
+    key: 'exempt.roles', label: 'Roles exempt from all filters', type: 'roles', web: true, max: 50,
+    help: 'Members with any of these roles are never filtered. Mods, admins and the owner are always exempt.',
+    validate: async (ctx, v) => {
+      const ids = idList(v);
+      if (!ids) return reject('Mention a channel like #general or a role like @Helpers.');
+      const out = [];
+      for (const id of ids) {
+        const role = await roleById(ctx, id);
+        if (!role) return reject(`I couldn't find ${clip(id, 60)}. Mention a channel like #general or a role like @Helpers.`);
+        out.push(role.id);
+      }
+      return accept([...new Set(out)].slice(0, 50));
+    },
+    save: (ctx, value) => { ctx.patchConfig({ exempt: { channels: [...ctx.config().exempt.channels], roles: value } }); },
+  },
+  {
+    key: 'links.allow', label: 'Allowed link domains', type: 'words', web: true, max: 100,
+    help: 'Sites (and their subdomains) that the link filter lets through.',
+    validate: (ctx, v) => {
+      const items = textList(v);
+      if (!items) return reject(DOMAIN_HELP);
+      const domains = items.map(cleanDomain);
+      if (domains.some((d) => !d)) return reject(DOMAIN_HELP);
+      return accept([...new Set(domains)].slice(0, 100));
+    },
+  },
+  {
+    key: 'words.list', label: 'Filtered words', type: 'words', web: true, max: 500,
+    help: 'Words the word filter catches, ignoring caps, leetspeak, repeated letters and dots between letters, matching whole words only.',
+    validate: (ctx, v) => {
+      const items = textList(v);
+      if (!items) return reject('Try `/automod words add badword` (commas for several).');
+      const next = [];
+      for (const w of items) if (freshWords(next, [w]).length) next.push(w);
+      return accept(next.slice(0, 500));
+    },
+    save: (ctx, value) => {
+      const cfg = ctx.config();
+      const added = freshWords(cfg.words.list, value).length > 0;
+      const patch = { words: { ...cfg.words, list: value } };
+      if (added) patch.filters = { ...cfg.filters, words: true };
+      ctx.patchConfig(patch);
+      return { applied: added ? { 'words.list': value, filters: patch.filters } : { 'words.list': value } };
+    },
+  },
+  {
+    key: 'verify', label: 'Verification gate', type: 'complex', web: false,
+    help: 'Posts a Verify button that gives new members a role.',
+    note: 'Set it up in the server with /automod verify #channel @role, since it posts the Verify button.',
+  },
+  wholeIn('spam.max', 'Flood: max messages', 'More than this many messages inside the flood window counts as flooding (scaled by strictness).', 2, 50),
+  wholeIn('spam.seconds', 'Flood window (seconds)', 'Time window for the flood count.', 1, 60),
+  wholeIn('spam.dupes', 'Repeat limit', 'The same text this many times inside the repeat window counts as spam.', 2, 20),
+  wholeIn('spam.dupeSeconds', 'Repeat window (seconds)', 'Time window for repeated-message detection.', 1, 60),
+  { key: 'spam.timeoutMinutes', label: 'Automod timeout (minutes)', type: 'number', web: false, help: 'Automod timeouts always last 10 minutes.', note: 'Not used: Automod timeouts are always 10 minutes.' },
+  wholeIn('mentions.max', 'Mention limit', 'More than this many distinct mentions in one message trips the filter (scaled by strictness).', 2, 50),
+  wholeIn('caps.percent', 'Caps percent', 'The share of capital letters that trips the caps filter. Only used when strictness is normal.', 1, 100),
+  wholeIn('caps.minLetters', 'Caps minimum letters', 'Messages with fewer letters than this are never caps-checked.', 1, 200),
+  wholeIn('raid.joins', 'Raid: joins', 'More than this many joins inside the raid window triggers a lockdown.', 2, 100),
+  wholeIn('raid.seconds', 'Raid: window (seconds)', 'Time window for counting joins.', 5, 60),
+  wholeIn('raid.autoLiftMinutes', 'Raid: auto-lift (minutes)', 'How long a lockdown lasts before it lifts by itself.', 1, 1440),
+];
 
 export const { setup, teardown, check } = defineApp({
   id: ID,
@@ -1284,6 +1473,8 @@ export const { setup, teardown, check } = defineApp({
 
   panelPerm: 'mod',
   panel: (ctx) => showPanel(ctx),
+
+  dashboard: DASHBOARD,
 
   services: (engine) => ({
     findBadWord,

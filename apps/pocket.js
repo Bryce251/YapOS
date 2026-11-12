@@ -1583,6 +1583,8 @@ export const { setup, teardown, check } = defineApp({
     { words: ['highlight', 'highlights'], run: (ctx) => runHighlight(ctx, ctx.args) },
   ],
 
+  dashboard: [],
+
   panel: (ctx) => showPanel(ctx, 'home'),
 
   services: (engine) => ({

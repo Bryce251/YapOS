@@ -3,6 +3,7 @@ import { card, dialog, button, row, rows, select, onOff } from '../engine/ui.js'
 import { customId } from '../engine/router.js';
 import { tokenize, fillTemplate, ordinal, clip, parseBool, didYouMean, levenshtein, resolveChannel, resolveRole } from '../engine/parse.js';
 import { explain, friendly, looksLikeFeatureOff, permName } from '../engine/errors.js';
+import { accept, reject, isBlank, boolField, idList, safeId } from '../engine/dashboard.js';
 
 const ID = 'welcome';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -706,15 +707,23 @@ async function setFlag(ctx, key, value, label) {
   return ctx.ok(`${label} ${value ? 'on' : 'off'}`, `${label} ${value ? 'are now on' : 'are now off'}.${extra}`);
 }
 
-async function setText(ctx, key, text, label) {
-  const t = text.trim();
-  if (!t) return ctx.warn('What should it say?', `Type the message after the command, like \`/welcome text Welcome {user}!\`.`);
+const EMPTY_TEXT = 'Type the message after the command, like `/welcome text Welcome {user}!`.';
+
+function checkText(text, max = 1000) {
+  const t = String(text ?? '').trim();
+  if (!t) return { title: 'What should it say?', error: EMPTY_TEXT };
   const problem = placeholderProblem(t);
-  if (problem) return ctx.warn('Nothing saved yet', problem);
+  if (problem) return { title: 'Nothing saved yet', error: problem };
+  return { value: clip(t, max) };
+}
+
+async function setText(ctx, key, text, label) {
+  const checked = checkText(text);
+  if (checked.error) return ctx.warn(checked.title, checked.error);
   const prev = ctx.config()[key];
-  ctx.patchConfig({ [key]: clip(t, 1000) });
+  ctx.patchConfig({ [key]: checked.value });
   const undo = undoFor(ctx, label.toLowerCase(), { [key]: prev });
-  return ctx.ok(`${label} saved`, `It now says:\n${clip(t, 1000)}`, { components: [row(undo.button, button('Preview', cid('preview'), 'secondary', '👀'))] });
+  return ctx.ok(`${label} saved`, `It now says:\n${checked.value}`, { components: [row(undo.button, button('Preview', cid('preview'), 'secondary', '👀'))] });
 }
 
 async function typedAutorole(ctx, tokens) {
@@ -811,6 +820,83 @@ async function runArgs(ctx, tokens, raw) {
 }
 
 const TOGGLES = { join: 'join', leave: 'leave', card: 'card', dm: 'dm' };
+const IMAGE_OFF = /^(none|off|remove|clear)$/i;
+
+const textField = (key, label, help, max = 1000, type = 'text') => ({
+  key, label, help, type, web: true, maxLength: max,
+  validate: (ctx, v) => {
+    const checked = checkText(typeof v === 'string' ? v : '', max);
+    return checked.error ? reject(checked.error) : accept(checked.value);
+  },
+});
+
+const channelField = (key, label, help, which) => ({
+  key, label, help, type: 'channel', web: true,
+  validate: async (ctx, v) => {
+    if (which === 'leave' && (isBlank(v) || /^(same|reset|default)$/i.test(String(v).trim()))) return accept(null);
+    const id = safeId(v);
+    const ch = id ? (await textChannels(ctx.engine, ctx.serverId)).find((c) => c.id === id) : null;
+    return ch ? accept(ch.id) : reject(`No text channel matches **${clip(String(v ?? '?'), 50)}**. Try \`/welcome channel #general\`.`);
+  },
+  save: (ctx, value) => {
+    ctx.patchConfig({ [key]: value });
+    forgetLogged(ctx.engine, ctx.serverId, 'send');
+  },
+});
+
+async function validateAutoroles(ctx, v) {
+  const ids = idList(v);
+  if (!ids) return reject('Pick roles from the list.');
+  const wanted = [...new Set(ids)];
+  if (wanted.length > MAX_AUTOROLES) return reject(`You can have up to ${MAX_AUTOROLES} starter roles. Remove one first.`);
+  const prev = ctx.config().autoroles || [];
+  const candidates = await manageableRoles(ctx);
+  for (const id of wanted) {
+    if (prev.includes(id)) continue;
+    const role = candidates.find((r) => r.id === id);
+    if (!role) return reject(`No role matches **${clip(id, 50)}**. Try \`/welcome autorole add @Member\`.`);
+    const problem = await roleProblem(ctx, id);
+    if (problem) return reject(problem);
+  }
+  return accept(wanted);
+}
+
+const DASHBOARD = [
+  boolField({ key: 'join', label: 'Join messages', help: 'Posts a welcome message when someone joins.' }),
+  boolField({ key: 'leave', label: 'Leave messages', help: 'Posts a goodbye message when someone leaves.' }),
+  boolField({ key: 'card', label: 'Welcome card', help: 'Sends the join message as an embed card instead of plain text.' }),
+  boolField({ key: 'dm', label: 'Welcome DM', help: "Also DMs new members. DMs from bots are a testing feature on Yapin'." }),
+  channelField('channel', 'Welcome channel', 'Where join messages go.', 'join'),
+  channelField('leaveChannel', 'Goodbye channel', 'Where leave messages go. Empty means the same channel as join messages.', 'leave'),
+  textField('joinText', 'Join message', 'Placeholders: {user} {username} {server} {count} {count_ord}.'),
+  textField('leaveText', 'Leave message', 'Same placeholders as the join message.'),
+  textField('dmText', 'Welcome DM text', 'Same placeholders as the join message.'),
+  textField('cardTitle', 'Card title', 'Title on the welcome card. Placeholders work here too.', 200, 'string'),
+  {
+    key: 'imageUrl', label: 'Card picture link', type: 'string', web: true, maxLength: 512,
+    help: "Optional thumbnail on the welcome card. Must be an https link from a host Yapin' shows.",
+    validate: (ctx, v) => {
+      if (isBlank(v) || (typeof v === 'string' && IMAGE_OFF.test(v.trim()))) return accept(null);
+      if (typeof v !== 'string') return reject("That doesn't look like a link. Paste a full picture link that starts with https://.");
+      const check = checkImage(v);
+      return check.ok ? accept(check.url) : reject(check.reason);
+    },
+    save: (ctx, value) => {
+      if (value === null) { ctx.patchConfig({ imageUrl: null }); return { applied: { imageUrl: null } }; }
+      ctx.patchConfig({ imageUrl: value, card: true });
+      return { applied: { imageUrl: value, card: true } };
+    },
+  },
+  {
+    key: 'autoroles', label: 'Starter roles', type: 'roles', web: true, max: MAX_AUTOROLES,
+    help: 'Up to 5 roles given to every new member when they join.',
+    validate: validateAutoroles,
+    save: (ctx, value) => {
+      ctx.patchConfig({ autoroles: value });
+      forgetLogged(ctx.engine, ctx.serverId, 'role:');
+    },
+  },
+];
 
 const adminOnly = (run) => ({
   perm: 'admin',
@@ -918,6 +1004,8 @@ export const { setup, teardown, check } = defineApp({
   ],
 
   panel: openPanel,
+
+  dashboard: DASHBOARD,
 
   services: (engine) => ({
     flushBursts: (sid) => flushBurst(engine, sid),

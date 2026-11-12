@@ -1,6 +1,24 @@
 import { dialog } from './ui.js';
 
 const NAME_RE = /^[a-z0-9_-]{1,32}$/;
+const FIELD_KEY_RE = /^[A-Za-z][\w.]{0,63}$/;
+const FIELD_TYPES = new Set(['boolean', 'number', 'string', 'text', 'channel', 'voice_channel', 'category', 'role', 'roles', 'channels', 'emoji', 'select', 'duration', 'color', 'words', 'complex']);
+
+function checkDashboard(appId, fields) {
+  if (!Array.isArray(fields)) throw new Error(`App ${appId}: dashboard must be a list of fields`);
+  const seen = new Set();
+  for (const f of fields) {
+    if (!f || typeof f !== 'object' || !FIELD_KEY_RE.test(String(f.key))) throw new Error(`App ${appId}: dashboard field needs a key`);
+    if (seen.has(f.key)) throw new Error(`App ${appId}: dashboard field "${f.key}" is listed twice`);
+    seen.add(f.key);
+    if (!FIELD_TYPES.has(f.type)) throw new Error(`App ${appId}: dashboard field "${f.key}" has an unknown type`);
+    for (const fn of ['validate', 'save', 'read']) {
+      if (f[fn] !== undefined && typeof f[fn] !== 'function') throw new Error(`App ${appId}: dashboard field "${f.key}" ${fn} must be a function`);
+    }
+    if (f.web === true && typeof f.validate !== 'function') throw new Error(`App ${appId}: dashboard field "${f.key}" is editable on the web but has no validator`);
+    if (f.web !== true && !f.note) throw new Error(`App ${appId}: dashboard field "${f.key}" needs a note saying which command changes it`);
+  }
+}
 
 export function defineApp(def) {
   const meta = {
@@ -26,6 +44,7 @@ export function defineApp(def) {
     if (!NAME_RE.test(name)) throw new Error(`App ${meta.id}: bad job name "${name}"`);
     if (typeof fn !== 'function') throw new Error(`App ${meta.id}: job "${name}" needs a handler function`);
   }
+  if (def.dashboard !== undefined) checkDashboard(meta.id, def.dashboard);
 
   let engine = null;
   let stopToggles = null;

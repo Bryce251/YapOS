@@ -945,6 +945,8 @@ export const { setup, teardown, check } = defineApp({
     { words: ['studio'], run: showHowTo },
   ],
 
+  dashboard: [],
+
   panel: showHowTo,
 
   services: (engine) => {

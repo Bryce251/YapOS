@@ -1505,6 +1505,8 @@ export const { setup, teardown, check } = defineApp({
     run: (ctx) => runCommand(ctx),
   }],
 
+  dashboard: [],
+
   panel: async (ctx) => {
     const isAdmin = ctx.engine.perms.atLeast(await ctx.level(), 'admin');
     if (!isAdmin) return ctx.info('Role menus', 'Admins post role menus in channels. Click a button (or pick, or react) on one to get a role, and click again to drop it.');

@@ -1,0 +1,22 @@
+name = "yapos-dashboard"
+main = "worker/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[assets]
+directory = "./web"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/auth/*", "/bot/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "yapos-dashboard"
+database_id = "PASTE-YOUR-D1-DATABASE-ID-HERE"
+
+[vars]
+YAPIN_CLIENT_ID = "b21fe402-0f20-43df-867b-8b346029fd8d"
+PUBLIC_URL = "https://yapos-dashboard.YOUR-SUBDOMAIN.workers.dev"
+YAPIN_BASE = "https://www.yapin.gg"
+
+[triggers]
+crons = ["*/15 * * * *"]

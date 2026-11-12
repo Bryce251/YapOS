@@ -4,6 +4,7 @@ import { card, dialog, button, row, rows, select, ICONS } from '../engine/ui.js'
 import { customId } from '../engine/router.js';
 import { tokenize, clip, fuzzyFind, didYouMean, userId as mentionedUser, channelId as mentionedChannel } from '../engine/parse.js';
 import { explain, permName, looksLikeFeatureOff } from '../engine/errors.js';
+import { accept, reject, isBlank, channelById } from '../engine/dashboard.js';
 
 const ID = 'voice';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -875,7 +876,7 @@ async function setPanels(ctx, text) {
   const t = text.trim();
   const cfg = ctx.config();
   if (!t) return ctx.info('Room control panels', `${cfg.panelChannel ? `They go to <#${cfg.panelChannel}>.` : 'They go to the room owner by DM.'}\nChange it with \`/voice panels #channel\`, \`/voice panels here\` or \`/voice panels dm\`.`);
-  if (/^(dm|dms|off|none|direct)$/i.test(t)) {
+  if (PANELS_OFF.test(t)) {
     ctx.patchConfig({ panelChannel: null });
     return ctx.ok('Panels go by DM', 'New room owners get their control panel by DM.');
   }
@@ -885,10 +886,40 @@ async function setPanels(ctx, text) {
   return ctx.ok('Panels saved', `New room control panels go to <#${channel.id}>. Only each room's owner and moderators can press their buttons.`);
 }
 
+const LIMIT_HELP = `Pick a whole number from 1 to ${MAX_ROOMS}, like \`/voice limit 20\`.`;
+const PANELS_OFF = /^(dm|dms|off|none|direct)$/i;
+
+function checkRoomLimit(value) {
+  const n = Number(String(value ?? '').trim());
+  return Number.isInteger(n) && n >= 1 && n <= MAX_ROOMS ? n : null;
+}
+
+const DASHBOARD = [
+  { key: 'createChannelId', label: 'Join-to-create channel', type: 'voice_channel', web: false, help: 'People who join this voice channel get their own temporary voice room.', note: 'Set it up in the server with /voice setup, which also checks my permissions and starts the room sweep.' },
+  {
+    key: 'panelChannel', label: 'Room control panels channel', type: 'channel', web: true,
+    help: 'Where new room control panels are posted. Empty means the room owner gets theirs by DM.',
+    validate: async (ctx, v) => {
+      if (isBlank(v) || (typeof v === 'string' && PANELS_OFF.test(v.trim()))) return accept(null);
+      const ch = await channelById(ctx, v);
+      return ch ? accept(ch.id) : reject(`No text channel matches **${clip(String(v), 40)}**.`);
+    },
+  },
+  {
+    key: 'maxRooms', label: 'Most rooms open at once', type: 'number', web: true, min: 1, max: MAX_ROOMS, step: 1,
+    help: 'How many join-to-create rooms can exist at the same time.',
+    validate: (ctx, v) => {
+      const n = checkRoomLimit(v);
+      return n === null ? reject(LIMIT_HELP) : accept(n);
+    },
+  },
+  { key: 'categoryId', label: 'Rooms category', type: 'category', web: false, help: 'Category new rooms are created in when the create channel has none.', note: 'Set by /voice setup from the join-to-create channel.' },
+];
+
 async function setLimit(ctx, value) {
   await ctx.require('admin');
-  const n = Number(String(value ?? '').trim());
-  if (!Number.isInteger(n) || n < 1 || n > MAX_ROOMS) return ctx.warn("That limit didn't work", `Pick a whole number from 1 to ${MAX_ROOMS}, like \`/voice limit 20\`.`);
+  const n = checkRoomLimit(value);
+  if (n === null) return ctx.warn("That limit didn't work", LIMIT_HELP);
   ctx.patchConfig({ maxRooms: n });
   return ctx.ok('Room limit saved', `Up to ${plural(n, 'room')} can be open at once.`);
 }
@@ -1011,6 +1042,8 @@ export const { setup, teardown, check } = defineApp({
     panelChannel: null,
     maxRooms: DEFAULT_MAX_ROOMS,
   },
+
+  dashboard: DASHBOARD,
 
   commands: {
     voice: { description: 'Your voice room and its controls. Admins: /voice setup. Mods: /voice close <room>', run: runVoice },

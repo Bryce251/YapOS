@@ -12,6 +12,7 @@ import { createContext } from './context.js';
 import { createFreshness } from './freshness.js';
 import { createScheduler } from './scheduler.js';
 import { createAppRegistry, createYap } from './apps.js';
+import { createDashboard } from './dashboard.js';
 import { dialog } from './ui.js';
 import { normalizeName } from './parse.js';
 
@@ -133,6 +134,11 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
       else await bot.loadCogs(appsDir);
       log.info(`${VERSION.full}: ${apps.size} apps loaded (${apps.list().map((a) => a.meta.id).join(', ')})`);
       engine.scheduler.start();
+      engine.dashboard.start();
+    },
+
+    dispose() {
+      engine.dashboard?.stop();
     },
 
     gatewayState() {
@@ -143,6 +149,7 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
   };
 
   bot.yapos = engine;
+  engine.dashboard = createDashboard({ engine, url: config.dashboardUrl, secret: config.dashboardSecret });
   engine.scheduler = createScheduler({ store, log, engine, ...schedulerOptions });
   engine.freshness = createFreshness({ bot, engine, log, ...freshnessOptions });
   engine.freshness.install();
@@ -177,7 +184,13 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
   bot.on('command', () => { stats.commands++; });
   bot.on('interaction', () => { stats.interactions++; });
   bot.on('member_join', (ev) => cache.invalidate(ev.server_id));
-  bot.on('member_leave', (ev) => cache.invalidate(ev.server_id));
+  bot.on('member_leave', (ev) => {
+    cache.invalidate(ev.server_id);
+    const me = bot.me?.id;
+    if (me && ev?.server_id && (ev.user_id ?? ev.member?.id ?? ev.id) === me) {
+      engine.dashboard?.serverGone?.(ev.server_id)?.catch?.((e) => log.debug('[dashboard] unpublishing after leaving a server failed', e?.message));
+    }
+  });
   bot.on('error', (e) => {
     stats.errors++;
     log.error(e?.cog ? `[${e.cog}${e.where ? ` ${e.where}` : ''}]` : '[sdk]', e);

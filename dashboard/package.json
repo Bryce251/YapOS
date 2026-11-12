@@ -1,0 +1,21 @@
+{
+  "name": "yapos-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node dev.mjs",
+    "dev:fresh": "node dev.mjs --fresh",
+    "dev:wrangler": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/",
+    "db:init": "wrangler d1 execute yapos-dashboard --remote --file=./schema.sql",
+    "db:init:local": "wrangler d1 execute yapos-dashboard --local --file=./schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "4.155.0"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}

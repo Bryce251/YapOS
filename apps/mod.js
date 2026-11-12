@@ -4,6 +4,7 @@ import { MAX_TRIES } from '../engine/scheduler.js';
 import { customId } from '../engine/router.js';
 import { tokenize, parseDuration, takeDuration, formatDuration, didYouMean, fuzzyFind, normalizeName, userId, clip } from '../engine/parse.js';
 import { friendly, permName, explain, looksLikeFeatureOff } from '../engine/errors.js';
+import { accept, reject, isBlank, channelById } from '../engine/dashboard.js';
 
 const ID = 'mod';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -1424,6 +1425,17 @@ function parseSteps(text) {
   return { steps: steps.sort((a, b) => a.at - b.at) };
 }
 
+const DECAY_HELP = 'Use a whole number of days, like 30, or 0 to keep warnings forever.';
+const stepsHelp = (error) => `${error}\nWrite them like: \`3 timeout 1h, 5 kick, 7 ban\`.`;
+const LOG_OFF = /^(off|none|clear|remove|disable)$/;
+const LOG_MISSING = 'Mention it, like `/mod log #mod-log`.';
+
+function checkDecayDays(raw) {
+  const typed = String(raw ?? '').trim();
+  const days = Number(typed);
+  return /^\d{1,4}$/.test(typed) && days <= 3650 ? days : null;
+}
+
 const roleList = (ids) => (ids || []).length ? ids.map((r) => `<@&${r}>`).join(' ') : 'None';
 
 async function runLogChannel(ctx, tokens) {
@@ -1432,12 +1444,12 @@ async function runLogChannel(ctx, tokens) {
   if (!first) {
     return ctx.info('Mod log channel', `${current ? `Mod actions are logged in <#${current}>.` : 'No log channel yet.'}\nSet one with \`/mod log #mod-log\`, or turn it off with \`/mod log off\`.`);
   }
-  if (/^(off|none|clear|remove|disable)$/.test(first)) {
+  if (LOG_OFF.test(first)) {
     ctx.engine.settings.patchCore(ctx.serverId, { logChannel: null });
     return ctx.ok('Log channel cleared', 'Mod actions are no longer logged anywhere.');
   }
   const ch = await ctx.findChannel(tokens.join(' '), 'text');
-  if (!ch || ch.server_id && ch.server_id !== ctx.serverId) return ctx.warn("I couldn't find that channel", 'Mention it, like `/mod log #mod-log`.');
+  if (!ch || ch.server_id && ch.server_id !== ctx.serverId) return ctx.warn("I couldn't find that channel", LOG_MISSING);
   ctx.engine.settings.patchCore(ctx.serverId, { logChannel: ch.id });
   return ctx.ok('Log channel saved', `Mod actions, Automod alerts and warnings from other apps now go to <#${ch.id}>.`);
 }
@@ -1587,6 +1599,57 @@ async function runHub(ctx) {
 
 const shortcut = (sub) => (ctx) => route(ctx, sub, ctx.argv);
 
+function stepsText(v) {
+  if (typeof v === 'string') return v;
+  if (!Array.isArray(v)) return null;
+  const parts = [];
+  for (const s of v) {
+    if (!s || typeof s !== 'object') return null;
+    const action = String(s.action ?? '');
+    const len = action === 'timeout' && s.durationMs ? ` ${formatDuration(Number(s.durationMs))}` : '';
+    parts.push(`${s.at} ${action}${len}`);
+  }
+  return parts.join(', ');
+}
+
+const DASHBOARD = [
+  {
+    key: 'dmOnAction', label: 'DM people before kick, ban or timeout', type: 'boolean', web: true,
+    help: 'Sends the member a DM saying what happened and why.',
+    validate: (ctx, v) => (typeof v === 'boolean' ? accept(v) : reject('Use on or off.')),
+  },
+  {
+    key: 'warnDecayDays', label: 'Days a warning counts for', type: 'number', web: true, min: 0, max: 3650, step: 1,
+    help: 'Warnings older than this stop counting toward the automatic steps. 0 keeps them forever.',
+    validate: (ctx, v) => {
+      const days = checkDecayDays(v);
+      return days === null ? reject(DECAY_HELP) : accept(days);
+    },
+  },
+  {
+    key: 'escalation', label: 'Automatic warning steps', type: 'complex', web: true, maxLength: STEPS_MAX,
+    help: 'What happens automatically when someone reaches a number of active warnings, like: 3 timeout 1h, 5 kick, 7 ban.',
+    validate: (ctx, v) => {
+      const text = stepsText(v);
+      if (text === null) return reject(stepsHelp("I didn't understand those steps."));
+      if (text.length > STEPS_MAX) return reject(stepsHelp(`Keep it under ${STEPS_MAX} characters.`));
+      const parsed = parseSteps(text);
+      return parsed.error ? reject(stepsHelp(parsed.error)) : accept(parsed.steps);
+    },
+  },
+  {
+    key: 'core.logChannel', label: 'Mod log channel', type: 'channel', web: true,
+    help: 'Where mod cases, Automod alerts and warnings from other apps are posted. Empty turns logging off.',
+    validate: async (ctx, v) => {
+      if (isBlank(v) || (typeof v === 'string' && LOG_OFF.test(v.trim().toLowerCase()))) return accept(null);
+      const ch = await channelById(ctx, v);
+      return ch ? accept(ch.id) : reject(LOG_MISSING);
+    },
+  },
+  { key: 'core.modRoles', label: 'Extra mod roles', type: 'roles', web: false, max: 10, help: 'People with these roles count as YapOS moderators.', note: 'Change these in the server with /mod modrole add @role.' },
+  { key: 'core.adminRoles', label: 'Extra admin roles', type: 'roles', web: false, max: 10, help: 'People with these roles count as YapOS admins.', note: 'Only the server owner can change these, with /mod adminrole add @role.' },
+];
+
 const YAP_WORDS = ['timeout', 'mute', 'unmute', 'untimeout', 'kick', 'ban', 'unban', 'warn', 'warnings', 'purge', 'clear', 'slowmode', 'lock', 'unlock', 'case', 'whois'];
 
 export const { setup, teardown, check } = defineApp({
@@ -1660,11 +1723,10 @@ export const { setup, teardown, check } = defineApp({
       perm: 'admin',
       run: async (ctx) => {
         if (await refuseUnless(ctx, 'admin')) return undefined;
-        const typedDays = String(ctx.values?.days ?? '').trim();
-        const days = Number(typedDays);
-        if (!/^\d{1,4}$/.test(typedDays) || days > 3650) return ctx.warn("That number didn't work", 'Use a whole number of days, like 30, or 0 to keep warnings forever.');
+        const days = checkDecayDays(ctx.values?.days);
+        if (days === null) return ctx.warn("That number didn't work", DECAY_HELP);
         const parsed = parseSteps(ctx.values?.steps || '');
-        if (parsed.error) return ctx.warn("Those steps didn't work", `${parsed.error}\nWrite them like: \`3 timeout 1h, 5 kick, 7 ban\`.`);
+        if (parsed.error) return ctx.warn("Those steps didn't work", stepsHelp(parsed.error));
         ctx.patchConfig({ warnDecayDays: days, escalation: parsed.steps });
         return ctx.ok('Warning rules saved', `Warnings count for ${days ? `${days} days` : 'forever'}.\nSteps: ${formatSteps(parsed.steps) || 'none'}.`);
       },
@@ -1693,7 +1755,9 @@ export const { setup, teardown, check } = defineApp({
 
   panel: showPanel,
 
-  services: (engine) => createService(engine),
+  dashboard: DASHBOARD,
+
+  services: (engine) => ({ ...createService(engine), activeWarns: (sid, uid) => activeWarns(engine, sid, uid) }),
 
   presets: {
     gaming: { enabled: true, config: {} },

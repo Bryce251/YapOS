@@ -3,6 +3,8 @@ import { card, dialog, button, row, onOff, ICONS, COLORS } from '../engine/ui.js
 import { customId } from '../engine/router.js';
 import { tokenize, didYouMean, fillTemplate, clip, normalizeName, parseBool, channelId as channelMention, roleId as roleMention } from '../engine/parse.js';
 import { permName, explain, friendly } from '../engine/errors.js';
+import { avatarUrl } from '../engine/links.js';
+import { accept, reject, boolField, channelById, roleById, idList, plainObject } from '../engine/dashboard.js';
 
 const ID = 'levels';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -26,8 +28,6 @@ const BAR_EMPTY = '⬛';
 const AVATAR_CACHE_MS = 10 * 60_000;
 const AVATAR_CACHE_LIMIT = 2000;
 const AVATAR_LOOKUP_MS = 1500;
-const AVATAR_HOST = 'https://files.yapper.website/avatars/';
-const SITE_HOST = 'https://www.yapin.gg';
 const TIERS = [
   { min: 30, name: 'red', color: COLORS.error, square: '🟥' },
   { min: 20, name: 'gold', color: COLORS.economy, square: '🟨' },
@@ -80,15 +80,7 @@ export function progressBar(frac, square = TIERS[TIERS.length - 1].square, width
 
 export const percentOf = (frac) => Math.min(100, Math.floor(unit(frac) * 100 + 1e-9));
 
-export function avatarUrl(path) {
-  if (typeof path !== 'string' || !path.trim()) return null;
-  const p = path.trim();
-  if (/\s|\\/.test(p)) return null;
-  if (/^https:\/\//i.test(p)) return [AVATAR_HOST, `${SITE_HOST}/`].some((host) => p.toLowerCase().startsWith(host)) ? p : null;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(p) || p.startsWith('//') || /[?#]/.test(p) || p.split('/').includes('..')) return null;
-  if (p.startsWith('/')) return SITE_HOST + p;
-  return AVATAR_HOST + p;
-}
+export { avatarUrl };
 
 export function progressOf(totalXp) {
   const xp = Math.max(0, Math.floor(Number(totalXp) || 0));
@@ -799,21 +791,30 @@ async function setLevel(ctx, tokens) {
   return out;
 }
 
+const validRewardLevel = (level) => Number.isInteger(level) && level >= 1 && level <= MAX_LEVEL;
+const TOO_MANY_REWARDS = `You can have up to ${MAX_REWARDS}. Remove one with \`/levels reward remove 10\`.`;
+
+async function rewardProblem(engine, sid, role) {
+  if (isEveryone(role, sid)) return { title: "That role can't be a reward", body: 'Everyone already has @everyone.' };
+  const staff = staffPerms(role);
+  if (staff.length) return { title: "That role can't be a reward", body: `**@${role.name}** has staff permissions (${staff.map(permName).join(', ')}). Anyone who levels up would get them. Use a role without those permissions.` };
+  const check = await engine.perms.canManageRole(sid, role.id);
+  if (!check.ok) return { title: "I can't hand out that role", body: check.reason };
+  return null;
+}
+
 async function addReward(ctx, tokens) {
   const { engine, serverId: sid } = ctx;
   const level = Number(tokens[0]);
   const roleTok = tokens.slice(1).join(' ').trim();
-  if (!Number.isInteger(level) || level < 1 || level > MAX_LEVEL || !roleTok) return ctx.warn('Which level and role?', 'Try `/levels reward 10 @Regular`, or `/levels reward remove 10`.');
+  if (!validRewardLevel(level) || !roleTok) return ctx.warn('Which level and role?', 'Try `/levels reward 10 @Regular`, or `/levels reward remove 10`.');
   const role = await ctx.findRole(roleTok);
   if (!role) return ctx.warn("I couldn't find that role", `No role matches **${clip(roleTok, 40)}**.`);
-  if (isEveryone(role, sid)) return ctx.warn("That role can't be a reward", 'Everyone already has @everyone.');
-  const staff = staffPerms(role);
-  if (staff.length) return ctx.warn("That role can't be a reward", `**@${role.name}** has staff permissions (${staff.map(permName).join(', ')}). Anyone who levels up would get them. Use a role without those permissions.`);
-  const check = await engine.perms.canManageRole(sid, role.id);
-  if (!check.ok) return ctx.warn("I can't hand out that role", check.reason);
+  const problem = await rewardProblem(engine, sid, role);
+  if (problem) return ctx.warn(problem.title, problem.body);
   const cfg = ctx.config();
   const rewards = { ...(cfg.rewards || {}) };
-  if (!rewards[level] && Object.keys(rewards).length >= MAX_REWARDS) return ctx.warn('Too many rewards', `You can have up to ${MAX_REWARDS}. Remove one with \`/levels reward remove 10\`.`);
+  if (!rewards[level] && Object.keys(rewards).length >= MAX_REWARDS) return ctx.warn('Too many rewards', TOO_MANY_REWARDS);
   const prev = rewards[level] || null;
   rewards[level] = role.id;
   ctx.patchConfig({ rewards });
@@ -883,10 +884,29 @@ async function toggleNoXp(ctx, tokens) {
   return ctx.warn("I couldn't find that", `No channel or role matches **${clip(tok, 40)}**.`);
 }
 
-function numberSetting(ctx, tokens, { key, min, max, label, unit = '', integer = false }) {
-  const typed = String(tokens[0] ?? '').replace(/^x|x$/i, '');
+const NUMBER_SETTINGS = {
+  rate: { key: 'rate', min: 0, max: 5, label: 'XP rate', unit: '×' },
+  cooldownSeconds: { key: 'cooldownSeconds', min: 0, max: 3600, label: 'cooldown', unit: ' seconds', integer: true },
+  voiceXpPerMinute: { key: 'voiceXpPerMinute', min: 0, max: 100, label: 'voice XP a minute', integer: true },
+};
+
+function checkNumberSetting(raw, { min, max, label, integer = false }) {
+  const typed = String(raw ?? '').replace(/^x|x$/i, '');
   const n = typed ? Number(typed) : NaN;
-  if (!Number.isFinite(n) || n < min || n > max || (integer && !Number.isInteger(n))) return ctx.warn(`That ${label} didn't work`, `Use a ${integer ? 'whole ' : ''}number from ${min} to ${max}.`);
+  if (!Number.isFinite(n) || n < min || n > max || (integer && !Number.isInteger(n))) return { title: `That ${label} didn't work`, error: `Use a ${integer ? 'whole ' : ''}number from ${min} to ${max}.` };
+  return { value: n };
+}
+
+function levelUpMessage(text) {
+  const t = String(text ?? '').trim();
+  if (!t) return null;
+  return /^reset$/i.test(t) ? DEFAULT_MESSAGE : clip(t, 500);
+}
+
+function numberSetting(ctx, tokens, { key, min, max, label, unit = '', integer = false }) {
+  const checked = checkNumberSetting(tokens[0], { min, max, label, integer });
+  if (checked.error) return ctx.warn(checked.title, checked.error);
+  const n = checked.value;
   ctx.patchConfig({ [key]: n });
   return ctx.ok('Saved', `${label[0].toUpperCase()}${label.slice(1)} is now **${n}${unit}**.`);
 }
@@ -915,9 +935,9 @@ async function runLevels(ctx) {
   }
   if (sub === 'channel' || sub === 'announce') return setAnnounceChannel(ctx, rest);
   if (sub === 'noxp' || sub === 'no-xp' || sub === 'ignore') return toggleNoXp(ctx, rest);
-  if (sub === 'rate' || sub === 'multiplier') return numberSetting(ctx, rest, { key: 'rate', min: 0, max: 5, label: 'XP rate', unit: '×' });
-  if (sub === 'cooldown') return numberSetting(ctx, rest, { key: 'cooldownSeconds', min: 0, max: 3600, label: 'cooldown', unit: ' seconds', integer: true });
-  if (sub === 'voicerate') return numberSetting(ctx, rest, { key: 'voiceXpPerMinute', min: 0, max: 100, label: 'voice XP a minute', integer: true });
+  if (sub === 'rate' || sub === 'multiplier') return numberSetting(ctx, rest, NUMBER_SETTINGS.rate);
+  if (sub === 'cooldown') return numberSetting(ctx, rest, NUMBER_SETTINGS.cooldownSeconds);
+  if (sub === 'voicerate') return numberSetting(ctx, rest, NUMBER_SETTINGS.voiceXpPerMinute);
   if (sub === 'voice') return boolSetting(ctx, rest, 'voiceXp', 'Voice XP');
   if (sub === 'xp' || sub === 'chat') return boolSetting(ctx, rest, 'messageXp', 'Chat XP');
   if (sub === 'stack') {
@@ -929,7 +949,7 @@ async function runLevels(ctx) {
   if (sub === 'message') {
     const text = ctx.args.replace(/^\s*message\s*/i, '').trim();
     if (!text) return ctx.info('Level-up message', `Now: ${ctx.config().message}\nChange it with \`/levels message GG {user}, level {level}!\` (also {username} and {server}), or \`/levels message reset\`.`);
-    const next = /^reset$/i.test(text) ? DEFAULT_MESSAGE : clip(text, 500);
+    const next = levelUpMessage(text);
     ctx.patchConfig({ message: next });
     return ctx.ok('Level-up message saved', `Preview: ${fillTemplate(next, { user: `<@${ctx.userId}>`, username: ctx.username, level: 5, server: 'this server' })}`);
   }
@@ -947,6 +967,106 @@ async function runLevels(ctx) {
 
 const admin = (run) => ({ perm: 'admin', run: async (ctx) => { await ctx.require('admin'); return run(ctx); } });
 const refresh = async (ctx) => ctx.update(await settingsView(ctx));
+
+const PICK_CHANNEL_FIRST = 'Type `/levels channel #level-ups` and level-ups go there.';
+const NO_CHANNEL = "I couldn't find that channel";
+
+const numberField = (key, label, help) => ({
+  key, label, help, type: 'number', web: true,
+  min: NUMBER_SETTINGS[key].min, max: NUMBER_SETTINGS[key].max, step: NUMBER_SETTINGS[key].integer ? 1 : 0.1,
+  validate: (ctx, v) => {
+    const checked = checkNumberSetting(v, NUMBER_SETTINGS[key]);
+    return checked.error ? reject(checked.error) : accept(checked.value);
+  },
+});
+
+async function validateRewards(ctx, v) {
+  if (!plainObject(v)) return reject('Rewards are a list of levels and roles.');
+  const prev = ctx.config().rewards || {};
+  const next = {};
+  for (const [lvl, rid] of Object.entries(v)) {
+    const level = Number(lvl);
+    if (!validRewardLevel(level)) return reject('Try `/levels reward 10 @Regular`, or `/levels reward remove 10`.');
+    const role = await roleById(ctx, rid);
+    if (!role) return reject(`No role matches **${clip(String(rid ?? '?'), 40)}**.`);
+    if (prev[level] !== role.id) {
+      const problem = await rewardProblem(ctx.engine, ctx.serverId, role);
+      if (problem) return reject(problem.body);
+    }
+    next[String(level)] = role.id;
+  }
+  if (Object.keys(next).length > MAX_REWARDS) return reject(TOO_MANY_REWARDS);
+  return accept(next);
+}
+
+async function validateChannelList(ctx, v) {
+  const ids = idList(v);
+  if (!ids) return reject('Pick channels from the list.');
+  const out = [];
+  for (const id of ids) {
+    const ch = await channelById(ctx, id);
+    if (!ch) return reject(`No channel or role matches **${clip(id, 40)}**.`);
+    out.push(ch.id);
+  }
+  return accept([...new Set(out)].slice(0, 50));
+}
+
+async function validateRoleList(ctx, v) {
+  const ids = idList(v);
+  if (!ids) return reject('Pick roles from the list.');
+  const out = [];
+  for (const id of ids) {
+    const role = await roleById(ctx, id);
+    if (!role) return reject(`No channel or role matches **${clip(id, 40)}**.`);
+    out.push(role.id);
+  }
+  return accept([...new Set(out)].slice(0, 50));
+}
+
+const DASHBOARD = [
+  boolField({ key: 'messageXp', label: 'XP for chatting', help: 'Members earn 15 to 25 XP (times the rate) for messages of 3 or more characters, at most once per cooldown.' }),
+  boolField({ key: 'voiceXp', label: 'XP for voice', help: 'Members earn XP for each full minute in voice while someone else is in the channel.' }),
+  numberField('rate', 'XP rate', 'Multiplier on chat XP. 1 is normal, 0.5 is half, 2 is double.'),
+  numberField('cooldownSeconds', 'Seconds between XP gains', 'The shortest time between two chat XP gains for one person.'),
+  numberField('voiceXpPerMinute', 'Voice XP per minute', 'XP for each full minute in voice with company.'),
+  {
+    key: 'announce', label: 'Level-up messages', type: 'select', web: true,
+    help: 'Where level-up messages go: the same channel, a set channel, a DM (falls back to the same channel), or nowhere.',
+    options: ANNOUNCE_MODES.map((m) => ({ value: m, label: ANNOUNCE_LABELS[m] })),
+    validate: async (ctx, v, all) => {
+      if (!ANNOUNCE_MODES.includes(v)) return reject('Pick one of the options.');
+      if (v !== 'channel') return accept(v);
+      const channel = all && all.channelId !== undefined ? await channelById(ctx, all.channelId) : ctx.config().channelId;
+      if (!channel) return reject('Pick a level-up channel below first.');
+      return accept(v);
+    },
+  },
+  {
+    key: 'channelId', label: 'Level-up channel', type: 'channel', web: true,
+    help: "The channel used when level-ups are set to 'Level-up channel'.",
+    validate: async (ctx, v) => {
+      const ch = await channelById(ctx, v);
+      return ch ? accept(ch.id) : reject(`${NO_CHANNEL}. Pick a text channel.`);
+    },
+  },
+  {
+    key: 'message', label: 'Level-up message', type: 'text', web: true, maxLength: 500,
+    help: 'Text of the level-up message. Placeholders: {user} {username} {level} {server}. Type reset for the default.',
+    validate: (ctx, v) => {
+      const next = levelUpMessage(v);
+      return next === null ? reject('Write a message like: GG {user}, level {level}! You can also use {username} and {server}, or type reset.') : accept(next);
+    },
+  },
+  {
+    key: 'rewards', label: 'Role rewards', type: 'complex', web: true, max: MAX_REWARDS,
+    help: 'Map of level to role. Reaching that level gives the role.',
+    validate: validateRewards,
+    save: (ctx, value) => { ctx.patchConfig({ rewards: value }); forgetLogged(ctx.engine, ctx.serverId); },
+  },
+  boolField({ key: 'stackRewards', label: 'Keep all reward roles', help: 'On: members keep every reward role. Off: only the highest one is kept.' }),
+  { key: 'noXpChannels', label: 'No-XP channels', type: 'channels', web: true, max: 50, help: 'Messages in these channels earn no XP.', validate: validateChannelList },
+  { key: 'noXpRoles', label: 'No-XP roles', type: 'roles', web: true, max: 50, help: 'Members with any of these roles earn no chat XP.', validate: validateRoleList },
+];
 
 export const { setup, teardown, check } = defineApp({
   id: ID,
@@ -995,7 +1115,7 @@ export const { setup, teardown, check } = defineApp({
     tstack: admin(async (ctx) => { ctx.patchConfig({ stackRewards: ctx.config().stackRewards === false }); return refresh(ctx); }),
     ann: admin(async (ctx) => {
       const mode = ANNOUNCE_MODES.includes(ctx.argv[0]) ? ctx.argv[0] : 'here';
-      if (mode === 'channel' && !ctx.config().channelId) return ctx.warn('Pick a channel first', 'Type `/levels channel #level-ups` and level-ups go there.');
+      if (mode === 'channel' && !ctx.config().channelId) return ctx.warn('Pick a channel first', PICK_CHANNEL_FIRST);
       ctx.patchConfig({ announce: mode });
       return refresh(ctx);
     }),
@@ -1057,7 +1177,10 @@ export const { setup, teardown, check } = defineApp({
     return showRank(ctx, [], 'ephemeral');
   },
 
+  dashboard: DASHBOARD,
+
   services: (engine) => ({
+    ranked: (sid) => ranked(engine, sid).map((u) => ({ id: u.id, xp: u.xp, level: Number.isInteger(u.level) ? u.level : levelFor(u.xp), messages: u.messages || 0 })),
     getUser: (sid, uid) => {
       const u = readUser(engine, sid, uid);
       return { ...u, ...progressOf(u.xp), level: u.level };

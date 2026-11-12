@@ -15,6 +15,7 @@ export function createPerms({ bot, settings, isBotOwner = () => false, cacheMs =
     return value;
   };
   const invalidate = (prefix = '') => { for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k); };
+  const invalidateKey = (k) => cache.delete(k);
 
   const server = (sid) => cached(`s:${sid}`, () => bot.server(sid));
   const roles = (sid) => cached(`r:${sid}`, async () => (await bot.roles(sid)) || []);
@@ -132,5 +133,5 @@ export function createPerms({ bot, settings, isBotOwner = () => false, cacheMs =
     return !!s?.owner_id && s.owner_id === uid;
   }
 
-  return { isOwner, level, atLeast, has, actorCan, require, botCan, canActOn, canManageRole, permsOf, topPosition, botRoleName, server, roles, member, invalidate, LEVELS };
+  return { isOwner, level, atLeast, has, actorCan, require, botCan, canActOn, canManageRole, permsOf, topPosition, botRoleName, server, roles, member, invalidate, invalidateKey, LEVELS };
 }

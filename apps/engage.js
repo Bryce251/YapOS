@@ -4,6 +4,7 @@ import { card, dialog, button, row, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
 import { tokenize, parseDuration, formatDuration, clip, didYouMean } from '../engine/parse.js';
 import { friendly } from '../engine/errors.js';
+import { accept, reject } from '../engine/dashboard.js';
 
 const ID = 'engage';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -1079,6 +1080,20 @@ async function panelView(ctx) {
   return { embeds: [card({ title: `${ICONS.engage} Engage`, body: tips.join('\n'), fields, color: 'engage' })], components };
 }
 
+const WHO_CAN = ['member', 'mod', 'admin'];
+const WHO_LABELS = { member: 'Everyone', mod: 'Mods and up', admin: 'Admins only' };
+
+const whoField = (key, label, help) => ({
+  key, label, help, type: 'select', web: true,
+  options: WHO_CAN.map((value) => ({ value, label: WHO_LABELS[value] })),
+  validate: (ctx, v) => (WHO_CAN.includes(v) ? accept(v) : reject('Pick everyone, mods or admins.')),
+});
+
+const DASHBOARD = [
+  whoField('pollPerm', 'Who can start polls', 'Members can run up to 3 polls at once. Anyone can vote.'),
+  whoField('giveawayPerm', 'Who can start giveaways', 'Anyone can enter a giveaway.'),
+];
+
 const adminToggle = (key, values) => ({
   perm: 'admin',
   run: async (ctx) => {
@@ -1127,6 +1142,8 @@ export const { setup, teardown, check } = defineApp({
   events: {
     member_leave: onMemberLeave,
   },
+
+  dashboard: DASHBOARD,
 
   jobs: {
     pollend: async (job, engine) => {

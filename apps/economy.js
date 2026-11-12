@@ -3,6 +3,7 @@ import { card, dialog, button, row, rows, select, onOff, ICONS } from '../engine
 import { customId } from '../engine/router.js';
 import { tokenize, didYouMean, clip, formatDuration, fuzzyFind, fillTemplate, roleId as roleMention } from '../engine/parse.js';
 import { permName, friendly } from '../engine/errors.js';
+import { accept, reject, boolField } from '../engine/dashboard.js';
 
 const ID = 'economy';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -1047,13 +1048,26 @@ async function setCurrency(ctx, tokens) {
   return saveCurrency(ctx, parts.join(' '), emoji);
 }
 
+const NAME_HELP = 'Use 1 to 20 plain letters, like **gems** or **star dust**.';
+const EMOJI_HELP = 'Use one emoji, like 💎.';
+const DAILY_HELP = `Use a whole number from 0 to ${fmt(MAX_SETTING)} (0 turns daily off).`;
+const WORK_HELP = `Use whole numbers from 1 to ${fmt(MAX_SETTING)}, like \`/economy work 20 80\`.`;
+const START_HELP = `Use a whole number from 0 to ${fmt(MAX_SETTING)}.`;
+
+function workPair(loText, hiText) {
+  const lo = numberIn(loText, { min: 1 });
+  const hi = numberIn(hiText ?? loText, { min: 1 });
+  if (lo === null || hi === null) return null;
+  return lo <= hi ? [lo, hi] : [hi, lo];
+}
+
 async function saveCurrency(ctx, nameText, emojiText) {
   const name = cleanCurrencyName(nameText);
-  if (!name) return ctx.warn("That name didn't work", 'Use 1 to 20 plain letters, like **gems** or **star dust**.');
+  if (!name) return ctx.warn("That name didn't work", NAME_HELP);
   const patch = { currencyName: name };
   if (emojiText !== undefined && String(emojiText).trim()) {
     const emoji = cleanEmoji(emojiText);
-    if (!emoji) return ctx.warn("That emoji didn't work", 'Use one emoji, like 💎.');
+    if (!emoji) return ctx.warn("That emoji didn't work", EMOJI_HELP);
     patch.currencyEmoji = emoji;
   }
   ctx.patchConfig(patch);
@@ -1068,17 +1082,16 @@ function numberIn(text, { min = 0, max = MAX_SETTING } = {}) {
 
 async function saveDaily(ctx, text) {
   const n = numberIn(text, { min: 0 });
-  if (n === null) return ctx.warn("That amount didn't work", `Use a whole number from 0 to ${fmt(MAX_SETTING)} (0 turns daily off).`);
+  if (n === null) return ctx.warn("That amount didn't work", DAILY_HELP);
   ctx.patchConfig({ dailyAmount: n });
   const cur = currencyOf(ctx.engine, ctx.serverId);
   return ctx.ok('Daily saved', n ? `/daily gives ${price(cur, n)}, plus up to +${STREAK_MAX}% for streaks.` : '/daily is off now.');
 }
 
 async function saveWork(ctx, loText, hiText) {
-  const lo = numberIn(loText, { min: 1 });
-  const hi = numberIn(hiText ?? loText, { min: 1 });
-  if (lo === null || hi === null) return ctx.warn("That pay didn't work", `Use whole numbers from 1 to ${fmt(MAX_SETTING)}, like \`/economy work 20 80\`.`);
-  const [a, b] = lo <= hi ? [lo, hi] : [hi, lo];
+  const pair = workPair(loText, hiText);
+  if (!pair) return ctx.warn("That pay didn't work", WORK_HELP);
+  const [a, b] = pair;
   ctx.patchConfig({ workMin: a, workMax: b });
   const cur = currencyOf(ctx.engine, ctx.serverId);
   return ctx.ok('Work pay saved', `A shift pays ${fmt(a)} to ${fmt(b)} ${cur.emoji}, once an hour.`);
@@ -1086,13 +1099,59 @@ async function saveWork(ctx, loText, hiText) {
 
 async function saveStart(ctx, text) {
   const n = numberIn(text, { min: 0 });
-  if (n === null) return ctx.warn("That amount didn't work", `Use a whole number from 0 to ${fmt(MAX_SETTING)}.`);
+  if (n === null) return ctx.warn("That amount didn't work", START_HELP);
   ctx.patchConfig({ startBalance: n });
   const cur = currencyOf(ctx.engine, ctx.serverId);
   return ctx.ok('Starting balance saved', `New wallets start with ${price(cur, n)}. Existing wallets don't change.`);
 }
 
 const ECON_SUBS = ['give', 'take', 'reset', 'currency', 'daily', 'work', 'start', 'settings'];
+
+const amountField = (key, label, help, min, error) => ({
+  key, label, help, type: 'number', web: true, min, max: MAX_SETTING, step: 1,
+  validate: (ctx, v) => {
+    const n = numberIn(v, { min });
+    return n === null ? reject(error) : accept(n);
+  },
+});
+
+const workField = (key, label, help) => ({
+  ...amountField(key, label, help, 1, WORK_HELP),
+  save: (ctx, value, all) => {
+    const cfg = ctx.config();
+    const other = key === 'workMin' ? 'workMax' : 'workMin';
+    const otherValue = all && all[other] !== undefined && numberIn(all[other], { min: 1 }) !== null ? numberIn(all[other], { min: 1 }) : cfg[other];
+    const pair = key === 'workMin' ? workPair(value, otherValue) : workPair(otherValue, value);
+    if (!pair) return { error: WORK_HELP };
+    ctx.patchConfig({ workMin: pair[0], workMax: pair[1] });
+    return { applied: { workMin: pair[0], workMax: pair[1] } };
+  },
+});
+
+const DASHBOARD = [
+  {
+    key: 'currencyName', label: 'Currency name', type: 'string', web: true, maxLength: 20,
+    help: 'What your coins are called, like gems or star dust.',
+    validate: (ctx, v) => {
+      const name = cleanCurrencyName(v);
+      return name ? accept(name) : reject(NAME_HELP);
+    },
+  },
+  {
+    key: 'currencyEmoji', label: 'Currency emoji', type: 'emoji', web: true, maxLength: 80,
+    help: 'The emoji shown next to prices and balances.',
+    validate: (ctx, v) => {
+      const emoji = cleanEmoji(v);
+      return emoji ? accept(emoji) : reject(EMOJI_HELP);
+    },
+  },
+  amountField('dailyAmount', 'Daily reward', 'Coins from /daily, before the streak bonus. 0 turns /daily off.', 0, DAILY_HELP),
+  workField('workMin', 'Work pay (lowest)', 'The least a shift of /balance work pays.'),
+  workField('workMax', 'Work pay (highest)', 'The most a shift of /balance work pays.'),
+  boolField({ key: 'workEnabled', label: '/balance work enabled', help: 'Lets members earn coins once an hour with /balance work.' }),
+  boolField({ key: 'begEnabled', label: '/beg enabled', help: 'Lets members beg for a few coins.' }),
+  amountField('startBalance', 'Starting balance', 'Coins every new wallet starts with. Existing wallets do not change.', 0, START_HELP),
+];
 
 async function runEconomy(ctx) {
   await ctx.require('admin');
@@ -1250,7 +1309,10 @@ export const { setup, teardown, check } = defineApp({
     return ctx.ephemeral(await walletView(ctx, ctx.userId, { self: true }));
   },
 
+  dashboard: DASHBOARD,
+
   services: (engine) => ({
+    ranked: (sid) => ranked(engine, sid),
     currency: (sid) => currencyOf(engine, sid),
     balance: (sid, uid) => {
       needIds(sid, uid);

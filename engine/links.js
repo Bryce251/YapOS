@@ -17,7 +17,20 @@ export function fileUrl(path) {
   return FILE_HOST + p.split('/').map(encodeURIComponent).join('/');
 }
 
-export const isPicture = (nameOrPath) => PICTURE.test(String(nameOrPath ?? '').split('?')[0]);
+const AVATAR_HOST = 'https://files.yapper.website/avatars/';
+const SITE_HOST = 'https://www.yapin.gg';
+
+export function avatarUrl(path) {
+  if (typeof path !== 'string' || !path.trim()) return null;
+  const p = path.trim();
+  if (/\s|\\/.test(p)) return null;
+  if (/^https:\/\//i.test(p)) return [AVATAR_HOST, `${SITE_HOST}/`].some((host) => p.toLowerCase().startsWith(host)) ? p : null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(p) || p.startsWith('//') || /[?#]/.test(p) || p.split('/').includes('..')) return null;
+  if (p.startsWith('/')) return SITE_HOST + p;
+  return AVATAR_HOST + p;
+}
+
+export const isPicture =(nameOrPath) => PICTURE.test(String(nameOrPath ?? '').split('?')[0]);
 
 export function messageLink(serverId, channelId, messageId) {
   if (!channelId || !messageId) return null;
