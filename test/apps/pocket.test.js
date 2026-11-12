@@ -890,3 +890,25 @@ test('review: highlights only look up people known in the server, at most 25, an
   assert.ok([...again].every((u) => !first.has(u)), 'non-members found last time are skipped for 10 minutes');
   h.engine.perms.member = realMember;
 });
+
+test('highlights: /highlight test sends a sample DM and explains when real ones come', async () => {
+  const h = await make();
+  await h.slash('highlight', 'add pizza', { user: IDS.member });
+  const ans = await h.slash('highlight', 'test', { user: IDS.member });
+  assert.match(lastText(h, ans), /Test sent to your DMs/);
+  assert.match(lastText(h, ans), /someone else/);
+  const dms = highlightDms(h);
+  assert.equal(dms.length, 1);
+  assert.match(dms[0].embeds[0].title, /^🧪 Test: 🔔 "pizza" was mentioned in #general/);
+  const none = await h.slash('highlight', 'test', { user: IDS.member2 });
+  assert.match(lastText(h, none), /no highlights yet/);
+  assert.equal(highlightDms(h, IDS.member2).length, 1);
+});
+
+test('highlights: a typed highlight command does not count as chatting in the channel', async () => {
+  const h = await make();
+  await h.message('!highlight add pizza', { user: IDS.member });
+  assert.deepEqual(highlightsOf(h), ['pizza']);
+  await h.message('who wants pizza', { user: IDS.member2 });
+  assert.equal(highlightDms(h).length, 1);
+});

@@ -775,7 +775,7 @@ function highlightMessage(engine, msg, uid, now) {
   const index = highlightIndex(engine);
   if (!index.users.size) return;
   if (index.users.has(uid)) {
-    stamp(st.hlSeen, `${uid}:${msg.channel_id}`, now);
+    if (!msg.command) stamp(st.hlSeen, `${uid}:${msg.channel_id}`, now);
     rememberServer(engine, uid, msg.server_id);
   }
   const content = String(msg.content ?? '');
@@ -861,12 +861,12 @@ async function contextLines(engine, msg) {
   }
 }
 
-async function sendHighlight(engine, msg, target, phrase, channel, user) {
+async function sendHighlight(engine, msg, target, phrase, channel, user, { test = false } = {}) {
   const server = await engine.perms.server(msg.server_id).catch(() => null);
   const link = messageLink(msg.server_id, msg.channel_id, msg.id);
   const sentAt = Date.parse(msg.created_at);
   const author = clip(authorName(msg), 100);
-  const context = await contextLines(engine, msg);
+  const context = test ? [] : await contextLines(engine, msg);
   const text = `**${plain(author)}:** ${plain(clip(String(msg.content ?? ''), HIGHLIGHT_TEXT_MAX))}`;
   const fields = [
     { name: 'From', value: author, inline: true },
@@ -874,7 +874,7 @@ async function sendHighlight(engine, msg, target, phrase, channel, user) {
     { name: 'Sent', value: whenAt(Number.isFinite(sentAt) ? sentAt : nowOf(engine), tzOf(user)), inline: true },
   ];
   const embed = card({
-    title: clip(`🔔 "${phrase}" was mentioned in #${channel.name}${server?.name ? ` (${server.name})` : ''}`, 256),
+    title: clip(`${test ? '🧪 Test: ' : ''}🔔 "${phrase}" was mentioned in #${channel.name}${server?.name ? ` (${server.name})` : ''}`, 256),
     url: link || undefined,
     body: [...context, text].join('\n'),
     fields,
@@ -883,9 +883,11 @@ async function sendHighlight(engine, msg, target, phrase, channel, user) {
   });
   try {
     const dm = await engine.bot.dm(target);
-    await engine.budget.send({ serverId: null, channelId: dm, content: '', opts: { embeds: [embed], components: link ? [row(linkButton('Jump to message', link, '↗️'))] : [] }, priority: 'low' });
+    await engine.budget.send({ serverId: null, channelId: dm, content: '', opts: { embeds: [embed], components: link ? [row(linkButton('Jump to message', link, '↗️'))] : [] }, priority: test ? 'normal' : 'low' });
+    return true;
   } catch (e) {
     engine.log.debug(`[pocket] could not DM a highlight (DMs may be closed): ${e?.message}`);
+    return false;
   }
 }
 
@@ -893,7 +895,7 @@ function highlightExamples() {
   return [
     '`/highlight add pizza` · `/highlight add game night`',
     '`/highlight list` · `/highlight remove pizza` · `/highlight remove 2`',
-    '`/highlight pause` · `/highlight resume` · `/highlight clear`',
+    '`/highlight pause` · `/highlight resume` · `/highlight clear` · `/highlight test`',
   ].join('\n');
 }
 
@@ -915,6 +917,7 @@ async function highlightCommand(ctx, raw) {
   if (sub === 'help' || sub === '?') {
     return answer(ctx, { embeds: [card({ title: '🔔 Highlights', body: `Save words or phrases. When someone says one in a channel you can see, I DM you a copy with a link.\nUp to ${MAX_HIGHLIGHTS}, ${HIGHLIGHT_MIN} to ${HIGHLIGHT_MAX} characters each. Whole words only, so **pizza** doesn't match **pizzas**.\nI watch the servers we share where you've sent a message or used /highlight.\n\n${highlightExamples()}`, color: 'pocket' })] });
   }
+  if (sub === 'test' && words.length === 1) return testHighlight(ctx);
   if (['add', 'new', 'save', '+'].includes(sub)) return addHighlightReply(ctx, rest);
   if (DEL_WORDS.includes(sub) || sub === '-') {
     if (!rest) return ctx.warn('Which one?', 'Add the word or its number, like `/highlight remove pizza` or `/highlight remove 2`.');
@@ -939,10 +942,25 @@ async function highlightCommand(ctx, raw) {
     return ctx.ok('Highlights are on', n ? `I'm watching for your ${plural(n, 'word')} again.` : 'Add a word with `/highlight add pizza`.');
   }
   if (words.length === 1) {
-    const guess = didYouMean(sub, ['add', 'remove', 'list', 'clear', 'pause', 'resume', 'help']);
+    const guess = didYouMean(sub, ['add', 'remove', 'list', 'clear', 'pause', 'resume', 'test', 'help']);
     if (guess.length) return ctx.warn("I didn't get that", `Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?\n\n${highlightExamples()}`);
   }
   return addHighlightReply(ctx, text);
+}
+
+async function testHighlight(ctx) {
+  const { engine } = ctx;
+  const uid = ctx.userId;
+  const user = readUser(engine, uid);
+  const phrase = user.highlights[0] || 'pizza';
+  const channels = ctx.serverId ? await engine.cache.channels(ctx.serverId).catch(() => []) : [];
+  const channel = (Array.isArray(channels) ? channels : []).find((c) => c.id === ctx.channelId) || { name: 'general' };
+  const sample = { server_id: ctx.serverId || null, channel_id: ctx.channelId || null, id: null, author: 'YapOS', content: `This is a test. Does anyone want ${phrase}?`, created_at: new Date(nowOf(engine)).toISOString() };
+  const sent = await sendHighlight(engine, sample, uid, phrase, channel, user, { test: true });
+  if (!sent) return ctx.warn("I couldn't DM you", 'Your DMs might be closed. Open them and try `/highlight test` again.');
+  const rules = 'Real highlights come when **someone else** says your word in a channel you can see. Not for your own messages, or in a channel you were chatting in during the last 5 minutes.';
+  const status = user.highlightsPaused ? '\n-# Your highlights are paused. Turn them back on with `/highlight resume`.' : user.highlights.length ? '' : '\n-# You have no highlights yet. Add one with `/highlight add pizza`.';
+  return ctx.ok('Test sent to your DMs', `${rules}${status}`);
 }
 
 function addHighlightReply(ctx, text) {
@@ -951,7 +969,7 @@ function addHighlightReply(ctx, text) {
   if (out.dupe) return ctx.info('Already saved', `**${plain(out.word)}** is already one of your highlights.`);
   if (out.full) return ctx.warn('Your list is full', `You can have ${MAX_HIGHLIGHTS} highlights. Remove one with \`/highlight remove <word>\`.`);
   const paused = readUser(ctx.engine, ctx.userId).highlightsPaused ? '\n-# Your highlights are paused. Type `/highlight resume` to turn them on.' : '';
-  return ctx.ok(`Highlight ${out.count} saved`, `When someone says **${plain(out.word)}** in a channel you can see, I'll DM you.${paused}\n-# \`/highlight list\` to see them all.`);
+  return ctx.ok(`Highlight ${out.count} saved`, `When someone says **${plain(out.word)}** in a channel you can see, I'll DM you.${paused}\n-# Not for your own messages, or in a channel you've been chatting in for the last 5 minutes, since you'd see it anyway. \`/highlight list\` to see them all.`);
 }
 
 const isBookmark = (emoji) => {
