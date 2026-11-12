@@ -5,10 +5,10 @@ import { createResults } from './results.js';
 import { standings } from './board.js';
 import { viewFor } from '../views/index.js';
 
-export function headerModel(snap) {
+export function headerModel(snap, { alone = false } = {}) {
   const phase = snap.ready ? snap.room.phase : 'connecting';
   const game = snap.game;
-  let status = 'Connecting';
+  let status = alone ? 'Not in a call' : 'Connecting';
   if (phase === 'lobby') status = 'Lobby';
   else if (phase === 'game') status = game ? `${game.emoji} ${game.name}` : 'Playing';
   else if (phase === 'results') status = 'Results';
@@ -30,6 +30,8 @@ function stripModel(snap) {
 }
 
 export function mountApp({ root, engine, bridge, win }) {
+  const alone = !win.parent || win.parent === win;
+  let account = alone ? { state: 'loading', name: '' } : null;
   const fx = createFx(win);
   const toastRoot = h('div', { class: 'toasts', attrs: { 'aria-live': 'polite' } });
   const head = h('header', { class: 'top' });
@@ -52,7 +54,6 @@ export function mountApp({ root, engine, bridge, win }) {
   let view = null;
   let viewKey = '';
   let screen = '';
-  const firstSeen = Date.now();
 
   const paintHead = memo((m) =>
     h(
@@ -73,7 +74,7 @@ export function mountApp({ root, engine, bridge, win }) {
         'span',
         { class: 'top-actions' },
         m.canEnd ? button('End game', { variant: 'ghost', size: 'sm', key: 'end', on: () => engine.lobby.end(), attrs: { 'aria-label': 'End game', title: 'End game' }, kids: h('span', { class: 'btn-icon', text: '⏹', attrs: { 'aria-hidden': 'true' } }) }) : null,
-        button('Leave', { variant: 'ghost', size: 'sm', key: 'leave', on: () => bridge.close(), attrs: { 'aria-label': 'Leave', title: 'Leave' }, kids: h('span', { class: 'btn-icon', text: '🚪', attrs: { 'aria-hidden': 'true' } }) }),
+        button('Leave', { variant: 'ghost', size: 'sm', key: 'leave', on: leave, attrs: { 'aria-label': 'Leave', title: 'Leave' }, kids: h('span', { class: 'btn-icon', text: '🚪', attrs: { 'aria-hidden': 'true' } }) }),
       ),
     ),
   );
@@ -96,6 +97,7 @@ export function mountApp({ root, engine, bridge, win }) {
         h('span', { class: 'trophy', text: '🎉', attrs: { 'aria-hidden': 'true' } }),
         h('h1', { class: 'winner-title', text: 'YapOS Party' }),
         h('p', { class: 'muted', text: "Start it from a voice call in Yapin' to play with everyone in the call." }),
+        accountBlock(m.account),
       );
     }
     return h(
@@ -107,12 +109,48 @@ export function mountApp({ root, engine, bridge, win }) {
   });
 
   function connectModel(snap) {
-    const alone = !win.parent || win.parent === win;
-    return { lost: alone && Date.now() - firstSeen > 4000, ready: Boolean(snap && snap.ready) };
+    return { lost: alone, ready: Boolean(snap && snap.ready), account: account ? `${account.state}:${account.name}` : '' };
+  }
+
+  function accountBlock(key) {
+    if (!key) return null;
+    const [state, ...rest] = key.split(':');
+    const name = rest.join(':');
+    if (state === 'loading') return h('p', { class: 'muted account-line', text: 'Checking your account…' });
+    if (state === 'in') {
+      return h('div', { class: 'account' },
+        h('p', { class: 'account-line' }, h('span', { text: 'Signed in as ' }), h('strong', { text: name || 'you' }), h('span', { text: '.' })),
+        h('a', { class: 'btn btn-ghost spot', attrs: { href: '/servers' } }, h('span', { class: 'btn-label', text: 'Open the dashboard' })));
+    }
+    return h('div', { class: 'account' },
+      h('p', { class: 'account-line', text: "You're not signed in. Authorize YapOS with your Yapin' account to use it." }),
+      h('a', { class: 'btn btn-primary spot', attrs: { href: '/auth/login?next=%2Factivity%2F' } }, h('span', { class: 'btn-label', text: "Log in with Yapin'" })));
+  }
+
+  function leave() {
+    if (alone) {
+      win.location.assign('/');
+      return;
+    }
+    if (!engine.snapshot().ready) toast('Use the call controls to close the activity.');
+    bridge.close();
+  }
+
+  if (alone && typeof win.fetch === 'function') {
+    win.fetch('/api/me', { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+      .then(async (r) => {
+        const data = r.ok ? await r.json() : null;
+        const u = data && data.user;
+        account = u ? { state: 'in', name: String(u.display_name || u.username || '').slice(0, 64) } : { state: 'out', name: '' };
+      })
+      .catch(() => { account = { state: 'out', name: '' }; })
+      .finally(() => render(engine.snapshot()));
+  } else if (alone) {
+    account = { state: 'out', name: '' };
   }
 
   function render(snap) {
-    const hm = headerModel(snap);
+    const hm = headerModel(snap, { alone });
     paintHead(head, hm);
     root.dataset.phase = hm.phase;
     if (screen === 'results' && hm.phase !== 'results') fx.clear();

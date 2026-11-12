@@ -1354,3 +1354,27 @@ img {
     animation: none;
   }
 }
+
+.account {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  width: 100%;
+}
+
+.account-line {
+  margin: 0;
+  color: var(--text-2, rgba(255, 255, 255, 0.72));
+}
+
+.account-line strong {
+  color: var(--text, #fff);
+}
+
+.account a.btn {
+  text-decoration: none;
+}
