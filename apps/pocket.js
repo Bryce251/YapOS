@@ -1,6 +1,7 @@
 import { defineApp } from '../engine/apps.js';
-import { card, dialog, button, row, ICONS } from '../engine/ui.js';
+import { card, dialog, button, linkButton, row, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
+import { messageFiles, messageLink, isPicture } from '../engine/links.js';
 import { tokenize, parseDuration, takeDuration, formatDuration, mentionedUserIds, clip, didYouMean, authorName } from '../engine/parse.js';
 import { isTimeZone, partsAt, zonedTime, nextRun } from '../engine/scheduler.js';
 
@@ -623,18 +624,24 @@ async function onReaction(ctx, ev) {
   const channel = channels.find((c) => c.id === ev.channel_id);
   const where = `${channel ? `#${channel.name}` : 'a channel'}${server?.name ? ` in ${server.name}` : ''}`;
   const sentAt = Date.parse(m.created_at);
-  const attachment = m.attachment_name || (m.attachment_path ? String(m.attachment_path).split('/').pop() : null);
+  const files = messageFiles(m);
+  const link = messageLink(ev.server_id, ev.channel_id, ev.message_id);
   const fields = [
     { name: 'From', value: clip(authorLabel || 'someone', 100), inline: true },
     { name: 'Where', value: clip(where, 200), inline: true },
     { name: 'Sent', value: Number.isFinite(sentAt) ? whenAt(sentAt, tzOf(user)) : 'unknown', inline: true },
   ];
-  if (attachment) fields.push({ name: 'Attachment', value: clip(attachment, 200), inline: false });
-  const embed = card({ title: `💬 Bookmark from ${clip(channel ? `#${channel.name}` : 'a server', 200)}`, body: m.content ? clip(m.content, 3800) : '*(no text)*', fields, color: 'pocket', footer: 'Saved with 💬 · YapOS Pocket' });
+  if (files.length) fields.push({ name: files.length === 1 ? 'Attachment' : 'Attachments', value: clip(files.map((f) => f.url).join('\n'), 1000), inline: false });
+  if (link) fields.push({ name: 'Message link', value: link, inline: false });
+  const picture = files.find((f) => isPicture(f.name) || isPicture(f.url));
+  const embed = card({ title: `💬 Bookmark from ${clip(channel ? `#${channel.name}` : 'a server', 200)}`, url: link || undefined, body: m.content ? clip(m.content, 3800) : '*(no text)*', fields, color: 'pocket', footer: 'Saved with 💬 · YapOS Pocket', image: picture?.url });
+  const links = [];
+  if (link) links.push(linkButton('Jump to message', link, '↗️'));
+  if (files[0]) links.push(linkButton(files.length === 1 ? 'Open file' : 'Open first file', files[0].url, '📎'));
 
   try {
     const dm = await engine.bot.dm(uid);
-    await engine.budget.send({ serverId: null, channelId: dm, content: '', opts: { embeds: [embed] }, priority: 'low' });
+    await engine.budget.send({ serverId: null, channelId: dm, content: '', opts: { embeds: [embed], components: links.length ? [row(links)] : [] }, priority: 'low' });
   } catch (e) {
     engine.log.debug(`[pocket] could not DM a bookmark (DMs may be closed): ${e?.message}`);
     release();

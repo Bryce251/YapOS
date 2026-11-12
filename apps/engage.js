@@ -361,8 +361,10 @@ function giveawayView(engine, g) {
   }
   const embed = card({ title: `🎉 ${g.prize}`, body, color: g.ended ? 'muted' : 'engage', footer: `Giveaway #${g.id}${g.ended ? '' : ' · winners are drawn at random'}` });
   embed.timestamp = new Date(g.ended ? g.endedAt || g.endsAt : g.endsAt).toISOString();
-  const btn = g.ended ? button('Ended', cid('enter', g.id), 'secondary', '🎉', { disabled: true }) : button('Enter', cid('enter', g.id), 'primary', '🎉');
-  return { content: '', embeds: [embed], components: [row(btn)] };
+  const btns = g.ended
+    ? [button('Ended', cid('enter', g.id), 'secondary', '🎉', { disabled: true }), (g.entries || []).length ? button('Reroll', cid('reroll', g.id), 'secondary', '🔁', { disabled: (g.rerolls || []).length >= MAX_REROLLS }) : null]
+    : [button('Enter', cid('enter', g.id), 'primary', '🎉')];
+  return { content: '', embeds: [embed], components: [row(btns)] };
 }
 
 const viewOf = (engine, type, item) => (type === 'poll' ? pollView(engine, item) : giveawayView(engine, item));
@@ -953,18 +955,24 @@ async function rerollGiveaway(ctx, tok, countTok) {
   const out = await withLock(engine, itemKey(sid, 'giveaway', g.id), async () => {
     const fresh = readItem(engine, sid, 'giveaway', g.id);
     const exclude = new Set([...(fresh.winnerIds || []), ...(fresh.rerolls || []).flatMap((r) => r.ids)]);
-    const ids = await pickWinners(engine, sid, fresh, count, exclude);
+    let ids = await pickWinners(engine, sid, fresh, count, exclude);
+    let again = false;
+    if (!ids.length) {
+      ids = await pickWinners(engine, sid, fresh, count, new Set());
+      again = ids.length > 0;
+    }
     if (!ids.length) return { status: 'empty' };
     changeItem(engine, sid, 'giveaway', g.id, (x) => { x.rerolls = [...(x.rerolls || []), { at: nowOf(engine), by: ctx.userId, ids }]; });
     try { await refreshNow(engine, sid, 'giveaway', g.id); } catch (e) { engine.log.debug('[engage] reroll card update failed', e?.message); }
     const now = readItem(engine, sid, 'giveaway', g.id);
     try { await announce(engine, now, ids, { reroll: true }); } catch (e) { engine.log.debug('[engage] reroll announcement failed', e?.message); }
     await logGiveaway(engine, now, ids, { reroll: true, by: ctx.userId });
-    return { status: 'ok', ids };
+    return { status: 'ok', ids, again };
   });
   if (out.status === 'busy') return ctx.info('Busy', "I'm already drawing for this giveaway. Give it a moment.");
-  if (out.status === 'empty') return ctx.warn('Nobody left to pick', 'Everyone else who entered has already won, left the server, or no longer meets the requirements.');
-  return ctx.ok('Rerolled', `New ${out.ids.length === 1 ? 'winner' : 'winners'}: ${out.ids.map((u) => `<@${u}>`).join(', ')}. I announced it in <#${g.channelId}>.`);
+  if (out.status === 'empty') return ctx.warn('Nobody left to pick', 'Everyone who entered has left the server or no longer meets the requirements.');
+  const note = out.again ? '\n-# Everyone who entered had already won, so I drew from all the entries again.' : '';
+  return ctx.ok('Rerolled', `New ${out.ids.length === 1 ? 'winner' : 'winners'}: ${out.ids.map((u) => `<@${u}>`).join(', ')}. I announced it in <#${g.channelId}>.${note}`);
 }
 
 function giveawayForm(ctx) {
@@ -1104,6 +1112,7 @@ export const { setup, teardown, check } = defineApp({
     voters: { run: showVoters },
     pend: { run: (ctx) => endPollByHand(ctx, ctx.argv[0]) },
     enter: { run: enter },
+    reroll: { run: (ctx) => rerollGiveaway(ctx, ctx.argv[0]) },
     leave: { run: leave },
     stay: { run: (ctx) => ctx.update({ embeds: [dialog.ok('Still in', "You're still in the giveaway. Good luck!")], components: [] }) },
     newpoll: { run: async (ctx) => { await requireCreator(ctx, 'poll'); return pollForm(ctx); } },

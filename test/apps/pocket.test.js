@@ -501,10 +501,20 @@ test('bookmarks: reacting 💬 DMs a copy, at most 20 an hour, duplicates ignore
   assert.match(text, /Test Town/);
   assert.match(text, /notes\.txt/);
   assert.match(text, /\(UTC\)/);
+  const link = `https://www.yapper.website/?server=${IDS.server}&channel=${IDS.channels.general}&msg=${msg.id}`;
+  assert.ok(text.includes('https://files.yapper.website/attachments/abc/notes.txt'), 'file link');
+  assert.ok(text.includes(link), 'message link');
+  assert.equal(dms[0].embeds[0].url, link);
+  assert.deepEqual(dms[0].components[0].components.map((b) => b.url), [link, 'https://files.yapper.website/attachments/abc/notes.txt']);
+  assert.equal(dms[0].embeds[0].image, undefined, 'a text file is not shown as a picture');
+  const pic = await h.message('look', { user: IDS.member2, attachment: 'aad5e2c5/r2-1794-ypnip-t.png' });
+  await h.react(pic.id, '💬', { user: IDS.member });
+  const picDm = h.sent(dmOf(IDS.member)).at(-1);
+  assert.equal(picDm.embeds[0].image.url, 'https://files.yapper.website/attachments/aad5e2c5/r2-1794-ypnip-t.png');
   await h.react(msg.id, '💬', { user: IDS.member });
-  assert.equal(h.sent(dmOf(IDS.member)).length, 1, 'the same message twice is ignored');
+  assert.equal(h.sent(dmOf(IDS.member)).length, 2, 'the same message twice is ignored');
   await h.react(msg.id, '👍', { user: IDS.member });
-  assert.equal(h.sent(dmOf(IDS.member)).length, 1, 'other emoji do nothing');
+  assert.equal(h.sent(dmOf(IDS.member)).length, 2, 'other emoji do nothing');
   for (let i = 0; i < 25; i++) {
     const m = await h.message(`msg ${i}`, { user: IDS.member2 });
     await h.react(m.id, '💬', { user: IDS.member });

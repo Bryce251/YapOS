@@ -18,6 +18,7 @@ const MINUTE = 60_000;
 const SWEEP_EVERY_MS = 10 * MINUTE;
 const STARTUP_SWEEP_MS = 15_000;
 const NEW_ROOM_GRACE_MS = MINUTE;
+const MOVE_WAITS = [800, 1600, 3000];
 const RENAME_COOLDOWN_MS = 30_000;
 const ACCESS_COOLDOWN_MS = 3_000;
 const PICK_LIMIT = 20;
@@ -209,8 +210,8 @@ async function panelView(engine, sid, room, note) {
   };
 }
 
-async function postPanel(engine, sid, room) {
-  const view = await panelView(engine, sid, room);
+async function postPanel(engine, sid, room, note) {
+  const view = await panelView(engine, sid, room, note);
   const opts = { embeds: view.embeds, components: view.components };
   const target = cfgOf(engine, sid).panelChannel;
   if (target) {
@@ -324,6 +325,32 @@ function retryLater(engine, sid, uid, waitMs) {
   st.retry.set(k, timer);
 }
 
+async function inAnyVoice(engine, sid, uid) {
+  try {
+    const list = await engine.bot.voice(sid);
+    return (list || []).some((v) => (v.user_ids || []).includes(uid));
+  } catch {
+    return true;
+  }
+}
+
+async function moveIn(engine, sid, uid, channelId) {
+  const waits = Array.isArray(engine.config?.voiceMoveWaits) ? engine.config.voiceMoveWaits : MOVE_WAITS;
+  let error = null;
+  for (let i = 0; i <= waits.length; i++) {
+    try {
+      await engine.bot.moveMember(sid, uid, channelId);
+      return { ok: true };
+    } catch (e) {
+      error = e;
+      if (e?.status === 403 || e?.status === 404 || i === waits.length) break;
+      await new Promise((r) => { const t = setTimeout(r, waits[i]); t.unref?.(); });
+    }
+  }
+  engine.log.debug('[voice] move into new room failed', error?.status, error?.message);
+  return { ok: false, error };
+}
+
 async function createRoomFor(engine, sid, uid) {
   const st = stateOf(engine);
   const flight = `${sid}:${uid}`;
@@ -368,19 +395,23 @@ async function createRoomFor(engine, sid, uid) {
     engine.cache.invalidate(sid);
     const room = writeRoom(engine, sid, { id: channel.id, key: newKey(engine, sid), ownerId: uid, name: channel.name || name, createdAt: now(engine), roleId: null, locked: false, hidden: false, panel: null });
     ensureSweep(engine, sid);
-    try {
-      await engine.bot.moveMember(sid, uid, channel.id);
-      solved(engine, sid, 'move');
-    } catch (e) {
-      const where = await peopleIn(engine, sid, cfg.createChannelId).catch(() => null);
-      await closeRoom(engine, sid, room);
-      if (where?.includes(uid)) {
-        const { body } = explain(e, { action: 'move people into their new room', perm: 'move_members' });
-        await logProblem(engine, sid, 'move', `I made a room for **${mdSafe(displayName(member), 'someone')}** but couldn't move them into it, so I deleted it again.\n${body}`, "Couldn't move someone into their room");
+    const moved = await moveIn(engine, sid, uid, channel.id);
+    let note;
+    if (moved.ok) solved(engine, sid, 'move');
+    else {
+      const stillInVoice = await inAnyVoice(engine, sid, uid);
+      if (!stillInVoice) {
+        await closeRoom(engine, sid, room);
+        return null;
       }
-      return null;
+      patchRoom(engine, sid, room.id, { waiting: true });
+      note = `➡️ I couldn't move you in by myself, so click <#${room.id}> to join your room. It stays open for a minute while you get there.`;
+      if (moved.error?.status === 403) {
+        const { body } = explain(moved.error, { action: 'move people into their new room', perm: 'move_members' });
+        await logProblem(engine, sid, 'move', `I made a room for **${mdSafe(displayName(member), 'someone')}** but couldn't move them into it, so they have to click it to join.\n${body}`, "Couldn't move someone into their room");
+      }
     }
-    const panel = await postPanel(engine, sid, room);
+    const panel = await postPanel(engine, sid, roomById(engine, sid, room.id) || room, note);
     if (!panel) return room;
     const saved = patchRoom(engine, sid, room.id, { panel });
     if (!saved) await engine.bot.delete(panel.channelId, panel.messageId).catch(() => {});
@@ -447,6 +478,26 @@ async function onVoiceJoin(ctx, ev) {
   await createRoomFor(engine, sid, uid);
 }
 
+function recheckLater(engine, sid, roomId, waitMs) {
+  const st = stateOf(engine);
+  const k = `${sid}:${roomId}`;
+  st.rechecks ||= new Map();
+  if (st.rechecks.has(k)) return;
+  const timer = setTimeout(async () => {
+    st.rechecks.delete(k);
+    try {
+      const room = roomById(engine, sid, roomId);
+      if (!room) return;
+      const people = await insideRoom(engine, sid, room);
+      if (people && !people.length) await closeRoom(engine, sid, room);
+    } catch (e) {
+      engine.log.debug('[voice] empty room recheck failed', e?.message);
+    }
+  }, waitMs);
+  timer.unref?.();
+  st.rechecks.set(k, timer);
+}
+
 async function onVoiceLeave(ctx, ev) {
   const { engine } = ctx;
   const sid = ev.server_id;
@@ -467,6 +518,11 @@ async function onVoiceLeave(ctx, ev) {
   }
   if (people === null) people = [];
   if (!people.length) {
+    const age = now(engine) - (Number(room.createdAt) || 0);
+    if (room.waiting && age < NEW_ROOM_GRACE_MS) {
+      recheckLater(engine, sid, room.id, NEW_ROOM_GRACE_MS - age + 1000);
+      return;
+    }
     await closeRoom(engine, sid, room);
     return;
   }
@@ -1059,6 +1115,7 @@ export const { setup, teardown, check } = defineApp({
   dispose(engine) {
     const st = states.get(engine);
     if (st) for (const t of st.retry.values()) clearTimeout(t);
+    if (st?.rechecks) for (const t of st.rechecks.values()) clearTimeout(t);
     states.delete(engine);
   },
 });

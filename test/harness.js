@@ -245,7 +245,8 @@ export function createFakeYapin() {
     ['PUT', /^\/channels\/([^/]+)\/messages\/([^/]+)\/pin$/, ([cid, mid]) => { state.pins.add(mid); return { ok: true }; }],
     ['DELETE', /^\/channels\/([^/]+)\/messages\/([^/]+)\/pin$/, ([cid, mid]) => { state.pins.delete(mid); return { ok: true }; }],
     ['PUT', /^\/channels\/([^/]+)\/messages\/([^/]+)\/reactions\/(.+)$/, ([cid, mid, emoji]) => { state.reactions.push({ channel_id: cid, message_id: mid, emoji: decodeURIComponent(emoji), user_id: IDS.bot }); return { ok: true }; }],
-    ['DELETE', /^\/channels\/([^/]+)\/messages\/([^/]+)\/reactions\/(.+)$/, ([cid, mid, emoji]) => { state.reactions = state.reactions.filter((r) => !(r.message_id === mid && r.emoji === decodeURIComponent(emoji))); return { ok: true }; }],
+    ['DELETE', /^\/channels\/([^/]+)\/messages\/([^/]+)\/reactions\/(.+)$/, ([cid, mid, emoji]) => { state.reactions = state.reactions.filter((r) => !(r.message_id === mid && r.emoji === decodeURIComponent(emoji) && r.user_id === IDS.bot)); return { ok: true }; }],
+    ['GET', /^\/channels\/([^/]+)\/messages\/([^/]+)\/reactions$/, ([cid, mid]) => ({ reactions: state.reactions.filter((r) => r.message_id === mid).map((r, i) => ({ id: `r${i}`, user_id: r.user_id, emoji: r.emoji, created_at: new Date().toISOString() })) })],
     ['POST', /^\/users\/([^/]+)\/dm$/, ([uid]) => { if (!features.dms) throw httpError(403, 'DMs are in testing'); const cid = `d${uid.slice(1)}`; state.dms[cid] = uid; return { channel_id: cid }; }],
     ['GET', /^\/users\/([^/]+)$/, ([uid]) => { const m = Object.values(state.members).flat().find((x) => x.id === uid); if (!m) throw httpError(404, 'No such user'); return { user: { id: m.id, username: m.username, display_name: m.display_name, avatar_path: null, badges: [] } }; }],
     ['POST', /^\/interactions\/([^/]+)\/([^/]+)\/callback$/, ([iid, token], b) => {
@@ -473,6 +474,8 @@ export async function createHarness({ verified = false, store = createMemoryStor
       await settle();
     },
     async react(messageId, emoji, { user = IDS.member, channel = IDS.channels.general, server = S, remove = false, createdAt = null, lateBy = 0 } = {}) {
+      if (remove) fake.state.reactions = fake.state.reactions.filter((r) => !(r.message_id === messageId && r.emoji === emoji && r.user_id === user));
+      else if (!fake.state.reactions.some((r) => r.message_id === messageId && r.emoji === emoji && r.user_id === user)) fake.state.reactions.push({ channel_id: channel, message_id: messageId, emoji, user_id: user });
       await bot.handle({ id: ++evId, type: remove ? 'reaction_remove' : 'reaction_add', data: { message_id: messageId, channel_id: channel, server_id: server, user_id: user, username: nameOf(user), emoji, message_author_id: IDS.bot }, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
     },

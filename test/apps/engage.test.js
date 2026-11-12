@@ -455,7 +455,15 @@ test('reroll picks from the rest, only for the host or mods', async () => {
   assert.match(h.textOf(card), new RegExp(`Rerolled: <@${other}>`));
   assert.ok(h.sent(G).some((m) => /Reroll for \*\*Prize\*\*/.test(m.content)));
   ans = await h.slash('giveaway', 'reroll 1', { user: IDS.mod });
-  assert.match(lastText(h, ans), /Nobody left to pick/);
+  assert.match(lastText(h, ans), /Rerolled/);
+  assert.match(lastText(h, ans), /already won, so I drew from all the entries again/);
+  await settle();
+  const reroll = h.findButton('Reroll', card);
+  assert.ok(reroll, 'ended card has a Reroll button');
+  ans = await h.click(reroll.custom_id, { user: IDS.member2 });
+  assert.match(lastText(h, ans), /Only the host/);
+  ans = await h.click(reroll.custom_id, { user: IDS.mod });
+  assert.match(lastText(h, ans), /Rerolled/);
 });
 
 test('/giveaway end ends early, cancels the job and /giveaway list shows them', async () => {

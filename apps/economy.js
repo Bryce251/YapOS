@@ -11,6 +11,10 @@ const HOUR = 3600_000;
 const DAY = 24 * HOUR;
 const STREAK_GRACE_MS = 48 * HOUR;
 const WORK_COOLDOWN_MS = HOUR;
+const BEG_COOLDOWN_MS = 5 * 60_000;
+const BEG_MIN = 1;
+const BEG_MAX = 25;
+const BEG_MISS = 0.3;
 const STREAK_STEP = 10;
 const STREAK_MAX = 100;
 const MAX_BALANCE = 1_000_000_000_000;
@@ -29,6 +33,25 @@ const PAY_CONFIRM_OVER = 1000;
 const TOP_SIZE = 10;
 const MEDALS = ['🥇', '🥈', '🥉'];
 const DEFAULT_CURRENCY = { name: 'coins', emoji: '🪙' };
+
+const BEG_YES = [
+  'A kind stranger dropped {amount} in your cup.',
+  'Someone felt sorry for you and handed over {amount}.',
+  'A passing knight tossed you {amount} without slowing down.',
+  'A grandma pinched your cheek and gave you {amount}.',
+  'You found {amount} in a coat pocket a stranger gave you.',
+  'A pigeon dropped {amount} at your feet. Lucky.',
+  'A streamer read your sign on air and donated {amount}.',
+  'A tourist mistook you for a street performer and paid {amount}.',
+];
+
+const BEG_NO = [
+  'Everyone walked right past you. Nothing this time.',
+  'A cat stared at you, judged you, and left. Nothing.',
+  'Someone offered you advice instead of coins.',
+  'You got a high five. Morale up, wallet the same.',
+  'A seagull stole the one coin you were about to get.',
+];
 
 const JOBS = [
   'You walked a pack of very excited dogs and earned {amount}.',
@@ -493,6 +516,27 @@ async function claimDaily(ctx) {
   return ctx.reply({ embeds: [card({ title: `${cur.emoji} +${fmt(res.got)} ${plural(res.got, cur.name)} (${streakText})`, body, color: 'economy', footer: false })] });
 }
 
+async function doBeg(ctx) {
+  const { engine, serverId: sid } = ctx;
+  const cfg = ctx.config();
+  if (cfg.begEnabled === false) return ctx.info('Begging is off', 'An admin turned off **/beg** here. **/daily** still works.');
+  const cur = currencyOf(engine, sid);
+  const t = clock(engine);
+  const miss = Math.random() < BEG_MISS;
+  const pay = miss ? 0 : BEG_MIN + Math.floor(Math.random() * (BEG_MAX - BEG_MIN + 1));
+  const res = mutate(engine, sid, (doc) => {
+    const u = ensureUser(doc, ctx.userId, cfg, t);
+    if (u.lastBeg && t - u.lastBeg < BEG_COOLDOWN_MS) return { wait: u.lastBeg + BEG_COOLDOWN_MS - t };
+    u.lastBeg = t;
+    const got = pay ? change(u, pay, 'Begging', t) : 0;
+    return { got, bal: u.bal };
+  });
+  if (res.wait) return ctx.warn('Give it a rest', `People are tired of you asking. Try again in **${waitText(res.wait)}**.`);
+  const pick = (list) => list[Math.floor(Math.random() * list.length)];
+  const line = res.got ? fillTemplate(pick(BEG_YES), { amount: `${money(cur, res.got)} ${cur.emoji}` }) : pick(BEG_NO);
+  return ctx.reply({ embeds: [card({ title: res.got ? '🥺 Someone helped' : '🥺 No luck', body: `${line}\nBalance **${fmt(res.bal)}** · beg again in ${waitText(BEG_COOLDOWN_MS)}`, color: 'economy', footer: false })] });
+}
+
 async function doWork(ctx) {
   const { engine, serverId: sid } = ctx;
   const cfg = ctx.config();
@@ -611,6 +655,7 @@ async function runBalance(ctx, tokensIn) {
   const rest = tokens.slice(1);
   if (['pay', 'give', 'send', 'transfer'].includes(sub)) return startPay(ctx, rest);
   if (['work', 'job', 'shift'].includes(sub)) return doWork(ctx);
+  if (['beg', 'plead'].includes(sub)) return doBeg(ctx);
   if (['top', 'leaderboard', 'lb', 'rich', 'richest'].includes(sub)) return ctx.reply(await topView(ctx));
   if (['history', 'log', 'hist'].includes(sub)) return showHistory(ctx, rest.join(' '));
   if (sub === 'daily') return claimDaily(ctx);
@@ -1108,11 +1153,13 @@ export const { setup, teardown, check } = defineApp({
     workMin: 20,
     workMax: 80,
     workEnabled: true,
+    begEnabled: true,
     startBalance: 0,
   },
 
   commands: {
     daily: { description: 'Claim your daily coins. Come back every day for a streak bonus: /daily', run: claimDaily },
+    beg: { description: 'Beg for a few coins. Sometimes people help, sometimes not: /beg', run: doBeg },
     balance: { description: 'Your wallet: /balance, /balance @sam, /balance pay @sam 50, work, top, history', run: (ctx) => runBalance(ctx) },
     shop: { description: 'The server shop: /shop, /shop buy Name. Admins: /shop add role @Supporter 500', run: runShop },
     economy: { description: 'Economy settings (admins): /economy give @sam 100, take, reset @sam, daily 150', perm: 'admin', run: runEconomy },
@@ -1121,6 +1168,7 @@ export const { setup, teardown, check } = defineApp({
   components: {
     daily: { run: claimDaily },
     work: { run: doWork },
+    beg: { run: doBeg },
     top: { run: async (ctx) => ctx.reply(await topView(ctx)) },
     history: { run: (ctx) => showHistory(ctx, '') },
     wallet: { run: async (ctx) => ctx.ephemeral(await walletView(ctx, ctx.userId, { self: true })) },
@@ -1184,6 +1232,7 @@ export const { setup, teardown, check } = defineApp({
 
   yap: [
     { words: ['daily'], run: claimDaily },
+    { words: ['beg', 'plead'], run: doBeg },
     { words: ['balance', 'bal', 'wallet', 'coins', 'money'], run: (ctx) => runBalance(ctx, ctx.argv) },
     { words: ['pay', 'work', 'richest'], run: (ctx) => runBalance(ctx, [ctx.word, ...ctx.argv]) },
     { words: ['shop', 'store', 'buy'], run: (ctx) => (ctx.word === 'buy' ? runShopTokens(ctx, ['buy', ...ctx.argv]) : runShopTokens(ctx, ctx.argv)) },

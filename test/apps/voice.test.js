@@ -52,6 +52,7 @@ async function make({ apps = ['voice'], store, features, logChannel = LOG, keepC
   const h = await createHarness({ apps, fakeClock: true, store, features });
   if (keepClock) h.clock.t = keepClock;
   const fx = addVoiceApi(h);
+  h.engine.config.voiceMoveWaits = [0, 0];
   if (logChannel) h.engine.settings.patchCore(S, { logChannel });
   return { h, fx };
 }
@@ -263,16 +264,50 @@ test('if making the room fails it is explained once in the log channel', async (
   assert.doesNotMatch(text, /403/);
 });
 
-test('if the move fails the new room is deleted again and the reason is logged', async () => {
+test('if the move fails the room stays, the owner is told to click it, and the reason is logged', async () => {
   const { h, fx } = await make();
   const { createId } = await setUp(h);
   fx.moveError = { status: 403, message: 'Missing permission' };
   const before = voiceChannels(h).length;
   await h.voiceJoin(IDS.member, { channel: createId });
-  assert.equal(rooms(h).length, 0);
-  assert.equal(voiceChannels(h).length, before, 'channel cleaned up');
+  assert.equal(rooms(h).length, 1, 'room kept so they can join it by hand');
+  assert.equal(voiceChannels(h).length, before + 1);
+  const room = rooms(h)[0];
+  assert.equal(room.waiting, true);
+  const panel = h.textOf(h.lastSent(dmOf(IDS.member)));
+  assert.match(panel, /click/i);
+  assert.match(panel, new RegExp(room.id));
   const log = h.textOf(h.lastSent(LOG));
   assert.match(log, /Move Members/);
+  assert.equal(h.fake.callsTo('POST', /voice\/move/).length, 1, 'no retries on a permission error');
+});
+
+test('a move that fails at first is tried again', async () => {
+  const { h } = await make();
+  const { createId } = await setUp(h);
+  const realApi = h.bot.api;
+  let tries = 0;
+  h.bot.api = async (method, p, body) => {
+    if (method === 'POST' && /voice\/move$/.test(p) && ++tries < 3) { const e = new Error('not connected yet'); e.status = 400; throw e; }
+    return realApi(method, p, body);
+  };
+  await h.voiceJoin(IDS.member, { channel: createId });
+  assert.equal(tries, 3);
+  const room = rooms(h)[0];
+  assert.ok(room && !room.waiting);
+  assert.deepEqual(inVoice(h, room.id), [IDS.member]);
+});
+
+test('a room waiting for its owner is not closed by an early leave event', async () => {
+  const { h, fx } = await make();
+  const { createId } = await setUp(h);
+  fx.moveError = { status: 403, message: 'Missing permission' };
+  await h.voiceJoin(IDS.member, { channel: createId });
+  const room = rooms(h)[0];
+  await h.voiceJoin(IDS.member, { channel: room.id });
+  await h.voiceLeave(IDS.member);
+  await settle();
+  assert.equal(rooms(h).length, 1, 'still open during the first minute');
 });
 
 test('someone who leaves the create channel before the move just loses the room quietly', async () => {

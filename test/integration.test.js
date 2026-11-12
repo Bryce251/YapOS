@@ -158,7 +158,8 @@ test('Pocket and Studio each answer only their own words in DMs', async () => {
   const pic = { path: 'abc/pic.png', name: 'pic.png', size: 1234, width: 800, height: 600 };
   const before = h.sent(dmOf(IDS.member2)).length;
   await h.dm('caption hello there', { user: IDS.member2, attachments: [pic] });
-  await settle(20);
+  const answered = () => h.sent(dmOf(IDS.member2)).length > before || h.fake.calls.some((c) => /typing|files/.test(c.path));
+  for (let i = 0; i < 100 && !answered(); i++) await settle(20);
   const after = h.sent(dmOf(IDS.member2)).slice(before).map((m) => h.textOf(m)).join('\n');
   assert.doesNotMatch(after, /YapOS Pocket|What you can type here/, 'Pocket does not answer caption');
   assert.ok(h.sent(dmOf(IDS.member2)).length > before || h.fake.calls.some((c) => /typing|files/.test(c.path)), 'Studio answered caption');

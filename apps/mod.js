@@ -1083,9 +1083,13 @@ async function runNote(ctx, tokens) {
   if (/^(remove|delete|del|rm|forget)$/.test(first)) return removeNote(ctx, tokens.slice(1));
   const { user, rest } = await takeTarget(ctx, tokens);
   if (!user) return ctx.warn('Who is the note about?', `Try ${USAGE.note}.`);
-  const label = tag(user);
   const raw = rest.join(' ').trim();
   if (!raw) return ctx.warn('What should the note say?', `Type it after their name, like ${USAGE.note}.`);
+  return saveNote(ctx, user, raw);
+}
+
+async function saveNote(ctx, user, raw) {
+  const label = tag(user);
   const text = raw.slice(0, NOTE_MAX_LEN);
   const byName = await actorName(ctx);
   const out = writeData(ctx.engine, ctx.serverId, (d) => {
@@ -1117,11 +1121,44 @@ function noteLine(n) {
 async function showNotes(ctx, tokens) {
   const { user } = await takeTarget(ctx, tokens);
   if (!user) return ctx.warn('Whose notes?', `Try ${USAGE.notes}.`);
+  return ctx.ephemeral(notesView(ctx, user));
+}
+
+function notesView(ctx, user) {
   const label = tag(user);
   const notes = readData(ctx.engine, ctx.serverId).notes.filter((n) => n.targetId === user.id);
-  if (!notes.length) return ctx.info(`No notes on ${label}`, `Add one with ${USAGE.note.replace('@sam', label)}.`);
-  const body = `${notes.slice(-15).reverse().map(noteLine).join('\n')}\n\n-# Only mods can read these. Remove one with ${USAGE.unnote}.`;
-  return ctx.ephemeral({ embeds: [card({ title: `🗒️ Notes on ${label} (${notes.length})`, body, color: 'mod' })] });
+  const body = notes.length
+    ? `${notes.slice(-15).reverse().map(noteLine).join('\n')}\n\n-# Only mods can read these. Remove one with ${USAGE.unnote}.`
+    : `Nothing written yet. Press **Add note** or type ${USAGE.note.replace('@sam', label)}.`;
+  return {
+    embeds: [card({ title: `🗒️ Notes on ${label} (${notes.length})`, body, color: 'mod' })],
+    components: [row(button('Add note', cid('unote', user.id), 'primary', '📝'))],
+  };
+}
+
+async function lookupNotes(ctx) {
+  const user = await lookupTarget(ctx);
+  if (!user) return expiredQuestion(ctx);
+  return ctx.ephemeral(notesView(ctx, user));
+}
+
+async function lookupAddNote(ctx) {
+  const user = await lookupTarget(ctx);
+  if (!user) return expiredQuestion(ctx);
+  return ctx.form({
+    title: clip(`Note on ${tag(user)}`, 45),
+    action: 'unotesave',
+    args: [user.id],
+    fields: [{ id: 'text', label: 'Note (only mods can read it)', style: 'paragraph', max: NOTE_MAX_LEN, placeholder: 'Was warned in DMs about spam' }],
+  });
+}
+
+async function saveLookupNote(ctx) {
+  const user = await lookupTarget(ctx);
+  if (!user) return expiredQuestion(ctx);
+  const raw = String(ctx.values?.text || '').trim();
+  if (!raw) return ctx.warn('The note was empty', 'Nothing was saved.');
+  return saveNote(ctx, user, raw);
 }
 
 async function removeNote(ctx, tokens) {
@@ -1205,7 +1242,9 @@ async function lookupView(ctx, user) {
   }
   const alreadyBanned = fields.some((f) => f.name === 'Ban');
   if (!alreadyBanned) buttons.push(button('Ban', cid('uban', user.id), 'danger', '🔨'));
-  const body = `Notes: ${USAGE.notes.replace('@sam', label)}${notes.length ? '' : ` · add one with ${USAGE.note.replace('@sam', label)}`}`;
+  buttons.push(button(notes.length ? `Notes (${notes.length})` : 'Notes', cid('unotes', user.id), 'secondary', '🗒️'));
+  buttons.push(button('Add note', cid('unote', user.id), 'secondary', '📝'));
+  const body = notes.length ? `Press **Notes** to read what mods wrote about ${label}.` : 'No notes yet. Press **Add note** to write one only mods can see.';
   return {
     embeds: [card({ title: `🔎 ${label}`, body, fields, color: 'mod' })],
     components: buttons.length ? [row(...buttons)] : [],
@@ -1591,6 +1630,9 @@ export const { setup, teardown, check } = defineApp({
     uwarnsave: { perm: 'mod', run: staff('mod', saveLookupWarn) },
     uto: { perm: 'mod', run: staff('mod', lookupTimeout) },
     uban: { perm: 'mod', run: staff('mod', lookupBan) },
+    unotes: { perm: 'mod', run: staff('mod', lookupNotes) },
+    unote: { perm: 'mod', run: staff('mod', lookupAddNote) },
+    unotesave: { perm: 'mod', run: staff('mod', saveLookupNote) },
     blen: { perm: 'mod', run: staff('mod', pickBanLength) },
     purge: { perm: 'mod', run: staff('mod', (ctx) => runPurge(ctx, [String(buttonCount(ctx.argv[0]))])) },
     dm: {

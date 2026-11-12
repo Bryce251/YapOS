@@ -653,3 +653,26 @@ test('with daily off the wallet hides the Daily button, and empty takes leave no
   assert.match(lastText(h, take), /no coins to take/);
   assert.equal((userDoc(h, IDS.member)?.hist || []).length, 0);
 });
+
+test('beg sometimes pays a little, always has a cooldown, and works typed too', async () => {
+  const h = await make();
+  const c = h.bot.commands.get('beg');
+  assert.ok(c && c.description.length <= 100);
+  const ans = await h.slash('beg', '');
+  const got = bal(h, IDS.member);
+  assert.ok(got >= 0 && got <= 25, `got ${got}`);
+  assert.match(lastText(h, ans), /Someone helped|No luck/);
+  assert.match(lastText(h, ans), /beg again in/);
+  const again = await h.slash('beg', '');
+  assert.match(lastText(h, again), /Give it a rest/);
+  assert.equal(bal(h, IDS.member), got);
+  let paid = got;
+  for (let i = 0; i < 20; i++) {
+    await h.advance(5 * 60_000);
+    await h.slash('balance', 'beg');
+  }
+  paid = bal(h, IDS.member);
+  assert.ok(paid > got, 'twenty begs pay something');
+  assert.ok(paid <= got + 20 * 25);
+  assert.ok(userDoc(h, IDS.member).lastBeg);
+});

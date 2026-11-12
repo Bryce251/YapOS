@@ -1353,7 +1353,8 @@ test('private notes: add, list, show in lookup, never a warning or DM', async ()
   const look = await h.slash('mod', 'user @sam', { user: IDS.mod });
   assert.match(lastText(h, look), /Notes\n2/);
   const none = await h.slash('mod', 'notes @riley', { user: IDS.mod });
-  assert.match(lastText(h, none), /No notes on @riley/);
+  assert.match(lastText(h, none), /Notes on @riley \(0\)/);
+  assert.match(lastText(h, none), /Nothing written yet/);
   const empty = await h.slash('mod', 'note @sam', { user: IDS.mod });
   assert.match(lastText(h, empty), /What should the note say/);
   const member = await h.slash('mod', 'note @riley sneaky', { user: IDS.member });
@@ -1493,7 +1494,7 @@ test('user lookup shows the whole picture with working buttons', async () => {
   const goneText = lastText(h, gone);
   assert.match(goneText, /Not in the server right now/);
   assert.match(goneText, /Banned until Sat 14 Nov, 12:00 UTC/);
-  assert.equal(h.allButtons(gone).length, 0, 'no buttons for someone already banned');
+  assert.deepEqual(h.allButtons(gone).map((b) => b.label).filter((l) => !/^Notes/.test(l) && l !== 'Add note'), [], 'only note buttons for someone already banned');
 });
 
 test('lookup buttons keep every check', async () => {
@@ -1576,4 +1577,21 @@ test('the lookup card is posted where others can see it, so it never shows note 
   const text = lastText(h, look);
   assert.match(text, /Notes\n1/);
   assert.doesNotMatch(text, /secret thing/);
+});
+
+test('user lookup: Notes shows the notes and Add note saves one from a form', async () => {
+  const h = await createHarness({ apps: ['mod'] });
+  await h.slash('mod', 'note @sam first thing', { user: IDS.mod });
+  const look = await h.slash('mod', 'user @sam', { user: IDS.mod });
+  const labels = h.allButtons(look).map((b) => b.label);
+  assert.ok(labels.includes('Notes (1)'));
+  assert.ok(labels.includes('Add note'));
+  const shown = await h.click(h.findButton('Notes (1)', look).custom_id, { user: IDS.mod });
+  assert.match(lastText(h, shown), /first thing/);
+  const addId = h.findButton('Add note', look).custom_id;
+  await h.submit(addId.replace(':unote:', ':unotesave:'), { text: 'second thing' }, { user: IDS.mod });
+  const out = await h.slash('mod', 'notes @sam', { user: IDS.mod });
+  assert.match(lastText(h, out), /second thing/);
+  const forged = await h.click(h.findButton('Notes (1)', look).custom_id, { user: IDS.member });
+  assert.doesNotMatch(lastText(h, forged) || '', /first thing/);
 });
