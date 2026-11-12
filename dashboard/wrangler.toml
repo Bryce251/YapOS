@@ -2,6 +2,7 @@ name = "yapos-dashboard"
 main = "worker/index.js"
 compatibility_date = "2026-10-01"
 workers_dev = true
+routes = [{ pattern = "yapos.dev", custom_domain = true }]
 
 [assets]
 directory = "./web"
@@ -15,7 +16,7 @@ database_id = "fa2b13e3-ce48-44ef-b689-f678d37eba35"
 
 [vars]
 YAPIN_CLIENT_ID = "b21fe402-0f20-43df-867b-8b346029fd8d"
-PUBLIC_URL = "https://yapos-dashboard.yapos-dashboard.workers.dev"
+PUBLIC_URL = "https://yapos.dev"
 YAPIN_BASE = "https://www.yapin.gg"
 
 [triggers]

@@ -54,7 +54,8 @@ export async function login(request, env, deps) {
   return redirect(target.href, 302, { 'Set-Cookie': cookie(env, STATE_COOKIE, state, Math.floor(STATE_TTL / 1000), '/auth') });
 }
 
-function loginFailed(env, reason) {
+function loginFailed(env, reason, step) {
+  console.log(`login ${reason}${step ? ` at ${step}` : ""}`);
   return redirect(`/?login=${reason}`, 302, { 'Set-Cookie': clearStateCookie(env) });
 }
 
@@ -64,14 +65,18 @@ async function exchangeCode(env, deps, code) {
     code,
     redirect_uri: redirectUri(env),
     client_id: String(env.YAPIN_CLIENT_ID || ''),
-    client_secret: String(env.YAPIN_CLIENT_SECRET || ''),
+    client_secret: String(env.YAPIN_CLIENT_SECRET || '').trim(),
   });
   const res = await deps.fetch(`${yapinBase(env)}/api/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: body.toString(),
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    console.log(`login token answer ${res.status} ${String(err?.error || "").slice(0, 40)}`);
+    return null;
+  }
   const data = await res.json().catch(() => null);
   const token = data && typeof data.access_token === 'string' ? data.access_token : null;
   return token && token.length <= 4096 ? token : null;
@@ -81,12 +86,18 @@ async function fetchMe(env, deps, token) {
   const res = await deps.fetch(`${yapinBase(env)}/api/oauth/me`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    console.log(`login me answer ${res.status}`);
+    return null;
+  }
   const me = await res.json().catch(() => null);
   if (!me || typeof me !== 'object') return null;
   const id = typeof me.id === 'string' ? me.id : null;
   const username = clipString(me.username, 64);
-  if (!id || !ID_RE.test(id) || !username) return null;
+  if (!id || !ID_RE.test(id) || !username) {
+    console.log(`login me shape id:${typeof me.id} username:${typeof me.username}`);
+    return null;
+  }
   return {
     id,
     username,
@@ -108,20 +119,21 @@ export async function callback(request, env, deps) {
     return loginFailed(env, error === 'access_denied' ? 'cancelled' : 'failed');
   }
   const code = params.get('code');
-  if (!state || !STATE_RE.test(state) || !code || code.length > 2048) return loginFailed(env, 'failed');
+  if (!state || !STATE_RE.test(state) || !code || code.length > 2048) return loginFailed(env, 'failed', 'params');
   const row = await env.DB.prepare('DELETE FROM oauth_states WHERE state = ? RETURNING next, created').bind(state).first();
   if (!row) return loginFailed(env, 'expired');
   if (Number(row.created) + STATE_TTL < t) return loginFailed(env, 'expired');
   const browserState = readToken(request, STATE_COOKIE);
-  if (!browserState || !(await safeEqual(browserState, state))) return loginFailed(env, 'failed');
+  if (!browserState || !(await safeEqual(browserState, state))) return loginFailed(env, 'failed', browserState ? 'cookie mismatch' : 'no cookie');
   let user = null;
   try {
     const token = await exchangeCode(env, deps, code);
     if (token) user = await fetchMe(env, deps, token);
-  } catch {
+  } catch (e) {
+    console.log(`login error ${e?.name || "Error"}`);
     user = null;
   }
-  if (!user) return loginFailed(env, 'failed');
+  if (!user) return loginFailed(env, 'failed', 'yapin');
   const id = await createSession(env.DB, user, t);
   const headers = new Headers();
   headers.append('Set-Cookie', sessionCookie(env, id));
