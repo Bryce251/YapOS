@@ -29,18 +29,20 @@ Needs Node.js 18 or newer (22+ so the live gateway is used; older versions fall 
 | Automod | `/automod` |
 | Welcome | `/welcome` |
 | Roles | `/roles` |
-| Levels | `/rank` `/leaderboard` `/levels` |
+| Levels | `/rank` `/leaderboard` `/levels` (one level per person across every server, and one global leaderboard) |
 | Tickets | `/ticket` `/tickets` |
 | Studio | `/caption` `/gif` (works anywhere, no ffmpeg needed) |
-| Economy | `/daily` `/beg` `/balance` `/shop` `/economy` |
+| Economy | `/daily` `/beg` `/balance` `/shop` `/economy` (one 💎 Shards wallet that follows you to every server) |
 | Engage | `/poll` `/giveaway` |
 | Starboard | `/starboard` (react ⭐ to send great messages to a hall of fame) |
 | Wrapped | `/wrapped` (your month: `/wrapped @sam`, `/wrapped server`, `/wrapped last`; admins: `/wrapped post #channel` for a monthly recap) |
 | Tools | `/tag` (or type `!name`) `/embed` `/schedule` |
 | Voice | `/voice` |
 | Games | `/game` `/trivia` |
-| Casino | `/casino` `/coinflip` `/dice` `/slots` `/blackjack` `/roulette` `/crash` (needs Economy; off until an admin installs it) |
+| Casino | `/casino` `/coinflip` `/dice` `/slots` `/blackjack` `/roulette` `/crash` (plays for 💎 Shards; needs Economy and stays off until an admin installs it) |
 | Pocket | `/remind` `/afk` `/pocket` `/highlight` (also in DMs: `remind`, `note`, `todo`, `highlight`, `tz`, `afk`, `help`; react 💬 to bookmark a message) |
+
+Shards and levels are global. Everyone has one 💎 Shards wallet and one level that follow them to every server, with a single leaderboard for both. The currency is always 💎 Shards, earn rates (daily, work, beg and XP) are one setting the bot owner looks after, and only the owner, or someone the owner allows, can hand out Shards. Each server still keeps its own shop, role rewards, level-up messages and no-XP channels.
 
 51 commands in all. Every hub command opens a panel. Most also take typed shortcuts, like `/mod timeout @sam 10m spam`, and `/yap` understands plain words: `/yap timeout @sam 10m`.
 

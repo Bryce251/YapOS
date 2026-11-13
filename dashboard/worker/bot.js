@@ -8,6 +8,8 @@ const MAX_RESULTS = 100;
 const MAX_SERVERS = 1000;
 const MAX_CASES = 2000;
 const MAX_BOARD = 100;
+const GLOBAL_KEY = 'global';
+const DEFAULT_CURRENCY = { name: 'Shards', emoji: '💎' };
 const JOB_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 const LEVEL_RE = /^[a-z_]{1,16}$/;
 const SNAPSHOT_PARTS = ['overview', 'apps', 'settings', 'cases'];
@@ -164,6 +166,42 @@ async function putSnapshot(request, env, sid, t) {
   return json({ ok: true, parts: rows.map((r) => r[0]), updatedAt: updated });
 }
 
+function cleanBoard(value, name) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new HttpError(400, 'bad_part', `The ${name} part must be a list.`);
+  const out = value.slice(0, MAX_BOARD);
+  partText(name, out);
+  return out;
+}
+
+function cleanCurrency(value) {
+  if (!isPlainObject(value)) return { ...DEFAULT_CURRENCY };
+  return {
+    name: clipString(value.name, 32) || DEFAULT_CURRENCY.name,
+    emoji: clipString(value.emoji, 16) || DEFAULT_CURRENCY.emoji,
+  };
+}
+
+async function storeGlobal(env, body, t) {
+  const data = {
+    levels: cleanBoard(body.levels, 'levels'),
+    economy: cleanBoard(body.economy, 'economy'),
+    currency: cleanCurrency(body.currency),
+    updatedAt: Number.isFinite(body.updatedAt) && body.updatedAt > 0 && body.updatedAt <= t + 60000 ? Math.floor(body.updatedAt) : t,
+  };
+  await env.DB
+    .prepare('INSERT INTO global_board (id, data, updated) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET data = excluded.data, updated = excluded.updated')
+    .bind(GLOBAL_KEY, JSON.stringify(data), t)
+    .run();
+  return data;
+}
+
+async function putGlobal(request, env, t) {
+  const body = await readJson(request, PUBLIC_LIMIT);
+  const data = await storeGlobal(env, body, t);
+  return json({ ok: true, levels: data.levels.length, economy: data.economy.length, updatedAt: data.updatedAt });
+}
+
 function isUniqueError(err) {
   return /UNIQUE|constraint/i.test(String(err && err.message));
 }
@@ -174,29 +212,18 @@ async function putPublic(request, env, sid, t) {
   if (typeof body.slug !== 'string' || !SLUG_RE.test(body.slug)) {
     throw new HttpError(400, 'bad_slug', 'The link name must be 3 to 32 characters: lowercase letters, numbers and dashes.');
   }
-  for (const part of ['levels', 'economy']) {
-    if (body[part] !== undefined && body[part] !== null && !Array.isArray(body[part])) {
-      throw new HttpError(400, 'bad_part', `The ${part} part must be a list.`);
-    }
+  cleanBoard(body.levels, 'levels');
+  cleanBoard(body.economy, 'economy');
+  if (body.global !== undefined && body.global !== null) {
+    if (!isPlainObject(body.global)) throw new HttpError(400, 'bad_part', 'The global part must be an object.');
+    await storeGlobal(env, body.global, t);
   }
-  if (body.wrapped !== undefined && body.wrapped !== null && !isPlainObject(body.wrapped)) {
-    throw new HttpError(400, 'bad_part', 'The wrapped part must be an object.');
-  }
-  const levels = Array.isArray(body.levels) ? body.levels.slice(0, MAX_BOARD) : [];
-  const economy = Array.isArray(body.economy) ? body.economy.slice(0, MAX_BOARD) : [];
-  const wrapped = body.wrapped ?? null;
-  partText('levels', levels);
-  partText('economy', economy);
-  partText('wrapped', wrapped);
   const updatedAt = Number.isFinite(body.updatedAt) ? body.updatedAt : t;
   const data = {
     enabled: body.enabled,
     slug: body.slug,
     name: clipString(body.name, 100) || 'Server',
     icon: safeHttpsUrl(body.icon),
-    levels,
-    economy,
-    wrapped,
     updatedAt,
   };
   const taken = await env.DB.prepare('SELECT server_id FROM public_pages WHERE slug = ? AND server_id != ?').bind(body.slug, sid).first();
@@ -226,6 +253,10 @@ export async function handleBot(request, env, deps, url) {
   const method = request.method;
   if (segs.length === 2 && segs[1] === 'poll' && method === 'GET') return poll(env, t);
   if (segs.length === 2 && segs[1] === 'results' && method === 'POST') return results(request, env, t);
+  if (segs.length === 2 && segs[1] === 'global') {
+    if (method === 'PUT') return putGlobal(request, env, t);
+    return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  }
   if (segs.length === 3 && (segs[1] === 'snapshot' || segs[1] === 'public')) {
     const sid = segs[2];
     if (!SERVER_ID_RE.test(sid)) return fail(400, 'bad_id', "That server id doesn't look right.");

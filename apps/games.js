@@ -5,6 +5,7 @@ import { customId } from '../engine/router.js';
 import { tokenize, didYouMean, clip } from '../engine/parse.js';
 import { accept as acceptValue, reject as rejectValue, boolField } from '../engine/dashboard.js';
 import { HARD_CAP, atMost, isUnlimited, parseLimit, readLimit, storeLimit, limitText, withinLimit } from '../engine/limits.js';
+import { CURRENCY, canGiveCurrency } from '../engine/global.js';
 
 const ID = 'games';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -389,7 +390,7 @@ function economyFor(engine, sid) {
 function money(engine, sid, n) {
   let c = null;
   try { c = engine.service('economy')?.currency?.(sid); } catch { c = null; }
-  const emoji = c && typeof c === 'object' && typeof c.emoji === 'string' && c.emoji ? c.emoji : '🪙';
+  const emoji = c && typeof c === 'object' && typeof c.emoji === 'string' && c.emoji ? c.emoji : '💎';
   return `**${Number(n).toLocaleString('en-US')}** ${emoji}`;
 }
 
@@ -690,7 +691,7 @@ function parseChallengeArgs(tokens) {
       i++;
       continue;
     }
-    const num = t.replace(/,/g, '').replace(/coins?$/i, '');
+    const num = t.replace(/,/g, '').replace(/(?:coins?|shards?|💎|🪙)$/i, '');
     if (/^\d+$/.test(num) && !/^<@/.test(t)) { bet = Number(num); continue; }
     if (/^-\d+$/.test(num)) { badBet = t; continue; }
     if (/^(vs|against|with|me)$/i.test(low)) continue;
@@ -725,17 +726,17 @@ async function startChallenge(ctx, kind, tokens) {
     if (theirs && st.games.has(theirs)) return ctx.info("They're busy", `${mention(found.id)} is already in a game. Try again when it ends.`);
     target = found.id;
   }
-  if (badBet !== null) return ctx.warn("That bet didn't work", 'Bets are whole numbers of coins, like `bet 50`.');
+  if (badBet !== null) return ctx.warn("That bet didn't work", 'Bets are whole numbers of Shards, like `bet 50`.');
   if (bet !== null) {
     const cfg = cfgOf(engine, sid);
     const eco = economyFor(engine, sid);
-    if (!eco) return ctx.info("Bets aren't available", 'Playing for coins needs the **Economy** app. An admin can install it with **/apps**. You can still play without a bet.');
+    if (!eco) return ctx.info("Bets aren't available", 'Playing for Shards needs the **Economy** app. An admin can install it with **/apps**. You can still play without a bet.');
     if (cfg.bets === false) return ctx.info('Bets are off here', 'An admin turned off betting. You can still play without a bet.');
     const maxBet = maxBetOf(cfg);
-    if (!Number.isSafeInteger(bet) || bet < 1) return ctx.warn("That bet didn't work", 'Bets are whole numbers of coins, 1 or more.');
+    if (!Number.isSafeInteger(bet) || bet < 1) return ctx.warn("That bet didn't work", 'Bets are whole numbers of Shards, 1 or more.');
     if (!withinLimit(bet, maxBet) || bet > HARD_CAP) return ctx.warn('That bet is too big', `The biggest bet here is ${moneyLimit(engine, sid, atMost(maxBet, HARD_CAP))}.`);
     const have = await balanceOf(eco, sid, ctx.userId);
-    if (have !== null && have < bet) return ctx.warn('Not enough coins', `You have ${money(engine, sid, have)}, so you can't bet ${money(engine, sid, bet)}.`);
+    if (have !== null && have < bet) return ctx.warn('Not enough Shards', `You have ${money(engine, sid, have)}, so you can't bet ${money(engine, sid, bet)}.`);
   }
   const g = {
     id: newId(), sid, channelId: ctx.channelId, messageId: null, kind, challenger: ctx.userId, target,
@@ -780,7 +781,7 @@ async function rematch(ctx, oldId) {
     const have = await balanceOf(eco, ctx.serverId, ctx.userId);
     if (have !== null && have < f.bet) {
       st.finished.set(oldId, f);
-      return ctx.warn('Not enough coins', `You have ${money(engine, ctx.serverId, have)}, so you can't bet ${money(engine, ctx.serverId, f.bet)} again.`);
+      return ctx.warn('Not enough Shards', `You have ${money(engine, ctx.serverId, have)}, so you can't bet ${money(engine, ctx.serverId, f.bet)} again.`);
     }
   }
   const g = {
@@ -844,7 +845,7 @@ async function accept(ctx, g) {
     const first = await hold(engine, g, g.challenger);
     if (g.phase !== 'starting') return endedWhileStarting(ctx, g);
     if (!first.ok) {
-      const reason = first.why === 'funds' ? `${await nameOf(engine, g.sid, g.challenger)} doesn't have enough coins for the bet any more` : "I couldn't hold the bets right now";
+      const reason = first.why === 'funds' ? `${await nameOf(engine, g.sid, g.challenger)} doesn't have enough Shards for the bet any more` : "I couldn't hold the bets right now";
       return ctx.update(await endGame(engine, g, { kind: 'cancelled', reason }));
     }
     const second = await hold(engine, g, uid);
@@ -855,7 +856,7 @@ async function accept(ctx, g) {
       backToChallenge();
       if (second.why === 'funds') {
         const have = await balanceOf(economyFor(engine, g.sid) || { balance: () => null }, g.sid, uid);
-        return ctx.warn('Not enough coins', `You need ${money(engine, g.sid, g.bet)} to accept${have !== null ? ` and you have ${money(engine, g.sid, have)}` : ''}.`);
+        return ctx.warn('Not enough Shards', `You need ${money(engine, g.sid, g.bet)} to accept${have !== null ? ` and you have ${money(engine, g.sid, have)}` : ''}.`);
       }
       return ctx.warn("I couldn't hold the bets", 'Nothing was taken. Try again in a moment.');
     }
@@ -875,7 +876,7 @@ async function endedWhileStarting(ctx, g) {
   await settle(engine, g.sid, g.id, null);
   unwatch(engine, g.sid, g.id);
   g.held = [];
-  return ctx.info('That game was ended', 'It was called off while it was starting. Any coins taken went back.');
+  return ctx.info('That game was ended', 'It was called off while it was starting. Any Shards taken went back.');
 }
 
 async function nameOf(engine, sid, uid) {
@@ -1076,7 +1077,7 @@ function finalView(engine, t) {
   if (t.total > 1 || t.stoppedBy) {
     const lines = scoreLines(t);
     const parts = [lines.length ? lines.join('\n') : 'Nobody scored this time.'];
-    if (t.prize?.length) parts.push('', `🪙 ${t.prize.map((p) => mention(p.uid)).join(', ')} won ${money(engine, t.sid, t.prize[0].amount)}${t.prize.length > 1 ? ' each' : ''}.`);
+    if (t.prize?.length) parts.push('', `💎 ${t.prize.map((p) => mention(p.uid)).join(', ')} won ${money(engine, t.sid, t.prize[0].amount)}${t.prize.length > 1 ? ' each' : ''}.`);
     if (t.stoppedBy) parts.push('', `⏹️ Stopped by ${mention(t.stoppedBy)}.`);
     const asked = t.revealed ? t.index + 1 : t.index;
     embeds.push(card({ title: '🏆 Trivia results', body: parts.join('\n'), color: 'games', footer: `${plural(asked, 'question')} asked` }));
@@ -1369,7 +1370,7 @@ function listView(engine, sid) {
   });
   const quiz = [...st.trivia.values()].filter((t) => t.sid === sid).map((t) => `🧠 Trivia in <#${t.channelId}>${t.total > 1 ? ` (question ${t.index + 1}/${t.total})` : ''}`);
   const fields = [{ name: 'Playing now', value: [...live, ...quiz].join('\n') || 'Nothing right now.' }];
-  return { embeds: [card({ title: '🎮 Games', body: `${lines.join('\n')}\n\n-# Add \`bet 50\` to play for coins (needs the Economy app).`, fields, color: 'games', footer: false })] };
+  return { embeds: [card({ title: '🎮 Games', body: `${lines.join('\n')}\n\n-# Add \`bet 50\` to play for Shards (needs the Economy app).`, fields, color: 'games', footer: false })] };
 }
 
 function panelView(engine, sid, uid, isAdmin) {
@@ -1382,7 +1383,7 @@ function panelView(engine, sid, uid, isAdmin) {
     '🧠 **Trivia** for everyone · `/trivia`, or `/trivia 5 science` for a round',
   ];
   const panelMaxBet = maxBetOf(cfg);
-  if (eco && cfg.bets !== false) intro.push('', `💰 Add \`bet 50\` to play for coins (${isUnlimited(panelMaxBet) ? 'bet any amount you like' : `up to ${money(engine, sid, panelMaxBet)}`}).`);
+  if (eco && cfg.bets !== false) intro.push('', `💰 Add \`bet 50\` to play for Shards (${isUnlimited(panelMaxBet) ? 'bet any amount you like' : `up to ${money(engine, sid, panelMaxBet)}`}).`);
   const record = recordLines(engine, sid, uid);
   const playing = serverGames(st, sid).length;
   const quiz = [...st.trivia.values()].filter((t) => t.sid === sid).length;
@@ -1418,8 +1419,9 @@ function settingsView(engine, sid) {
   };
 }
 
-const MAXBET_HELP = 'Use a whole number of coins, like `/game maxbet 500`, or `inf` for no limit at all.';
-const PRIZE_HELP = 'Use a whole number of coins, like `/game prize 50`, or `0` to turn it off.';
+const MAXBET_HELP = 'Use a whole number of Shards, like `/game maxbet 500`, or `inf` for no limit at all.';
+const PRIZE_HELP = 'Use a whole number of Shards, like `/game prize 50`, or `0` to turn it off.';
+const OWNER_ONLY_PRIZE = `A trivia prize hands out ${CURRENCY.name}, and everyone's wallet is the same everywhere, so only the bot owner can set it.`;
 
 function checkMaxBet(raw) {
   return parseLimit(raw, { min: 1, max: HARD_CAP });
@@ -1431,18 +1433,18 @@ function checkPrize(raw) {
 }
 
 const DASHBOARD = [
-  boolField({ key: 'bets', label: 'Allow coin bets', help: "Lets players add 'bet 50' to a game to play for Economy coins." }),
+  boolField({ key: 'bets', label: 'Allow Shard bets', help: "Lets players add 'bet 50' to a game to play for 💎 Shards." }),
   {
     key: 'maxBet', label: 'Biggest bet allowed', type: 'number', web: true, unlimited: true, min: 1, max: HARD_CAP, step: 1,
-    help: 'The largest number of coins one player can bet on a game. Type inf for no limit at all.',
+    help: 'The largest number of Shards one player can bet on a game. Type inf for no limit at all.',
     validate: (ctx, v) => {
       const n = checkMaxBet(v);
       return n === null ? rejectValue(MAXBET_HELP) : acceptValue(storeLimit(n));
     },
   },
   {
-    key: 'triviaPrize', label: 'Trivia round prize (coins)', type: 'number', web: true, min: 0, max: HARD_CAP, step: 1,
-    help: 'Coins paid to the winner of a trivia round of 3 or more questions. 0 turns it off.',
+    key: 'triviaPrize', label: 'Trivia round prize (Shards)', type: 'number', web: true, owner: true, min: 0, max: HARD_CAP, step: 1,
+    help: 'Shards paid to the winner of a trivia round of 3 or more questions. 0 turns it off. Only the bot owner can change it.',
     validate: (ctx, v) => {
       const n = checkPrize(v);
       return n === null ? rejectValue(PRIZE_HELP) : acceptValue(n);
@@ -1459,7 +1461,7 @@ async function adminSetting(ctx, sub, rest) {
     const v = String(rest[0] || '').toLowerCase();
     const next = /^(on|yes|true|enable)$/.test(v) ? true : /^(off|no|false|disable)$/.test(v) ? false : cfgOf(engine, sid).bets === false;
     ctx.patchConfig({ bets: next });
-    return ctx.ok('Saved', next ? 'People can bet coins on games now.' : 'Betting is off. Games still work without bets.');
+    return ctx.ok('Saved', next ? 'People can bet Shards on games now.' : 'Betting is off. Games still work without bets.');
   }
   if (sub === 'maxbet') {
     const n = checkMaxBet(rest[0]);
@@ -1468,10 +1470,11 @@ async function adminSetting(ctx, sub, rest) {
     return ctx.ok('Saved', isUnlimited(n) ? 'There is no limit on bets now.' : `The biggest bet is now ${money(engine, sid, n)}.`);
   }
   if (sub === 'prize') {
+    if (!canGiveCurrency(engine, ctx.userId)) return ctx.ephemeral({ embeds: [dialog.denied(null, { title: 'Owner only', body: OWNER_ONLY_PRIZE })] });
     const n = checkPrize(rest[0]);
     if (n === null) return ctx.warn("That didn't work", PRIZE_HELP);
     ctx.patchConfig({ triviaPrize: n });
-    return ctx.ok('Saved', n ? `The winner of a trivia round (${PRIZE_ROUND_MIN}+ questions) gets ${money(engine, sid, n)}.` : 'Trivia rounds give no coins now.');
+    return ctx.ok('Saved', n ? `The winner of a trivia round (${PRIZE_ROUND_MIN}+ questions) gets ${money(engine, sid, n)}.` : 'Trivia rounds give no Shards now.');
   }
   return null;
 }
@@ -1569,26 +1572,22 @@ export const { setup, teardown, check } = defineApp({
       run: async (ctx) => {
         await ctx.require('admin');
         const cfg = ctx.config();
-        return ctx.form({
-          title: 'Games settings',
-          action: 'setsave',
-          fields: [
-            { id: 'prize', label: 'Trivia round prize in coins (0 = off)', style: 'short', value: String(prizeOf(cfg)), max: 20 },
-            { id: 'maxbet', label: 'Biggest bet allowed (inf = no limit)', style: 'short', value: maxBetText(cfg), max: 20 },
-          ],
-        });
+        const fields = [{ id: 'maxbet', label: 'Biggest bet allowed (inf = no limit)', style: 'short', value: maxBetText(cfg), max: 20 }];
+        if (canGiveCurrency(ctx.engine, ctx.userId)) fields.unshift({ id: 'prize', label: 'Trivia round prize in Shards (0 = off)', style: 'short', value: String(prizeOf(cfg)), max: 20 });
+        return ctx.form({ title: 'Games settings', action: 'setsave', fields });
       },
     },
     setsave: {
       perm: 'admin',
       run: async (ctx) => {
         await ctx.require('admin');
-        const prize = checkPrize(ctx.values?.prize);
+        const mayPrize = canGiveCurrency(ctx.engine, ctx.userId);
+        const prize = mayPrize ? checkPrize(ctx.values?.prize) : prizeOf(ctx.config());
         const maxBet = checkMaxBet(ctx.values?.maxbet);
-        if (prize === null) return ctx.warn("That prize didn't work", 'Use a whole number of coins, or 0 to turn it off.');
-        if (maxBet === null) return ctx.warn("That max bet didn't work", 'Use a whole number of coins, 1 or more, or `inf` for no limit.');
-        ctx.patchConfig({ triviaPrize: prize, maxBet: storeLimit(maxBet) });
-        return ctx.ok('Saved', `Trivia round prize: ${prize ? money(ctx.engine, ctx.serverId, prize) : 'off'}. Biggest bet: ${moneyLimit(ctx.engine, ctx.serverId, maxBet, 'no limit')}.`);
+        if (prize === null) return ctx.warn("That prize didn't work", 'Use a whole number of Shards, or 0 to turn it off.');
+        if (maxBet === null) return ctx.warn("That max bet didn't work", 'Use a whole number of Shards, 1 or more, or `inf` for no limit.');
+        ctx.patchConfig(mayPrize ? { triviaPrize: prize, maxBet: storeLimit(maxBet) } : { maxBet: storeLimit(maxBet) });
+        return ctx.ok('Saved', `${mayPrize ? `Trivia round prize: ${prize ? money(ctx.engine, ctx.serverId, prize) : 'off'}. ` : ''}Biggest bet: ${moneyLimit(ctx.engine, ctx.serverId, maxBet, 'no limit')}.`);
       },
     },
   },
@@ -1640,7 +1639,7 @@ export const { setup, teardown, check } = defineApp({
     'Challenges last 60 seconds. Leave the name out (`/game tictactoe`) and anyone can accept. **Rematch** at the end plays again.',
     'Bets: add `bet 50` (needs the Economy app). Both bets are held when the challenge is accepted; the winner takes the pot, a draw or a cancel gives them back.',
     'Trivia: `/trivia`, `/trivia 5`, `/trivia history`. 20 seconds per question, everyone answers once. Categories: general, science, geography, history, games, music.',
-    'Give up with `/game end`. Mods: `/game end @sam` ends a stuck game and gives bets back. Admins: `/game bets off`, `/game maxbet 500`, `/game prize 50`.',
+    'Give up with `/game end`. Mods: `/game end @sam` ends a stuck game and gives bets back. Admins: `/game bets off`, `/game maxbet 500`. Only the bot owner sets the trivia prize with `/game prize 50`, because it hands out Shards.',
   ],
 
   dispose: (engine) => {

@@ -196,7 +196,7 @@ function dashboardView(engine, sid) {
   if (!base) return { embeds: [dialog.warn("The web dashboard isn't on yet", "YapOS's owner hasn't connected the web dashboard. Everything still works from **/menu**.")] };
   const here = sid ? `${base}/servers/${encodeURIComponent(sid)}` : `${base}/servers`;
   const body = sid
-    ? "Change this server's settings, read mod cases and see leaderboards from your browser. Log in with your Yapin' account. You only see servers you manage."
+    ? "Change this server's settings, read mod cases and see the global leaderboard from your browser. Log in with your Yapin' account. You only see servers you manage."
     : "Change your servers' settings from your browser. Log in with your Yapin' account.";
   const buttons = [linkButton(sid ? 'Open this server' : 'Open the dashboard', here, '🌐')];
   if (sid) buttons.push(linkButton('All my servers', `${base}/servers`, '🗂️'));
@@ -289,7 +289,7 @@ const DASHBOARD = [
   {
     key: 'publicPage', label: 'Public page', type: 'complex', web: true,
     default: { enabled: false, slug: null },
-    help: 'A public leaderboard page for this server: levels, coins and last month\'s Wrapped. Off until you turn it on.',
+    help: 'A public page with the one global leaderboard: levels and 💎 Shards across every server. Off until you turn it on.',
     note: 'Change it on the Public page tab.',
     read: (cfg, core) => (plainObject(core.publicPage) ? { enabled: core.publicPage.enabled === true, slug: core.publicPage.slug ?? null } : { enabled: false, slug: null }),
     validate: validatePublicPage,

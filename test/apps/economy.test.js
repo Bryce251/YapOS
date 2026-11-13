@@ -1,17 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHarness, IDS } from '../harness.js';
+import { createMemoryStore } from '../../engine/storage.js';
 import { parseAmount, streakBonus } from '../../apps/economy.js';
+import { GLOBAL_KEY, CURRENCY } from '../../engine/global.js';
 
 const S = IDS.server;
 const R = IDS.roles;
+const OTHER = '5e000000-0000-4000-8000-0000000000ff';
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
 const make = (opts = {}) => createHarness({ apps: ['economy'], fakeClock: true, ...opts });
 const lastText = (h, ans) => h.textOf(ans[ans.length - 1]);
 const eco = (h) => h.engine.service('economy');
 const bal = (h, uid) => eco(h).balance(S, uid);
-const userDoc = (h, uid) => h.engine.store.get('economy', S, {}).users?.[uid];
+const userDoc = (h, uid) => h.engine.store.get('economy', GLOBAL_KEY, {}).users?.[uid];
 
 async function stockShop(h) {
   await h.slash('shop', `add role <@&${R.vip}> 500`, { user: IDS.admin });
@@ -31,7 +34,7 @@ test('economy commands fit Yapin limits and the service is shared', async () => 
   }
   const s = eco(h);
   for (const fn of ['currency', 'balance', 'add', 'take', 'transfer']) assert.equal(typeof s[fn], 'function', fn);
-  assert.deepEqual(s.currency(S), { name: 'coins', emoji: '🪙' });
+  assert.deepEqual(s.currency(S), { name: 'Shards', emoji: '💎' });
 });
 
 test('amount parsing and streak bonus', () => {
@@ -55,7 +58,7 @@ test('amount parsing and streak bonus', () => {
 test('daily pays, refuses a second claim, grows the streak and caps it', async () => {
   const h = await make();
   const first = await h.slash('daily', '');
-  assert.match(lastText(h, first), /\+110 coins \(day 1\)/);
+  assert.match(lastText(h, first), /\+110 Shards \(day 1\)/);
   assert.match(lastText(h, first), /Balance \*\*110\*\* · next daily in 24h/);
   assert.equal(bal(h, IDS.member), 110);
 
@@ -68,7 +71,7 @@ test('daily pays, refuses a second claim, grows the streak and caps it', async (
 
   await h.advance(19 * HOUR);
   const day2 = await h.slash('daily', '');
-  assert.match(lastText(h, day2), /\+120 coins \(day 2 streak 🔥\)/);
+  assert.match(lastText(h, day2), /\+120 Shards \(day 2 streak 🔥\)/);
   assert.equal(bal(h, IDS.member), 230);
 
   for (let d = 3; d <= 12; d++) {
@@ -88,22 +91,22 @@ test('daily streak resets after 48 hours and says so', async () => {
   assert.equal(userDoc(h, IDS.member).streak, 2);
   await h.advance(49 * HOUR);
   const ans = await h.slash('daily', '');
-  assert.match(lastText(h, ans), /\+110 coins \(day 1\)/);
+  assert.match(lastText(h, ans), /\+110 Shards \(day 1\)/);
   assert.match(lastText(h, ans), /2-day streak ended/);
   assert.equal(userDoc(h, IDS.member).streak, 1);
 });
 
 test('coin amounts and settings go far past a million', async () => {
   const h = await make();
-  await h.slash('economy', 'daily 5b', { user: IDS.admin });
-  assert.equal(h.engine.settings.appConfig(S, 'economy').dailyAmount, 5_000_000_000);
-  await h.slash('economy', 'start 1b', { user: IDS.admin });
+  await h.slash('economy', 'daily 5b', { user: IDS.owner });
+  assert.equal(h.engine.settings.appConfig(GLOBAL_KEY, 'economy').dailyAmount, 5_000_000_000);
+  await h.slash('economy', 'start 1b', { user: IDS.owner });
   assert.equal(bal(h, IDS.member2), 1_000_000_000);
 
-  const give = await h.slash('economy', 'give @sam 2t', { user: IDS.admin });
+  const give = await h.slash('economy', 'give @sam 2t', { user: IDS.owner });
   assert.match(lastText(h, give), /2,000,000,000,000/);
   assert.equal(bal(h, IDS.member), 2_001_000_000_000);
-  assert.match(lastText(h, await h.slash('economy', 'give @sam 9999t', { user: IDS.admin })), /didn't work/);
+  assert.match(lastText(h, await h.slash('economy', 'give @sam 9999t', { user: IDS.owner })), /didn't work/);
 
   await stockShop(h);
   const cost = await h.slash('shop', 'price 2 3b', { user: IDS.admin });
@@ -117,7 +120,7 @@ test('coin amounts and settings go far past a million', async () => {
 
 test('daily amount 0 turns daily off', async () => {
   const h = await make();
-  await h.slash('economy', 'daily 0', { user: IDS.admin });
+  await h.slash('economy', 'daily 0', { user: IDS.owner });
   const ans = await h.slash('daily', '');
   assert.match(lastText(h, ans), /Daily is off/);
   assert.equal(bal(h, IDS.member), 0);
@@ -130,7 +133,7 @@ test('balance card shows wallet, rank, streak and buttons; others have no button
   const mine = await h.slash('balance', '');
   const text = lastText(h, mine);
   assert.match(text, /Sam's wallet/);
-  assert.match(text, /110 coins 🪙/);
+  assert.match(text, /110 Shards 💎/);
   assert.match(text, /#2 of 2/);
   assert.match(text, /1 day/);
   for (const label of ['Daily', 'Work', 'Top 10', 'History']) assert.ok(h.findButton(label, mine), label);
@@ -148,7 +151,7 @@ test('wallet buttons act for whoever presses them and are locked to the opener',
   const h = await make();
   const card = await h.slash('balance', '');
   const daily = await h.clickButton('Daily', { user: IDS.member, in: card });
-  assert.match(lastText(h, daily), /\+110 coins/);
+  assert.match(lastText(h, daily), /\+110 Shards/);
   const stranger = await h.clickButton('Work', { user: IDS.member2, in: card });
   assert.match(lastText(h, stranger), /Not your panel/);
   assert.equal(bal(h, IDS.member2), 0);
@@ -168,20 +171,20 @@ test('work pays within range, has a cooldown, and can be turned off', async () =
   await h.slash('balance', 'work');
   assert.ok(bal(h, IDS.member) > got);
 
-  await h.slash('economy', 'work 5 5', { user: IDS.admin });
+  await h.slash('economy', 'work 5 5', { user: IDS.owner });
   await h.advance(HOUR);
   const before = bal(h, IDS.member);
   await h.slash('balance', 'work');
   assert.equal(bal(h, IDS.member), before + 5);
 
-  await h.slash('economy', 'work off', { user: IDS.admin });
+  await h.slash('economy', 'work off', { user: IDS.owner });
   await h.advance(HOUR);
   const off = await h.slash('balance', 'work');
   assert.match(lastText(h, off), /Work is off/);
   assert.equal(bal(h, IDS.member), before + 5);
 });
 
-test('pay moves coins, refuses self, bots, missing people and overspending', async () => {
+test('pay moves Shards, refuses self, bots, missing people and overspending', async () => {
   const h = await make();
   eco(h).add(S, IDS.member, 300, 'seed');
   const ok = await h.slash('balance', 'pay @riley 50');
@@ -189,8 +192,8 @@ test('pay moves coins, refuses self, bots, missing people and overspending', asy
   assert.equal(bal(h, IDS.member), 250);
   assert.equal(bal(h, IDS.member2), 50);
   assert.match(lastText(h, await h.slash('balance', 'pay @sam 5')), /can't pay yourself/);
-  assert.match(lastText(h, await h.slash('balance', `pay <@${IDS.bot}> 5`)), /Bots can't take coins/);
-  assert.match(lastText(h, await h.slash('balance', 'pay @riley 9999')), /Not enough coins/);
+  assert.match(lastText(h, await h.slash('balance', `pay <@${IDS.bot}> 5`)), /Bots can't take Shards/);
+  assert.match(lastText(h, await h.slash('balance', 'pay @riley 9999')), /Not enough Shards/);
   assert.match(lastText(h, await h.slash('balance', 'pay @riley 1.5')), /amount didn't work/);
   assert.match(lastText(h, await h.slash('balance', 'pay @riley')), /Pay who, and how much/);
   assert.match(lastText(h, await h.slash('balance', 'pay a0000000-0000-4000-8000-0000000000ff 5')), /isn't in this server/);
@@ -226,7 +229,7 @@ test('big payments ask first; only the payer can confirm, and only once', async 
   const ask3 = await h.slash('balance', 'pay @riley 1500');
   eco(h).take(S, IDS.member, 2000, 'spent elsewhere');
   const late = await h.clickButton('Send 1,500', { user: IDS.member, in: ask3 });
-  assert.match(lastText(h, late), /Not enough coins/);
+  assert.match(lastText(h, late), /Not enough Shards/);
   assert.equal(bal(h, IDS.member), 1000);
 });
 
@@ -237,10 +240,11 @@ test('top shows the richest with medals and your own place', async () => {
   eco(h).add(S, IDS.mod, 50, 'x');
   const ans = await h.slash('balance', 'top');
   const text = lastText(h, ans);
-  assert.match(text, /Richest in Test Town/);
-  assert.match(text, /🥇 Riley · 900 🪙/);
-  assert.match(text, /🥈 Sam · 300 🪙/);
-  assert.match(text, /🥉 Mo · 50 🪙/);
+  assert.match(text, /Richest yappers everywhere/);
+  assert.match(text, /One leaderboard for every server/);
+  assert.match(text, /🥇 Riley · 900 💎/);
+  assert.match(text, /🥈 Sam · 300 💎/);
+  assert.match(text, /🥉 Mo · 50 💎/);
   assert.match(text, /You: \*\*#2\*\*/);
 });
 
@@ -292,8 +296,8 @@ test('the shop card is public, lists items and is not locked', async () => {
   await stockShop(h);
   const ans = await h.slash('shop', '');
   const text = lastText(h, ans);
-  assert.match(text, /🛒 \*\*VIP\*\* · 500 🪙 · gives @VIP/);
-  assert.match(text, /🛒 \*\*Golden ticket\*\* · 200 🪙/);
+  assert.match(text, /🛒 \*\*VIP\*\* · 500 💎 · gives @VIP/);
+  assert.match(text, /🛒 \*\*Golden ticket\*\* · 200 💎/);
   assert.equal(ans[ans.length - 1].type, 'reply');
   const sel = selectIn(h, ans);
   assert.ok(sel, 'has a select menu');
@@ -302,7 +306,7 @@ test('the shop card is public, lists items and is not locked', async () => {
   assert.match(lastText(h, wallet), /Riley's wallet/);
 });
 
-test('buying a role: confirm, take coins, give the role, refuse a second buy', async () => {
+test('buying a role: confirm, take Shards, give the role, refuse a second buy', async () => {
   const h = await make();
   await stockShop(h);
   eco(h).add(S, IDS.member, 600, 'seed');
@@ -325,13 +329,13 @@ test('buying a role: confirm, take coins, give the role, refuse a second buy', a
   assert.match(lastText(h, typed), /already have/);
 });
 
-test('not enough coins and price changes never charge', async () => {
+test('not enough Shards and price changes never charge', async () => {
   const h = await make();
   await stockShop(h);
   eco(h).add(S, IDS.member, 300, 'seed');
   const poor = await h.slash('shop', 'buy VIP');
-  assert.match(lastText(h, poor), /Not enough coins/);
-  assert.match(lastText(h, poor), /200 🪙 more/);
+  assert.match(lastText(h, poor), /Not enough Shards/);
+  assert.match(lastText(h, poor), /200 💎 more/);
   const ask = await h.slash('shop', 'buy golden');
   assert.match(lastText(h, ask), /Buy Golden ticket\?/);
   await h.slash('shop', 'price "Golden ticket" 250', { user: IDS.admin });
@@ -353,6 +357,8 @@ test('custom items go to the inventory and show in /balance', async () => {
   assert.match(lastText(h, card), /2× Golden ticket/);
   const hist = userDoc(h, IDS.member).hist;
   assert.match(hist[hist.length - 1][2], /Bought Golden ticket/);
+  const slots = Object.keys(userDoc(h, IDS.member).inv);
+  assert.deepEqual(slots.map((k) => k.startsWith(`${S}:`)), [true], 'inventory slots name the shop they came from');
 });
 
 test('limited stock sells out and the posted shop card updates', async () => {
@@ -382,7 +388,7 @@ test('limited stock sells out and the posted shop card updates', async () => {
   assert.match(lastText(h, which), /Which item/);
 });
 
-test('a failed role grant refunds the coins and the stock', async () => {
+test('a failed role grant refunds the Shards and the stock', async () => {
   const h = await make();
   await stockShop(h);
   await h.slash('shop', 'stock VIP 3', { user: IDS.admin });
@@ -444,96 +450,217 @@ test('shop remove has Undo and the shop holds at most 20 items', async () => {
   assert.equal(sel.options.length, 20);
 });
 
-test('/economy is admins only and its panel opens', async () => {
+test('/economy is admins only, and only the owner gets its buttons', async () => {
   const h = await make();
   const denied = await h.slash('economy', '');
   assert.match(lastText(h, denied), /Only admins/);
-  const panel = await h.slash('economy', '', { user: IDS.admin });
+  const adminPanel = await h.slash('economy', '', { user: IDS.admin });
+  assert.match(lastText(h, adminPanel), /Economy settings/);
+  assert.equal(h.allButtons(adminPanel).length, 0, 'admins see the panel but no earn or give buttons');
+  const panel = await h.slash('economy', '', { user: IDS.owner });
   const text = lastText(h, panel);
   assert.match(text, /Economy settings/);
-  assert.match(text, /🪙 coins/);
-  for (const label of ['Currency', 'Daily amount', 'Work: on', 'Give coins', 'Take coins', 'Reset someone']) assert.ok(h.findButton(label, panel), label);
-  const toggled = await h.clickButton('Work: on', { user: IDS.admin, in: panel });
+  assert.match(text, /Shards/);
+  for (const label of ['Daily amount', 'Work: on', 'Give Shards', 'Take Shards', 'Reset someone']) assert.ok(h.findButton(label, panel), label);
+  assert.equal(h.findButton('Currency', panel), null, 'the currency editor is gone');
+  const toggled = await h.clickButton('Work: on', { user: IDS.owner, in: panel });
   assert.ok(toggled.length);
-  assert.equal(h.engine.settings.appConfig(S, 'economy').workEnabled, false);
-  const sneaky = await h.click(h.findButton('Give coins', panel).custom_id, { user: IDS.member });
+  assert.equal(h.engine.settings.appConfig(GLOBAL_KEY, 'economy').workEnabled, false);
+  const sneaky = await h.click(h.findButton('Give Shards', panel).custom_id, { user: IDS.member });
   assert.match(lastText(h, sneaky), /Only admins/);
+  const adminTry = await h.click(h.findButton('Give Shards', panel).custom_id, { user: IDS.admin });
+  assert.match(lastText(h, adminTry), /Only the bot owner/);
 });
 
 test('give and take are logged and can be undone', async () => {
   const h = await make();
   h.engine.settings.patchCore(S, { logChannel: IDS.channels.modlog });
-  const give = await h.slash('economy', 'give @sam 100 contest prize', { user: IDS.admin });
-  assert.match(lastText(h, give), /Gave \*\*100\*\* coins/);
+  const give = await h.slash('economy', 'give @sam 100 contest prize', { user: IDS.owner });
+  assert.match(lastText(h, give), /Gave \*\*100\*\* Shards/);
   assert.equal(bal(h, IDS.member), 100);
   await h.settle();
   const log = h.textOf(h.lastSent(IDS.channels.modlog));
-  assert.match(log, /Coins given/);
+  assert.match(log, /Shards given/);
   assert.match(log, /contest prize/);
   const hist = userDoc(h, IDS.member).hist;
-  assert.match(hist[hist.length - 1][2], /Given by Alex: contest prize/);
-  await h.clickButton('Undo', { user: IDS.admin, in: give });
+  assert.match(hist[hist.length - 1][2], /Given by Jolli: contest prize/);
+  await h.clickButton('Undo', { user: IDS.owner, in: give });
   assert.equal(bal(h, IDS.member), 0);
 
   eco(h).add(S, IDS.member, 30, 'seed');
-  const take = await h.slash('economy', 'take @sam 100', { user: IDS.admin });
+  const take = await h.slash('economy', 'take @sam 100', { user: IDS.owner });
   assert.match(lastText(h, take), /all they had/);
   assert.equal(bal(h, IDS.member), 0);
-  await h.clickButton('Undo', { user: IDS.admin, in: take });
+  await h.clickButton('Undo', { user: IDS.owner, in: take });
   assert.equal(bal(h, IDS.member), 30);
-  assert.match(lastText(h, await h.slash('economy', `give <@${IDS.bot}> 5`, { user: IDS.admin })), /Bots can't hold coins/);
-  assert.match(lastText(h, await h.slash('economy', 'give @sam lots', { user: IDS.admin })), /how much/);
+  assert.match(lastText(h, await h.slash('economy', `give <@${IDS.bot}> 5`, { user: IDS.owner })), /Bots can't hold Shards/);
+  assert.match(lastText(h, await h.slash('economy', 'give @sam lots', { user: IDS.owner })), /how much/);
 });
 
 test('give through the panel form', async () => {
   const h = await make();
-  const panel = await h.slash('economy', '', { user: IDS.admin });
-  const opened = await h.clickButton('Give coins', { user: IDS.admin, in: panel });
+  const panel = await h.slash('economy', '', { user: IDS.owner });
+  const opened = await h.clickButton('Give Shards', { user: IDS.owner, in: panel });
   assert.equal(opened[opened.length - 1].type, 'modal');
   const modalId = opened[opened.length - 1].modal.custom_id;
-  const saved = await h.submit(modalId, { user: '@riley', amount: '75', reason: 'helping out' }, { user: IDS.admin });
-  assert.match(lastText(h, saved), /Gave \*\*75\*\* coins/);
+  const saved = await h.submit(modalId, { user: '@riley', amount: '75', reason: 'helping out' }, { user: IDS.owner });
+  assert.match(lastText(h, saved), /Gave \*\*75\*\* Shards/);
   assert.equal(bal(h, IDS.member2), 75);
 });
 
 test('reset wipes a wallet with Undo', async () => {
   const h = await make();
   await h.slash('daily', '');
-  const ans = await h.slash('economy', 'reset @sam', { user: IDS.admin });
+  const ans = await h.slash('economy', 'reset @sam', { user: IDS.owner });
   assert.match(lastText(h, ans), /Wallet reset/);
   assert.equal(userDoc(h, IDS.member), undefined);
   const member = await h.clickButton('Undo', { user: IDS.member, in: ans });
   assert.ok(member.length);
   assert.equal(userDoc(h, IDS.member), undefined, 'members cannot undo');
-  await h.clickButton('Undo', { user: IDS.admin, in: ans });
+  await h.clickButton('Undo', { user: IDS.owner, in: ans });
   assert.equal(bal(h, IDS.member), 110);
   assert.equal(userDoc(h, IDS.member).streak, 1);
-  assert.match(lastText(h, await h.slash('economy', 'reset @riley', { user: IDS.admin })), /Nothing to reset/);
+  assert.match(lastText(h, await h.slash('economy', 'reset @riley', { user: IDS.owner })), /Nothing to reset/);
 });
 
-test('currency, daily, work and starting balance settings', async () => {
+test('the currency is always Shards and cannot be changed', async () => {
   const h = await make();
-  await h.slash('economy', 'currency gems 💎', { user: IDS.admin });
-  assert.deepEqual(eco(h).currency(S), { name: 'gems', emoji: '💎' });
-  await h.slash('economy', 'currency <@everyone>', { user: IDS.admin });
-  assert.doesNotMatch(eco(h).currency(S).name, /[<>@]/);
-  const empty = await h.slash('economy', 'currency ***', { user: IDS.admin });
-  assert.match(lastText(h, empty), /name didn't work/);
-  await h.slash('economy', 'currency gems 💎', { user: IDS.admin });
-  await h.slash('economy', 'daily 250', { user: IDS.admin });
+  assert.deepEqual(eco(h).currency(S), CURRENCY);
+  const fixed = await h.slash('economy', 'currency gems', { user: IDS.owner });
+  assert.match(lastText(h, fixed), /One currency everywhere/);
+  const emoji = await h.slash('economy', 'emoji XX', { user: IDS.owner });
+  assert.match(lastText(h, emoji), /One currency everywhere/);
+  assert.deepEqual(eco(h).currency(S), CURRENCY);
+  const cfg = h.engine.settings.appConfig(GLOBAL_KEY, 'economy');
+  assert.equal(cfg.currencyName, undefined);
+  assert.equal(cfg.currencyEmoji, undefined);
+});
+
+test('daily, work and starting balance are one setting for the whole bot', async () => {
+  const h = await make();
+  await h.slash('economy', 'daily 250', { user: IDS.owner });
   const d = await h.slash('daily', '');
-  assert.match(lastText(h, d), /💎 \+275 gems \(day 1\)/);
-  await h.slash('economy', 'start 40', { user: IDS.admin });
+  assert.match(lastText(h, d), /\+275 Shards \(day 1\)/);
+  await h.slash('economy', 'start 40', { user: IDS.owner });
   assert.equal(bal(h, IDS.member2), 40);
   await h.slash('balance', 'work', { user: IDS.member2 });
   assert.ok(bal(h, IDS.member2) >= 60);
   assert.match(userDoc(h, IDS.member2).hist[0][2], /Starting balance/);
-  assert.match(lastText(h, await h.slash('economy', 'daily lots', { user: IDS.admin })), /didn't work/);
-  assert.match(lastText(h, await h.slash('economy', 'wrok 1', { user: IDS.admin })), /Did you mean \*\*work\*\*/);
-  await h.slash('economy', 'work 90 10', { user: IDS.admin });
-  const cfg = h.engine.settings.appConfig(S, 'economy');
+  assert.match(lastText(h, await h.slash('economy', 'daily lots', { user: IDS.owner })), /didn't work/);
+  assert.match(lastText(h, await h.slash('economy', 'wrok 1', { user: IDS.owner })), /Did you mean \*\*work\*\*/);
+  await h.slash('economy', 'work 90 10', { user: IDS.owner });
+  const cfg = h.engine.settings.appConfig(GLOBAL_KEY, 'economy');
   assert.equal(cfg.workMin, 10);
   assert.equal(cfg.workMax, 90);
+  assert.equal(h.engine.settings.appConfig(S, 'economy').workMin, 20, 'nothing is stored per server');
+});
+
+test('only the owner can change earn rates or hand out Shards', async () => {
+  const h = await make();
+  const rate = await h.slash('economy', 'daily 500', { user: IDS.admin });
+  assert.match(lastText(h, rate), /Only the bot owner can change how many Shards people earn/);
+  assert.equal(h.engine.settings.appConfig(GLOBAL_KEY, 'economy').dailyAmount, 100);
+  const give = await h.slash('economy', 'give @sam 100', { user: IDS.admin });
+  assert.match(lastText(h, give), /Only the bot owner can hand out/);
+  assert.equal(bal(h, IDS.member), 0);
+  const reset = await h.slash('economy', 'reset @sam', { user: IDS.admin });
+  assert.match(lastText(h, reset), /Only the bot owner/);
+
+  const allowed = await h.slash('economy', 'allow @alex', { user: IDS.owner });
+  assert.match(lastText(h, allowed), /can hand out/);
+  const nowOk = await h.slash('economy', 'give @sam 100', { user: IDS.admin });
+  assert.match(lastText(h, nowOk), /Gave \*\*100\*\* Shards/);
+  assert.equal(bal(h, IDS.member), 100);
+  const list = await h.slash('economy', 'givers', { user: IDS.owner });
+  assert.match(lastText(h, list), /Who can hand out Shards/);
+
+  await h.slash('economy', 'deny @alex', { user: IDS.owner });
+  const blocked = await h.slash('economy', 'give @sam 100', { user: IDS.admin });
+  assert.match(lastText(h, blocked), /Only the bot owner can hand out/);
+  assert.equal(bal(h, IDS.member), 100);
+  const notOwner = await h.slash('economy', 'allow @riley', { user: IDS.admin });
+  assert.match(lastText(h, notOwner), /Only the bot owner/);
+});
+
+test('a giver still cannot hand the keys to someone else', async () => {
+  const h = await make();
+  await h.slash('economy', 'allow @alex', { user: IDS.owner });
+  const tried = await h.slash('economy', 'allow @riley', { user: IDS.admin });
+  assert.match(lastText(h, tried), /Only the bot owner can change who hands out Shards/);
+  const riley = await h.slash('economy', 'give @sam 100', { user: IDS.member2 });
+  assert.match(lastText(h, riley), /Only admins/);
+  assert.equal(bal(h, IDS.member), 0);
+});
+
+test('Undo stops working once someone loses the right to hand out Shards', async () => {
+  const h = await make();
+  await h.slash('economy', 'allow @alex', { user: IDS.owner });
+  const give = await h.slash('economy', 'give @sam 100', { user: IDS.admin });
+  assert.equal(bal(h, IDS.member), 100);
+  await h.slash('economy', 'deny @alex', { user: IDS.owner });
+  const sneaky = await h.clickButton('Undo', { user: IDS.admin, in: give });
+  assert.match(lastText(h, sneaky), /Only the bot owner can hand out/);
+  assert.equal(bal(h, IDS.member), 100, 'an admin cannot move global Shards with Undo');
+  await h.clickButton('Undo', { user: IDS.owner, in: give });
+  assert.equal(bal(h, IDS.member), 0);
+});
+
+test('one wallet, one daily and one leaderboard for every server', async () => {
+  const h = await make();
+  await h.slash('daily', '');
+  assert.equal(bal(h, IDS.member), 110);
+  assert.equal(h.engine.store.get('economy', S, null)?.users?.[IDS.member], undefined, 'wallets are not stored per server');
+  const s = eco(h);
+  s.add(OTHER, IDS.member, 50, 'won elsewhere');
+  assert.equal(s.balance(S, IDS.member), 160, 'a payout in another server shows up here');
+  assert.equal(s.balance(OTHER, IDS.member), 160);
+  const again = await h.slash('daily', '');
+  assert.match(lastText(h, again), /one daily for the whole bot/);
+});
+
+test('old per-server wallets are summed once on start', async () => {
+  const store = createMemoryStore();
+  const other = '5e000000-0000-4000-8000-0000000000fe';
+  const blank = () => ({ users: {}, items: [], seq: 0, shopMsgs: [] });
+  store.update('economy', S, (d) => {
+    d.users = { [IDS.member]: { bal: 100, streak: 3, lastDaily: 1000, lastWork: 0, inv: { i1: { name: 'Cookie', n: 2 } }, hist: [[1000, 100, 'old']], seen: 1000 } };
+  }, blank());
+  store.update('economy', other, (d) => {
+    d.users = { [IDS.member]: { bal: 40, streak: 1, lastDaily: 9000, lastWork: 5, inv: { i1: { name: 'Potion', n: 1 } }, hist: [[9000, 40, 'newer']], seen: 9000 } };
+  }, blank());
+
+  const b = await createHarness({ apps: ['economy'], fakeClock: true, store });
+  const u = userDoc(b, IDS.member);
+  assert.equal(u.bal, 140, 'balances add up');
+  assert.equal(u.streak, 1, 'the most recent daily wins');
+  assert.equal(u.lastDaily, 9000);
+  assert.equal(u.lastWork, 5);
+  assert.equal(u.inv[`${S}:i1`].n, 2, 'each shop keeps its own items');
+  assert.equal(u.inv[`${other}:i1`].name, 'Potion', 'two shops that both call an item i1 never merge');
+  assert.equal(u.hist[u.hist.length - 1][2], 'newer');
+  b.engine.scheduler.stop();
+
+  const c = await createHarness({ apps: ['economy'], fakeClock: true, store: b.store });
+  assert.equal(userDoc(c, IDS.member).bal, 140, 'the merge never runs twice');
+});
+
+test('merging is safe on a bot with no data', async () => {
+  const h = await make();
+  assert.equal(bal(h, IDS.member), 0);
+  assert.equal(h.engine.store.get('economy', GLOBAL_KEY, {}).merged, true);
+});
+
+test('earn settings are owner only on the dashboard', async () => {
+  const h = await make();
+  const fields = h.engine.apps.list().find((x) => x.meta.id === 'economy').def.dashboard;
+  for (const key of ['dailyAmount', 'workMin', 'workMax', 'workEnabled', 'begEnabled', 'startBalance']) {
+    const f = fields.find((x) => x.key === key);
+    assert.ok(f, key);
+    assert.equal(f.owner, true, key);
+    assert.equal(typeof f.read, 'function', key);
+  }
+  assert.equal(fields.find((x) => x.key === 'currencyName'), undefined);
+  assert.equal(fields.find((x) => x.key === 'currencyEmoji'), undefined);
 });
 
 test('service contract: integers only, atomic take, never negative, transfer', async () => {
@@ -572,7 +699,7 @@ test('wallets and streaks survive a restart', async () => {
   b.clock.t = a.clock.t + 25 * HOUR;
   assert.equal(b.engine.service('economy').balance(S, IDS.member), 110);
   const ans = await b.slash('daily', '');
-  assert.match(lastText(b, ans), /\+120 coins \(day 2 streak 🔥\)/);
+  assert.match(lastText(b, ans), /\+120 Shards \(day 2 streak 🔥\)/);
   assert.equal(b.engine.store.get('economy', S).items[0].name, 'Cookie');
 });
 
@@ -592,7 +719,7 @@ test('home screen tile opens the wallet for members and settings for admins', as
 test('/yap routes to economy and uninstalling blocks it', async () => {
   const h = await make();
   const ans = await h.slash('yap', 'daily');
-  assert.match(lastText(h, ans), /\+110 coins/);
+  assert.match(lastText(h, ans), /\+110 Shards/);
   const pay = await h.slash('yap', 'pay @riley 10');
   assert.match(lastText(h, pay), /Sam paid Riley/);
   h.engine.settings.setEnabled(S, 'economy', false);
@@ -616,7 +743,7 @@ test('day 5 of a streak pays +50% and reads like the brief', async () => {
     await h.advance(DAY + 60_000);
   }
   const ans = await h.slash('daily', '');
-  assert.match(lastText(h, ans), /🪙 \+150 coins \(day 5 streak 🔥\)/);
+  assert.match(lastText(h, ans), /💎 \+150 Shards \(day 5 streak 🔥\)/);
   assert.match(lastText(h, ans), /Streak bonus \+50%/);
 });
 
@@ -646,18 +773,9 @@ test('a used or cancelled buy confirmation never charges again', async () => {
   assert.equal(bal(h, IDS.member), 800);
 });
 
-test('currency emoji must be an emoji, and names never show raw ids', async () => {
+test('names never show raw ids', async () => {
   const h = await make();
-  const bad = await h.slash('economy', 'emoji **bold**', { user: IDS.admin });
-  assert.match(lastText(h, bad), /emoji didn't work/);
-  await h.slash('economy', 'currency gems **x**', { user: IDS.admin });
-  assert.deepEqual(eco(h).currency(S), { name: 'gems x', emoji: '🪙' });
-  await h.slash('economy', 'emoji <:gem:a0000000-0000-4000-8000-0000000000aa>', { user: IDS.admin });
-  assert.equal(eco(h).currency(S).emoji, '<:gem:a0000000-0000-4000-8000-0000000000aa>');
-  await h.slash('economy', 'emoji 💎', { user: IDS.admin });
-  assert.equal(eco(h).currency(S).emoji, '💎');
-
-  await h.slash('economy', `give @sam 50 for <@&${R.vip}> and <@${IDS.member2}> @everyone`, { user: IDS.admin });
+  await h.slash('economy', `give @sam 50 for <@&${R.vip}> and <@${IDS.member2}> @everyone`, { user: IDS.owner });
   const hist = await h.slash('balance', 'history');
   const text = lastText(h, hist);
   assert.doesNotMatch(text, /[0-9a-f]{8}-[0-9a-f]{4}/);
@@ -671,12 +789,12 @@ test('currency emoji must be an emoji, and names never show raw ids', async () =
 
 test('with daily off the wallet hides the Daily button, and empty takes leave no history line', async () => {
   const h = await make();
-  await h.slash('economy', 'daily 0', { user: IDS.admin });
+  await h.slash('economy', 'daily 0', { user: IDS.owner });
   const card = await h.slash('balance', '');
   assert.equal(h.findButton('Daily', card), null);
   assert.match(lastText(h, card), /Daily\s+Off/);
-  const take = await h.slash('economy', 'take @sam 10', { user: IDS.admin });
-  assert.match(lastText(h, take), /no coins to take/);
+  const take = await h.slash('economy', 'take @sam 10', { user: IDS.owner });
+  assert.match(lastText(h, take), /no Shards to take/);
   assert.equal((userDoc(h, IDS.member)?.hist || []).length, 0);
 });
 

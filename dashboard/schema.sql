@@ -71,3 +71,9 @@ CREATE TABLE IF NOT EXISTS rate (
   PRIMARY KEY (key, "window")
 );
 CREATE INDEX IF NOT EXISTS rate_window ON rate ("window");
+
+CREATE TABLE IF NOT EXISTS global_board (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  updated INTEGER NOT NULL
+);

@@ -14,7 +14,7 @@ export const COLORS = {
 };
 
 export const ICONS = {
-  system: '🖥️', setup: '🚀', mod: '🛡️', automod: '🤖', welcome: '👋', roles: '🎭', levels: '📈', economy: '🪙',
+  system: '🖥️', setup: '🚀', mod: '🛡️', automod: '🤖', welcome: '👋', roles: '🎭', levels: '📈', economy: '💎',
   engage: '🎉', tickets: '🎫', tools: '🧰', voice: '🔊', music: '🎵', games: '🎮', casino: '🎰', characters: '🎭', pocket: '📱',
   ai: '✨', extras: '🧩', ok: '✅', error: '⛔', warn: '⚠️', info: 'ℹ️', lock: '🔒', unlock: '🔓', undo: '↩️',
 };

@@ -1937,7 +1937,83 @@
   display: none;
 }
 
+.field-tag-owner {
+  color: var(--accent-text);
+  border-color: var(--accent-border, var(--border));
+  background: var(--accent-soft);
+}
+
+.field-lock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.field-lock[hidden] {
+  display: none;
+}
+
+.field.is-locked .field-control,
+.field.is-locked .field-tile-top {
+  opacity: 0.65;
+}
+
+.field.is-locked {
+  cursor: default;
+}
+
+.public-crest {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  color: var(--accent-text);
+  background:
+    radial-gradient(120% 140% at 0% 0%, var(--accent-soft), transparent 60%),
+    var(--surface-2);
+}
+
+.public-lead {
+  margin-top: 4px;
+  max-width: 56ch;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.plain-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+}
+
+.plain-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.plain-list svg {
+  flex: none;
+  color: var(--text-3);
+}
+
 @media (max-width: 720px) {
+  .public-crest {
+    width: 48px;
+    height: 48px;
+  }
+
   .settings-toolbar {
     position: static;
   }

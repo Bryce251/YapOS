@@ -17,7 +17,7 @@ function fakeEconomy(start = {}) {
   return {
     bal,
     log,
-    currency: () => ({ name: 'coins', emoji: '🪙' }),
+    currency: () => ({ name: 'Shards', emoji: '💎' }),
     balance: (sid, uid) => bal[uid] || 0,
     add: (sid, uid, n, reason) => { bal[uid] = (bal[uid] || 0) + n; log.push(['add', uid, n, reason]); return bal[uid]; },
     take: (sid, uid, n, reason) => {
@@ -295,12 +295,12 @@ test('rock paper scissors: picks stay private until both have picked', async () 
   assert.match(h.textOf(live(h, msg.id)), /It's a draw/);
 });
 
-test('bets: held on accept, winner takes the pot, draws and declines give coins back', async (t) => {
+test('bets: held on accept, winner takes the pot, draws and declines give Shards back', async (t) => {
   t.mock.method(Math, 'random', () => 0);
   const h = await make();
   const eco = withEco(h, fakeEconomy({ [A]: 100, [B]: 100, [IDS.mod]: 10 }));
   const msg = replyMsg(await h.slash('game', `rps <@${B}> bet 50`, { user: A }));
-  assert.match(h.textOf(msg), /Bet: \*\*50\*\* 🪙 each · winner takes \*\*100\*\* 🪙/);
+  assert.match(h.textOf(msg), /Bet: \*\*50\*\* 💎 each · winner takes \*\*100\*\* 💎/);
   assert.equal(eco.bal[A], 100, 'nothing is taken before the challenge is accepted');
   await press(h, msg, 'Accept', B);
   assert.equal(eco.bal[A], 50);
@@ -310,7 +310,7 @@ test('bets: held on accept, winner takes the pot, draws and declines give coins 
   await press(h, msg, 'Scissors', B);
   assert.equal(eco.bal[A], 150);
   assert.equal(eco.bal[B], 50);
-  assert.match(h.textOf(live(h, msg.id)), /takes \*\*100\*\* 🪙/);
+  assert.match(h.textOf(live(h, msg.id)), /takes \*\*100\*\* 💎/);
   await press(h, msg, 'Rematch', B);
   await press(h, msg, 'Accept', A);
   assert.equal(eco.bal[A], 100);
@@ -326,16 +326,16 @@ test('bets: held on accept, winner takes the pot, draws and declines give coins 
   assert.equal(eco.bal[B], 50);
 });
 
-test('bets: not enough coins, limits, bets off and no Economy app', async () => {
+test('bets: not enough Shards, limits, bets off and no Economy app', async () => {
   const h = await make();
   assert.match(lastText(h, await h.slash('game', `rps <@${B}> bet 50`, { user: A })), /needs the \*\*Economy\*\* app/);
   const eco = withEco(h, fakeEconomy({ [A]: 100, [B]: 10 }));
-  assert.match(lastText(h, await h.slash('game', `rps <@${B}> bet 500`, { user: A })), /Not enough coins/);
+  assert.match(lastText(h, await h.slash('game', `rps <@${B}> bet 500`, { user: A })), /Not enough Shards/);
   assert.match(lastText(h, await h.slash('game', `rps <@${B}> bet 5000`, { user: A })), /biggest bet here is \*\*1,000\*\*/);
   assert.match(lastText(h, await h.slash('game', `rps <@${B}> bet lots`, { user: A })), /whole numbers/);
   const msg = replyMsg(await h.slash('game', `rps <@${B}> bet 50`, { user: A }));
   const poor = await press(h, msg, 'Accept', B);
-  assert.match(lastText(h, poor), /You need \*\*50\*\* 🪙 to accept and you have \*\*10\*\* 🪙/);
+  assert.match(lastText(h, poor), /You need \*\*50\*\* 💎 to accept and you have \*\*10\*\* 💎/);
   assert.equal(eco.bal[A], 100, 'the challenger got their stake back');
   assert.equal(eco.bal[B], 10);
   assert.ok(findBtn(h, msg, 'Accept'), 'the challenge stays open');
@@ -505,7 +505,7 @@ test('trivia: one question, answer once, reveal with who got it right, another q
   assert.equal(h.engine.store.get('games', S).stats[A].trivia.correct, 1);
 });
 
-test('trivia round: scores, next questions in the same message, final results and a coin prize', async (t) => {
+test('trivia round: scores, next questions in the same message, final results and a Shards prize', async (t) => {
   t.mock.method(Math, 'random', () => 0);
   const tick = clockAt(t);
   const h = await make();
@@ -534,7 +534,7 @@ test('trivia round: scores, next questions in the same message, final results an
   assert.match(final, /Trivia results/);
   assert.match(final, new RegExp(`🥇 <@${A}> · 3 points`));
   assert.match(final, new RegExp(`🥈 <@${B}> · 1 point`));
-  assert.match(final, /won \*\*25\*\* 🪙/);
+  assert.match(final, /won \*\*25\*\* 💎/);
   assert.equal(eco.bal[A], 25);
   assert.equal(eco.bal[B], undefined);
   assert.equal(h.sent(G).length, 1, 'the whole round used one message');
@@ -619,20 +619,26 @@ test('panel: members get games and trivia, admins also get settings', async () =
 test('admin typed settings and the settings form', async () => {
   const h = await make();
   assert.match(lastText(h, await h.slash('game', 'prize 50', { user: A })), /Needs Admin|Only admins/);
-  assert.match(lastText(h, await h.slash('game', 'prize 50', { user: IDS.admin })), /\*\*50\*\*/);
+  assert.match(lastText(h, await h.slash('game', 'prize 50', { user: IDS.admin })), /Owner only/);
+  assert.equal(h.engine.settings.appConfig(S, 'games').triviaPrize, 25, 'a server admin cannot hand out Shards');
+  assert.match(lastText(h, await h.slash('game', 'prize 50', { user: IDS.owner })), /\*\*50\*\*/);
   assert.equal(h.engine.settings.appConfig(S, 'games').triviaPrize, 50);
   await h.slash('game', 'maxbet 500', { user: IDS.admin });
   assert.equal(h.engine.settings.appConfig(S, 'games').maxBet, 500);
   assert.match(lastText(h, await h.slash('game', 'maxbet zero', { user: IDS.admin })), /didn't work/);
   await h.slash('game', 'bets off', { user: IDS.admin });
   assert.equal(h.engine.settings.appConfig(S, 'games').bets, false);
-  await h.slash('game', 'prize off', { user: IDS.admin });
+  await h.slash('game', 'prize off', { user: IDS.owner });
   assert.equal(h.engine.settings.appConfig(S, 'games').triviaPrize, 0);
-  const saved = await h.submit('yo:games:setsave', { prize: '30', maxbet: '2,000' }, { user: IDS.admin });
+  const saved = await h.submit('yo:games:setsave', { prize: '30', maxbet: '2,000' }, { user: IDS.owner });
   assert.match(lastText(h, saved), /Saved/);
   assert.equal(h.engine.settings.appConfig(S, 'games').maxBet, 2000);
   assert.equal(h.engine.settings.appConfig(S, 'games').triviaPrize, 30);
-  const bad = await h.submit('yo:games:setsave', { prize: '-3', maxbet: '10' }, { user: IDS.admin });
+  const kept = await h.submit('yo:games:setsave', { prize: '9999', maxbet: '1,500' }, { user: IDS.admin });
+  assert.match(lastText(h, kept), /Saved/);
+  assert.equal(h.engine.settings.appConfig(S, 'games').maxBet, 1500);
+  assert.equal(h.engine.settings.appConfig(S, 'games').triviaPrize, 30, 'the form cannot mint Shards for a server admin');
+  const bad = await h.submit('yo:games:setsave', { prize: '-3', maxbet: '10' }, { user: IDS.owner });
   assert.match(lastText(h, bad), /didn't work/);
 });
 
@@ -640,14 +646,14 @@ test('big bet caps, inf for no limit and old saved numbers all work', async () =
   const h = await make();
   await h.slash('game', 'maxbet 5m', { user: IDS.admin });
   assert.equal(h.engine.settings.appConfig(S, 'games').maxBet, 5_000_000);
-  await h.slash('game', 'prize 2,500,000', { user: IDS.admin });
+  await h.slash('game', 'prize 2,500,000', { user: IDS.owner });
   assert.equal(h.engine.settings.appConfig(S, 'games').triviaPrize, 2_500_000);
 
   const off = await h.slash('game', 'maxbet inf', { user: IDS.admin });
   assert.match(lastText(h, off), /no limit/i);
   assert.equal(h.engine.settings.appConfig(S, 'games').maxBet, 'inf');
   assert.match(lastText(h, await h.slash('game', 'settings', { user: IDS.admin })), /Biggest bet:\*\* No limit/);
-  assert.match(lastText(h, await h.slash('game', 'prize inf', { user: IDS.admin })), /didn't work/);
+  assert.match(lastText(h, await h.slash('game', 'prize inf', { user: IDS.owner })), /didn't work/);
 
   const form = await h.submit('yo:games:setsave', { prize: '30', maxbet: 'unlimited' }, { user: IDS.admin });
   assert.match(lastText(h, form), /no limit/i);
@@ -665,7 +671,7 @@ test('an unlimited max bet lets any bet through', async () => {
   assert.doesNotMatch(lastText(h, ok), /too big/);
 });
 
-test('even with no limit a bet stays a real number of coins', async () => {
+test('even with no limit a bet stays a real number of Shards', async () => {
   const h = await make();
   withEco(h, fakeEconomy({ [A]: 9_000_000, [B]: 9_000_000 }));
   await h.slash('game', 'maxbet inf', { user: IDS.admin });
@@ -710,7 +716,7 @@ test('rematch pressed by both players at once starts only one game', async (t) =
   assert.equal(eco.bal[A] + eco.bal[B], 200);
 });
 
-test('rematch refused for coins keeps the button working for later', async (t) => {
+test('rematch refused for Shards keeps the button working for later', async (t) => {
   t.mock.method(Math, 'random', () => 0);
   const h = await make();
   const eco = withEco(h, fakeEconomy({ [A]: 20, [B]: 20 }));
@@ -719,7 +725,7 @@ test('rematch refused for coins keeps the button working for later', async (t) =
   await press(h, msg, 'Scissors', B);
   assert.equal(eco.bal[B], 0);
   const poor = await press(h, msg, 'Rematch', B);
-  assert.match(lastText(h, poor), /Not enough coins/);
+  assert.match(lastText(h, poor), /Not enough Shards/);
   await press(h, msg, 'Rematch', A);
   assert.match(h.textOf(live(h, msg.id)), /challenges/);
 });
@@ -754,7 +760,7 @@ test('a game ended by a mod while it is starting gives both stakes back', async 
   const h = await make();
   const bal = { [A]: 100, [B]: 100 };
   const slow = {
-    currency: () => ({ name: 'coins', emoji: '🪙' }),
+    currency: () => ({ name: 'Shards', emoji: '💎' }),
     balance: (sid, uid) => bal[uid] || 0,
     add: (sid, uid, n) => { bal[uid] = (bal[uid] || 0) + n; return bal[uid]; },
     take: async (sid, uid, n) => {
@@ -806,6 +812,6 @@ test('trivia rounds cut short pay no prize', async (t) => {
   tick(20_001);
   await sweep(h);
   assert.equal(svc(h).trivia(G), null);
-  assert.equal(eco.bal[B], undefined, 'no coins for an unfinished round');
+  assert.equal(eco.bal[B], undefined, 'no Shards for an unfinished round');
   assert.equal(h.engine.store.get('games', S).stats[B].trivia.wins, 0);
 });

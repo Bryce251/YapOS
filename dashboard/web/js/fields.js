@@ -2,7 +2,7 @@ import { h, nextId, replace } from './dom.js';
 import { icon } from './icons.js';
 import { picker } from './picker.js';
 import { switchControl } from './ui.js';
-import { addWord, channelMatches, describeReadOnly, wordLimit } from './forms.js';
+import { OWNER_ONLY_NOTE, addWord, channelMatches, describeReadOnly, wordLimit } from './forms.js';
 import { toHexColor } from './format.js';
 import { choiceRows, messagePreview, numberSlider, optionCards, pickerRows, placeholderChips, placeholdersIn, rewardsEditor, stepsEditor, toggleGrid } from './settings-editors.js';
 
@@ -239,7 +239,14 @@ function cardSelect(field) {
   return field.options.length >= 2 && field.options.length <= CARD_SELECT_MAX && field.options.every((o) => String(o.label).length <= 28);
 }
 
-export function fieldRow(field, { edit, rawValue, lookups, onChange, context = {} }) {
+const LOCKABLE = new Set(['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON']);
+
+function lockNodes(root) {
+  const all = [root, ...root.querySelectorAll('input, select, textarea, button')];
+  return all.filter((n) => LOCKABLE.has(n.tagName));
+}
+
+export function fieldRow(field, { edit, rawValue, lookups, onChange, context = {}, locked = false }) {
   const ids = { input: nextId('f'), label: nextId('l'), help: nextId('h'), error: nextId('e') };
   ids.describedBy = [field.help ? ids.help : '', ids.error].filter(Boolean).join(' ');
   const errorEl = h('p', { class: 'field-error', id: ids.error, attrs: { 'aria-live': 'polite' } });
@@ -297,25 +304,42 @@ export function fieldRow(field, { edit, rawValue, lookups, onChange, context = {
     }
   }
 
-  const head = h('div', { class: 'field-head' }, labelEl, field.readOnly ? h('span', { class: 'field-tag', text: 'Read-only' }) : null);
+  const lockNote = h('p', { class: 'field-lock', hidden: true }, icon('lock', { size: 12 }), h('span', { text: OWNER_ONLY_NOTE }));
+  const head = h('div', { class: 'field-head' }, labelEl,
+    field.readOnly ? h('span', { class: 'field-tag', text: 'Read-only' }) : null,
+    field.owner && !field.readOnly ? h('span', { class: 'field-tag field-tag-owner', text: 'Bot owner' }) : null);
   let el;
   if (field.type === 'boolean' && !field.readOnly) {
     el = h('div', { class: 'field field-tile', dataset: { key: field.key } },
       h('div', { class: 'field-tile-top' }, h('span', { class: 'field-tile-icon', attrs: { 'aria-hidden': 'true' } }, icon('power', { size: 16 })), control.el),
-      h('div', { class: 'field-text' }, head, helpEl, errorEl));
+      h('div', { class: 'field-text' }, head, helpEl, lockNote, errorEl));
     el.addEventListener('click', (e) => {
+      if (el.classList.contains('is-locked')) return;
       if (!control.el.contains(e.target) && !e.target.closest('a, button, input')) control.el.click();
     });
   } else if (field.editor || (field.type === 'text' && !field.readOnly)) {
-    el = h('div', { class: 'field field-wide', dataset: { key: field.key } }, h('div', { class: 'field-text' }, head, helpEl), h('div', { class: 'field-control' }, control.el, errorEl));
+    el = h('div', { class: 'field field-wide', dataset: { key: field.key } }, h('div', { class: 'field-text' }, head, helpEl), h('div', { class: 'field-control' }, control.el, lockNote, errorEl));
   } else {
-    el = h('div', { class: 'field', dataset: { key: field.key } }, h('div', { class: 'field-text' }, head, helpEl), h('div', { class: 'field-control' }, control.el, errorEl));
+    el = h('div', { class: 'field', dataset: { key: field.key } }, h('div', { class: 'field-text' }, head, helpEl), h('div', { class: 'field-control' }, control.el, lockNote, errorEl));
   }
+
+  function setLocked(on) {
+    const v = Boolean(on) && !field.readOnly;
+    el.classList.toggle('is-locked', v);
+    lockNote.hidden = !v;
+    for (const node of lockNodes(control.el)) node.disabled = v;
+  }
+  setLocked(locked && field.owner);
 
   return {
     el,
     key: field.key,
-    setValue: (v) => control.setValue(v),
+    locked: () => el.classList.contains('is-locked'),
+    setLocked,
+    setValue: (v) => {
+      control.setValue(v);
+      if (el.classList.contains('is-locked')) setLocked(true);
+    },
     setError(msg) {
       errorEl.textContent = msg || '';
       el.classList.toggle('has-error', Boolean(msg));

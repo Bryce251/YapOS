@@ -5,6 +5,7 @@ import { tokenize, didYouMean, fillTemplate, clip, normalizeName, parseBool, cha
 import { permName, explain, friendly } from '../engine/errors.js';
 import { avatarUrl } from '../engine/links.js';
 import { accept, reject, boolField, channelById, roleById, idList, plainObject } from '../engine/dashboard.js';
+import { globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, mergeOnce, canGiveCurrency } from '../engine/global.js';
 
 const ID = 'levels';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -94,21 +95,50 @@ const states = new WeakMap();
 function stateOf(engine) {
   let s = states.get(engine);
   if (!s) {
-    s = { lastXp: new Map(), pendingMsgs: new Map(), sessions: new Map(), closed: new Map(), voiceCache: new Map(), avatars: new Map(), logged: new Set(), seen: 0 };
+    s = { lastXp: new Map(), pendingMsgs: new Map(), sessions: new Map(), closed: new Map(), voiceCache: new Map(), avatars: new Map(), names: new Map(), logged: new Set(), seen: 0 };
     states.set(engine, s);
   }
   return s;
 }
 
 const blankUser = () => ({ xp: 0, level: 0, voiceSeconds: 0, messages: 0, lastXpAt: 0 });
-const readDoc = (engine, sid) => {
-  const d = engine.store.get(ID, sid, { users: {} });
+const blankDoc = () => ({ users: {} });
+const readDoc = (engine) => {
+  const d = globalDoc(engine, ID, blankDoc());
   d.users ||= {};
   return d;
 };
-const readUser = (engine, sid, uid) => ({ ...blankUser(), ...(readDoc(engine, sid).users[uid] || {}) });
+const readUser = (engine, uid) => ({ ...blankUser(), ...(readDoc(engine).users[uid] || {}) });
 const botId = (engine) => engine.bot.me?.id;
 const cfgOf = (engine, sid) => engine.settings.appConfig(sid, ID);
+let dashboardEngine = null;
+const earnOf = (engine) => globalConfig(engine, ID);
+const earnRead = (key, cfg) => (dashboardEngine ? earnOf(dashboardEngine)[key] : cfg?.[key] ?? null);
+const patchEarn = (engine, patch) => patchGlobalConfig(engine, ID, patch);
+const canSetEarn = (ctx) => canGiveCurrency(ctx.engine, ctx.userId);
+const EARN_ONLY_TITLE = 'Only the bot owner can change that';
+const EARN_ONLY = 'Only the bot owner can change how fast XP is earned. Reward roles, level-up messages and no-XP spots are still yours.';
+const OWNER_ONLY_XP = 'Levels are shared across every server now, so only the bot owner can hand out or wipe XP. You can still set up reward roles here.';
+
+function foldUsers(d, from) {
+  d.users ||= {};
+  for (const [uid, raw] of Object.entries(from?.users || {})) {
+    const add = { ...blankUser(), ...(raw || {}) };
+    const cur = { ...blankUser(), ...(d.users[uid] || {}) };
+    const xp = Math.max(0, Math.round((Number(cur.xp) || 0) + (Number(add.xp) || 0)));
+    d.users[uid] = {
+      xp,
+      level: levelFor(xp),
+      voiceSeconds: Math.max(0, Math.round((Number(cur.voiceSeconds) || 0) + (Number(add.voiceSeconds) || 0))),
+      messages: (Number(cur.messages) || 0) + (Number(add.messages) || 0),
+      lastXpAt: Math.max(Number(cur.lastXpAt) || 0, Number(add.lastXpAt) || 0),
+    };
+  }
+}
+
+export function mergeServerXp(engine) {
+  return mergeOnce(engine, ID, { blank: blankDoc, fold: foldUsers });
+}
 const plainName = (name) => String(name ?? '').replace(/[<>]/g, '').replace(/@/g, '@\u200b');
 const ownsPanel = (ctx) => {
   const messageId = ctx.source?.message_id;
@@ -249,12 +279,11 @@ async function onLevelUp(engine, sid, uid, level, opts) {
   try { await grantRewards(engine, sid, uid, level); } catch (e) { engine.log.debug('[levels] rewards failed', e?.message); }
 }
 
-function applyGain(engine, sid, uid, { xp = 0, voiceSeconds = 0, messages = 0 }) {
+function applyGain(engine, uid, { xp = 0, voiceSeconds = 0, messages = 0 }) {
   let before = 0;
   let after = 0;
   let total = 0;
-  engine.store.update(ID, sid, (d) => {
-    d ||= { users: {} };
+  mutateGlobal(engine, ID, (d) => {
     d.users ||= {};
     const u = { ...blankUser(), ...(d.users[uid] || {}) };
     before = u.level;
@@ -266,13 +295,12 @@ function applyGain(engine, sid, uid, { xp = 0, voiceSeconds = 0, messages = 0 })
     d.users[uid] = u;
     after = u.level;
     total = u.xp;
-    return d;
-  }, { users: {} });
+  }, blankDoc());
   return { before, level: after, xp: total, leveledUp: after > before };
 }
 
 async function addXp(engine, sid, uid, amount, extra = {}) {
-  const res = applyGain(engine, sid, uid, { xp: Number(amount) || 0, voiceSeconds: extra.voiceSeconds, messages: extra.messages });
+  const res = applyGain(engine, uid, { xp: Number(amount) || 0, voiceSeconds: extra.voiceSeconds, messages: extra.messages });
   if (res.leveledUp) await onLevelUp(engine, sid, uid, res.level, { channelId: extra.channelId });
   return res;
 }
@@ -284,19 +312,20 @@ async function onMessage(ctx, msg) {
   if (!sid || !uid || msg.dm || msg.is_dm || msg.author_bot || msg.command || uid === botId(engine)) return;
   if (String(msg.content || '').trim().length < 3) return;
   const cfg = cfgOf(engine, sid);
-  if (cfg.messageXp === false) return;
+  const earn = earnOf(engine);
+  if (earn.messageXp === false) return;
   if ((cfg.noXpChannels || []).includes(msg.channel_id)) return;
   const st = stateOf(engine);
-  const key = `${sid}:${uid}`;
+  const key = uid;
   const now = Date.now();
   pruneTrackers(st, now);
   const last = st.lastXp.get(key);
-  const cooldownMs = Math.max(0, Number(cfg.cooldownSeconds ?? 60)) * 1000;
+  const cooldownMs = Math.max(0, Number(earn.cooldownSeconds ?? 60)) * 1000;
   if (last !== undefined && now - last < cooldownMs) {
     st.pendingMsgs.set(key, (st.pendingMsgs.get(key) || 0) + 1);
     return;
   }
-  const rate = Math.max(0, Number(cfg.rate ?? 1));
+  const rate = Math.max(0, Number(earn.rate ?? 1));
   if (!rate) return;
   st.lastXp.delete(key);
   st.lastXp.set(key, now);
@@ -304,7 +333,12 @@ async function onMessage(ctx, msg) {
   st.pendingMsgs.delete(key);
   if ((cfg.noXpRoles || []).length) {
     const m = await engine.perms.member(sid, uid).catch(() => null);
-    if (m && (m.roles || []).some((r) => cfg.noXpRoles.includes(r))) return;
+    if (m && (m.roles || []).some((r) => cfg.noXpRoles.includes(r))) {
+      st.lastXp.delete(key);
+      if (last !== undefined) st.lastXp.set(key, last);
+      if (messages > 1) st.pendingMsgs.set(key, messages - 1);
+      return;
+    }
   }
   const amount = Math.round((15 + Math.floor(Math.random() * 11)) * rate);
   await addXp(engine, sid, uid, amount, { channelId: msg.channel_id, messages });
@@ -339,14 +373,14 @@ async function awardVoice(engine, sid, uid, s) {
   s.awardedMin = Math.max(s.awardedMin, minutes);
   s.countedSec = Math.max(s.countedSec, elapsed);
   if (newSeconds <= 0) return null;
-  const cfg = cfgOf(engine, sid);
-  if (cfg.voiceXp === false) return null;
+  const earn = earnOf(engine);
+  if (earn.voiceXp === false) return null;
   let company = trackedCompanion(st, sid, uid, s.channelId, now);
   if (!company) {
     try { company = (await voiceOthers(engine, sid, s.channelId, uid)).length > 0; } catch { company = true; }
   }
   if (!company) return null;
-  const perMinute = Math.max(0, Number(cfg.voiceXpPerMinute ?? 5));
+  const perMinute = Math.max(0, Number(earn.voiceXpPerMinute ?? 5));
   return addXp(engine, sid, uid, Math.max(0, newMinutes) * perMinute, { voiceSeconds: newSeconds });
 }
 
@@ -370,7 +404,7 @@ async function onVoiceJoin(ctx, ev) {
     st.sessions.set(key, recent.session);
     return;
   }
-  if (cfgOf(engine, sid).voiceXp === false) return;
+  if (earnOf(engine).voiceXp === false) return;
   st.sessions.set(key, { channelId: ev.channel_id, startedAt: now, awardedMin: 0, countedSec: 0 });
 }
 
@@ -390,9 +424,25 @@ async function onVoiceLeave(ctx, ev) {
   await awardVoice(engine, sid, uid, s);
 }
 
-function ranked(engine, sid, sort = 'xp') {
+async function onMemberJoin(ctx, ev) {
+  const { engine } = ctx;
+  const sid = ev.server_id;
+  const uid = ev.user_id;
+  if (!sid || !uid || uid === botId(engine)) return;
+  const u = readUser(engine, uid);
+  const level = Number.isInteger(u.level) && u.level > 0 ? u.level : levelFor(u.xp);
+  if (!level) return;
+  if (!rewardList(cfgOf(engine, sid)).some((r) => r.level <= level)) return;
+  try {
+    await grantRewards(engine, sid, uid, level);
+  } catch (e) {
+    engine.log.debug('[levels] rewards on join failed', e?.message);
+  }
+}
+
+function ranked(engine, sort = 'xp') {
   const field = sort === 'voice' ? 'voiceSeconds' : 'xp';
-  return Object.entries(readDoc(engine, sid).users)
+  return Object.entries(readDoc(engine).users)
     .map(([id, u]) => ({ id, ...blankUser(), ...u }))
     .filter((u) => u[field] > 0)
     .sort((a, b) => b[field] - a[field] || b.xp - a.xp || a.id.localeCompare(b.id));
@@ -434,13 +484,13 @@ function sinceText(joinedAt) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 
-function tipFor(cfg) {
-  const chat = cfg.messageXp !== false;
-  const voice = cfg.voiceXp === true;
-  if (chat && voice) return 'Chat to earn XP · voice counts too';
-  if (chat) return 'Chat to earn XP · keep the conversation going';
+function tipFor(earn) {
+  const chat = earn.messageXp !== false;
+  const voice = earn.voiceXp === true;
+  if (chat && voice) return 'Chat to earn XP · voice counts too · your level follows you everywhere';
+  if (chat) return 'Chat to earn XP · your level follows you everywhere';
   if (voice) return 'Hang out in voice with friends to earn XP';
-  return 'XP is paused on this server right now';
+  return 'XP is paused right now';
 }
 
 async function avatarPathOf(engine, member) {
@@ -474,14 +524,15 @@ const roleLabeller = (roles) => (id) => {
 };
 
 async function rankView(ctx, target) {
-  const { engine, serverId: sid } = ctx;
-  const stored = readDoc(engine, sid).users[target.id] || null;
-  const u = readUser(engine, sid, target.id);
+  const { engine } = ctx;
+  const stored = readDoc(engine).users[target.id] || null;
+  const u = readUser(engine, target.id);
   const p = progressOf(u.xp);
   const tier = tierOf(p.level);
-  const list = ranked(engine, sid);
+  const list = ranked(engine);
   const pos = list.findIndex((x) => x.id === target.id);
   const cfg = ctx.config();
+  const earn = earnOf(engine);
   const rewards = rewardList(cfg);
   const next = rewards.find((r) => r.level > p.level);
   const roles = rewards.length ? await ctx.roles().catch(() => []) : [];
@@ -514,7 +565,7 @@ async function rankView(ctx, target) {
     ]).join('\n');
     const msgs = Number.isFinite(stored?.messages) ? `\`${num(stored.messages)}\`` : 'not counted yet';
     fields = [
-      { name: '🏆 Rank', value: pos >= 0 ? `\`#${num(pos + 1)} of ${num(list.length)}\`` : 'not ranked yet', inline: true },
+      { name: '🏆 Global rank', value: pos >= 0 ? `\`#${num(pos + 1)} of ${num(list.length)}\`` : 'not ranked yet', inline: true },
       { name: '✨ Total XP', value: `\`${num(u.xp)}\``, inline: true },
       { name: '💬 Messages', value: msgs, inline: true },
       { name: '🎙️ Voice', value: u.voiceSeconds >= 60 ? `\`${voiceText(u.voiceSeconds)}\`` : voiceText(u.voiceSeconds), inline: true },
@@ -522,7 +573,7 @@ async function rankView(ctx, target) {
       since ? { name: '📅 Member since', value: since, inline: true } : null,
     ];
   }
-  const embed = withAuthor(card({ body, fields, color: tier.color, footer: tipFor(cfg), thumbnail: icon || undefined }), name, icon);
+  const embed = withAuthor(card({ body, fields, color: tier.color, footer: tipFor(earn), thumbnail: icon || undefined }), name, icon);
   return {
     embeds: [embed],
     components: [row(
@@ -542,7 +593,7 @@ async function rewardsView(ctx, subjectId) {
     member = await engine.perms.member(sid, uid).catch(() => null);
   }
   const self = uid === ctx.userId;
-  const u = readUser(engine, sid, uid);
+  const u = readUser(engine, uid);
   const level = levelFor(u.xp);
   const cfg = ctx.config();
   const rewards = rewardList(cfg);
@@ -562,7 +613,7 @@ async function rewardsView(ctx, subjectId) {
     const lead = self ? null : `-# Showing progress for **${mdSafe(displayName(member), 'them')}**`;
     body = [lead, ...lines].filter(Boolean).join('\n');
   }
-  const footer = !rewards.length ? tipFor(cfg) : cfg.stackRewards === false ? 'Only the highest reward role is kept' : 'Every reward role you earn is yours to keep';
+  const footer = !rewards.length ? tipFor(earnOf(ctx.engine)) : cfg.stackRewards === false ? 'Only the highest reward role is kept' : 'Every reward role you earn is yours to keep';
   return { embeds: [card({ title: '🎁 Level rewards', body, color: tierOf(level).color, footer })] };
 }
 
@@ -596,21 +647,48 @@ async function showRank(ctx, tokens, how = 'reply') {
   }
 }
 
+async function boardNames(engine, members, ids) {
+  const names = new Map(members.map((m) => [m.id, displayName(m)]));
+  if (typeof engine.bot.user !== 'function') return names;
+  const st = stateOf(engine);
+  const now = Date.now();
+  const missing = [];
+  for (const id of ids) {
+    if (names.has(id)) continue;
+    const hit = st.names.get(id);
+    if (hit && now - hit.at < AVATAR_CACHE_MS) {
+      if (hit.name) names.set(id, hit.name);
+      continue;
+    }
+    if (!missing.includes(id)) missing.push(id);
+  }
+  if (!missing.length) return names;
+  const found = await Promise.all(missing.map((id) => Promise.resolve().then(() => engine.bot.user(id)).catch(() => null)));
+  for (let i = 0; i < missing.length; i++) {
+    const user = found[i];
+    const name = user && (user.display_name || user.username) ? displayName(user) : null;
+    if (st.names.size >= AVATAR_CACHE_LIMIT) st.names.clear();
+    st.names.set(missing[i], { at: now, name });
+    if (name) names.set(missing[i], name);
+  }
+  return names;
+}
+
 async function leaderboardView(ctx, page, sort) {
-  const { engine, serverId: sid } = ctx;
+  const { engine } = ctx;
   const by = sort === 'voice' ? 'voice' : 'xp';
-  const list = ranked(engine, sid, by);
+  const list = ranked(engine, by);
   const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
   const p = Math.min(Math.max(1, Math.floor(Number(page) || 1)), pages);
-  const [members, server] = await Promise.all([ctx.members().catch(() => []), engine.perms.server(sid).catch(() => null)]);
-  const names = new Map(members.map((m) => [m.id, displayName(m)]));
   const start = (p - 1) * PAGE_SIZE;
   const slice = list.slice(start, start + PAGE_SIZE);
+  const members = await ctx.members().catch(() => []);
+  const names = await boardNames(engine, members, slice.map((u) => u.id));
   const stat = (u) => (by === 'voice' ? `${voiceText(u.voiceSeconds)} in voice` : `Level ${num(levelFor(u.xp))} · ${num(u.xp)} XP`);
   const lines = slice.map((u, i) => {
     const n = start + i;
     const mark = MEDALS[n] || `\`#${n + 1}\``;
-    const who = names.has(u.id) ? mdSafe(names.get(u.id), 'someone', BOARD_NAME_MAX) : 'someone who left';
+    const who = names.has(u.id) ? mdSafe(names.get(u.id), 'someone', BOARD_NAME_MAX) : 'someone';
     return `${mark} **${who}** · ${stat(u)}${u.id === ctx.userId ? '  ◂ you' : ''}`;
   });
   const mine = list.findIndex((x) => x.id === ctx.userId);
@@ -622,10 +700,7 @@ async function leaderboardView(ctx, page, sort) {
   }
   const empty = by === 'voice' ? 'Nobody has voice time yet. Hop in a voice channel with friends!' : 'Nobody has XP yet. Start chatting to get on the board!';
   const body = lines.length ? [...lines, ...(you ? ['', you] : [])].join('\n') : empty;
-  const serverName = mdSafe(server?.name, '');
-  const title = by === 'voice'
-    ? `🎙️ ${serverName ? `${serverName} voice leaderboard` : 'Voice leaderboard'}`
-    : `🏆 ${serverName ? `${serverName} leaderboard` : 'Leaderboard'}`;
+  const title = by === 'voice' ? '🎙️ Global voice leaderboard' : '🏆 Global leaderboard';
   const accent = list.length ? tierOf(levelFor(list[0].xp)).color : COLORS.levels;
   const buttons = [];
   if (pages > 1) {
@@ -634,7 +709,7 @@ async function leaderboardView(ctx, page, sort) {
   }
   buttons.push(button(by === 'voice' ? 'Sort by XP' : 'Sort by voice time', cid('lb', 1, by === 'voice' ? 'xp' : 'voice'), 'primary', by === 'voice' ? '📈' : '🎙️'));
   return {
-    embeds: [card({ title, body, color: accent, footer: `Page ${p} of ${pages} · ${num(list.length)} ranked` })],
+    embeds: [card({ title, body, color: accent, footer: `Page ${p} of ${pages} · ${num(list.length)} ranked · everyone, every server` })],
     components: [row(buttons)],
   };
 }
@@ -657,6 +732,7 @@ async function showLeaderboard(ctx, tokens) {
 
 async function settingsView(ctx) {
   const cfg = ctx.config();
+  const earn = earnOf(ctx.engine);
   const [roles, channels] = await Promise.all([ctx.roles().catch(() => []), ctx.channels().catch(() => [])]);
   const roleName = (id) => { const r = roles.find((x) => x.id === id); return r ? `@${r.name}` : 'a deleted role'; };
   const chName = (id) => { const c = channels.find((x) => x.id === id); return c ? `#${c.name}` : 'a deleted channel'; };
@@ -665,20 +741,20 @@ async function settingsView(ctx) {
   const where = mode === 'channel' ? (cfg.channelId ? chName(cfg.channelId) : 'no channel picked yet, so the same channel') : mode === 'dm' ? 'a DM (falls back to the same channel if DMs are off)' : mode === 'off' ? 'nowhere' : 'the channel they were chatting in';
   const noXp = [...(cfg.noXpChannels || []).map(chName), ...(cfg.noXpRoles || []).map(roleName)];
   const fields = [
-    { name: 'XP for chatting', value: `${onOff(cfg.messageXp !== false)} · ×${cfg.rate} · once every ${cfg.cooldownSeconds}s`, inline: true },
-    { name: 'XP for voice', value: `${onOff(cfg.voiceXp === true)} · ${cfg.voiceXpPerMinute} XP a minute`, inline: true },
+    { name: 'XP for chatting (everywhere)', value: `${onOff(earn.messageXp !== false)} · ×${earn.rate} · once every ${earn.cooldownSeconds}s`, inline: true },
+    { name: 'XP for voice (everywhere)', value: `${onOff(earn.voiceXp === true)} · ${earn.voiceXpPerMinute} XP a minute`, inline: true },
     { name: 'Level-up messages', value: `${ANNOUNCE_LABELS[mode] || mode}: ${where}`, inline: false },
     { name: `Role rewards (${rewards.length}/${MAX_REWARDS})${cfg.stackRewards === false ? ' · keep highest only' : ' · keep all'}`, value: clip(rewards.map((r) => `Level ${r.level} → ${roleName(r.roleId)}`).join('\n'), 1024) || 'None. Add one with `/levels reward 10 @Regular`.', inline: false },
     { name: 'No XP in', value: clip(noXp.join(', '), 1024) || 'Nowhere. Add with `/levels noxp #channel` or `/levels noxp @role`.', inline: false },
-    { name: 'Ranked members', value: String(ranked(ctx.engine, ctx.serverId).length), inline: true },
+    { name: 'Ranked people', value: String(ranked(ctx.engine).length), inline: true },
   ];
-  const body = 'Members earn XP for chatting and hanging out in voice, level up, and unlock reward roles.\nTyped settings: `/levels reward 10 @Regular` · `/levels channel #level-ups` · `/levels rate 1.5` · `/levels set @sam 12` · `/levels reset @sam`';
+  const body = 'XP, levels and the leaderboard are shared across every server, so a level follows people wherever they go. Only the bot owner sets how fast XP is earned; reward roles, level-up messages and no-XP spots are yours.\nTyped settings: `/levels reward 10 @Regular` · `/levels channel #level-ups` · `/levels rate 1.5` · `/levels set @sam 12` · `/levels reset @sam`';
   return {
     embeds: [card({ title: `${ICONS.levels} Levels settings`, body, fields, color: 'levels' })],
     components: [
       row(
-        button(cfg.messageXp !== false ? 'Chat XP: on' : 'Chat XP: off', cid('tmsg'), cfg.messageXp !== false ? 'success' : 'secondary', '💬'),
-        button(cfg.voiceXp === true ? 'Voice XP: on' : 'Voice XP: off', cid('tvoice'), cfg.voiceXp === true ? 'success' : 'secondary', '🎙️'),
+        button(earn.messageXp !== false ? 'Chat XP: on' : 'Chat XP: off', cid('tmsg'), earn.messageXp !== false ? 'success' : 'secondary', '💬'),
+        button(earn.voiceXp === true ? 'Voice XP: on' : 'Voice XP: off', cid('tvoice'), earn.voiceXp === true ? 'success' : 'secondary', '🎙️'),
         button('Rate & cooldown', cid('rateform'), 'secondary', '⏱️'),
         button(cfg.stackRewards === false ? 'Rewards: keep highest' : 'Rewards: keep all', cid('tstack'), 'secondary', '🎁'),
       ),
@@ -709,14 +785,13 @@ function adminUndo(ctx, label, revert) {
   });
 }
 
-function snapshotUser(engine, sid, uid) {
-  const u = readDoc(engine, sid).users[uid];
+function snapshotUser(engine, uid) {
+  const u = readDoc(engine).users[uid];
   return u ? structuredClone(u) : null;
 }
 
-function restoreUsers(engine, sid, saved, { additive = true } = {}) {
-  engine.store.update(ID, sid, (d) => {
-    d ||= { users: {} };
+function restoreUsers(engine, saved, { additive = true } = {}) {
+  mutateGlobal(engine, ID, (d) => {
     d.users ||= {};
     for (const [uid, old] of Object.entries(saved)) {
       const cur = d.users[uid];
@@ -725,48 +800,50 @@ function restoreUsers(engine, sid, saved, { additive = true } = {}) {
       const xp = (old.xp || 0) + (cur.xp || 0);
       d.users[uid] = { ...old, xp, level: levelFor(xp), voiceSeconds: (old.voiceSeconds || 0) + (cur.voiceSeconds || 0), messages: (old.messages || 0) + (cur.messages || 0), lastXpAt: Math.max(old.lastXpAt || 0, cur.lastXpAt || 0) };
     }
-    return d;
-  }, { users: {} });
+  }, blankDoc());
 }
 
 async function resetUser(ctx, target) {
   await ctx.require('admin');
-  const { engine, serverId: sid } = ctx;
+  if (!canSetEarn(ctx)) return ctx.warn(EARN_ONLY_TITLE, OWNER_ONLY_XP);
+  const { engine } = ctx;
   const name = target.nickname || target.display_name || target.username || 'them';
-  const saved = snapshotUser(engine, sid, target.id);
+  const saved = snapshotUser(engine, target.id);
   if (!saved || !(saved.xp || saved.voiceSeconds)) return ctx.info('Nothing to reset', `**${name}** has no XP yet.`);
-  engine.store.update(ID, sid, (d) => { d ||= { users: {} }; d.users ||= {}; delete d.users[target.id]; return d; }, { users: {} });
-  stateOf(engine).lastXp.delete(`${sid}:${target.id}`);
-  const undo = adminUndo(ctx, `reset of ${name}`, async () => restoreUsers(engine, sid, { [target.id]: saved }));
-  return ctx.ok('XP reset', `**${name}** is back to level 0 (was level ${saved.level}, ${saved.xp} XP). Reward roles they already have stay.`, { components: [row(undo.button)] });
+  mutateGlobal(engine, ID, (d) => { d.users ||= {}; delete d.users[target.id]; }, blankDoc());
+  stateOf(engine).lastXp.delete(target.id);
+  const undo = adminUndo(ctx, `reset of ${name}`, async () => restoreUsers(engine, { [target.id]: saved }));
+  return ctx.ok('XP reset', `**${name}** is back to level 0 everywhere (was level ${saved.level}, ${saved.xp} XP). Reward roles they already have stay.`, { components: [row(undo.button)] });
 }
 
 async function resetAllConfirm(ctx) {
   await ctx.require('admin');
-  const count = ranked(ctx.engine, ctx.serverId).length;
+  if (!canSetEarn(ctx)) return ctx.warn(EARN_ONLY_TITLE, OWNER_ONLY_XP);
+  const count = ranked(ctx.engine).length;
   if (!count) return ctx.info('Nothing to reset', 'Nobody has XP yet.');
   return ctx.ephemeral({
-    embeds: [dialog.warn('Reset everyone?', `This sets all **${count}** ranked member${count === 1 ? '' : 's'} back to level 0 and clears voice time. Reward roles people already have stay.\nYou get an Undo button for 10 minutes.`)],
+    embeds: [dialog.warn('Reset everyone, everywhere?', `This sets all **${count}** ranked ${count === 1 ? 'person' : 'people'} back to level 0 on every server and clears voice time. Reward roles people already have stay.\nYou get an Undo button for 10 minutes.`)],
     components: [row(button('Yes, reset everyone', cid('resetallyes'), 'danger', '🧨'), button('Cancel', cid('cancel'), 'secondary'))],
   });
 }
 
 async function resetAll(ctx) {
   await ctx.require('admin');
-  const { engine, serverId: sid } = ctx;
-  const saved = readDoc(engine, sid).users;
+  if (!canSetEarn(ctx)) return ctx.warn(EARN_ONLY_TITLE, OWNER_ONLY_XP);
+  const { engine } = ctx;
+  const saved = structuredClone(readDoc(engine).users);
   const count = Object.keys(saved).length;
   if (!count) return ctx.info('Already reset', 'Nobody has XP right now, so there was nothing to reset. If you just reset everyone, the Undo button is on that message.');
-  engine.store.update(ID, sid, (d) => ({ ...(d || {}), users: {} }), { users: {} });
-  const st = stateOf(engine);
-  for (const k of [...st.lastXp.keys()]) if (k.startsWith(`${sid}:`)) st.lastXp.delete(k);
-  const undo = adminUndo(ctx, 'reset of everyone', async () => restoreUsers(engine, sid, saved));
-  const embeds = [dialog.ok('Everyone reset', `${count} member${count === 1 ? '' : 's'} went back to level 0. Changed your mind? Press Undo within 10 minutes.`)];
+  mutateGlobal(engine, ID, (d) => { d.users = {}; }, blankDoc());
+  stateOf(engine).lastXp.clear();
+  const undo = adminUndo(ctx, 'reset of everyone', async () => restoreUsers(engine, saved));
+  const embeds = [dialog.ok('Everyone reset', `${count} ${count === 1 ? 'person' : 'people'} went back to level 0 everywhere. Changed your mind? Press Undo within 10 minutes.`)];
   return ctx.update({ embeds, components: [row(undo.button)] });
 }
 
 async function setLevel(ctx, tokens) {
   const { engine, serverId: sid } = ctx;
+  if (!canSetEarn(ctx)) return ctx.warn(EARN_ONLY_TITLE, OWNER_ONLY_XP);
   const lvlIdx = tokens.length > 1 && /^\d+$/.test(tokens[tokens.length - 1]) ? tokens.length - 1 : -1;
   const levelTok = lvlIdx >= 0 ? tokens[lvlIdx] : undefined;
   const who = tokens.slice(0, lvlIdx >= 0 ? lvlIdx : tokens.length).join(' ');
@@ -776,17 +853,15 @@ async function setLevel(ctx, tokens) {
   const target = await ctx.findUser(who);
   if (!target?.id) return ctx.warn("I couldn't find them", `Nobody here matches **${clip(who, 40)}**.`);
   if (target.id === botId(engine)) return ctx.info("I don't level up", "Bots don't earn XP.");
-  const saved = snapshotUser(engine, sid, target.id);
+  const saved = snapshotUser(engine, target.id);
   const xp = totalXpForLevel(level);
-  engine.store.update(ID, sid, (d) => {
-    d ||= { users: {} };
+  mutateGlobal(engine, ID, (d) => {
     d.users ||= {};
     d.users[target.id] = { ...blankUser(), ...(d.users[target.id] || {}), xp, level };
-    return d;
-  }, { users: {} });
+  }, blankDoc());
   const name = target.nickname || target.display_name || target.username || 'them';
-  const undo = adminUndo(ctx, `level of ${name}`, async () => restoreUsers(engine, sid, { [target.id]: saved }, { additive: false }));
-  const out = await ctx.ok('Level set', `**${name}** is now level ${level} (${xp.toLocaleString('en-US')} XP). Any rewards up to level ${level} are on their way.`, { components: [row(undo.button)] });
+  const undo = adminUndo(ctx, `level of ${name}`, async () => restoreUsers(engine, { [target.id]: saved }, { additive: false }));
+  const out = await ctx.ok('Level set', `**${name}** is now level ${level} everywhere (${xp.toLocaleString('en-US')} XP). Any rewards up to level ${level} are on their way.`, { components: [row(undo.button)] });
   grantRewards(engine, sid, target.id, level).catch((e) => engine.log.debug('[levels] rewards after set failed', e?.message));
   return out;
 }
@@ -904,19 +979,22 @@ function levelUpMessage(text) {
 }
 
 function numberSetting(ctx, tokens, { key, min, max, label, unit = '', integer = false }) {
+  if (!canSetEarn(ctx)) return ctx.warn(EARN_ONLY_TITLE, EARN_ONLY);
   const checked = checkNumberSetting(tokens[0], { min, max, label, integer });
   if (checked.error) return ctx.warn(checked.title, checked.error);
   const n = checked.value;
-  ctx.patchConfig({ [key]: n });
-  return ctx.ok('Saved', `${label[0].toUpperCase()}${label.slice(1)} is now **${n}${unit}**.`);
+  patchEarn(ctx.engine, { [key]: n });
+  return ctx.ok('Saved', `${label[0].toUpperCase()}${label.slice(1)} is now **${n}${unit}** on every server.`);
 }
 
 function boolSetting(ctx, tokens, key, label) {
+  if (!canSetEarn(ctx)) return ctx.warn(EARN_ONLY_TITLE, EARN_ONLY);
+  const earn = earnOf(ctx.engine);
   const v = parseBool(tokens[0]);
-  const current = key === 'voiceXp' ? ctx.config().voiceXp === true : ctx.config()[key] !== false;
+  const current = key === 'voiceXp' ? earn.voiceXp === true : earn[key] !== false;
   const next = v === null ? !current : v;
-  ctx.patchConfig({ [key]: next });
-  return ctx.ok('Saved', `${label} is now **${next ? 'on' : 'off'}**.`);
+  patchEarn(ctx.engine, { [key]: next });
+  return ctx.ok('Saved', `${label} is now **${next ? 'on' : 'off'}** on every server.`);
 }
 
 const SUBS = ['reward', 'rewards', 'channel', 'noxp', 'rate', 'cooldown', 'voice', 'voicerate', 'xp', 'stack', 'message', 'set', 'reset', 'settings'];
@@ -966,18 +1044,29 @@ async function runLevels(ctx) {
 }
 
 const admin = (run) => ({ perm: 'admin', run: async (ctx) => { await ctx.require('admin'); return run(ctx); } });
+const owner = (run, why = EARN_ONLY) => ({ perm: 'admin', run: async (ctx) => { await ctx.require('admin'); if (!canSetEarn(ctx)) return ctx.warn(EARN_ONLY_TITLE, why); return run(ctx); } });
+const xpOwner = (run) => owner(run, OWNER_ONLY_XP);
 const refresh = async (ctx) => ctx.update(await settingsView(ctx));
 
 const PICK_CHANNEL_FIRST = 'Type `/levels channel #level-ups` and level-ups go there.';
 const NO_CHANNEL = "I couldn't find that channel";
 
 const numberField = (key, label, help) => ({
-  key, label, help, type: 'number', web: true,
+  key, label, help, type: 'number', web: true, owner: true,
   min: NUMBER_SETTINGS[key].min, max: NUMBER_SETTINGS[key].max, step: NUMBER_SETTINGS[key].integer ? 1 : 0.1,
+  read: (cfg) => earnRead(key, cfg),
+  save: (ctx, value) => { patchEarn(ctx.engine, { [key]: value }); },
   validate: (ctx, v) => {
     const checked = checkNumberSetting(v, NUMBER_SETTINGS[key]);
     return checked.error ? reject(checked.error) : accept(checked.value);
   },
+});
+
+const earnField = (spec) => boolField({
+  ...spec,
+  owner: true,
+  read: (cfg) => earnRead(spec.key, cfg),
+  save: (ctx, value) => { patchEarn(ctx.engine, { [spec.key]: value }); },
 });
 
 async function validateRewards(ctx, v) {
@@ -1024,11 +1113,11 @@ async function validateRoleList(ctx, v) {
 }
 
 const DASHBOARD = [
-  boolField({ key: 'messageXp', label: 'XP for chatting', help: 'Members earn 15 to 25 XP (times the rate) for messages of 3 or more characters, at most once per cooldown.' }),
-  boolField({ key: 'voiceXp', label: 'XP for voice', help: 'Members earn XP for each full minute in voice while someone else is in the channel.' }),
-  numberField('rate', 'XP rate', 'Multiplier on chat XP. 1 is normal, 0.5 is half, 2 is double.'),
-  numberField('cooldownSeconds', 'Seconds between XP gains', 'The shortest time between two chat XP gains for one person.'),
-  numberField('voiceXpPerMinute', 'Voice XP per minute', 'XP for each full minute in voice with company.'),
+  earnField({ key: 'messageXp', label: 'XP for chatting (every server)', help: 'People earn 15 to 25 XP (times the rate) for messages of 3 or more characters, at most once per cooldown. Set once by the bot owner for every server.' }),
+  earnField({ key: 'voiceXp', label: 'XP for voice (every server)', help: 'People earn XP for each full minute in voice while someone else is in the channel. Set once by the bot owner for every server.' }),
+  numberField('rate', 'XP rate (every server)', 'Multiplier on chat XP. 1 is normal, 0.5 is half, 2 is double. Set once by the bot owner.'),
+  numberField('cooldownSeconds', 'Seconds between XP gains (every server)', 'The shortest time between two chat XP gains for one person. Set once by the bot owner.'),
+  numberField('voiceXpPerMinute', 'Voice XP per minute (every server)', 'XP for each full minute in voice with company. Set once by the bot owner.'),
   {
     key: 'announce', label: 'Level-up messages', type: 'select', web: true,
     help: 'Where level-up messages go: the same channel, a set channel, a DM (falls back to the same channel), or nowhere.',
@@ -1092,7 +1181,7 @@ export const { setup, teardown, check } = defineApp({
 
   commands: {
     rank: { description: "Your level, XP and rank, or someone else's: /rank or /rank @sam", run: (ctx) => showRank(ctx, ctx.argv) },
-    leaderboard: { description: 'Top members by XP: /leaderboard, /leaderboard 2 for page 2, /leaderboard voice', run: (ctx) => showLeaderboard(ctx, ctx.argv) },
+    leaderboard: { description: 'The global top by XP: /leaderboard, /leaderboard 2 for page 2, /leaderboard voice', run: (ctx) => showLeaderboard(ctx, ctx.argv) },
     levels: { description: 'Levels settings (admins): /levels reward 10 @Regular, /levels channel #level-ups', perm: 'admin', run: runLevels },
   },
 
@@ -1110,8 +1199,8 @@ export const { setup, teardown, check } = defineApp({
         return ctx.ephemeral({ embeds: [{ ...view.embeds[0], footer: { text: 'Type /leaderboard for the full board with pages.' } }] });
       },
     },
-    tmsg: admin(async (ctx) => { ctx.patchConfig({ messageXp: ctx.config().messageXp === false }); return refresh(ctx); }),
-    tvoice: admin(async (ctx) => { ctx.patchConfig({ voiceXp: ctx.config().voiceXp !== true }); return refresh(ctx); }),
+    tmsg: owner(async (ctx) => { patchEarn(ctx.engine, { messageXp: earnOf(ctx.engine).messageXp === false }); return refresh(ctx); }),
+    tvoice: owner(async (ctx) => { patchEarn(ctx.engine, { voiceXp: earnOf(ctx.engine).voiceXp !== true }); return refresh(ctx); }),
     tstack: admin(async (ctx) => { ctx.patchConfig({ stackRewards: ctx.config().stackRewards === false }); return refresh(ctx); }),
     ann: admin(async (ctx) => {
       const mode = ANNOUNCE_MODES.includes(ctx.argv[0]) ? ctx.argv[0] : 'here';
@@ -1119,43 +1208,44 @@ export const { setup, teardown, check } = defineApp({
       ctx.patchConfig({ announce: mode });
       return refresh(ctx);
     }),
-    rateform: admin((ctx) => {
-      const cfg = ctx.config();
+    rateform: owner((ctx) => {
+      const earn = earnOf(ctx.engine);
       return ctx.form({
         title: 'XP rate and cooldown',
         action: 'ratesave',
         fields: [
-          { id: 'rate', label: 'XP rate (1 = normal, 0.5 = half, 2 = double)', style: 'short', value: String(cfg.rate), max: 5 },
-          { id: 'cooldown', label: 'Seconds between XP gains (default 60)', style: 'short', value: String(cfg.cooldownSeconds), max: 4 },
+          { id: 'rate', label: 'XP rate (1 = normal, 0.5 = half, 2 = double)', style: 'short', value: String(earn.rate), max: 5 },
+          { id: 'cooldown', label: 'Seconds between XP gains (default 60)', style: 'short', value: String(earn.cooldownSeconds), max: 4 },
         ],
       });
     }),
-    ratesave: admin(async (ctx) => {
+    ratesave: owner(async (ctx) => {
       const rate = typedNumber(ctx.values?.rate, /x$/i);
       const cooldown = typedNumber(ctx.values?.cooldown, /s$/i);
       if (!Number.isFinite(rate) || rate < 0 || rate > 5) return ctx.warn("That rate didn't work", 'Use a number from 0 to 5, like 1 or 1.5.');
       if (!Number.isInteger(cooldown) || cooldown < 0 || cooldown > 3600) return ctx.warn("That cooldown didn't work", 'Use whole seconds from 0 to 3600, like 60.');
-      ctx.patchConfig({ rate, cooldownSeconds: cooldown });
-      return ctx.ok('Saved', `XP rate ×${rate}, at most once every ${cooldown} seconds per person.`);
+      patchEarn(ctx.engine, { rate, cooldownSeconds: cooldown });
+      return ctx.ok('Saved', `XP rate ×${rate}, at most once every ${cooldown} seconds per person, on every server.`);
     }),
-    resetform: admin((ctx) => ctx.form({
+    resetform: xpOwner((ctx) => ctx.form({
       title: 'Reset someone',
       action: 'resetuser',
       fields: [{ id: 'user', label: 'Who? (@name or username)', style: 'short', placeholder: '@sam', max: 100 }],
     })),
-    resetuser: admin(async (ctx) => {
+    resetuser: xpOwner(async (ctx) => {
       const q = String(ctx.values?.user ?? '').trim();
       const target = q ? await ctx.findUser(q) : null;
       if (!target?.id) return ctx.warn("I couldn't find them", `Nobody here matches **${clip(q || '?', 40)}**.`);
       return resetUser(ctx, target);
     }),
-    resetall: admin((ctx) => resetAllConfirm(ctx)),
-    resetallyes: admin((ctx) => resetAll(ctx)),
+    resetall: xpOwner((ctx) => resetAllConfirm(ctx)),
+    resetallyes: xpOwner((ctx) => resetAll(ctx)),
     cancel: admin((ctx) => ctx.update({ embeds: [dialog.info('Cancelled', 'Nothing was reset.')], components: [] })),
   },
 
   events: {
     message: onMessage,
+    member_join: onMemberJoin,
     voice_join: onVoiceJoin,
     voice_leave: onVoiceLeave,
   },
@@ -1179,10 +1269,19 @@ export const { setup, teardown, check } = defineApp({
 
   dashboard: DASHBOARD,
 
+  init: (engine) => {
+    dashboardEngine = engine;
+    try {
+      mergeServerXp(engine);
+    } catch (e) {
+      engine.log.debug('[levels] folding old server XP failed', e?.message);
+    }
+  },
+
   services: (engine) => ({
-    ranked: (sid) => ranked(engine, sid).map((u) => ({ id: u.id, xp: u.xp, level: Number.isInteger(u.level) ? u.level : levelFor(u.xp), messages: u.messages || 0 })),
+    ranked: () => ranked(engine).map((u) => ({ id: u.id, xp: u.xp, level: Number.isInteger(u.level) ? u.level : levelFor(u.xp), messages: u.messages || 0 })),
     getUser: (sid, uid) => {
-      const u = readUser(engine, sid, uid);
+      const u = readUser(engine, uid);
       return { ...u, ...progressOf(u.xp), level: u.level };
     },
     addXp: (sid, uid, amount, reason, opts = {}) => addXp(engine, sid, uid, amount, { ...opts, reason }),
@@ -1191,11 +1290,11 @@ export const { setup, teardown, check } = defineApp({
   }),
 
   presets: {
-    gaming: { enabled: true, config: { messageXp: true, voiceXp: true, announce: 'here' } },
-    friends: { enabled: true, config: { messageXp: true } },
-    study: { enabled: true, config: { voiceXp: true, announce: 'off', rate: 0.5 } },
-    community: { enabled: true, config: { messageXp: true, rewards: {} } },
-    roleplay: { enabled: true, config: { messageXp: true, cooldownSeconds: 90 } },
+    gaming: { enabled: true, config: { announce: 'here' } },
+    friends: { enabled: true, config: { announce: 'here' } },
+    study: { enabled: true, config: { announce: 'off' } },
+    community: { enabled: true, config: { rewards: {} } },
+    roleplay: { enabled: true, config: { announce: 'here' } },
   },
 
   applyPreset: async (engine, serverId, { preset } = {}) => {
@@ -1206,17 +1305,20 @@ export const { setup, teardown, check } = defineApp({
       return `Levels: XP for chatting is on, level-ups post in ${ch ? `#${ch.name}` : 'the same channel'}. Add role rewards with **/levels reward**.`;
     }
     const cfg = cfgOf(engine, serverId);
-    const parts = [`XP for chatting${cfg.rate !== 1 ? ` at ×${cfg.rate}` : ''}`];
-    if (cfg.voiceXp) parts.push('voice');
+    const earn = earnOf(engine);
+    const parts = [`XP for chatting${earn.rate !== 1 ? ` at ×${earn.rate}` : ''}`];
+    if (earn.voiceXp) parts.push('voice');
     const where = cfg.announce === 'off' ? 'level-ups stay quiet' : 'level-ups post in the same channel';
-    return `Levels: ${parts.join(' and ')} is on, ${where}${cfg.cooldownSeconds !== 60 ? `, ${cfg.cooldownSeconds}s between XP gains` : ''}.`;
+    return `Levels: ${parts.join(' and ')} is on, ${where}. Levels count on every server.`;
   },
 
   help: [
     'Chatting earns 15 to 25 XP at most once a minute. Voice earns XP each full minute when you are not alone.',
+    'Your XP, level and place on the leaderboard count everywhere, so one level follows you from server to server.',
+    'How fast XP is earned is set once by the bot owner. Reward roles, level-up messages and no-XP spots are per server.',
     'Leveling up can give reward roles: /levels reward 10 @Regular. Bots, commands and very short messages earn nothing.',
     'Typed settings: /levels channel #level-ups | here | dm | off · /levels noxp #channel · /levels rate 1.5 · /levels set @sam 12 · /levels reset @sam',
   ],
 
-  dispose: (engine) => { states.delete(engine); },
+  dispose: (engine) => { states.delete(engine); if (dashboardEngine === engine) dashboardEngine = null; },
 });

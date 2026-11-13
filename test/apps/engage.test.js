@@ -389,7 +389,7 @@ test('level requirements use the Levels app', async () => {
   const card = giveCard(h);
   let ans = await enter(h, card, IDS.member);
   assert.match(lastText(h, ans), /need to be \*\*level 5\*\*/);
-  await h.slash('levels', 'set @sam 6', { user: IDS.admin });
+  await h.slash('levels', 'set @sam 6', { user: IDS.owner });
   ans = await enter(h, card, IDS.member);
   assert.match(lastText(h, ans), /You're in!/);
   assert.match(h.textOf(card), /level 5\+/);

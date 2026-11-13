@@ -1,10 +1,11 @@
-import { MINUTE, ID_RE, SERVER_ID_RE, APP_RE, SLUG_RE, SETTING_KEY_RE, USER_BODY_LIMIT, HttpError, json, fail, readJson, isPlainObject, parseJsonSafe, publicOrigin, clientIp } from './util.js';
+import { MINUTE, ID_RE, SERVER_ID_RE, APP_RE, SLUG_RE, SETTING_KEY_RE, USER_BODY_LIMIT, HttpError, json, fail, redirect, readJson, isPlainObject, parseJsonSafe, publicOrigin, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
-import { PUBLIC_STALE } from './cron.js';
 import { getSession, touchSession, publicUser } from './sessions.js';
 import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
 
 const SERVERS_TTL = 2 * MINUTE;
+const GLOBAL_SLUG = 'global';
+const DEFAULT_CURRENCY = { name: 'Shards', emoji: '💎' };
 const CASES_PAGE_SIZE = 50;
 const MAX_SETTINGS = 100;
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -373,21 +374,23 @@ async function patchPublic(request, env, session, sid, t) {
 async function getPublic(request, env, slug, t) {
   const limit = await hit(env.DB, await ipKey('public', clientIp(request)), LIMITS.public, t);
   if (!limit.ok) return tooMany(limit.retryAfter);
-  const notFound = () => fail(404, 'not_found', "This page isn't public or doesn't exist.", null, { 'Cache-Control': 'public, max-age=60' });
-  if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return notFound();
-  const row = await env.DB.prepare('SELECT data, updated FROM public_pages WHERE slug = ?').bind(slug).first();
-  if (!row || !(Number(row.updated) >= t - PUBLIC_STALE)) return notFound();
-  const data = parseJsonSafe(row.data, null);
-  if (!data || data.enabled !== true) return notFound();
+  if (slug !== GLOBAL_SLUG) {
+    if (typeof slug !== 'string' || !SLUG_RE.test(slug)) {
+      return fail(404, 'not_found', "That page doesn't exist.", null, { 'Cache-Control': 'public, max-age=60' });
+    }
+    return redirect(`/api/public/${GLOBAL_SLUG}`, 308);
+  }
+  const row = await env.DB.prepare('SELECT data, updated FROM global_board WHERE id = ?').bind(GLOBAL_SLUG).first();
+  const data = (row && parseJsonSafe(row.data, null)) || null;
+  const currency = isPlainObject(data && data.currency) ? data.currency : DEFAULT_CURRENCY;
   return json(
     {
-      slug,
-      name: typeof data.name === 'string' ? data.name : null,
-      icon: typeof data.icon === 'string' ? data.icon : null,
-      levels: Array.isArray(data.levels) ? data.levels : [],
-      economy: Array.isArray(data.economy) ? data.economy : [],
-      wrapped: data.wrapped ?? null,
-      updatedAt: Number(data.updatedAt) || Number(row.updated) || null,
+      slug: GLOBAL_SLUG,
+      global: true,
+      currency: { name: currency.name || DEFAULT_CURRENCY.name, emoji: currency.emoji || DEFAULT_CURRENCY.emoji },
+      levels: Array.isArray(data && data.levels) ? data.levels : [],
+      economy: Array.isArray(data && data.economy) ? data.economy : [],
+      updatedAt: (data && Number(data.updatedAt)) || (row && Number(row.updated)) || null,
     },
     200,
     { 'Cache-Control': 'public, max-age=60' },

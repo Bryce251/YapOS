@@ -697,14 +697,6 @@ export const { setup, teardown, check } = defineApp({
     { key: 'postChannelId', label: 'Monthly Wrapped post channel', type: 'channel', web: false, help: "Where last month's server Wrapped is posted on the 1st at 12:00 UTC.", note: 'Change it in the server with /wrapped post #channel, which schedules the monthly post.' },
   ],
 
-  services: (engine) => ({
-    lastMonth: async (sid, name) => {
-      flush(engine, sid);
-      const key = shiftMonth(monthKey(nowOf(engine)), -1);
-      return { month: key, card: await serverCard(engine, sid, key, name) };
-    },
-  }),
-
   commands: {
     wrapped: { description: 'Your monthly recap. /wrapped last · /wrapped @user · /wrapped server · admins: /wrapped post #ch', run: runWrapped },
   },

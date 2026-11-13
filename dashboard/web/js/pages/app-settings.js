@@ -7,7 +7,7 @@ import { changeApp } from './apps.js';
 import { serverPath } from '../router.js';
 import { buildPatch, cloneEdit, dirtyKeys, initialEdits, normalizeSchema, sameValue, toEditValue, validateAll, validateField } from '../forms.js';
 import { fieldRow } from '../fields.js';
-import { getDetail, serverSummary } from '../state.js';
+import { getDetail, serverSummary, state } from '../state.js';
 import { OFFLINE_MESSAGE, SLOW_AFTER_MS, isAbort } from '../api.js';
 
 const SECTIONS = [
@@ -196,8 +196,9 @@ function buildForm(ctx, body, detail, app, entry) {
     refreshBar();
   }
 
+  const botOwnerViewer = detail?.botOwner === true || state.user?.botOwner === true;
   for (const f of fields) {
-    rows.set(f.key, fieldRow(f, { edit: cloneEdit(current[f.key]), rawValue: rawValues[f.key] ?? f.default, lookups, context, onChange: (v) => onChange(f.key, v) }));
+    rows.set(f.key, fieldRow(f, { edit: cloneEdit(current[f.key]), rawValue: rawValues[f.key] ?? f.default, lookups, context, locked: !botOwnerViewer, onChange: (v) => onChange(f.key, v) }));
   }
 
   function reset() {
@@ -261,6 +262,11 @@ function buildForm(ctx, body, detail, app, entry) {
         if (Object.prototype.hasOwnProperty.call(res.errors, key)) {
           serverErrors[key] = String(res.errors[key]);
           row.setError(serverErrors[key]);
+          if (field.owner) {
+            current[key] = cloneEdit(base[key]);
+            row.setValue(cloneEdit(base[key]));
+            row.setLocked(true);
+          }
           continue;
         }
         if (Object.prototype.hasOwnProperty.call(res.applied, key)) {

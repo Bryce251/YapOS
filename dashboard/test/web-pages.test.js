@@ -75,47 +75,30 @@ test('the case search still filters once the cases are loaded', async () => {
   ctx.abort();
 });
 
-test('a taken page address is shown on the field, not only in a toast', async () => {
+test('the public page settings explain the one global leaderboard and link to it', async () => {
   state.details.clear();
-  setDetail(SID, detail({ settings: { system: { values: { publicPage: { enabled: false, slug: null } } } } }));
-  const ctx = makeCtx({
-    get: async () => detail(),
-    job: never,
-    run: async () => { throw new ApiError('That link name is already used by another server. Pick a different one.', { status: 409, code: 'http_409', data: { error: 'slug_taken' } }); },
-  });
+  const ctx = makeCtx({ get: never, job: never, run: never });
   renderPublicSettings(ctx);
   await flush();
-  const input = ctx.main.querySelector('input.input-mono');
-  type(input, 'taken-name');
-  ctx.main.querySelector('button.switch').click();
-  const save = ctx.main.querySelectorAll('button').find((b) => /Save/.test(b.textContent));
-  save.click();
-  await flush();
-  const err = ctx.main.querySelector('.field-error');
-  assert.match(err.textContent, /already used/);
-  assert.equal(input.getAttribute('aria-invalid'), 'true');
-  assert.ok(input.classList.contains('is-invalid'));
-  assert.equal(document.activeElement, input);
-  type(input, 'fresh-name');
-  assert.equal(err.textContent, '');
-  assert.equal(input.getAttribute('aria-invalid'), null);
+  const text = ctx.main.textContent;
+  assert.match(text, /one leaderboard/i);
+  assert.match(text, /Shards/);
+  assert.doesNotMatch(text, /Wrapped/i);
+  const link = ctx.main.querySelectorAll('a').find((a) => /^\/p\//.test(String(a.href || '')));
+  assert.ok(link, 'the page links to the leaderboard');
+  assert.equal(link.href, '/p/global');
   ctx.abort();
 });
 
-test('the public page settings warn before leaving with unsaved changes', async () => {
+test('the public page settings have no toggle, no address field and no leave guard', async () => {
   state.details.clear();
-  setDetail(SID, detail({ settings: { system: { values: { publicPage: { enabled: false, slug: 'test-town' } } } } }));
-  const ctx = makeCtx({ get: async () => detail(), job: never, run: never });
+  const ctx = makeCtx({ get: never, job: never, run: never });
   renderPublicSettings(ctx);
   await flush();
-  assert.ok(ctx.guard, 'a leave guard is registered');
-  assert.equal(ctx.guard.isDirty(), false);
-  ctx.main.querySelector('button.switch').click();
-  assert.equal(ctx.guard.isDirty(), true);
-  ctx.main.querySelector('button.switch').click();
-  assert.equal(ctx.guard.isDirty(), false);
-  type(ctx.main.querySelector('input.input-mono'), 'new-address');
-  assert.equal(ctx.guard.isDirty(), true);
+  assert.equal(ctx.main.querySelector('button.switch'), null);
+  assert.equal(ctx.main.querySelector('input.input-mono'), null);
+  assert.equal(ctx.main.querySelectorAll('button').filter((b) => /Save/.test(b.textContent)).length, 0);
+  assert.equal(ctx.guard, null);
   ctx.abort();
 });
 

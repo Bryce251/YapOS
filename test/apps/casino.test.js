@@ -23,7 +23,7 @@ function fakeEconomy(start = {}) {
   return {
     bal,
     log,
-    currency: () => ({ name: 'coins', emoji: '🪙' }),
+    currency: () => ({ name: 'Shards', emoji: '💎' }),
     balance: (sid, uid) => bal[uid] || 0,
     add: (sid, uid, n, reason) => { bal[uid] = (bal[uid] || 0) + n; log.push(['add', uid, n, reason]); return bal[uid]; },
     take: (sid, uid, n, reason) => {
@@ -80,9 +80,9 @@ async function play(h, command, args, user = A) {
 test('meta: seven commands, yap words, the cleanup job, off by default, icon and color', async () => {
   const h = await createHarness({ apps: ['casino'] });
   const want = {
-    casino: 'Casino hub with server coins: /casino, /casino stats, /casino top, /casino rules',
-    coinflip: 'Flip a coin for coins: /coinflip heads 100, /coinflip tails half',
-    dice: 'Roll a die for coins: /dice 6 100, /dice over 3 100, /dice even 50',
+    casino: 'Casino hub with 💎 Shards: /casino, /casino stats, /casino top, /casino rules',
+    coinflip: 'Flip a coin for Shards: /coinflip heads 100, /coinflip tails half',
+    dice: 'Roll a die for Shards: /dice 6 100, /dice over 3 100, /dice even 50',
     slots: 'Spin the slot machine: /slots 100',
     blackjack: 'Play blackjack against the dealer: /blackjack 100',
     roulette: 'Bet on the roulette wheel: /roulette red 100, /roulette 17 50, /roulette 2nd 100',
@@ -133,7 +133,7 @@ test('math: slots, roulette, dice, coinflip and crash pay back what the rules sa
   assert.equal(sum * 2, 63575);
   assert.ok(Math.abs(sum / 32768 - 317875 / 327680) < 1e-12);
   assert.ok(sum / 32768 > 0.97 && sum / 32768 < 0.971);
-  assert.equal(paid, 317875, 'slotPayout pays 317,875 coins over every spin of 10');
+  assert.equal(paid, 317875, 'slotPayout pays 317,875 Shards over every spin of 10');
   assert.equal(hits, 32768 - 19812);
   assert.deepEqual(seen.triple, { cherry: 343, lemon: 216, orange: 125, grape: 64, bell: 27, star: 27, diamond: 8, seven: 8 });
   assert.equal(seen.cherryPair, 3675);
@@ -206,6 +206,9 @@ test('amounts: numbers, k, m, b and t, all, half and the bad ones', () => {
   assert.deepEqual(parseAmountToken('1.1k'), { kind: 'number', n: 1100 });
   assert.deepEqual(parseAmountToken('1m'), { kind: 'number', n: 1_000_000 });
   assert.deepEqual(parseAmountToken('100coins'), { kind: 'number', n: 100 });
+  assert.deepEqual(parseAmountToken('100shards'), { kind: 'number', n: 100 });
+  assert.deepEqual(parseAmountToken('100shard'), { kind: 'number', n: 100 });
+  assert.deepEqual(parseAmountToken('2k💎'), { kind: 'number', n: 2000 });
   assert.deepEqual(parseAmountToken('2b'), { kind: 'number', n: 2_000_000_000 });
   assert.deepEqual(parseAmountToken('1.5t'), { kind: 'number', n: 1_500_000_000_000 });
   assert.deepEqual(parseAmountToken('9,000,000,000'), { kind: 'number', n: 9_000_000_000 });
@@ -241,18 +244,18 @@ test('coinflip: a win pays 1.95x, a loss takes the bet, and the bet goes first',
   const win = await play(h, 'coinflip', 'heads 100');
   assert.ok(win.msg, win.text);
   assert.match(h.textOf(win.msg), /landed on \*\*Heads\*\*/);
-  assert.match(h.textOf(win.msg), /You won \*\*195\*\* 🪙 \(1\.95x\)/);
-  assert.match(h.textOf(win.msg), /Balance: \*\*1,095\*\* 🪙/);
+  assert.match(h.textOf(win.msg), /You won \*\*195\*\* 💎 \(1\.95x\)/);
+  assert.match(h.textOf(win.msg), /Balance: \*\*1,095\*\* 💎/);
   assert.equal(eco.bal[A], 1095);
   assert.deepEqual(eco.log.slice(-2), [['take', A, 100, 'Coinflip bet'], ['add', A, 195, 'Coinflip win']]);
   assert.equal(h.engine.router.panelOwner(win.msg.id), null, 'game messages are public');
   rolls(h, 1);
   const loss = await play(h, 'coinflip', '100 heads');
-  assert.match(h.textOf(loss.msg), /You lost \*\*100\*\* 🪙/);
+  assert.match(h.textOf(loss.msg), /You lost \*\*100\*\* 💎/);
   assert.equal(eco.bal[A], 995);
   rolls(h, 0);
   const small = await play(h, 'coinflip', 'heads 10');
-  assert.match(h.textOf(small.msg), /You won \*\*19\*\* 🪙 \(1\.9x\)/);
+  assert.match(h.textOf(small.msg), /You won \*\*19\*\* 💎 \(1\.9x\)/);
   assert.equal(eco.bal[A], 1004);
   eco.bal[A] = 995;
   assert.match((await play(h, 'coinflip', '100')).text, /Pick a side/);
@@ -263,9 +266,9 @@ test('coinflip: a win pays 1.95x, a loss takes the bet, and the bet goes first',
 test('dice: faces, over and under, even and bad ranges', async () => {
   const { h, eco } = await make({}, { eco: { [A]: 10_000 } });
   rolls(h, 6);
-  assert.match(h.textOf((await play(h, 'dice', '6 100')).msg), /You won \*\*582\*\* 🪙 \(5\.82x\)/);
+  assert.match(h.textOf((await play(h, 'dice', '6 100')).msg), /You won \*\*582\*\* 💎 \(5\.82x\)/);
   rolls(h, 5);
-  assert.match(h.textOf((await play(h, 'dice', 'over 3 100')).msg), /You won \*\*194\*\* 🪙 \(1\.94x\)/);
+  assert.match(h.textOf((await play(h, 'dice', 'over 3 100')).msg), /You won \*\*194\*\* 💎 \(1\.94x\)/);
   rolls(h, 1);
   assert.match(h.textOf((await play(h, 'dice', 'under 2 100')).msg), /You won \*\*582\*\*/);
   rolls(h, 3);
@@ -285,10 +288,10 @@ test('slots: three sevens, a cherry pair, another pair and nothing', async () =>
   rolls(h, 30, 31, 30);
   const jackpot = await play(h, 'slots', '100');
   assert.match(h.textOf(jackpot.msg), /\[ 7️⃣ \| 7️⃣ \| 7️⃣ \]/);
-  assert.match(h.textOf(jackpot.msg), /You won \*\*25,000\*\* 🪙 \(250x\)/);
+  assert.match(h.textOf(jackpot.msg), /You won \*\*25,000\*\* 💎 \(250x\)/);
   assert.equal(eco.bal[A], 25_900);
   rolls(h, 0, 6, 7);
-  assert.match(h.textOf((await play(h, 'slots', '100')).msg), /You won \*\*250\*\* 🪙 \(2\.5x\)/);
+  assert.match(h.textOf((await play(h, 'slots', '100')).msg), /You won \*\*250\*\* 💎 \(2\.5x\)/);
   rolls(h, 7, 8, 13);
   const pair = await play(h, 'slots', '100');
   assert.match(h.textOf(pair.msg), /Pair: your bet back/);
@@ -303,11 +306,11 @@ test('roulette: a number, red on zero, a dozen, a column, zero and a forged butt
   rolls(h, 17);
   const num = await play(h, 'roulette', '17 100');
   assert.match(h.textOf(num.msg), /landed on ⚫ \*\*17\*\*/);
-  assert.match(h.textOf(num.msg), /You won \*\*3,600\*\* 🪙 \(36x\)/);
+  assert.match(h.textOf(num.msg), /You won \*\*3,600\*\* 💎 \(36x\)/);
   rolls(h, 0);
   assert.match(h.textOf((await play(h, 'roulette', 'red 100')).msg), /🟢 \*\*0\*\*[\s\S]*You lost/);
   rolls(h, 14);
-  assert.match(h.textOf((await play(h, 'roulette', '2nd 100')).msg), /You won \*\*300\*\* 🪙 \(3x\)/);
+  assert.match(h.textOf((await play(h, 'roulette', '2nd 100')).msg), /You won \*\*300\*\* 💎 \(3x\)/);
   rolls(h, 36);
   assert.match(h.textOf((await play(h, 'roulette', 'col3 100')).msg), /You won \*\*300\*\*/);
   rolls(h, 0);
@@ -351,14 +354,14 @@ test('blackjack naturals: blackjack pays 3:2, the dealer can have one, both is a
   const { h, eco } = await make();
   rolls(h, CARD.A, CARD[9], CARD.K, CARD[7]);
   const bj = await play(h, 'blackjack', '100');
-  assert.match(h.textOf(bj.msg), /Blackjack! You won \*\*250\*\* 🪙/);
+  assert.match(h.textOf(bj.msg), /Blackjack! You won \*\*250\*\* 💎/);
   assert.equal(eco.bal[A], 1150);
   assert.equal(h.allButtons([bj.msg]).filter((b) => /:bj:/.test(b.custom_id)).length, 0, 'no Hit or Stand');
   assert.ok(findBtn(h, bj.msg, 'New hand'));
   rolls(h, CARD[9], CARD.A, CARD[7], CARD.Q);
   assert.match(h.textOf((await play(h, 'blackjack', '100')).msg), /dealer has blackjack. You lost \*\*100\*\*/);
   rolls(h, CARD.A, CARD.A, CARD.J, CARD.K);
-  assert.match(h.textOf((await play(h, 'blackjack', '100')).msg), /Push. Your \*\*100\*\* 🪙 came back/);
+  assert.match(h.textOf((await play(h, 'blackjack', '100')).msg), /Push. Your \*\*100\*\* 💎 came back/);
   assert.equal(eco.bal[A], 1050);
   assert.equal(svc(h).isPlaying(S, A), false);
   assert.deepEqual(doc(h).open, {});
@@ -415,7 +418,7 @@ test('blackjack double: takes a second bet, one card, then stands; refused after
   const hand = await play(h, 'blackjack', '100');
   await press(h, hand.msg, 'Double');
   const text = h.textOf(live(h, hand.msg.id));
-  assert.match(text, /bet \*\*200\*\* 🪙 \(doubled\)/);
+  assert.match(text, /bet \*\*200\*\* 💎 \(doubled\)/);
   assert.match(text, /5♠ 6♠ 10♠ · 21/);
   assert.match(text, /dealer went bust. You got \*\*400\*\*/);
   assert.equal(eco.bal[A], 1200);
@@ -433,8 +436,8 @@ test('blackjack double: takes a second bet, one card, then stands; refused after
   rolls(h, CARD[5], CARD[10], CARD[6], CARD[7]);
   const poor = await play(h, 'blackjack', '100');
   const no = await press(h, poor.msg, 'Double');
-  assert.match(lastText(h, no), /Not enough coins to double/);
-  assert.match(lastText(h, no), /needs another \*\*100\*\* 🪙. You have \*\*50\*\* 🪙/);
+  assert.match(lastText(h, no), /Not enough Shards to double/);
+  assert.match(lastText(h, no), /needs another \*\*100\*\* 💎. You have \*\*50\*\* 💎/);
   assert.match(h.textOf(live(h, poor.msg.id)), /5♠ 6♠ · 11/);
   assert.ok(findBtn(h, poor.msg, 'Double'));
   assert.equal(eco.bal[A], 50);
@@ -597,14 +600,14 @@ test('refusals take nothing: no Economy, game off, limits, funds, cooldown and u
   h.engine.settings.patchApp(S, 'casino', { coinflip: false, dice: false, blackjack: false, roulette: false, crash: false });
   assert.match((await play(h, 'dice', '6 10')).text, /The casino is closed/);
   h.engine.settings.patchApp(S, 'casino', { coinflip: true, dice: true, slots: true, blackjack: true, roulette: true, crash: true });
-  assert.match((await play(h, 'slots', '5')).text, /too small[\s\S]*\*\*10\*\* 🪙/);
-  assert.match((await play(h, 'slots', '5000')).text, /too big[\s\S]*\*\*1,000\*\* 🪙/);
-  assert.match((await play(h, 'slots', '100')).text, /You have \*\*50\*\* 🪙, so you can't bet \*\*100\*\* 🪙/);
+  assert.match((await play(h, 'slots', '5')).text, /too small[\s\S]*\*\*10\*\* 💎/);
+  assert.match((await play(h, 'slots', '5000')).text, /too big[\s\S]*\*\*1,000\*\* 💎/);
+  assert.match((await play(h, 'slots', '100')).text, /You have \*\*50\*\* 💎, so you can't bet \*\*100\*\* 💎/);
   assert.match((await play(h, 'slots', '-5')).text, /That bet didn't work/);
   assert.match((await play(h, 'slots', 'lots')).text, /I didn't get that/);
   assert.match((await play(h, 'coinflip', 'haeds 10')).text, /Did you mean \*\*heads\*\*/);
   eco.bal[A] = 15;
-  assert.match((await play(h, 'slots', 'half')).text, /You have \*\*15\*\* 🪙 and the smallest bet is \*\*10\*\* 🪙/);
+  assert.match((await play(h, 'slots', 'half')).text, /You have \*\*15\*\* 💎 and the smallest bet is \*\*10\*\* 💎/);
   assert.equal(eco.bal[A], 15);
   assert.equal(eco.log.length, 0);
   rolls(h, 0, 7, 13);
@@ -750,7 +753,7 @@ test('/casino end stands your own hand or cashes out your round; only a mod endi
   rolls(h, 194_000);
   const flat = await play(h, 'crash', '100', B);
   const flatText = (await play(h, 'casino', 'end', B)).text;
-  assert.match(flatText, /your bet of \*\*100\*\* 🪙 came back/);
+  assert.match(flatText, /your bet of \*\*100\*\* 💎 came back/);
   await settle();
   assert.equal(live(h, flat.msg.id).embeds[0].color, COLORS.casino, 'a cash-out that only gives the bet back is not shown as a win');
   assert.equal(eco.bal[B], 1100);
@@ -809,14 +812,14 @@ test('blackjack: hitting to 21 stands by itself, a 3-card 21 against a dealer 21
   await press(h, tie.msg, 'Hit');
   const pushed = h.textOf(live(h, tie.msg.id));
   assert.match(pushed, /\*\*Dealer\*\* 10♠ 6♠ 5♠ · 21/);
-  assert.match(pushed, /Push. Your \*\*100\*\* 🪙 came back/);
+  assert.match(pushed, /Push. Your \*\*100\*\* 💎 came back/);
   assert.equal(eco.bal[A], 1100);
 
   rolls(h, CARD[10], CARD[10], CARD[5], CARD[7], CARD.K);
   const dbl = await play(h, 'blackjack', '100');
   await press(h, dbl.msg, 'Double');
   const bust = h.textOf(live(h, dbl.msg.id));
-  assert.match(bust, /bet \*\*200\*\* 🪙 \(doubled\)/);
+  assert.match(bust, /bet \*\*200\*\* 💎 \(doubled\)/);
   assert.match(bust, /Bust! You lost \*\*200\*\*/);
   assert.equal(eco.bal[A], 900);
   assert.deepEqual(doc(h).open, {});
@@ -863,7 +866,7 @@ test('small bets: the smallest allowed bet is 10, and a crash target that cannot
   assert.equal(eco.bal[A], 1000);
   assert.equal(svc(h).isPlaying(S, A), false);
   rolls(h, 6);
-  assert.match(h.textOf((await play(h, 'dice', 'over 1 10')).msg), /You won \*\*11\*\* 🪙 \(1\.1x\)/);
+  assert.match(h.textOf((await play(h, 'dice', 'over 1 10')).msg), /You won \*\*11\*\* 💎 \(1\.1x\)/);
 });
 
 test('a full scheduler never strands money: a failed payout is retried without a job, and a game left on disk is settled on start', async (t) => {
@@ -913,8 +916,8 @@ test('stats and top: wagered, won back, biggest win, server totals and the user 
   assert.deepEqual(svc(h).totals(S), { n: 3, wagered: 400, returned: 777, best: 482, bestBy: B });
   const mine = await play(h, 'casino', 'stats', A);
   assert.match(mine.text, /Games played: \*\*2\*\*/);
-  assert.match(mine.text, /Net: \*\*-105\*\* 🪙/);
-  assert.match(mine.text, /Biggest win: \*\*95\*\* 🪙/);
+  assert.match(mine.text, /Net: \*\*-105\*\* 💎/);
+  assert.match(mine.text, /Biggest win: \*\*95\*\* 💎/);
   assert.match((await play(h, 'casino', 'stats', IDS.mod)).text, /You haven't played yet. Try \*\*\/slots 50\*\*/);
   assert.match((await play(h, 'casino', `stats <@${B}>`, A)).text, /Riley's casino stats[\s\S]*Net: \*\*\+482\*\*/);
   const top = await play(h, 'casino', 'top', A);
@@ -923,7 +926,7 @@ test('stats and top: wagered, won back, biggest win, server totals and the user 
   const text = h.textOf(top.msg);
   assert.ok(text.indexOf(B) < text.indexOf(A), 'sorted by net');
   assert.match(text, /🥇/);
-  assert.match(text, /3 games · 400 coins bet · 777 coins paid out/);
+  assert.match(text, /3 games · 400 Shards bet · 777 Shards paid out/);
   const big = h.textOf((await play(h, 'casino', 'top biggest', A)).msg);
   assert.match(big, /biggest win \*\*482\*\*/);
   assert.match(big, /biggest win \*\*95\*\*/);
@@ -1049,7 +1052,7 @@ test('panel: members get the games, rules, stats and top; admins also settings; 
   const member = await h.slash('casino', '', { user: A });
   const text = lastText(h, member);
   assert.match(text, /Coinflip/);
-  assert.match(text, /Just for fun with server coins. No real money/);
+  assert.match(text, /Just for fun with 💎 Shards. No real money/);
   for (const label of ['Coinflip', 'Dice', 'Slots', 'Blackjack', 'Roulette', 'Crash', 'Rules', 'My stats', 'Top']) assert.ok(h.findButton(label, member), label);
   assert.equal(h.findButton('Settings', member), null);
   const admin = await h.slash('casino', '', { user: IDS.admin });
@@ -1080,7 +1083,7 @@ test('typed chat and /yap words reach the casino', async () => {
   assert.match(h.textOf(h.lastSent(G)), /\(250x\)/);
   rolls(h, 6);
   await h.slash('yap', 'casino dice 6 10', { user: A });
-  assert.match(h.textOf(h.lastSent(G)), /You won \*\*58\*\* 🪙 \(5\.8x\)/);
+  assert.match(h.textOf(h.lastSent(G)), /You won \*\*58\*\* 💎 \(5\.8x\)/);
   const rules = await h.slash('yap', 'gamble rules', { user: A });
   assert.match(lastText(h, rules), /Casino rules and payouts/);
   assert.match(lastText(h, await h.slash('casino', 'slotz', { user: A })), /Did you mean \*\*slots\*\*/);

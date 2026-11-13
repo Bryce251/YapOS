@@ -226,3 +226,91 @@ test('searching hides settings that do not match and says when nothing does', as
   assert.equal(ctx.main.querySelector('.settings-nomatch').hidden, false);
   ctx.abort();
 });
+
+const ownerSchema = [
+  { key: 'xpRate', label: 'XP per message', type: 'number', web: true, owner: true, min: 1, max: 100, step: 1, help: 'How fast XP is earned everywhere.' },
+  { key: 'levelUp', label: 'Level up message', type: 'string', web: true, maxLength: 200 },
+];
+
+const ownerDetail = (extra = {}) => ({
+  overview: { id: SID, name: 'Test Town' },
+  apps: [{ id: 'automod', name: 'Levels', enabled: true, canDisable: true }],
+  settings: { automod: { values: { xpRate: 15, levelUp: 'gg' }, schema: ownerSchema }, lookups },
+  updatedAt: 1,
+  level: 'admin',
+  ...extra,
+});
+
+test('an owner-only field carries its flag through normalizeField', () => {
+  assert.equal(normalizeField({ key: 'xpRate', type: 'number', web: true, owner: true }).owner, true);
+  assert.equal(normalizeField({ key: 'xpRate', type: 'number', web: true }).owner, false);
+});
+
+test('an owner-only field is shown locked with a plain note', () => {
+  const f = normalizeField(ownerSchema[0]);
+  const row = fieldRow(f, { edit: '15', rawValue: 15, lookups, locked: true, onChange: () => {} });
+  assert.equal(row.locked(), true);
+  assert.equal(row.el.querySelector('.stepper-input').disabled, true);
+  for (const b of row.el.querySelectorAll('button')) assert.equal(b.disabled, true);
+  const note = row.el.querySelector('.field-lock');
+  assert.equal(note.hidden, false);
+  assert.match(note.textContent, /Only the bot owner can change this\./);
+  assert.match(row.el.querySelector('.field-tag-owner').textContent, /Bot owner/);
+});
+
+test('the bot owner still gets a working control', () => {
+  const f = normalizeField(ownerSchema[0]);
+  let latest = '';
+  const row = fieldRow(f, { edit: '15', rawValue: 15, lookups, locked: false, onChange: (v) => { latest = v; } });
+  assert.equal(row.locked(), false);
+  assert.equal(row.el.querySelector('.stepper-input').disabled, false);
+  assert.equal(row.el.querySelector('.field-lock').hidden, true);
+  type(row.el.querySelector('.stepper-input'), '20');
+  assert.equal(latest, '20');
+});
+
+test('the settings page locks owner-only fields for everyone else', async () => {
+  state.details.clear();
+  setDetail(SID, ownerDetail());
+  const ctx = makeCtx({ get: async () => ownerDetail(), job: () => new Promise(() => {}), run: async () => ({ data: {} }) });
+  renderAppSettings(ctx);
+  await flush();
+  const locked = ctx.main.querySelector('.field.is-locked');
+  assert.ok(locked, 'the owner-only field is locked');
+  assert.equal(locked.dataset.key, 'xpRate');
+  assert.equal(ctx.main.querySelectorAll('.field.is-locked').length, 1);
+  ctx.abort();
+});
+
+test('a refused owner-only save shows what the server said instead of going quiet', async () => {
+  state.details.clear();
+  state.user = { id: 'owner-1', botOwner: true };
+  setDetail(SID, ownerDetail({ botOwner: true }));
+  const ctx = makeCtx({
+    get: async () => ownerDetail({ botOwner: true }),
+    job: () => new Promise(() => {}),
+    run: async () => ({ data: { ok: false, applied: {}, errors: { xpRate: 'Only the bot owner can change this.' } } }),
+  });
+  renderAppSettings(ctx);
+  await flush();
+  const row = ctx.main.querySelectorAll('.field').find((f) => f.dataset.key === 'xpRate');
+  assert.equal(row.classList.contains('is-locked'), false);
+  type(row.querySelector('.stepper-input'), '20');
+  ctx.main.querySelectorAll('button').find((b) => /^Save$/.test(b.textContent.trim())).click();
+  await flush();
+  assert.match(row.querySelector('.field-error').textContent, /Only the bot owner can change this\./);
+  assert.equal(row.classList.contains('is-locked'), true);
+  assert.equal(row.querySelector('.stepper-input').disabled, true);
+  state.user = null;
+  ctx.abort();
+});
+
+test('a locked owner-only field stays locked when its value is refreshed', () => {
+  const f = normalizeField({ key: 'dailyAmount', label: 'Daily Shards', type: 'number', web: true, owner: true, unlimited: true, min: 0, max: 1000, step: 1 });
+  const row = fieldRow(f, { edit: '250', rawValue: 250, lookups, locked: true, onChange: () => {} });
+  assert.equal(row.el.querySelector('.stepper-input').disabled, true);
+  row.setValue('300');
+  assert.equal(row.locked(), true);
+  assert.equal(row.el.querySelector('.stepper-input').disabled, true);
+  for (const b of row.el.querySelectorAll('button')) assert.equal(b.disabled, true);
+});

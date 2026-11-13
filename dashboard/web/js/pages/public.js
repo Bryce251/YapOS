@@ -3,16 +3,23 @@ import { icon } from '../icons.js';
 import { avatar, copyButton, emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
 import { brand } from '../shell.js';
 import { themeToggle } from '../theme.js';
-import { medalFor, normalizeBoard, normalizeWrapped } from '../public-data.js';
+import { medalFor, normalizeBoard } from '../public-data.js';
 import { formatNumber, relativeTime } from '../format.js';
 import { ApiError, isAbort } from '../api.js';
 import { publicPath } from '../router.js';
 
+export const LEADERBOARD_SLUG = 'global';
+export const CURRENCY_NAME = 'Shards';
+export const CURRENCY_EMOJI = '💎';
+
 const TABS = [
   { id: 'levels', label: 'Levels', icon: 'trophy' },
-  { id: 'coins', label: 'Coins', icon: 'coins' },
-  { id: 'wrapped', label: 'Wrapped', icon: 'gift' },
+  { id: 'shards', label: `${CURRENCY_EMOJI} ${CURRENCY_NAME}`, icon: 'coins' },
 ];
+
+export function leaderboardUrl() {
+  return publicPath(LEADERBOARD_SLUG);
+}
 
 function rankBadge(rank) {
   const medal = medalFor(rank);
@@ -22,10 +29,14 @@ function rankBadge(rank) {
 
 function boardView(rows, kind) {
   if (!rows.length) {
-    return emptyState({ icon: kind === 'economy' ? 'coins' : 'trophy', title: 'Nobody here yet', body: kind === 'economy' ? 'Coins earned in the server will rank people here.' : 'Chatting earns XP. The most active members show up here.' });
+    return emptyState({
+      icon: kind === 'economy' ? 'coins' : 'trophy',
+      title: 'Nobody here yet',
+      body: kind === 'economy' ? `${CURRENCY_EMOJI} ${CURRENCY_NAME} earned in any server rank people here.` : 'Chatting earns XP in every server. The most active people show up here.',
+    });
   }
-  const filter = h('input', { type: 'search', class: 'input', placeholder: 'Find a member', attrs: { 'aria-label': 'Find a member' } });
-  const list = h('ol', { class: 'board', attrs: { 'aria-label': kind === 'economy' ? 'Coins leaderboard' : 'Levels leaderboard' } });
+  const filter = h('input', { type: 'search', class: 'input', placeholder: 'Find someone', attrs: { 'aria-label': 'Find someone' } });
+  const list = h('ol', { class: 'board', attrs: { 'aria-label': kind === 'economy' ? `${CURRENCY_NAME} leaderboard` : 'Levels leaderboard' } });
   const none = h('p', { class: 'muted board-none', hidden: true, text: 'No one matches that name.' });
   const draw = () => {
     const q = filter.value.trim().toLowerCase();
@@ -39,36 +50,13 @@ function boardView(rows, kind) {
         r.secondary ? h('span', { class: 'board-sub', text: r.secondary }) : null),
       h('div', { class: 'board-score' },
         h('span', { class: 'board-value', text: formatNumber(r.primary) }),
-        h('span', { class: 'board-unit', text: r.primaryLabel === 'level' ? 'Level' : 'Coins' })))));
+        h('span', { class: 'board-unit', text: r.primaryLabel === 'level' ? 'Level' : `${CURRENCY_EMOJI} ${CURRENCY_NAME}` })))));
   };
   filter.addEventListener('input', draw);
   draw();
   return h('div', { class: 'board-wrap' },
     rows.length > 10 ? h('div', { class: 'input-shell has-lead board-filter' }, icon('search', { size: 14, className: 'input-lead' }), filter) : null,
     list, none);
-}
-
-function wrappedView(raw) {
-  const w = normalizeWrapped(raw);
-  if (!w || w.empty) {
-    return emptyState({ icon: 'gift', title: 'No Wrapped yet', body: w?.note || 'Once a month has passed, the server recap shows up here: messages, top channels, busiest times and more.' });
-  }
-  return h('div', { class: 'wrapped' },
-    h('div', { class: 'wrapped-head' },
-      h('span', { class: 'wrapped-icon' }, icon('gift', { size: 18 })),
-      h('div', null,
-        h('h2', { class: 'wrapped-title', text: w.title || (w.month ? `${w.month} Wrapped` : 'Server Wrapped') }),
-        h('p', { class: 'wrapped-sub', text: w.note || 'Counts from public channels only. Message text is never stored.' }))),
-    w.stats.length ? h('dl', { class: 'wrapped-stats' }, ...w.stats.map((s) => h('div', { class: 'wrapped-stat' }, h('dt', { text: s.label }), h('dd', { text: s.value })))) : null,
-    w.highlights.length ? h('div', { class: 'wrapped-highlights' }, ...w.highlights.map((x) => h('div', { class: 'wrapped-highlight' },
-      avatar({ name: x.label, url: x.avatar, size: 'md' }),
-      h('div', null, h('p', { class: 'wrapped-hl-title', text: x.title }), h('p', { class: 'wrapped-hl-name', text: x.label }), x.value ? h('p', { class: 'wrapped-hl-sub', text: x.value }) : null)))) : null,
-    w.lists.length ? h('div', { class: 'wrapped-lists' }, ...w.lists.map((l) => h('section', { class: 'wrapped-list' },
-      h('h3', { class: 'wrapped-list-title', text: l.title }),
-      h('ol', null, ...l.items.map((it, i) => h('li', null,
-        h('span', { class: 'wrapped-rank', text: String(i + 1) }),
-        h('span', { class: 'wrapped-item', text: it.label }),
-        it.value ? h('span', { class: 'wrapped-item-value', text: it.value }) : null)))))) : null);
 }
 
 function publicSkeleton() {
@@ -89,14 +77,19 @@ export function renderPublic(root, ctx) {
   const load = async () => {
     replace(content, publicSkeleton());
     try {
-      const data = await api.get(`/api/public/${encodeURIComponent(params.slug)}`, { signal, allow401: true });
+      const data = await api.get(`/api/public/${encodeURIComponent(params.slug || LEADERBOARD_SLUG)}`, { signal, allow401: true });
       if (signal.aborted) return;
       draw(data || {});
     } catch (err) {
       if (isAbort(err) || signal.aborted) return;
       if (err instanceof ApiError && err.status === 404) {
         ctx.setTitle('Page not found');
-        replace(content, emptyState({ icon: 'eye-off', title: "This page isn't available", body: 'The link may be wrong, or the server has turned its public page off.', action: linkButton({ label: 'Go to YapOS', href: '/' }) }));
+        replace(content, emptyState({
+          icon: 'eye-off',
+          title: "This page isn't available",
+          body: 'There is one leaderboard now, and it covers every server.',
+          action: linkButton({ label: 'Open the leaderboard', href: leaderboardUrl() }),
+        }));
         return;
       }
       replace(content, errorState({ title: "Couldn't load this page", body: err.message, onRetry: load }));
@@ -104,11 +97,11 @@ export function renderPublic(root, ctx) {
   };
 
   function draw(data) {
-    const name = String(data.name || 'Server');
-    ctx.setTitle(`${name} leaderboard`);
+    ctx.setTitle('Global leaderboard');
     const levels = normalizeBoard(data.levels, 'levels');
     const economy = normalizeBoard(data.economy, 'economy');
-    const initial = new URLSearchParams(window.location.search).get('tab');
+    const asked = new URLSearchParams(window.location.search).get('tab');
+    const initial = asked === 'coins' ? 'shards' : asked;
     let current = TABS.some((t) => t.id === initial) ? initial : 'levels';
     const panel = h('div', { class: 'tab-panel', attrs: { role: 'tabpanel' }, tabIndex: 0 });
     const tabButtons = TABS.map((t) => h('button', {
@@ -128,7 +121,7 @@ export function renderPublic(root, ctx) {
         if (on && focus) b.focus();
       });
       panel.setAttribute('aria-labelledby', `tab-${id}`);
-      replace(panel, id === 'levels' ? boardView(levels, 'levels') : id === 'coins' ? boardView(economy, 'economy') : wrappedView(data.wrapped));
+      replace(panel, id === 'levels' ? boardView(levels, 'levels') : boardView(economy, 'economy'));
       const url = new URL(window.location.href);
       if (id === 'levels') url.searchParams.delete('tab');
       else url.searchParams.set('tab', id);
@@ -148,14 +141,15 @@ export function renderPublic(root, ctx) {
         }
       });
     });
-    const shareUrl = `${window.location.origin}${publicPath(params.slug)}`;
+    const shareUrl = `${window.location.origin}${leaderboardUrl()}`;
     const shareBtn = copyButton({ getText: () => shareUrl, label: 'Copy link' });
     replace(content,
       h('div', { class: 'public-hero' },
-        avatar({ name, url: data.icon || data.icon_url, id: params.slug, size: 'xl', shape: 'square' }),
+        h('span', { class: 'public-crest', attrs: { 'aria-hidden': 'true' } }, icon('trophy', { size: 30 })),
         h('div', { class: 'public-hero-text' },
           h('p', { class: 'public-eyebrow', text: 'Leaderboard' }),
-          h('h1', { class: 'public-title', text: name }),
+          h('h1', { class: 'public-title', text: 'Everyone on YapOS' }),
+          h('p', { class: 'public-lead', text: `Levels and ${CURRENCY_EMOJI} ${CURRENCY_NAME} count the same in every server, so this is one board for all of them.` }),
           data.updatedAt ? h('p', { class: 'public-meta' }, icon('clock', { size: 14 }), h('span', { text: `Updated ${relativeTime(data.updatedAt)}` })) : null),
         h('div', { class: 'public-hero-actions' }, shareBtn)),
       h('div', { class: 'public-card' },

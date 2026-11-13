@@ -22,7 +22,7 @@ const FINISHED_KEEP_MS = 10 * 60_000;
 const MAX_STAT_USERS = 5000;
 const OWED_GIVE_UP_MS = 24 * 3600_000;
 const MEDALS = ['🥇', '🥈', '🥉'];
-const FUN_NOTE = 'Just for fun with server coins. No real money.';
+const FUN_NOTE = 'Just for fun with 💎 Shards. No real money.';
 
 export const LIMITS = { MAX_LIVE, MAX_CRASH, MAX_BET_LIMIT, CRASH_TICK_MS, CRASH_DOUBLE_MS, CRASH_MAX_EDITS, IDLE_MS, CHECK_MS, MAX_STAT_USERS };
 
@@ -207,13 +207,13 @@ const isNatural = (cards) => cards.length === 2 && handTotal(cards).total === 21
 
 const ALL_WORDS = new Set(['all', 'max', 'allin', 'all-in']);
 const SKIP = new Set(['bet', 'bets', 'for', 'on', 'with', 'wager']);
-const AMOUNT_RE = /^-?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:k|m|b|t)?(?:coins?|🪙)?$/;
+const AMOUNT_RE = /^-?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:k|m|b|t)?(?:coins?|shards?|💎|🪙)?$/;
 const AMOUNT_PLACES = { k: 3, m: 6, b: 9, t: 12 };
 const cleanToken = (t) => String(t ?? '').trim().toLowerCase();
 const amountLike = (w) => AMOUNT_RE.test(w) || ALL_WORDS.has(w) || w === 'half';
 
 export function parseAmountToken(token) {
-  const s = cleanToken(token).replace(/,/g, '').replace(/(?:coins?|🪙)$/, '');
+  const s = cleanToken(token).replace(/,/g, '').replace(/(?:coins?|shards?|💎|🪙)$/, '');
   if (ALL_WORDS.has(s)) return { kind: 'all' };
   if (s === 'half') return { kind: 'half' };
   let n = null;
@@ -263,7 +263,7 @@ const ERR = {
   diceRange: { level: 'warn', title: "That roll can't happen", body: 'Over works with 1 to 5 and under with 2 to 6, like `/dice over 3 100`.' },
   diceFace: { level: 'warn', title: "That roll can't happen", body: 'A die has faces 1 to 6, like `/dice 6 100`.' },
   wheel: { level: 'warn', title: "That number isn't on the wheel", body: 'Pick a number from 0 to 36.' },
-  amount: { level: 'warn', title: "That bet didn't work", body: 'Bets are whole numbers of coins, like `100`, `2k`, `half` or `all`.' },
+  amount: { level: 'warn', title: "That bet didn't work", body: 'Bets are whole numbers of Shards, like `100`, `2k`, `half` or `all`.' },
 };
 
 const badTarget = (crashMax) => ({ level: 'warn', title: "That target didn't work", body: `Pick a cash-out target from 1.01x to ${crashMax}x, like \`/crash 100 2x\`.` });
@@ -555,7 +555,7 @@ function economyFor(engine, sid) {
 function money(engine, sid, n) {
   let c = null;
   try { c = engine.service('economy')?.currency?.(sid); } catch { c = null; }
-  const emoji = c && typeof c === 'object' && typeof c.emoji === 'string' && c.emoji ? c.emoji : '🪙';
+  const emoji = c && typeof c === 'object' && typeof c.emoji === 'string' && c.emoji ? c.emoji : '💎';
   return `**${fmt(n)}** ${emoji}`;
 }
 
@@ -589,7 +589,7 @@ async function settle(engine, sid, id, payout, reason) {
     await eco.add(sid, rec.uid, amount, reason);
     return { ok: true, held, amount };
   } catch (e) {
-    engine.log.warn(`[casino] could not pay ${amount} coins for ${id} yet: ${e?.message}`);
+    engine.log.warn(`[casino] could not pay ${amount} Shards for ${id} yet: ${e?.message}`);
     writeDoc(engine, sid, (d) => {
       d.open[id] = { ...(d.open[id] || rec), kind: 'owed', game: rec.game || rec.kind, uid: rec.uid, held: amount, at: rec.kind === 'owed' ? rec.at : Date.now() };
     });
@@ -688,7 +688,7 @@ function notYours(ctx, uid) {
 const outOfDate = (ctx) => ctx.info('That button is out of date', 'Use the buttons on the message as it is now.');
 
 function wholeNumber(text) {
-  const s = String(text ?? '').trim().replace(/,/g, '').replace(/\s*(coins?|🪙|s|sec|secs|seconds?|x)$/i, '');
+  const s = String(text ?? '').trim().replace(/,/g, '').replace(/\s*(coins?|shards?|💎|🪙|s|sec|secs|seconds?|x)$/i, '');
   return /^\d+$/.test(s) ? Number(s) : NaN;
 }
 
@@ -781,7 +781,7 @@ async function startGame(ctx, kind, tokens, mode = 'reply', extra = {}) {
   const sid = ctx.serverId;
   const uid = ctx.userId;
   const eco = economyFor(engine, sid);
-  if (!eco) return ctx.info('The casino needs Economy', 'Casino games use server coins from the **Economy** app. An admin can install it with **/apps**.');
+  if (!eco) return ctx.info('The casino needs Economy', 'Casino games use 💎 Shards from the **Economy** app. An admin can install it with **/apps**.');
   const cfg = cfgOf(engine, sid);
   if (cfg[kind] === false) {
     if (GAME_KEYS.every((k) => cfg[k] === false)) return ctx.info('The casino is closed', 'An admin turned every game off.');
@@ -807,10 +807,10 @@ async function startGame(ctx, kind, tokens, mode = 'reply', extra = {}) {
     const r = resolveBet(parsed.amount, bal ?? 0, lim);
     if (r.error === 'small') return ctx.warn('That bet is too small', `The smallest bet here is ${money(engine, sid, lim.minBet)}.`);
     if (r.error === 'big') return ctx.warn('That bet is too big', `The biggest bet here is ${maxBetText(engine, sid, lim.maxBet)}.`);
-    if (r.error === 'low') return ctx.warn('Not enough coins', `You have ${money(engine, sid, bal ?? 0)} and the smallest bet is ${money(engine, sid, lim.minBet)}. Get more with **/daily**.`);
+    if (r.error === 'low') return ctx.warn('Not enough Shards', `You have ${money(engine, sid, bal ?? 0)} and the smallest bet is ${money(engine, sid, lim.minBet)}. Get more with **/daily**.`);
     const bet = r.bet;
     if (kind === 'crash' && parsed.target && Math.floor((bet * parsed.target) / 100) <= bet) return ctx.warn("That target can't win", `With a bet of ${money(engine, sid, bet)}, a ${fmtX(parsed.target)} cash-out only gives your bet back. Bet more or pick a higher target.`);
-    if (bal !== null && bal < bet) return ctx.warn('Not enough coins', `You have ${money(engine, sid, bal)}, so you can't bet ${money(engine, sid, bet)}. Get more with **/daily**.`);
+    if (bal !== null && bal < bet) return ctx.warn('Not enough Shards', `You have ${money(engine, sid, bal)}, so you can't bet ${money(engine, sid, bet)}. Get more with **/daily**.`);
     let after;
     try {
       after = await eco.take(sid, uid, bet, `${gameName(kind)} bet`);
@@ -820,7 +820,7 @@ async function startGame(ctx, kind, tokens, mode = 'reply', extra = {}) {
     }
     if (after === null || after === undefined || after === false) {
       const now = await balanceOf(eco, sid, uid);
-      return ctx.warn('Not enough coins', `You have ${money(engine, sid, now ?? 0)}, so you can't bet ${money(engine, sid, bet)}. Get more with **/daily**.`);
+      return ctx.warn('Not enough Shards', `You have ${money(engine, sid, now ?? 0)}, so you can't bet ${money(engine, sid, bet)}. Get more with **/daily**.`);
     }
     st.cool.set(key, Date.now());
     pruneCool(st, 300_000);
@@ -868,7 +868,7 @@ function instantView(engine, sid, r) {
   const again = againId(r.kind, r.uid, r.pick, r.bet);
   return {
     content: '',
-    embeds: [card({ title: `${g.icon} ${g.name}`, body: lines.join('\n'), color, footer: again ? 'Press Again to play the same bet · just for fun with server coins' : FUN_NOTE })],
+    embeds: [card({ title: `${g.icon} ${g.name}`, body: lines.join('\n'), color, footer: again ? 'Press Again to play the same bet · just for fun with 💎 Shards' : FUN_NOTE })],
     components: again ? [row(button('Again', again, 'primary', '🔁'))] : [],
   };
 }
@@ -1124,7 +1124,7 @@ async function doubleDown(ctx, g) {
   if (failed) return ctx.warn("I couldn't take the bet", 'Nothing was taken. Try again in a moment.');
   if (!took) {
     const bal = await balanceOf(eco, g.sid, g.uid);
-    return ctx.warn('Not enough coins to double', `Doubling needs another ${money(engine, g.sid, g.bet)}. You have ${money(engine, g.sid, bal ?? 0)}.`);
+    return ctx.warn('Not enough Shards to double', `Doubling needs another ${money(engine, g.sid, g.bet)}. You have ${money(engine, g.sid, bal ?? 0)}.`);
   }
   g.doubled = true;
   g.held += g.bet;
@@ -1355,7 +1355,7 @@ async function statsCommand(ctx, tokens) {
   if (!u) return ctx.ephemeral({ embeds: [card({ title, body: mine ? "You haven't played yet. Try **/slots 50**." : `${name} hasn't played yet.`, color: 'casino', footer: false })] });
   const lines = [
     `🎮 Games played: **${fmt(u.n)}**`,
-    `💸 Coins bet: ${money(engine, sid, u.wagered)}`,
+    `💸 Shards bet: ${money(engine, sid, u.wagered)}`,
     `💰 Won back: ${money(engine, sid, u.returned)}`,
     `📈 Net: ${signedMoney(engine, sid, u.returned - u.wagered)}`,
     `🏆 Biggest win: ${Number(u.best) > 0 ? money(engine, sid, u.best) : 'none yet'}`,
@@ -1381,7 +1381,7 @@ function topView(engine, sid, biggest) {
       title: biggest ? '🏆 Biggest casino wins' : '🏆 Casino leaderboard',
       body: lines.length ? lines.join('\n') : 'Nobody has played here yet.',
       color: 'casino',
-      footer: `Server totals: ${plural(Number(t.n) || 0, 'game')} · ${fmt(Number(t.wagered) || 0)} coins bet · ${fmt(Number(t.returned) || 0)} coins paid out`,
+      footer: `Server totals: ${plural(Number(t.n) || 0, 'game')} · ${fmt(Number(t.wagered) || 0)} Shards bet · ${fmt(Number(t.returned) || 0)} Shards paid out`,
     })],
   };
 }
@@ -1405,7 +1405,7 @@ function rulesView(engine, sid) {
     `🚀 **Crash**${off('crash')} · the multiplier doubles every 8 seconds, cash out before it crashes · it cashes out by itself at **${crashMax}x** · \`/crash 100 2x\``,
     '',
     `Bets: ${betRangeText(engine, sid, lim)}. Amounts: \`100\`, \`2k\`, \`half\` or \`all\`. Wins include your bet.`,
-    'The house keeps a small edge of about 1 to 3 coins per 100 bet, so over time the casino wins. Wins round down to whole coins, so small bets lose a little more.',
+    'The house keeps a small edge of about 1 to 3 Shards per 100 bet, so over time the casino wins. Wins round down to whole Shards, so small bets lose a little more.',
     `-# ${FUN_NOTE}`,
   ];
   return { embeds: [card({ title: `${ICONS.casino} Casino rules and payouts`, body: lines.join('\n'), color: 'casino', footer: false })] };
@@ -1438,7 +1438,7 @@ async function panelView(engine, sid, uid, isAdmin) {
   const lim = limitsOf(cfg);
   const eco = economyFor(engine, sid);
   const on = GAME_KEYS.filter((k) => cfg[k] !== false);
-  const intro = ['Play against the bot with server coins:'];
+  const intro = ['Play against the bot with 💎 Shards:'];
   if (on.length) for (const k of on) intro.push(`${GAMES[k].icon} **${GAMES[k].name}** · \`${GAMES[k].usage}\``);
   else intro.push('Every game is turned off right now.');
   intro.push('', `Bets: ${betRangeText(engine, sid, lim)} · amounts like \`100\`, \`2k\`, \`half\` or \`all\``);
@@ -1599,7 +1599,7 @@ async function cleanupJob(job, engine) {
   if (!rec) return undefined;
   if (rec.kind === 'owed') {
     if (Date.now() - (Number(rec.at) || 0) > OWED_GIVE_UP_MS) {
-      engine.log.error(`[casino] gave up paying ${rec.held} coins to ${rec.uid} for ${id} after 24 hours`);
+      engine.log.error(`[casino] gave up paying ${rec.held} Shards to ${rec.uid} for ${id} after 24 hours`);
       unwatch(engine, sid, id);
       return undefined;
     }
@@ -1627,8 +1627,8 @@ const DASHBOARD = [
   boolField({ key: 'blackjack', label: 'Blackjack', help: 'Hit, stand or double against the dealer. Blackjack pays 3:2.' }),
   boolField({ key: 'roulette', label: 'Roulette', help: 'European wheel with one zero: colors, numbers, dozens and columns.' }),
   boolField({ key: 'crash', label: 'Crash', help: 'A rising multiplier. Cash out before it crashes.' }),
-  numberField('minBet', 'Smallest bet', 'The fewest coins someone can bet on one game.'),
-  numberField('maxBet', 'Biggest bet', 'The most coins someone can bet on one game. Type inf for no limit at all.', { unlimited: true }),
+  numberField('minBet', 'Smallest bet', 'The fewest Shards someone can bet on one game.'),
+  numberField('maxBet', 'Biggest bet', 'The most Shards someone can bet on one game. Type inf for no limit at all.', { unlimited: true }),
   numberField('cooldownSeconds', 'Wait between games (seconds)', 'How long someone waits before starting another game. 0 turns it off.'),
   numberField('crashMax', 'Crash top multiplier', 'A crash round cashes out by itself when it reaches this.'),
 ];
@@ -1639,7 +1639,7 @@ export const { setup, teardown, check } = defineApp({
   id: ID,
   name: 'Casino',
   icon: ICONS.casino,
-  description: 'Coinflip, dice, slots, blackjack, roulette and crash for Economy coins.',
+  description: 'Coinflip, dice, slots, blackjack, roulette and crash for 💎 Shards.',
   category: 'Fun',
   phase: 3,
   panelPerm: 'member',
@@ -1661,9 +1661,9 @@ export const { setup, teardown, check } = defineApp({
   dashboard: DASHBOARD,
 
   commands: {
-    casino: { description: 'Casino hub with server coins: /casino, /casino stats, /casino top, /casino rules', run: (ctx) => runCasino(ctx, ctx.argv) },
-    coinflip: { description: 'Flip a coin for coins: /coinflip heads 100, /coinflip tails half', run: gameCommand('coinflip') },
-    dice: { description: 'Roll a die for coins: /dice 6 100, /dice over 3 100, /dice even 50', run: gameCommand('dice') },
+    casino: { description: 'Casino hub with 💎 Shards: /casino, /casino stats, /casino top, /casino rules', run: (ctx) => runCasino(ctx, ctx.argv) },
+    coinflip: { description: 'Flip a coin for Shards: /coinflip heads 100, /coinflip tails half', run: gameCommand('coinflip') },
+    dice: { description: 'Roll a die for Shards: /dice 6 100, /dice over 3 100, /dice even 50', run: gameCommand('dice') },
     slots: { description: 'Spin the slot machine: /slots 100', run: gameCommand('slots') },
     blackjack: { description: 'Play blackjack against the dealer: /blackjack 100', run: gameCommand('blackjack') },
     roulette: { description: 'Bet on the roulette wheel: /roulette red 100, /roulette 17 50, /roulette 2nd 100', run: gameCommand('roulette') },
@@ -1752,7 +1752,7 @@ export const { setup, teardown, check } = defineApp({
   },
 
   help: [
-    'Play casino games against the bot with Economy coins: /coinflip, /dice, /slots, /roulette, /blackjack and /crash. Bets are taken first and wins are paid at once.',
+    'Play casino games against the bot with 💎 Shards: /coinflip, /dice, /slots, /roulette, /blackjack and /crash. Bets are taken first and wins are paid at once.',
     'Payouts: coinflip 1.95x, dice up to 5.82x, roulette 36x on a number, slots up to 250x, blackjack pays 3:2, crash pays your cash-out multiplier.',
     'Only the player can press a game\'s buttons. One live blackjack or crash game at a time; /casino end stands your hand or cashes out your round, and a mod can end a stuck game with a refund.',
     'Admins: /casino off slots, /casino maxbet 500, /casino minbet 10, /casino cooldown 5, /casino crashmax 50, or the dashboard.',

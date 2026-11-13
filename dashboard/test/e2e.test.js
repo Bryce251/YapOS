@@ -160,20 +160,18 @@ test('an admin logs in, lists servers, opens Test Town and changes settings of s
 
   const levels = await change(b, 'levels', { settings: { messageXp: false, cooldownSeconds: 30, channelId: C.general, announce: 'channel', message: 'GG {user}, you reached level {level}!', noXpRoles: [R.vip] } });
   assert.equal(levels.status, 'done');
-  assert.deepEqual(levels.result.errors, {});
+  assert.match(levels.result.errors.messageXp, /bot owner/i);
+  assert.match(levels.result.errors.cooldownSeconds, /bot owner/i);
   const cfg = dev.harness.engine.settings.appConfig(S, 'levels');
-  assert.equal(cfg.messageXp, false);
-  assert.equal(cfg.cooldownSeconds, 30);
   assert.equal(cfg.channelId, C.general);
   assert.equal(cfg.announce, 'channel');
   assert.equal(cfg.message, 'GG {user}, you reached level {level}!');
   assert.deepEqual(cfg.noXpRoles, [R.vip]);
-  assert.equal(levels.result.snapshot.settings.levels.values.cooldownSeconds, 30);
+  assert.equal(levels.result.snapshot.settings.levels.values.channelId, C.general);
 
-  const bad = await change(b, 'levels', { settings: { cooldownSeconds: 99999, channelId: C.voice } });
-  assert.ok(bad.result.errors.cooldownSeconds);
+  const bad = await change(b, 'levels', { settings: { channelId: C.voice } });
   assert.ok(bad.result.errors.channelId);
-  assert.equal(dev.harness.engine.settings.appConfig(S, 'levels').cooldownSeconds, 30);
+  assert.equal(dev.harness.engine.settings.appConfig(S, 'levels').channelId, C.general);
 
   const words = await change(b, 'automod', { settings: { 'words.list': ['badword', 'worseword'], 'links.allow': ['example.com'] } });
   assert.deepEqual(words.result.errors, {});
@@ -189,9 +187,8 @@ test('an admin logs in, lists servers, opens Test Town and changes settings of s
   assert.ok(tooHigh.result.errors.autoroles);
   assert.deepEqual(dev.harness.engine.settings.appConfig(S, 'welcome').autoroles, [R.gamer]);
 
-  const money = await change(b, 'economy', { settings: { currencyName: 'Shells', dailyAmount: 250 } });
-  assert.deepEqual(money.result.errors, {});
-  assert.equal(dev.harness.engine.settings.appConfig(S, 'economy').currencyName, 'Shells');
+  const money = await change(b, 'economy', { settings: { dailyAmount: 250 } });
+  assert.match(money.result.errors.dailyAmount, /bot owner/i);
 
   const off = await change(b, 'games', { enabled: false });
   assert.equal(off.result.applied.enabled, false);
@@ -212,8 +209,10 @@ test('an admin logs in, lists servers, opens Test Town and changes settings of s
   assert.match(log, /⚙️ Alex changed Automod: /);
 
   const fresh = await (await b.req('GET', `/api/servers/${S}`)).json();
-  assert.equal(fresh.settings.levels.values.cooldownSeconds, 30);
-  assert.equal(fresh.settings.economy.values.currencyName, 'Shells');
+  assert.equal(fresh.settings.levels.values.channelId, C.general);
+  assert.ok(fresh.settings.levels.schema.some((f) => f.key === 'cooldownSeconds' && f.owner === true));
+  assert.ok(fresh.settings.economy.schema.every((f) => f.owner === true));
+  assert.equal(fresh.settings.economy.schema.some((f) => f.key === 'currencyName'), false);
 
   const noCsrf = await b.req('PATCH', `/api/servers/${S}/apps/levels`, { body: { enabled: true }, headers: { Origin: dev.url } });
   assert.equal(noCsrf.status, 403);
@@ -270,54 +269,35 @@ test('cases search and the member job', async () => {
   assert.ok(m.economy.balance >= 1250);
 });
 
-test('the public page is published, readable without a login, refuses a taken name and goes away when turned off', async () => {
-  const b = await login('alex');
-  await openServer(b);
-  const missing = browser(dev.url);
-  assert.equal((await missing.req('GET', '/api/public/test-town')).status, 404);
+test('the public leaderboard is one global board and old server links lead to it', async () => {
+  const visitor = browser(dev.url);
+  const moved = await visitor.req('GET', '/api/public/test-town');
+  assert.equal(moved.status, 308);
+  assert.equal(moved.headers.get('Location'), '/api/public/global');
 
-  const on = await settle(b, await b.mutate('PATCH', `/api/servers/${S}/public`, { enabled: true, slug: 'Test-Town' }));
-  assert.equal(on.status, 'done');
-  assert.deepEqual(on.result.errors, {});
-  assert.deepEqual(on.result.applied.publicPage, { enabled: true, slug: 'test-town' });
-  assert.deepEqual(dev.harness.engine.settings.core(S).publicPage, { enabled: true, slug: 'test-town' });
+  const board = {
+    levels: [{ rank: 1, id: IDS.member, name: 'Sam', level: 7, xp: 2650 }],
+    economy: [{ rank: 1, id: IDS.member, name: 'Sam', balance: 1250 }],
+    currency: { name: 'Shards', emoji: '\u{1F48E}' },
+    updatedAt: Date.now(),
+  };
+  const push = await fetch(`${dev.url}/bot/global`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${dev.env.BOT_SECRET}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(board),
+  });
+  assert.equal(push.status, 200);
 
-  const res = await missing.req('GET', '/api/public/test-town');
+  const res = await visitor.req('GET', '/api/public/global');
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('Cache-Control'), 'public, max-age=60');
   const page = await res.json();
-  assert.equal(page.name, 'Test Town');
+  assert.equal(page.global, true);
   assert.equal(page.serverId, undefined);
-  assert.deepEqual(page.levels.slice(0, 2).map((r) => [r.rank, r.name]), [[1, 'Sam'], [2, 'Riley']]);
-  assert.deepEqual(page.economy[0].name, 'Sam');
-  assert.ok(page.wrapped && page.wrapped.card);
-  const text = JSON.stringify(page.wrapped);
-  assert.equal(/<[@#][!&]?[\w-]+>/.test(text), false, 'no raw mention tokens');
-  const fields = Object.fromEntries(page.wrapped.card.fields.map((f) => [f.name.replace(/^[^\p{L}]+/u, ''), f.value]));
-  assert.match(fields['Messages'], /277/);
-  assert.match(fields['Top chatters'], /Sam · 121/);
-  assert.match(fields['Top channels'], /#general · 190/);
-  assert.match(fields['Member of the month'], /^Sam/);
-
-  const other = '5e000000-0000-4000-8000-0000000000bb';
-  const claim = await fetch(`${dev.url}/bot/public/${other}`, {
-    method: 'PUT',
-    headers: { Authorization: `Bearer ${dev.env.BOT_SECRET}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled: true, slug: 'other-place', name: 'Other', levels: [], economy: [], wrapped: null }),
-  });
-  assert.equal(claim.status, 200);
-  const taken = await b.mutate('PATCH', `/api/servers/${S}/public`, { enabled: true, slug: 'other-place' });
-  assert.equal(taken.status, 409);
-  assert.equal((await taken.json()).error, 'slug_taken');
-  assert.equal(dev.harness.engine.settings.core(S).publicPage.slug, 'test-town');
-
-  const bad = await b.mutate('PATCH', `/api/servers/${S}/public`, { enabled: true, slug: 'x' });
-  assert.equal(bad.status, 400);
-
-  const offJob = await settle(b, await b.mutate('PATCH', `/api/servers/${S}/public`, { enabled: false }));
-  assert.deepEqual(offJob.result.errors, {});
-  assert.equal(dev.harness.engine.settings.core(S).publicPage.enabled, false);
-  assert.equal((await missing.req('GET', '/api/public/test-town')).status, 404);
+  assert.equal(page.wrapped, undefined);
+  assert.equal(page.levels[0].name, 'Sam');
+  assert.equal(page.economy[0].name, 'Sam');
+  assert.deepEqual(page.currency, { name: 'Shards', emoji: '\u{1F48E}' });
 });
 
 test('the bot sees the dashboard as hot while people use it, and logging out ends the session', async () => {

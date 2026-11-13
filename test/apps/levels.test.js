@@ -14,9 +14,11 @@ const START = Date.parse('2026-11-07T12:00:00Z');
 const make = (opts = {}) => createHarness({ apps: ['levels'], ...opts });
 const lastText = (h, ans) => h.textOf(ans[ans.length - 1]);
 const userOf = (h, uid) => h.engine.service('levels').getUser(S, uid);
-const seed = (h, users) => h.engine.store.set('levels', S, { users: Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { xp: 0, level: levelFor(u.xp || 0), voiceSeconds: 0, messages: 0, lastXpAt: 0, ...u }])) });
+const seed = (h, users) => h.engine.store.set('levels', 'global', { users: Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { xp: 0, level: levelFor(u.xp || 0), voiceSeconds: 0, messages: 0, lastXpAt: 0, ...u }])) });
 const levelUps = (h, ch) => h.sent(ch).filter((m) => /reached/.test(m.content || ''));
 const cfg = (h) => h.engine.settings.appConfig(S, 'levels');
+const earn = (h) => h.engine.settings.appConfig('global', 'levels');
+const OWNER = { user: IDS.owner };
 const embedOf = (ans) => (ans[ans.length - 1]?.embeds || [])[0] || {};
 const cardText = (h, ans) => [embedOf(ans).author?.name || '', lastText(h, ans)].join('\n');
 const fieldOf = (ans, name) => (embedOf(ans).fields || []).find((x) => x.name.includes(name))?.value;
@@ -77,7 +79,7 @@ test('chat XP is 15 to 25 times the rate, once per cooldown', async (t) => {
   tick(61_000);
   await h.message('lucky roll');
   assert.equal(userOf(h, IDS.member).xp, 55);
-  await h.slash('levels', 'rate 2', { user: IDS.admin });
+  await h.slash('levels', 'rate 2', OWNER);
   tick(61_000);
   Math.random.mock.mockImplementation(() => 0);
   await h.message('double time');
@@ -258,7 +260,7 @@ test('a reward that fails to give is logged once and never breaks chat XP', asyn
 test('voice XP for a 10 minute session with someone else there', async (t) => {
   const tick = clock(t);
   const h = await make();
-  await h.slash('levels', 'voice on', { user: IDS.admin });
+  await h.slash('levels', 'voice on', OWNER);
   await h.voiceJoin(IDS.member);
   await h.voiceJoin(IDS.member2);
   tick(10 * 60_000 + 20_000);
@@ -280,7 +282,7 @@ test('no voice XP when alone, or with voice XP off', async (t) => {
   await h.voiceLeave(IDS.member);
   assert.equal(userOf(h, IDS.member).xp, 0, 'voice XP is off by default');
   await h.voiceLeave(IDS.member2);
-  await h.slash('levels', 'voice on', { user: IDS.admin });
+  await h.slash('levels', 'voice on', OWNER);
   await h.voiceJoin(IDS.member);
   tick(10 * 60_000);
   await h.voiceLeave(IDS.member);
@@ -293,7 +295,7 @@ test('a move within 5 seconds keeps one voice session', async (t) => {
   const h = await make();
   const V2 = uuid(5);
   h.fake.state.channels[S].push({ id: V2, name: 'Gaming', type: 'voice', kind: 'voice', server_id: S, position: 7, category: null, category_id: null, private: false, read_only: false, slowmode: 0 });
-  await h.slash('levels', 'voice on', { user: IDS.admin });
+  await h.slash('levels', 'voice on', OWNER);
   await h.voiceJoin(IDS.member2);
   await h.voiceJoin(IDS.member);
   tick(330_000);
@@ -314,7 +316,7 @@ test('a join that arrives before the leave of a move is one session too', async 
   const h = await make();
   const V2 = uuid(5);
   h.fake.state.channels[S].push({ id: V2, name: 'Gaming', type: 'voice', kind: 'voice', server_id: S, position: 7, category: null, category_id: null, private: false, read_only: false, slowmode: 0 });
-  await h.slash('levels', 'voice on', { user: IDS.admin });
+  await h.slash('levels', 'voice on', OWNER);
   await h.voiceJoin(IDS.member2, { channel: V2 });
   await h.voiceJoin(IDS.member);
   tick(300_000);
@@ -330,7 +332,7 @@ test('a join that arrives before the leave of a move is one session too', async 
 test('a session from before a restart is not counted', async (t) => {
   clock(t);
   const h = await make();
-  await h.slash('levels', 'voice on', { user: IDS.admin });
+  await h.slash('levels', 'voice on', OWNER);
   await h.voiceLeave(IDS.member);
   assert.equal(userOf(h, IDS.member).xp, 0);
 });
@@ -347,18 +349,18 @@ test('/rank for yourself and for someone else', async () => {
   assert.match(e.description, /45 \/ 220 XP · \*\*175 XP\*\* to go/);
   assert.doesNotMatch(e.description, /[█░]/);
   assert.equal(e.color, COLORS.info);
-  assert.equal(fieldOf(ans, 'Rank'), '`#2 of 2`');
+  assert.equal(fieldOf(ans, 'Global rank'), '`#2 of 2`');
   assert.equal(fieldOf(ans, 'Total XP'), '`300`');
   assert.equal(fieldOf(ans, 'Messages'), '`42`');
   assert.equal(fieldOf(ans, 'Voice'), '`1h 5m`');
   assert.equal(fieldOf(ans, 'Next reward'), 'none set');
   assert.equal(fieldOf(ans, 'Member since'), 'Jan 5, 2026');
   assert.ok(e.fields.every((x) => x.inline));
-  assert.equal(e.footer.text, 'Chat to earn XP · keep the conversation going');
+  assert.equal(e.footer.text, 'Chat to earn XP · your level follows you everywhere');
   assert.deepEqual(h.allButtons(ans).map((b) => b.label), ['Leaderboard', 'Rewards']);
   ans = await h.slash('rank', '@riley', { user: IDS.member });
   assert.equal(embedOf(ans).author.name, 'Riley');
-  assert.equal(fieldOf(ans, 'Rank'), '`#1 of 2`');
+  assert.equal(fieldOf(ans, 'Global rank'), '`#1 of 2`');
   assert.equal(fieldOf(ans, 'Voice'), 'none yet');
   assert.equal(h.findButton('Rewards', ans).custom_id, customId('levels', 'rewards', IDS.member2));
   ans = await h.slash('rank', '@nobodyatall', { user: IDS.member });
@@ -366,9 +368,9 @@ test('/rank for yourself and for someone else', async () => {
   await h.slash('levels', 'reward 5 @VIP', { user: IDS.admin });
   ans = await h.slash('rank', '', { user: IDS.member });
   assert.equal(fieldOf(ans, 'Next reward'), 'Level 5 → **@VIP**');
-  await h.slash('levels', 'voice on', { user: IDS.admin });
+  await h.slash('levels', 'voice on', OWNER);
   ans = await h.slash('rank', '', { user: IDS.member });
-  assert.equal(embedOf(ans).footer.text, 'Chat to earn XP · voice counts too');
+  assert.equal(embedOf(ans).footer.text, 'Chat to earn XP · voice counts too · your level follows you everywhere');
 });
 
 test('a member with no XP gets a friendly empty card', async () => {
@@ -380,7 +382,7 @@ test('a member with no XP gets a friendly empty card', async () => {
   assert.match(e.description, /No XP yet\. Say hi in chat to get started!/);
   assert.match(e.description, /⬛{10}/);
   assert.doesNotMatch(e.description, /0%|0 \/ /);
-  assert.equal(fieldOf(ans, 'Rank'), undefined);
+  assert.equal(fieldOf(ans, 'Global rank'), undefined);
   assert.equal(fieldOf(ans, 'Total XP'), undefined);
   assert.equal(fieldOf(ans, 'Member since'), 'Jan 4, 2026');
   ans = await h.slash('rank', '@sam', { user: IDS.mod });
@@ -485,7 +487,7 @@ test('big numbers get thousands separators and hours of voice', async () => {
 test('message counts stay backward compatible with older saved members', async (t) => {
   clock(t);
   const h = await make();
-  h.engine.store.set('levels', S, { users: { [IDS.member]: { xp: 300, level: 2, voiceSeconds: 0, lastXpAt: 0 }, [IDS.member2]: { xp: 120 } } });
+  h.engine.store.set('levels', 'global', { users: { [IDS.member]: { xp: 300, level: 2, voiceSeconds: 0, lastXpAt: 0 }, [IDS.member2]: { xp: 120 } } });
   let ans = await h.slash('rank', '', { user: IDS.member });
   assert.equal(fieldOf(ans, 'Messages'), 'not counted yet');
   assert.doesNotMatch(cardText(h, ans), /undefined|NaN/);
@@ -497,7 +499,7 @@ test('message counts stay backward compatible with older saved members', async (
   assert.equal(userOf(h, IDS.member).xp, 315);
   ans = await h.slash('rank', '', { user: IDS.member });
   assert.equal(fieldOf(ans, 'Messages'), '`1`');
-  await h.slash('levels', 'voice on', { user: IDS.admin });
+  await h.slash('levels', 'voice on', OWNER);
   await h.engine.service('levels').addXp(S, IDS.member2, 10, 'test');
   assert.equal(userOf(h, IDS.member2).messages, 0);
   assert.equal(userOf(h, IDS.member2).xp, 130);
@@ -527,7 +529,7 @@ test('the Rewards view shows what is unlocked and what is locked', async () => {
   const peek = embedOf(await h.clickButton('Rewards', { user: IDS.member2, in: other })).description;
   assert.match(peek, /Showing progress for \*\*Sam\*\*/);
   assert.match(peek, /✅ has it/);
-  await h.slash('levels', 'set @riley 6', { user: IDS.admin });
+  await h.slash('levels', 'set @riley 6', OWNER);
   await h.settle();
   h.fake.memberOf(S, IDS.member2).roles = [IDS.roles.member];
   h.engine.perms.invalidate();
@@ -568,7 +570,7 @@ test('leaderboard pages with buttons and sorts by voice time', async () => {
   const ans = await h.slash('leaderboard', '', { user: IDS.member });
   let text = lastText(h, ans);
   assert.match(text, /🥇 \*\*Sam\*\* · Level \d+ · 10,000 XP  ◂ you/);
-  assert.match(text, /🏆 Test Town leaderboard/);
+  assert.match(text, /🏆 Global leaderboard/);
   assert.match(text, /Page 1 of 3/);
   const prev = h.findButton('Prev', ans);
   assert.equal(prev.disabled, true);
@@ -590,7 +592,7 @@ test('leaderboard pages with buttons and sorts by voice time', async () => {
   assert.equal(h.findButton('Next', third).disabled, true);
   const voice = await h.slash('leaderboard', 'voice', { user: IDS.member });
   text = lastText(h, voice);
-  assert.match(text, /🎙️ Test Town voice leaderboard/);
+  assert.match(text, /🎙️ Global voice leaderboard/);
   assert.match(text, /🥇 \*\*Riley\*\* · 2h 30m in voice/);
   assert.match(text, /-# You're not on the board yet/);
   assert.match(text, /Page 1 of 1/);
@@ -607,34 +609,42 @@ test('settings are admin only, including old admin panels', async () => {
   assert.match(lastText(h, ans), /Only admins/);
   ans = await h.slash('levels', 'rate 3', { user: IDS.mod });
   assert.match(lastText(h, ans), /Only admins/);
-  assert.equal(cfg(h).rate, 1);
+  assert.equal(earn(h).rate, 1);
+  ans = await h.slash('levels', 'rate 3', { user: IDS.admin });
+  assert.match(lastText(h, ans), /Only the bot owner/);
+  assert.equal(earn(h).rate, 1);
   const panel = await h.slash('levels', '', { user: IDS.admin });
   assert.match(lastText(h, panel), /Levels settings/);
   const toggle = h.findButton('Chat XP', panel);
   const refused = await h.click(toggle.custom_id, { user: IDS.member });
   assert.match(lastText(h, refused), /Only admins/);
-  assert.equal(cfg(h).messageXp, true);
+  assert.equal(earn(h).messageXp, true);
+  const notOwner = await h.click(toggle.custom_id, { user: IDS.admin });
+  assert.match(lastText(h, notOwner), /Only the bot owner/);
+  assert.equal(earn(h).messageXp, true);
   const resetAll = await h.click(customId('levels', 'resetallyes'), { user: IDS.member });
   assert.match(lastText(h, resetAll), /Only admins/);
-  const ok = await h.click(toggle.custom_id, { user: IDS.admin });
+  const ok = await h.click(toggle.custom_id, OWNER);
   assert.equal(ok[0].type, 'update');
-  assert.equal(cfg(h).messageXp, false);
-  await h.clickButton('Voice XP', { user: IDS.admin, in: panel });
-  assert.equal(cfg(h).voiceXp, true);
+  assert.equal(earn(h).messageXp, false);
+  await h.clickButton('Voice XP', { user: IDS.owner, in: panel });
+  assert.equal(earn(h).voiceXp, true);
   await h.clickButton('Level-ups: Off', { user: IDS.admin, in: panel });
   assert.equal(cfg(h).announce, 'off');
   const noChannel = await h.clickButton('Level-ups: Level-up channel', { user: IDS.admin, in: panel });
   assert.match(lastText(h, noChannel), /Pick a channel first/);
-  const form = await h.clickButton('Rate & cooldown', { user: IDS.admin, in: panel });
+  const form = await h.clickButton('Rate & cooldown', { user: IDS.owner, in: panel });
   assert.equal(form[0].type, 'modal');
-  await h.submit(customId('levels', 'ratesave'), { rate: '1.5', cooldown: '30' }, { user: IDS.admin });
-  assert.equal(cfg(h).rate, 1.5);
-  assert.equal(cfg(h).cooldownSeconds, 30);
-  const bad = await h.submit(customId('levels', 'ratesave'), { rate: 'lots', cooldown: '30' }, { user: IDS.admin });
+  await h.submit(customId('levels', 'ratesave'), { rate: '1.5', cooldown: '30' }, OWNER);
+  assert.equal(earn(h).rate, 1.5);
+  assert.equal(earn(h).cooldownSeconds, 30);
+  const bad = await h.submit(customId('levels', 'ratesave'), { rate: 'lots', cooldown: '30' }, OWNER);
   assert.match(lastText(h, bad), /rate didn't work/);
   const sneaky = await h.submit(customId('levels', 'ratesave'), { rate: '5', cooldown: '0' }, { user: IDS.member });
   assert.match(lastText(h, sneaky), /Only admins/);
-  assert.equal(cfg(h).rate, 1.5);
+  const adminTry = await h.submit(customId('levels', 'ratesave'), { rate: '5', cooldown: '0' }, { user: IDS.admin });
+  assert.match(lastText(h, adminTry), /Only the bot owner/);
+  assert.equal(earn(h).rate, 1.5);
 });
 
 test('members opening Levels from the menu see their rank', async () => {
@@ -651,7 +661,7 @@ test('members opening Levels from the menu see their rank', async () => {
 test('reset one person, then Undo', async () => {
   const h = await make();
   seed(h, { [IDS.member]: { xp: 900, voiceSeconds: 120 } });
-  const ans = await h.slash('levels', 'reset @sam', { user: IDS.admin });
+  const ans = await h.slash('levels', 'reset @sam', OWNER);
   assert.match(lastText(h, ans), /XP reset/);
   assert.equal(userOf(h, IDS.member).xp, 0);
   const undo = h.findButton('Undo', ans);
@@ -666,11 +676,11 @@ test('reset one person, then Undo', async () => {
   const modRefused = await h.click(undo.custom_id, { user: IDS.mod });
   assert.match(lastText(h, modRefused), /Only admins/);
   assert.equal(userOf(h, IDS.member).xp, 0);
-  await h.clickButton('Undo', { user: IDS.admin, in: ans });
+  await h.clickButton('Undo', { user: IDS.owner, in: ans });
   assert.equal(userOf(h, IDS.member).xp, 900);
   assert.equal(userOf(h, IDS.member).voiceSeconds, 120);
   assert.equal(userOf(h, IDS.member).level, levelFor(900));
-  const again = await h.slash('levels', 'reset @sam', { user: IDS.admin });
+  const again = await h.slash('levels', 'reset @sam', OWNER);
   assert.equal(userOf(h, IDS.member).xp, 0);
   const ownerUndo = h.findButton('Undo', again);
   const byOwner = await h.click(ownerUndo.custom_id, { user: IDS.owner, messageId: ownerUndo.messageId });
@@ -682,9 +692,11 @@ test('reset someone from the panel form', async () => {
   const h = await make();
   seed(h, { [IDS.member2]: { xp: 400 } });
   const panel = await h.slash('levels', '', { user: IDS.admin });
-  const form = await h.clickButton('Reset someone', { user: IDS.admin, in: panel });
+  const refused = await h.clickButton('Reset someone', { user: IDS.admin, in: panel });
+  assert.match(lastText(h, refused), /Only the bot owner/);
+  const form = await h.clickButton('Reset someone', { user: IDS.owner, in: panel });
   assert.equal(form[0].type, 'modal');
-  const done = await h.submit(customId('levels', 'resetuser'), { user: 'riley' }, { user: IDS.admin });
+  const done = await h.submit(customId('levels', 'resetuser'), { user: 'riley' }, OWNER);
   assert.match(lastText(h, done), /XP reset/);
   assert.equal(userOf(h, IDS.member2).xp, 0);
 });
@@ -692,56 +704,56 @@ test('reset someone from the panel form', async () => {
 test('reset everyone needs a confirm and has Undo', async () => {
   const h = await make();
   seed(h, { [IDS.member]: { xp: 900 }, [IDS.member2]: { xp: 300 } });
-  const ask = await h.slash('levels', 'reset all', { user: IDS.admin });
-  assert.match(lastText(h, ask), /Reset everyone\?/);
+  const ask = await h.slash('levels', 'reset all', OWNER);
+  assert.match(lastText(h, ask), /Reset everyone, everywhere\?/);
   assert.equal(userOf(h, IDS.member).xp, 900, 'nothing happens before the confirm');
-  const done = await h.clickButton('Yes, reset everyone', { user: IDS.admin, in: ask });
+  const done = await h.clickButton('Yes, reset everyone', { user: IDS.owner, in: ask });
   assert.equal(done[0].type, 'update');
   assert.match(h.textOf(done[0]), /Everyone reset/);
   assert.equal(userOf(h, IDS.member).xp, 0);
   assert.equal(userOf(h, IDS.member2).xp, 0);
-  await h.clickButton('Undo', { user: IDS.admin, in: done });
+  await h.clickButton('Undo', { user: IDS.owner, in: done });
   assert.equal(userOf(h, IDS.member).xp, 900);
   assert.equal(userOf(h, IDS.member2).xp, 300);
-  const ask2 = await h.slash('levels', 'reset all', { user: IDS.admin });
-  const cancel = await h.clickButton('Cancel', { user: IDS.admin, in: ask2 });
+  const ask2 = await h.slash('levels', 'reset all', OWNER);
+  const cancel = await h.clickButton('Cancel', { user: IDS.owner, in: ask2 });
   assert.match(h.textOf(cancel[0]), /Nothing was reset/);
   assert.equal(userOf(h, IDS.member).xp, 900);
 });
 
 test('typed settings commands', async () => {
   const h = await make();
-  let ans = await h.slash('levels', 'rate 1.5', { user: IDS.admin });
+  let ans = await h.slash('levels', 'rate 1.5', OWNER);
   assert.match(lastText(h, ans), /1\.5/);
-  assert.equal(cfg(h).rate, 1.5);
-  ans = await h.slash('levels', 'rate 9', { user: IDS.admin });
+  assert.equal(earn(h).rate, 1.5);
+  ans = await h.slash('levels', 'rate 9', OWNER);
   assert.match(lastText(h, ans), /didn't work/);
-  assert.equal(cfg(h).rate, 1.5);
-  await h.slash('levels', 'cooldown 90', { user: IDS.admin });
-  assert.equal(cfg(h).cooldownSeconds, 90);
-  await h.slash('levels', 'voicerate 8', { user: IDS.admin });
-  assert.equal(cfg(h).voiceXpPerMinute, 8);
+  assert.equal(earn(h).rate, 1.5);
+  await h.slash('levels', 'cooldown 90', OWNER);
+  assert.equal(earn(h).cooldownSeconds, 90);
+  await h.slash('levels', 'voicerate 8', OWNER);
+  assert.equal(earn(h).voiceXpPerMinute, 8);
   await h.slash('levels', 'channel #announcements', { user: IDS.admin });
   assert.equal(cfg(h).announce, 'channel');
   assert.equal(cfg(h).channelId, NEWS);
   await h.slash('levels', 'channel here', { user: IDS.admin });
   assert.equal(cfg(h).announce, 'here');
-  await h.slash('levels', 'xp off', { user: IDS.admin });
-  assert.equal(cfg(h).messageXp, false);
-  await h.slash('levels', 'xp on', { user: IDS.admin });
-  assert.equal(cfg(h).messageXp, true);
-  ans = await h.slash('levels', 'set @sam 12', { user: IDS.admin });
+  await h.slash('levels', 'xp off', OWNER);
+  assert.equal(earn(h).messageXp, false);
+  await h.slash('levels', 'xp on', OWNER);
+  assert.equal(earn(h).messageXp, true);
+  ans = await h.slash('levels', 'set @sam 12', OWNER);
   assert.match(lastText(h, ans), /level 12/);
   assert.equal(userOf(h, IDS.member).level, 12);
   assert.equal(userOf(h, IDS.member).xp, totalXpForLevel(12));
-  await h.clickButton('Undo', { user: IDS.admin, in: ans });
+  await h.clickButton('Undo', { user: IDS.owner, in: ans });
   assert.equal(userOf(h, IDS.member).xp, 0);
-  ans = await h.slash('levels', 'set @sam lots', { user: IDS.admin });
+  ans = await h.slash('levels', 'set @sam lots', OWNER);
   assert.match(lastText(h, ans), /Who and which level/);
   ans = await h.slash('levels', 'rewrd 5 @VIP', { user: IDS.admin });
   assert.match(lastText(h, ans), /Did you mean/);
-  await h.message('!levels rate 2', { user: IDS.admin });
-  assert.equal(cfg(h).rate, 2);
+  await h.message('!levels rate 2', { user: IDS.owner });
+  assert.equal(earn(h).rate, 2);
   const panel = await h.slash('levels', '', { user: IDS.admin });
   const text = lastText(h, panel);
   assert.match(text, /×2/);
@@ -751,7 +763,7 @@ test('typed settings commands', async () => {
 test('/levels set gives the rewards up to that level', async () => {
   const h = await make();
   await h.slash('levels', 'reward 3 @Gamer', { user: IDS.admin });
-  await h.slash('levels', 'set @riley 4', { user: IDS.admin });
+  await h.slash('levels', 'set @riley 4', OWNER);
   await h.settle();
   assert.ok(h.fake.memberOf(S, IDS.member2).roles.includes(IDS.roles.gamer));
 });
@@ -759,7 +771,7 @@ test('/levels set gives the rewards up to that level', async () => {
 test('uninstalling the app stops XP', async (t) => {
   const tick = clock(t);
   const h = await make();
-  await h.slash('levels', 'voice on', { user: IDS.admin });
+  await h.slash('levels', 'voice on', OWNER);
   h.engine.settings.setEnabled(S, 'levels', false);
   await h.message('nobody is counting');
   await h.voiceJoin(IDS.member);
@@ -780,9 +792,13 @@ test('presets set sensible defaults', async () => {
   h.engine.settings.patchApp(S, 'levels', app.presets.study.config);
   let line = await app.applyPreset(h.engine, S, { preset: 'study' });
   assert.equal(typeof line, 'string');
-  assert.equal(cfg(h).rate, 0.5);
+  assert.match(line, /every server/);
   assert.equal(cfg(h).announce, 'off');
-  assert.equal(cfg(h).voiceXp, true);
+  for (const preset of Object.values(app.presets)) {
+    for (const key of ['rate', 'cooldownSeconds', 'messageXp', 'voiceXp', 'voiceXpPerMinute']) {
+      assert.equal(preset.config[key], undefined, `${key} is not a per-server preset any more`);
+    }
+  }
   line = await app.applyPreset(h.engine, S, { preset: 'community' });
   assert.equal(cfg(h).announce, 'here');
   const lvl = uuid(5);
@@ -792,7 +808,6 @@ test('presets set sensible defaults', async () => {
   assert.equal(cfg(h).announce, 'channel');
   assert.equal(cfg(h).channelId, lvl);
   assert.match(line, /level-ups/);
-  assert.equal(app.presets.roleplay.config.cooldownSeconds, 90);
 });
 
 test('the service adds XP and reads users for other apps', async () => {
@@ -876,13 +891,13 @@ test('removing a reward has Undo', async () => {
 test('pressing Reset everyone twice keeps the first Undo working', async () => {
   const h = await make();
   seed(h, { [IDS.member]: { xp: 900 } });
-  const ask = await h.slash('levels', 'reset all', { user: IDS.admin });
+  const ask = await h.slash('levels', 'reset all', OWNER);
   const yes = h.findButton('Yes, reset everyone', ask);
-  const first = await h.click(yes.custom_id, { user: IDS.admin });
-  const second = await h.click(yes.custom_id, { user: IDS.admin });
+  const first = await h.click(yes.custom_id, { user: IDS.owner });
+  const second = await h.click(yes.custom_id, { user: IDS.owner });
   assert.notEqual(second[0].type, 'update');
   assert.match(lastText(h, second), /Already reset/);
-  await h.clickButton('Undo', { user: IDS.admin, in: first });
+  await h.clickButton('Undo', { user: IDS.owner, in: first });
   assert.equal(userOf(h, IDS.member).xp, 900);
 });
 
@@ -898,7 +913,7 @@ test('two messages at the same moment only earn XP once', async (t) => {
 test('rejoining the same voice channel after a missed leave starts a fresh session', async (t) => {
   const tick = clock(t);
   const h = await make();
-  await h.slash('levels', 'voice on', { user: IDS.admin });
+  await h.slash('levels', 'voice on', OWNER);
   await h.voiceJoin(IDS.member2);
   await h.voiceJoin(IDS.member);
   h.engine.settings.setEnabled(S, 'levels', false);
@@ -920,7 +935,7 @@ test('the Leaderboard button on panels opens a private board and leaves the pane
   const peek = await h.clickButton('Leaderboard', { user: IDS.admin, in: panel });
   assert.notEqual(peek[0].type, 'update');
   assert.equal(h.allButtons(peek).length, 0);
-  assert.match(lastText(h, peek), /Test Town leaderboard/);
+  assert.match(lastText(h, peek), /Global leaderboard/);
   assert.match(lastText(h, peek), /Sam/);
 });
 
@@ -988,7 +1003,7 @@ test('staff handlers check the role themselves when called without the router', 
 test('the reset confirm and its Undo stay with the admin who asked', async () => {
   const h = await make();
   seed(h, { [IDS.member]: { xp: 900 } });
-  const ask = await h.slash('levels', 'reset all', { user: IDS.admin });
+  const ask = await h.slash('levels', 'reset all', OWNER);
   const yes = h.findButton('Yes, reset everyone', ask);
   h.addSecondAdmin();
   for (const user of [IDS.member, IDS.mod, IDS.admin2]) {
@@ -998,16 +1013,16 @@ test('the reset confirm and its Undo stay with the admin who asked', async () =>
   const cancel = h.findButton('Cancel', ask);
   assert.match(lastText(h, await h.click(cancel.custom_id, { user: IDS.member, messageId: cancel.messageId })), /Not your panel/);
   assert.equal(userOf(h, IDS.member).xp, 900);
-  const done = await h.click(yes.custom_id, { user: IDS.admin, messageId: yes.messageId });
+  const done = await h.click(yes.custom_id, { user: IDS.owner, messageId: yes.messageId });
   assert.equal(userOf(h, IDS.member).xp, 0);
   const undo = h.findButton('Undo', done);
   assert.match(lastText(h, await h.click(undo.custom_id, { user: IDS.member, messageId: yes.messageId })), /Not your panel/);
   assert.match(lastText(h, await h.click(undo.custom_id, { user: IDS.member })), /Only admins/);
   assert.match(lastText(h, await h.click(undo.custom_id, { user: IDS.mod })), /Only admins/);
   assert.equal(userOf(h, IDS.member).xp, 0);
-  await h.click(undo.custom_id, { user: IDS.admin, messageId: yes.messageId });
+  await h.click(undo.custom_id, { user: IDS.owner, messageId: yes.messageId });
   assert.equal(userOf(h, IDS.member).xp, 900);
-  const askAgain = await h.slash('levels', 'reset all', { user: IDS.admin });
+  const askAgain = await h.slash('levels', 'reset all', OWNER);
   const yesAgain = h.findButton('Yes, reset everyone', askAgain);
   const byOwner = await h.click(yesAgain.custom_id, { user: IDS.owner, messageId: yesAgain.messageId });
   assert.doesNotMatch(lastText(h, byOwner), /Not your panel/);
@@ -1017,7 +1032,7 @@ test('the reset confirm and its Undo stay with the admin who asked', async () =>
 test('an Undo button pressed from another server is refused', async () => {
   const h = await make();
   seed(h, { [IDS.member]: { xp: 900 } });
-  const ans = await h.slash('levels', 'reset @sam', { user: IDS.admin });
+  const ans = await h.slash('levels', 'reset @sam', OWNER);
   const undo = h.findButton('Undo', ans);
   const out = await h.click(undo.custom_id, { user: IDS.admin, server: uuid(9) });
   assert.match(lastText(h, out), /another server/);
@@ -1054,11 +1069,14 @@ test('the home screen and /yap never show settings to non-admins', async () => {
     const reset = await h.slash('yap', 'levels reset all', { user });
     assert.equal(h.findButton('Yes, reset everyone', reset), null);
   }
-  assert.equal(cfg(h).rate, 1);
+  assert.equal(earn(h).rate, 1);
   assert.equal(userOf(h, IDS.member).xp, 150);
   const adminYap = await h.slash('yap', 'levels rate 2', { user: IDS.admin });
-  assert.match(lastText(h, adminYap), /Saved/);
-  assert.equal(cfg(h).rate, 2);
+  assert.match(lastText(h, adminYap), /Only the bot owner/);
+  assert.equal(earn(h).rate, 1);
+  const ownerYap = await h.slash('yap', 'levels rate 2', OWNER);
+  assert.match(lastText(h, ownerYap), /Saved/);
+  assert.equal(earn(h).rate, 2);
 });
 
 const OTHER = '5e000000-0000-4000-8000-0000000000b2';
@@ -1125,7 +1143,7 @@ test('an Undo the member did not earn stays shut, even from their own panel', as
   seed(h, { [IDS.member]: { xp: 900 } });
   await h.slash('levels', 'reward 4 @Gamer', { user: IDS.admin });
   const removed = await h.slash('levels', 'reward remove 4', { user: IDS.admin });
-  const setTo = await h.slash('levels', 'set @sam 1', { user: IDS.admin });
+  const setTo = await h.slash('levels', 'set @sam 1', OWNER);
   const card = await h.slash('rank', '', { user: IDS.member });
   const mine = h.findButton('Leaderboard', card).messageId;
   for (const ans of [removed, setTo]) {
@@ -1138,7 +1156,7 @@ test('an Undo the member did not earn stays shut, even from their own panel', as
   assert.match(lastText(h, await h.click(customId('sys', 'undo', 'zzzzzz'), { user: IDS.member, messageId: mine })), /Too late to undo/);
   assert.deepEqual(cfg(h).rewards, {});
   assert.equal(userOf(h, IDS.member).level, 1);
-  await h.clickButton('Undo', { user: IDS.admin, in: setTo });
+  await h.clickButton('Undo', { user: IDS.owner, in: setTo });
   assert.equal(userOf(h, IDS.member).xp, 900);
 });
 
@@ -1148,7 +1166,7 @@ test('being the owner of another server gives nothing here', async () => {
   const there = { user: IDS.member, server: OTHER, channel: lobby };
   seed(h, { [IDS.member]: { xp: 900 }, [IDS.member2]: { xp: 300 } });
   const before = structuredClone(cfg(h));
-  const reset = await h.slash('levels', 'reset @riley', { user: IDS.admin });
+  const reset = await h.slash('levels', 'reset @riley', OWNER);
   const undo = h.findButton('Undo', reset);
   assert.equal(userOf(h, IDS.member2).xp, 0);
 
@@ -1168,8 +1186,9 @@ test('being the owner of another server gives nothing here', async () => {
   assert.deepEqual(cfg(h), before);
   assert.equal(userOf(h, IDS.member2).xp, 0);
 
-  await h.slash('levels', 'rate 5', there);
-  assert.equal(h.engine.settings.appConfig(OTHER, 'levels').rate, 5);
+  const theirRate = await h.slash('levels', 'rate 5', there);
+  assert.match(lastText(h, theirRate), /Only the bot owner/);
+  assert.equal(earn(h).rate, 1, 'running their own server never changes how fast XP is earned');
   let out = await h.slash('levels', `reward 2 <@&${IDS.roles.gamer}>`, there);
   assert.match(lastText(h, out), /couldn't find that role/);
   out = await h.slash('levels', `reward 2 <@&${IDS.roles.admin}>`, there);
@@ -1188,7 +1207,7 @@ test('being the owner of another server gives nothing here', async () => {
   assert.deepEqual(h.fake.memberOf(S, IDS.member).roles, [IDS.roles.member]);
   assert.deepEqual(h.fake.memberOf(S, IDS.member2).roles, [IDS.roles.member]);
 
-  await h.clickButton('Undo', { user: IDS.admin, in: reset });
+  await h.clickButton('Undo', { user: IDS.owner, in: reset });
   assert.equal(userOf(h, IDS.member2).xp, 300);
 });
 
@@ -1306,21 +1325,23 @@ test('hostile form values never save odd settings', async () => {
   const h = await make();
   seed(h, { [IDS.member]: { xp: 900 }, [IDS.member2]: { xp: 300 } });
   const before = structuredClone(cfg(h));
+  const beforeEarn = structuredClone(earn(h));
   const bad = [{}, { rate: '', cooldown: '' }, { rate: '   ', cooldown: '60' }, { rate: '1', cooldown: '' }, { rate: '-1', cooldown: '60' }, { rate: 'Infinity', cooldown: '60' }, { rate: '1e9', cooldown: '60' }, { rate: '1', cooldown: '1.5' }, { rate: '1', cooldown: '-1' }, { rate: '1', cooldown: '99999' }, { rate: {}, cooldown: [] }, { rate: ['1', '2'], cooldown: '60' }];
   for (const values of bad) {
-    const out = await h.submit(customId('levels', 'ratesave'), values, { user: IDS.admin });
+    const out = await h.submit(customId('levels', 'ratesave'), values, OWNER);
     assert.match(lastText(h, out), /didn't work/, JSON.stringify(values));
   }
-  assert.match(lastText(h, await h.click(customId('levels', 'ratesave'), { user: IDS.admin })), /didn't work/);
+  assert.match(lastText(h, await h.click(customId('levels', 'ratesave'), OWNER)), /didn't work/);
   for (const typed of ['rate', 'cooldown', 'voicerate']) {
-    assert.match(lastText(h, await h.slash('levels', typed, { user: IDS.admin })), /didn't work/, typed);
+    assert.match(lastText(h, await h.slash('levels', typed, OWNER)), /didn't work/, typed);
   }
   assert.deepEqual(cfg(h), before);
+  assert.deepEqual(earn(h), beforeEarn);
   for (const user of ['', '   ', '@everyone', '*', 'all', `<@&${IDS.roles.member}>`, `<@${IDS.bot}>`, 'x'.repeat(5000), {}]) {
-    const out = await h.submit(customId('levels', 'resetuser'), { user }, { user: IDS.admin });
+    const out = await h.submit(customId('levels', 'resetuser'), { user }, OWNER);
     assert.doesNotMatch(lastText(h, out), /XP reset|Everyone reset/, String(user).slice(0, 20));
   }
-  assert.match(lastText(h, await h.click(customId('levels', 'resetuser'), { user: IDS.admin })), /couldn't find/);
+  assert.match(lastText(h, await h.click(customId('levels', 'resetuser'), OWNER)), /couldn't find/);
   assert.equal(userOf(h, IDS.member).xp, 900);
   assert.equal(userOf(h, IDS.member2).xp, 300);
   for (const mode of ['dm_', 'everyone', '__proto__', '', 'CHANNEL']) {
@@ -1331,22 +1352,22 @@ test('hostile form values never save odd settings', async () => {
 
 test('only the admin who opened a chat form can answer it', async () => {
   const h = await make({ features: { modals: false } });
-  const panel = await h.slash('levels', '', { user: IDS.admin });
+  const panel = await h.slash('levels', '', OWNER);
   const btn = h.findButton('Rate & cooldown', panel);
-  const done = h.click(btn.custom_id, { user: IDS.admin, messageId: btn.messageId });
-  const asked = () => h.sent(G).filter((m) => m.content.startsWith(`<@${IDS.admin}>`)).length;
+  const done = h.click(btn.custom_id, { user: IDS.owner, messageId: btn.messageId });
+  const asked = () => h.sent(G).filter((m) => m.content.startsWith(`<@${IDS.owner}>`)).length;
   assert.ok(await waitFor(() => asked() === 1));
   await h.message('5', { user: IDS.member });
   await h.message('5', { user: IDS.mod });
   assert.equal(asked(), 1);
-  await h.message('2', { user: IDS.admin });
+  await h.message('2', { user: IDS.owner });
   assert.ok(await waitFor(() => asked() === 2));
   await h.message('0', { user: IDS.member });
-  assert.equal(cfg(h).rate, 1);
-  await h.message('45', { user: IDS.admin });
+  assert.equal(earn(h).rate, 1);
+  await h.message('45', { user: IDS.owner });
   await done;
-  assert.ok(await waitFor(() => cfg(h).rate === 2));
-  assert.equal(cfg(h).cooldownSeconds, 45);
+  assert.ok(await waitFor(() => earn(h).rate === 2));
+  assert.equal(earn(h).cooldownSeconds, 45);
 });
 
 test('a nickname cannot make the level-up message ping roles or everyone', async (t) => {
@@ -1388,13 +1409,13 @@ test('leaderboard medals, own position and single pages', async () => {
   let ans = await h.slash('leaderboard', '', { user: IDS.member });
   let e = embedOf(ans);
   const lines = e.description.split('\n');
-  assert.match(lines[0], /^🥇 \*\*someone who left\*\* · Level \d+ · 90,000 XP$/);
+  assert.match(lines[0], /^🥇 \*\*someone\*\* · Level \d+ · 90,000 XP$/);
   assert.match(lines[1], /^🥈 /);
   assert.match(lines[2], /^🥉 /);
   assert.match(lines[3], /^`#4` /);
   assert.match(lines[9], /^`#10` /);
   assert.equal(lines[11], `-# You: #15 · Level ${levelFor(500)}`);
-  assert.equal(e.footer.text, 'Page 1 of 2 · 15 ranked');
+  assert.equal(e.footer.text, 'Page 1 of 2 · 15 ranked · everyone, every server');
   assert.equal(e.color, tierOf(levelFor(90000)).color);
   assert.doesNotMatch(h.textOf(ans[ans.length - 1]), /undefined|NaN|null/);
   ans = await h.slash('leaderboard', '2', { user: IDS.member });
@@ -1402,7 +1423,7 @@ test('leaderboard medals, own position and single pages', async () => {
   assert.match(e.description, /`#15` \*\*Sam\*\* · Level \d+ · 500 XP  ◂ you/);
   assert.doesNotMatch(e.description, /-# You:/);
   ans = await h.slash('leaderboard', 'voice', { user: IDS.member });
-  assert.match(embedOf(ans).description, /🥇 \*\*someone who left\*\* · 20h in voice/);
+  assert.match(embedOf(ans).description, /🥇 \*\*someone\*\* · 20h in voice/);
   assert.match(embedOf(ans).description, /-# You: #15 · 2m in voice/);
 
   const small = await make();
@@ -1411,7 +1432,7 @@ test('leaderboard medals, own position and single pages', async () => {
   assert.equal(small.findButton('Prev', ans), null);
   assert.equal(small.findButton('Next', ans), null);
   assert.deepEqual(small.allButtons(ans).map((b) => b.label), ['Sort by voice time']);
-  assert.equal(embedOf(ans).footer.text, 'Page 1 of 1 · 2 ranked');
+  assert.equal(embedOf(ans).footer.text, 'Page 1 of 1 · 2 ranked · everyone, every server');
   assert.doesNotMatch(embedOf(ans).description, /-# You/);
   ans = await small.slash('leaderboard', '', { user: IDS.mod });
   assert.match(embedOf(ans).description, /-# You're not on the board yet\. Say hi in chat to join in!/);
@@ -1536,4 +1557,96 @@ test('voice under a minute reads as plain text and the top level has no next lev
   assert.match(top.description, /^\*\*Level 1,000\*\*  ▸  max level\n/);
   assert.match(top.description, /(?:🟥){10}  \*\*100%\*\*/u);
   assert.doesNotMatch(top.description, /1,001|0 XP\*\* to go/);
+});
+
+test('XP earned in one server counts in every server', async (t) => {
+  const tick = clock(t);
+  const h = await make();
+  const lobby = addOtherServer(h);
+  await h.message('hello everyone');
+  tick(61_000);
+  await h.message('hello over here', { user: IDS.member, server: OTHER, channel: lobby });
+  assert.equal(userOf(h, IDS.member).xp, 30, 'both servers add to one total');
+  const card = await h.slash('rank', '', { user: IDS.member, server: OTHER, channel: lobby });
+  assert.match(cardText(h, card), /30 \/ 100 XP/);
+  assert.equal(fieldOf(card, 'Global rank'), '`#1 of 1`');
+});
+
+test('the XP cooldown is shared, so nobody farms a claim per server', async (t) => {
+  const tick = clock(t);
+  const h = await make();
+  const lobby = addOtherServer(h);
+  await h.message('hello everyone');
+  assert.equal(userOf(h, IDS.member).xp, 15);
+  await h.message('hello over here', { user: IDS.member, server: OTHER, channel: lobby });
+  assert.equal(userOf(h, IDS.member).xp, 15, 'the second server is still on cooldown');
+  tick(61_000);
+  await h.message('and now again', { user: IDS.member, server: OTHER, channel: lobby });
+  assert.equal(userOf(h, IDS.member).xp, 30);
+  assert.equal(userOf(h, IDS.member).messages, 3, 'the skipped message still counts');
+});
+
+test('a no-XP role in one server does not spend the cooldown everywhere', async (t) => {
+  const tick = clock(t);
+  const h = await make();
+  const lobby = addOtherServer(h);
+  await h.slash('levels', `noxp <@&${IDS.roles.member}>`, { user: IDS.admin });
+  await h.message('hello everyone');
+  assert.equal(userOf(h, IDS.member).xp, 0, 'no XP here');
+  await h.message('hello over here', { user: IDS.member, server: OTHER, channel: lobby });
+  assert.equal(userOf(h, IDS.member).xp, 15, 'the other server still pays out');
+  tick(61_000);
+  await h.message('again over here', { user: IDS.member, server: OTHER, channel: lobby });
+  assert.equal(userOf(h, IDS.member).xp, 30);
+});
+
+test('the leaderboard shows people from other servers', async () => {
+  const h = await make();
+  const lobby = addOtherServer(h);
+  seed(h, { [IDS.member]: { xp: 900 }, [IDS.member2]: { xp: 300 } });
+  const board = await h.slash('leaderboard', '', { user: IDS.member, server: OTHER, channel: lobby });
+  const text = lastText(h, board);
+  assert.match(text, /Global leaderboard/);
+  assert.match(text, /2 ranked · everyone, every server/);
+  assert.match(text, /\*\*Sam\*\*/);
+});
+
+test('old per-server XP is folded into one global total, once', async () => {
+  const first = await make();
+  first.engine.store.set('levels', S, { users: { [IDS.member]: { xp: 400, level: 2, voiceSeconds: 60, messages: 7, lastXpAt: 10 } } });
+  first.engine.store.set('levels', OTHER, { users: { [IDS.member]: { xp: 500, level: 3, voiceSeconds: 40, messages: 3, lastXpAt: 99 } } });
+  first.engine.store.delete('levels', 'global');
+  const app = first.engine.apps.get('levels').def;
+  await app.init(first.engine);
+  const u = userOf(first, IDS.member);
+  assert.equal(u.xp, 900);
+  assert.equal(u.level, levelFor(900));
+  assert.equal(u.voiceSeconds, 100);
+  assert.equal(u.messages, 10);
+  assert.equal(u.lastXpAt, 99);
+  await app.init(first.engine);
+  assert.equal(userOf(first, IDS.member).xp, 900, 'the fold never runs twice');
+});
+
+test('earn settings set by the owner apply in every server', async () => {
+  const h = await make();
+  const lobby = addOtherServer(h);
+  await h.slash('levels', 'rate 2', OWNER);
+  assert.equal(earn(h).rate, 2);
+  assert.equal(h.engine.settings.appConfig(OTHER, 'levels').rate, 1, 'nothing is written per server');
+  const panel = await h.slash('levels', '', { user: IDS.member, server: OTHER, channel: lobby });
+  assert.match(lastText(h, panel), /×2/);
+});
+
+test('reward roles catch up when someone joins with a high global level', async () => {
+  const h = await make();
+  seed(h, { [IDS.member2]: { xp: totalXpForLevel(9) } });
+  await h.slash('levels', 'reward 2 @Gamer', { user: IDS.admin });
+  await h.slash('levels', 'reward 5 @VIP', { user: IDS.admin });
+  h.fake.memberOf(S, IDS.member2).roles = [IDS.roles.member];
+  await h.join(IDS.member2, { username: 'riley' });
+  await h.settle();
+  const roles = h.fake.memberOf(S, IDS.member2).roles;
+  assert.ok(roles.includes(IDS.roles.gamer), 'the level 2 reward');
+  assert.ok(roles.includes(IDS.roles.vip), 'the level 5 reward');
 });

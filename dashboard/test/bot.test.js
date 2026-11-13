@@ -121,7 +121,7 @@ test('snapshot parts over 512 KB are refused with 413', async () => {
   assert.equal((await h.bot('PUT', `/bot/snapshot/${SERVER}`, { cases: tooMany })).status, 413);
 });
 
-test('public pages: publish, read, conflict, unpublish', async () => {
+test('public pages: publish, conflict, unpublish and the old link sends people to the global board', async () => {
   const h = createHarness();
   const page = {
     enabled: true,
@@ -130,19 +130,16 @@ test('public pages: publish, read, conflict, unpublish', async () => {
     icon: 'https://files.yapper.website/i.png',
     levels: [{ rank: 1, id: 'u1', name: 'A', level: 5, xp: 100, messages: 20 }],
     economy: [{ rank: 1, id: 'u1', name: 'A', balance: 50 }],
-    wrapped: { month: '2026-10' },
     updatedAt: h.clock.t,
   };
   assert.equal((await h.bot('PUT', `/bot/public/${SERVER}`, page)).status, 200);
-  const res = await h.request('GET', '/api/public/cool-server');
-  assert.equal(res.status, 200);
-  assert.equal(res.headers.get('Cache-Control'), 'public, max-age=60');
-  const data = await res.json();
-  assert.equal(data.name, 'Cool Server');
-  assert.equal(data.levels[0].xp, 100);
-  assert.equal(data.economy[0].balance, 50);
-  assert.deepEqual(data.wrapped, { month: '2026-10' });
-  assert.ok(!('server_id' in data));
+  const moved = await h.request('GET', '/api/public/cool-server');
+  assert.equal(moved.status, 308);
+  assert.equal(moved.headers.get('Location'), '/api/public/global');
+  const stored = JSON.parse(h.db.raw.prepare('SELECT data FROM public_pages WHERE server_id = ?').get(SERVER).data);
+  assert.ok(!('levels' in stored));
+  assert.ok(!('economy' in stored));
+  assert.ok(!('wrapped' in stored));
   const clash = await h.bot('PUT', `/bot/public/${OTHER_SERVER}`, { ...page, name: 'Other' });
   assert.equal(clash.status, 409);
   assert.equal((await clash.json()).error, 'slug_taken');
@@ -152,20 +149,58 @@ test('public pages: publish, read, conflict, unpublish', async () => {
   assert.equal((await h.bot('PUT', `/bot/public/${SERVER}`, { ...page, levels: 'x' })).status, 400);
   assert.equal((await h.bot('PUT', `/bot/public/${SERVER}`, { ...page, levels: [{ big: 'x'.repeat(520 * 1024) }] })).status, 413);
   assert.equal((await h.bot('PUT', `/bot/public/${SERVER}`, { ...page, slug: 'renamed' })).status, 200);
-  assert.equal((await h.request('GET', '/api/public/cool-server')).status, 404);
-  assert.equal((await h.request('GET', '/api/public/renamed')).status, 200);
-  assert.equal((await h.bot('PUT', `/bot/public/${OTHER_SERVER}`, { ...page, name: 'Other' })).status, 200);
-  assert.equal((await h.bot('PUT', `/bot/public/${SERVER}`, { ...page, slug: 'renamed', enabled: false })).status, 200);
-  const hidden = await h.request('GET', '/api/public/renamed');
-  assert.equal(hidden.status, 404);
-  assert.equal((await h.bot('PUT', `/bot/public/${SERVER}`, { ...page, slug: 'renamed' })).status, 200);
   const del = await h.bot('DELETE', `/bot/public/${SERVER}`);
   assert.equal(del.status, 200);
   assert.deepEqual(await del.json(), { ok: true, removed: true });
-  assert.equal((await h.request('GET', '/api/public/renamed')).status, 404);
+  assert.equal((await h.request('GET', '/api/public/renamed')).status, 308);
   assert.equal((await h.request('GET', '/api/public/cool%2Fserver')).status, 404);
   assert.equal((await h.request('GET', '/api/public/cool-server/extra')).status, 404);
   assert.equal((await h.request('POST', '/api/public/cool-server')).status, 405);
+});
+
+test('the global board is stored once and served to everyone', async () => {
+  const h = createHarness();
+  const empty = await h.request('GET', '/api/public/global');
+  assert.equal(empty.status, 200);
+  const blank = await empty.json();
+  assert.deepEqual(blank.levels, []);
+  assert.deepEqual(blank.economy, []);
+  assert.deepEqual(blank.currency, { name: 'Shards', emoji: '\u{1F48E}' });
+  assert.equal(blank.updatedAt, null);
+  const board = {
+    levels: [{ rank: 1, id: 'u1', name: 'A', level: 9, xp: 900 }],
+    economy: [{ rank: 1, id: 'u1', name: 'A', balance: 500 }],
+    currency: { name: 'Shards', emoji: '\u{1F48E}' },
+    updatedAt: h.clock.t,
+  };
+  assert.equal((await h.bot('PUT', '/bot/global', board)).status, 200);
+  const res = await h.request('GET', '/api/public/global');
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('Cache-Control'), 'public, max-age=60');
+  const data = await res.json();
+  assert.equal(data.global, true);
+  assert.equal(data.levels[0].xp, 900);
+  assert.equal(data.economy[0].balance, 500);
+  assert.equal(data.updatedAt, h.clock.t);
+  assert.ok(!('wrapped' in data));
+  assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM global_board').get().n, 1);
+  assert.equal((await h.bot('PUT', '/bot/global', { ...board, levels: 'x' })).status, 400);
+  assert.equal((await h.bot('PUT', '/bot/global', { ...board, levels: [{ big: 'x'.repeat(520 * 1024) }] })).status, 413);
+  assert.equal((await h.bot('POST', '/bot/global', board)).status, 405);
+  assert.equal((await h.bot('PUT', '/bot/global', { ...board, updatedAt: h.clock.t + 7 * 24 * 60 * MIN })).status, 200);
+  assert.equal((await (await h.request('GET', '/api/public/global')).json()).updatedAt, h.clock.t);
+});
+
+test('a snapshot from any server carries the same global board', async () => {
+  const h = createHarness();
+  const page = { enabled: true, slug: 'one-server', name: 'One', updatedAt: h.clock.t };
+  const board = { levels: [], economy: [{ rank: 1, id: 'u2', name: 'B', balance: 12 }], updatedAt: h.clock.t };
+  assert.equal((await h.bot('PUT', `/bot/public/${SERVER}`, { ...page, global: board })).status, 200);
+  assert.equal((await h.bot('PUT', `/bot/public/${OTHER_SERVER}`, { ...page, slug: 'two-server', global: board })).status, 200);
+  assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM global_board').get().n, 1);
+  const data = await (await h.request('GET', '/api/public/global')).json();
+  assert.equal(data.economy[0].balance, 12);
+  assert.equal((await h.bot('PUT', `/bot/public/${SERVER}`, { ...page, global: 'nope' })).status, 400);
 });
 
 test('public reads are rate limited per IP', async () => {
@@ -199,16 +234,16 @@ test('bot routes refuse server ids that are not full UUIDs', async () => {
   }
 });
 
-test('a public page the bot stopped refreshing goes offline after 2 hours', async () => {
+test('the global board stays up even when a server stops refreshing its page', async () => {
   const h = createHarness();
-  const page = { enabled: true, slug: 'left-server', name: 'Left', levels: [], economy: [], wrapped: null, updatedAt: h.clock.t };
-  assert.equal((await h.bot('PUT', `/bot/public/${SERVER}`, page)).status, 200);
-  advance(h, 119 * MIN);
-  assert.equal((await h.request('GET', '/api/public/left-server')).status, 200);
-  advance(h, 2 * MIN);
-  assert.equal((await h.request('GET', '/api/public/left-server')).status, 404);
+  const page = { enabled: true, slug: 'left-server', name: 'Left', updatedAt: h.clock.t };
+  const board = { levels: [], economy: [{ rank: 1, id: 'u1', name: 'A', balance: 7 }], updatedAt: h.clock.t };
+  assert.equal((await h.bot('PUT', `/bot/public/${SERVER}`, { ...page, global: board })).status, 200);
+  advance(h, 121 * MIN);
   await h.worker.scheduled({}, h.env, {});
   assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM public_pages').get().n, 0);
+  const data = await (await h.request('GET', '/api/public/global')).json();
+  assert.equal(data.economy[0].balance, 7);
 });
 
 const NEW_JOBS = [

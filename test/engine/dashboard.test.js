@@ -4,6 +4,7 @@ import { createHarness, IDS } from '../harness.js';
 import { createDashboard, publicSchema, jsonSafe, accept, reject } from '../../engine/dashboard.js';
 import { createLogger } from '../../engine/log.js';
 import { HARD_CAP, UNLIMITED, parseLimit, storeLimit } from '../../engine/limits.js';
+import { globalConfig, patchGlobalConfig, allowGiver, denyGiver } from '../../engine/global.js';
 
 const SECRET = 'test-secret-value-for-the-dashboard';
 const S = IDS.server;
@@ -12,7 +13,7 @@ const C = IDS.channels;
 const OTHER = '5e000000-0000-4000-8000-0000000000aa';
 
 function fakeWorker() {
-  const w = { queue: [], results: [], snapshots: {}, publics: {}, slugs: new Map(), requests: [], hot: false, fail: 0, failWith: null, inFlight: 0, maxInFlight: 0, resultPosts: [], resultsStatus: [] };
+  const w = { queue: [], results: [], snapshots: {}, publics: {}, board: null, slugs: new Map(), requests: [], hot: false, fail: 0, failWith: null, inFlight: 0, maxInFlight: 0, resultPosts: [], resultsStatus: [] };
   let seq = 0;
   w.add = (type, user, data = {}, server = S) => {
     const id = `job-${++seq}`;
@@ -39,6 +40,7 @@ function fakeWorker() {
         w.results.push(...body.results);
         return reply(200, { ok: true });
       }
+      if (init.method === 'PUT' && u.pathname === '/bot/global') { w.board = body; return reply(200, { ok: true }); }
       let m = /^\/bot\/snapshot\/([^/]+)$/.exec(u.pathname);
       if (m && init.method === 'PUT') { w.snapshots[decodeURIComponent(m[1])] = body; return reply(200, { ok: true }); }
       m = /^\/bot\/public\/([^/]+)$/.exec(u.pathname);
@@ -49,6 +51,7 @@ function fakeWorker() {
         for (const [slug, s] of [...w.slugs]) if (s === sid) w.slugs.delete(slug);
         w.slugs.set(body.slug, sid);
         w.publics[sid] = body;
+        if (body.global) w.board = body.global;
         return reply(200, { ok: true });
       }
       if (m && init.method === 'DELETE') {
@@ -166,21 +169,21 @@ test('bad jobs are answered with errors instead of crashing', async () => {
   assert.deepEqual(w.result('j-string-data').result.applied, { dmOnAction: false });
 });
 
-async function typedThenWeb(apps, typed, web, appId) {
+async function typedThenWeb(apps, typed, web, appId, user = IDS.admin) {
   const a = await createHarness({ apps });
-  await a.slash(typed[0], typed[1], { user: IDS.admin });
-  const viaCommand = a.engine.settings.appConfig(S, appId);
+  await a.slash(typed[0], typed[1], { user });
+  const saved = (engine) => ({ here: engine.settings.appConfig(S, appId), everywhere: globalConfig(engine, appId) });
+  const viaCommand = saved(a.engine);
   const { h, change } = await setup({ harness: { apps } });
-  const r = await change(IDS.admin, appId, { settings: web });
+  const r = await change(user, appId, { settings: web });
   assert.deepEqual(r.result.errors, {});
-  const viaWeb = h.engine.settings.appConfig(S, appId);
-  assert.deepEqual(viaWeb, viaCommand);
+  assert.deepEqual(saved(h.engine), viaCommand);
   return r;
 }
 
 test('a change saves valid settings exactly like the typed command does', async () => {
-  await typedThenWeb(['levels'], ['levels', 'rate 1.5'], { rate: 1.5 }, 'levels');
-  await typedThenWeb(['levels'], ['levels', 'cooldown 90'], { cooldownSeconds: '90' }, 'levels');
+  await typedThenWeb(['levels'], ['levels', 'rate 1.5'], { rate: 1.5 }, 'levels', IDS.owner);
+  await typedThenWeb(['levels'], ['levels', 'cooldown 90'], { cooldownSeconds: '90' }, 'levels', IDS.owner);
   await typedThenWeb(['levels'], ['levels', 'message GG {user}, level {level}!'], { message: 'GG {user}, level {level}!' }, 'levels');
   await typedThenWeb(['starboard'], ['starboard', '7'], { threshold: 7 }, 'starboard');
   await typedThenWeb(['starboard'], ['starboard', 'emoji 🌟'], { emoji: '🌟' }, 'starboard');
@@ -191,8 +194,8 @@ test('a change saves valid settings exactly like the typed command does', async 
   await typedThenWeb(['automod'], ['automod', 'links allow https://www.Example.com/page'], { 'links.allow': ['https://www.Example.com/page'] }, 'automod');
   await typedThenWeb(['automod'], ['automod', 'action links timeout'], { actions: { links: 'timeout' } }, 'automod');
   await typedThenWeb(['automod'], ['automod', 'words add b4dword'], { 'words.list': ['b4dword'] }, 'automod');
-  await typedThenWeb(['economy'], ['economy', 'work 90 30'], { workMin: 90, workMax: 30 }, 'economy');
-  await typedThenWeb(['economy'], ['economy', 'daily 1.5k'], { dailyAmount: '1.5k' }, 'economy');
+  await typedThenWeb(['economy'], ['economy', 'work 90 30'], { workMin: 90, workMax: 30 }, 'economy', IDS.owner);
+  await typedThenWeb(['economy'], ['economy', 'daily 1.5k'], { dailyAmount: '1.5k' }, 'economy', IDS.owner);
   await typedThenWeb(['games'], ['game', 'maxbet 500'], { maxBet: 500 }, 'games');
   await typedThenWeb(['tickets'], ['tickets', 'limit 3'], { limit: 3 }, 'tickets');
   await typedThenWeb(['voice'], ['voice', 'limit 12'], { maxRooms: 12 }, 'voice');
@@ -217,13 +220,13 @@ test('casino bet limits save from the web like the typed command, checking min a
 
 test('a change refuses invalid values with the same message the command gives', async () => {
   const a = await createHarness({ apps: ['levels', 'starboard', 'welcome'] });
-  const typedRate = a.textOf((await a.slash('levels', 'rate 9', { user: IDS.admin }))[0]);
+  const typedRate = a.textOf((await a.slash('levels', 'rate 9', { user: IDS.owner }))[0]);
   const typedStars = a.textOf((await a.slash('starboard', 'stars 500', { user: IDS.admin }))[0]);
   const typedText = a.textOf((await a.slash('welcome', 'text Hi {usr}', { user: IDS.admin }))[0]);
 
   const { h, change } = await setup({ harness: { apps: ['levels', 'starboard', 'welcome'] } });
   const before = h.engine.settings.appConfig(S, 'levels');
-  const lv = await change(IDS.admin, 'levels', { settings: { rate: 9, cooldownSeconds: 1.5 } });
+  const lv = await change(IDS.owner, 'levels', { settings: { rate: 9, cooldownSeconds: 1.5 } });
   assert.equal(lv.result.errors.rate, 'Use a number from 0 to 5.');
   assert.ok(typedRate.includes(lv.result.errors.rate));
   assert.equal(lv.result.errors.cooldownSeconds, 'Use a whole number from 0 to 3600.');
@@ -257,20 +260,23 @@ test('a change reports unknown settings, read-only settings and oversized values
 
 test('a change is refused for members and for an admin who lost the role', async () => {
   const { h, change } = await setup({ harness: { apps: ['levels'] } });
-  const member = await change(IDS.member, 'levels', { settings: { rate: 2 } });
+  const stack = () => h.engine.settings.appConfig(S, 'levels').stackRewards;
+  const was = stack();
+  const member = await change(IDS.member, 'levels', { settings: { stackRewards: !was } });
   assert.equal(member.result.grant, false);
   assert.equal(member.error, 'You need to be an admin of this server.');
-  assert.equal(h.engine.settings.appConfig(S, 'levels').rate, 1);
+  assert.equal(stack(), was);
 
-  const ok = await change(IDS.admin, 'levels', { settings: { rate: 2 } });
+  const ok = await change(IDS.admin, 'levels', { settings: { stackRewards: !was } });
   assert.equal(ok.result.grant, true);
-  assert.equal(h.engine.settings.appConfig(S, 'levels').rate, 2);
+  assert.deepEqual(ok.result.errors, {});
+  assert.equal(stack(), !was);
 
   const alex = h.fake.memberOf(S, IDS.admin);
   alex.roles = [R.member];
-  const demoted = await change(IDS.admin, 'levels', { settings: { rate: 3 } });
+  const demoted = await change(IDS.admin, 'levels', { settings: { stackRewards: was } });
   assert.equal(demoted.result.grant, false);
-  assert.equal(h.engine.settings.appConfig(S, 'levels').rate, 2);
+  assert.equal(stack(), !was);
 });
 
 test('installing and uninstalling an app goes through setEnabled so its hooks run', async () => {
@@ -361,8 +367,9 @@ test('the snapshot has the overview, apps, settings with schema and lookups, and
   const lv = snap.apps.find((a) => a.id === 'levels');
   assert.deepEqual(Object.keys(lv).sort(), ['canDisable', 'category', 'description', 'enabled', 'icon', 'id', 'name', 'settingsCount']);
   assert.ok(lv.settingsCount > 5);
-  const rate = snap.settings.levels.schema.find((f) => f.key === 'rate');
-  assert.deepEqual(rate, { key: 'rate', label: 'XP rate', help: rate.help, type: 'number', default: 1, min: 0, max: 5, step: 0.1, web: true });
+  const { owner: rateOwner, ...rate } = snap.settings.levels.schema.find((f) => f.key === 'rate');
+  assert.equal(rateOwner, true);
+  assert.deepEqual(rate, { key: 'rate', label: 'XP rate (every server)', help: rate.help, type: 'number', default: 1, min: 0, max: 5, step: 0.1, web: true });
   assert.equal(snap.settings.levels.values.rate, 1);
   const modRoles = snap.settings.mod.schema.find((f) => f.key === 'core.modRoles');
   assert.equal(modRoles.web, false);
@@ -420,7 +427,7 @@ test('cases come newest first, capped at 2000', async () => {
   assert.equal(refused.result.grant, false);
 });
 
-test('the public page is off by default and publishes levels and coins once turned on', async () => {
+test('the public page is off by default and publishes the one global board once turned on', async () => {
   const { h, w, run, change } = await setup({ harness: { apps: ['levels', 'economy', 'wrapped'] } });
   await run('access', IDS.admin);
   assert.deepEqual(w.publics, {});
@@ -445,12 +452,17 @@ test('the public page is off by default and publishes levels and coins once turn
   assert.equal(page.enabled, true);
   assert.equal(page.slug, 'test-town');
   assert.equal(page.name, 'Test Town');
-  assert.deepEqual(page.levels.map((u) => [u.rank, u.id]), [[1, IDS.member2], [2, IDS.member]]);
-  assert.equal(page.levels[0].name, 'Riley');
-  assert.equal(page.economy[0].id, IDS.member);
-  assert.equal(page.economy[0].balance, 250);
-  assert.equal(page.economy[0].name, 'Sam');
-  assert.ok(page.wrapped && page.wrapped.card && page.wrapped.month);
+  assert.equal(page.levels, undefined);
+  assert.equal(page.economy, undefined);
+  assert.equal(page.wrapped, undefined);
+  const board = w.board;
+  assert.deepEqual(board.levels.map((u) => [u.rank, u.id]), [[1, IDS.member2], [2, IDS.member]]);
+  assert.equal(board.levels[0].name, 'Riley');
+  assert.equal(board.economy[0].id, IDS.member);
+  assert.equal(board.economy[0].balance, 250);
+  assert.equal(board.economy[0].name, 'Sam');
+  assert.deepEqual(board.currency, { name: 'Shards', emoji: '💎' });
+  assert.ok(!('wrapped' in board));
   assert.deepEqual(h.engine.settings.core(S).publicPage, { enabled: true, slug: 'test-town' });
 
   w.slugs.set('taken-name', OTHER);
@@ -1286,4 +1298,98 @@ test('no setting ever reaches the web as Infinity', () => {
 
   assert.deepEqual(jsonSafe({ a: UNLIMITED, b: [1, UNLIMITED], c: 'inf', d: null }), { a: 'inf', b: [1, 'inf'], c: 'inf', d: null });
   assert.deepEqual(jsonSafe({ a: NaN, b: -Infinity }), { a: null, b: null });
+});
+
+function probeApp(engine) {
+  const meta = { id: 'probe', name: 'Probe', icon: '🔬', category: 'System', description: 'A test app.', defaults: { rate: 1 } };
+  const rateField = {
+    key: 'rate', label: 'Global rate', help: 'Shared by every server.', type: 'number', web: true, owner: true, default: 1,
+    validate: (ctx, v) => (Number.isFinite(Number(v)) ? accept(Number(v)) : reject('Pick a number.')),
+    read: () => globalConfig(engine, 'probe').rate,
+    save: (ctx, value) => { patchGlobalConfig(engine, 'probe', { rate: value }); return undefined; },
+  };
+  const localField = {
+    key: 'note', label: 'Server note', type: 'string', web: true, default: '',
+    validate: (ctx, v) => accept(String(v ?? '')),
+  };
+  engine.apps.register(meta, { dashboard: [rateField, localField] });
+  for (const sid of [S, OTHER]) engine.settings.setEnabled(sid, 'probe', true);
+  return meta;
+}
+
+test('owner-only settings reach the web as a flag and only the bot owner can change them', async () => {
+  const { h, change } = await setup({ harness: { apps: ['mod'] } });
+  probeApp(h.engine);
+
+  const schema = publicSchema({ key: 'rate', label: 'Global rate', type: 'number', web: true, owner: true, default: 1 });
+  assert.equal(schema.owner, true);
+  assert.equal(publicSchema({ key: 'note', label: 'Note', type: 'string', web: true }).owner, false);
+
+  const no = await change(IDS.admin, 'probe', { settings: { rate: 5 } });
+  assert.equal(no.result.errors.rate, 'Only the bot owner can change this.');
+  assert.equal(no.result.applied.rate, undefined);
+  assert.equal(globalConfig(h.engine, 'probe').rate, 1);
+
+  const stillFine = await change(IDS.admin, 'probe', { settings: { note: 'hello' } });
+  assert.deepEqual(stillFine.result.errors, {});
+  assert.equal(h.engine.settings.appConfig(S, 'probe').note, 'hello');
+
+  const yes = await change(IDS.owner, 'probe', { settings: { rate: 5 } });
+  assert.deepEqual(yes.result.errors, {});
+  assert.equal(yes.result.applied.rate, 5);
+  assert.equal(globalConfig(h.engine, 'probe').rate, 5);
+
+  const allowed = await change(IDS.admin, 'probe', { settings: { rate: 9 } });
+  assert.equal(allowed.result.errors.rate, 'Only the bot owner can change this.');
+  allowGiver(h.engine, IDS.admin);
+  const now = await change(IDS.admin, 'probe', { settings: { rate: 9 } });
+  assert.deepEqual(now.result.errors, {});
+  assert.equal(globalConfig(h.engine, 'probe').rate, 9);
+  denyGiver(h.engine, IDS.admin);
+  const again = await change(IDS.admin, 'probe', { settings: { rate: 11 } });
+  assert.equal(again.result.errors.rate, 'Only the bot owner can change this.');
+});
+
+test('a global setting shows the same value in every server snapshot', async () => {
+  const { h, dash } = await setup({ harness: { apps: ['mod'] } });
+  const st = h.fake.state;
+  st.servers[OTHER] = { id: OTHER, name: 'Elsewhere', icon_path: null, owner_id: IDS.member2, member_count: 1 };
+  st.roles[OTHER] = [];
+  st.members[OTHER] = [{ id: IDS.member2, username: 'riley', display_name: 'Riley', roles: [] }];
+  st.channels[OTHER] = [];
+  probeApp(h.engine);
+  patchGlobalConfig(h.engine, 'probe', { rate: 42 });
+  h.engine.settings.patchApp(S, 'probe', { note: 'here' });
+  h.engine.settings.patchApp(OTHER, 'probe', { note: 'there' });
+
+  const here = await dash.snapshot(S);
+  const there = await dash.snapshot(OTHER);
+  assert.equal(here.settings.probe.values.rate, 42);
+  assert.equal(there.settings.probe.values.rate, 42);
+  assert.equal(here.settings.probe.values.note, 'here');
+  assert.equal(there.settings.probe.values.note, 'there');
+  assert.equal(here.settings.probe.schema.find((f) => f.key === 'rate').owner, true);
+  assert.equal(here.settings.probe.schema.find((f) => f.key === 'note').owner, false);
+});
+
+test('one global board is published, with no server id and nobody dropped', async () => {
+  const { h, dash, w } = await setup({ harness: { apps: ['levels'] } });
+  const gone = 'b0000000-0000-4000-8000-0000000000ff';
+  const asked = [];
+  h.engine.services.set('levels', { ranked: (...args) => { asked.push(args); return [{ id: gone, name: 'Wanderer', level: 5, xp: 900, messages: 20 }, { id: IDS.member, level: 2, xp: 120, messages: 4 }]; } });
+  h.engine.services.set('economy', { ranked: () => [{ id: gone, name: 'Wanderer', bal: 500 }] });
+  h.engine.settings.setEnabled(S, 'levels', false);
+  h.engine.settings.setEnabled(S, 'economy', false);
+
+  const board = await dash.globalBoard();
+  assert.deepEqual(asked, [[]]);
+  assert.deepEqual(board.levels.map((u) => [u.id, u.name]), [[gone, 'Wanderer'], [IDS.member, 'Sam']]);
+  assert.deepEqual(board.economy.map((u) => [u.id, u.name, u.balance]), [[gone, 'Wanderer', 500]]);
+  assert.deepEqual(board.currency, { name: 'Shards', emoji: '💎' });
+
+  const page = await dash.publicPage(S);
+  assert.deepEqual(page.global.levels.map((u) => u.id), [gone, IDS.member]);
+  assert.equal(await dash.publishGlobal().then((r) => r.ok), true);
+  assert.equal(w.requests.filter((r) => r.path === '/bot/global').length, 1);
+  assert.deepEqual(w.board.economy[0].balance, 500);
 });

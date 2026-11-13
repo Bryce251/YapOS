@@ -7,6 +7,8 @@ export const FIELD_TYPES = new Set([
 
 const MULTI = new Set(['channels', 'roles', 'words']);
 
+export const OWNER_ONLY_NOTE = 'Only the bot owner can change this.';
+
 export const EDITORS = new Set(['toggles', 'choices', 'channelMap', 'roleMap', 'rewards', 'steps']);
 const EDITOR_KEYS = { filters: 'toggles', actions: 'choices', filterExempt: 'channelMap', typeStaff: 'roleMap', rewards: 'rewards', escalation: 'steps' };
 const FILTER_LABELS = { spam: '🌊 Spam & flood', mentions: '📣 Mass mentions', caps: '🔠 Caps lock', links: '🔗 Links', invites: '✉️ Invites', words: '🤬 Word filter', raid: '🛡️ Raid shield' };
@@ -66,6 +68,7 @@ export function normalizeField(raw) {
       ? f.options.filter((o) => o && o.value !== undefined).map((o) => ({ value: o.value, label: String(o.label ?? o.value) }))
       : [],
     unlimited: f.unlimited === true,
+    owner: f.owner === true,
     readOnly,
     editor: readOnly ? '' : editor,
     labels: cleanLabels(f.labels) || FALLBACK_LABELS[key] || null,

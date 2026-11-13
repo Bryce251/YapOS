@@ -107,7 +107,7 @@ test('a giveaway with a level requirement reads levels from the Levels app', asy
   assert.ok(card, 'the giveaway card was posted');
   let ans = await press(h, card, /:enter:/, IDS.member);
   assert.match(lastText(h, ans), /level 5/);
-  await h.slash('levels', 'set @sam 6', { user: IDS.admin });
+  await h.slash('levels', 'set @sam 6', { user: IDS.owner });
   ans = await press(h, card, /:enter:/, IDS.member);
   assert.match(lastText(h, ans), /You're in!/);
   await h.advance(DAY);
@@ -183,7 +183,7 @@ test('tags never take over real commands', async () => {
   const posts = h.sent(G).length;
   await h.message('!daily', { user: IDS.member2 });
   assert.ok(!h.sent(G).slice(posts).some((m) => /Hijacked/.test(h.textOf(m))));
-  assert.match(h.textOf(h.lastSent(G)), /coins|🪙/, '!daily still runs Economy');
+  assert.match(h.textOf(h.lastSent(G)), /Shards|💎/, '!daily still runs Economy');
 });
 
 test('jobs from every app survive a restart and run on the new copy', async () => {

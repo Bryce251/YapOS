@@ -16,7 +16,7 @@ export function isUnlimited(value) {
 export function parseLimit(text, { min = 0, max = HARD_CAP, unlimited = true } = {}) {
   if (unlimited && isUnlimited(text)) return UNLIMITED;
   if (typeof text === 'number' && !Number.isFinite(text)) return null;
-  const s = String(text ?? '').trim().toLowerCase().replace(/,/g, '').replace(/\s*(?:coins?|🪙)$/, '').replace(/\s+/g, '');
+  const s = String(text ?? '').trim().toLowerCase().replace(/,/g, '').replace(/\s*(?:coins?|shards?|💎|🪙)$/, '').replace(/\s+/g, '');
   const m = /^(\d+(?:\.\d+)?)([kmbt]?)$/.exec(s);
   if (!m) return null;
   const v = Number(m[1]) * SUFFIX[m[2]];

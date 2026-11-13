@@ -5,6 +5,7 @@ import { tokenize, didYouMean, clip, formatDuration, fuzzyFind, fillTemplate, ro
 import { permName, friendly } from '../engine/errors.js';
 import { accept, reject, boolField } from '../engine/dashboard.js';
 import { HARD_CAP, parseLimit, readLimit, isUnlimited } from '../engine/limits.js';
+import { GLOBAL_KEY, CURRENCY, globalConfig, patchGlobalConfig, mergeOnce, canGiveCurrency, allowGiver, denyGiver, ownerIds } from '../engine/global.js';
 
 const ID = 'economy';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -22,7 +23,7 @@ const STREAK_MAX = 100;
 const MAX_BALANCE = HARD_CAP;
 const MAX_AMOUNT = HARD_CAP;
 const MAX_SETTING = HARD_CAP;
-const MAX_USERS = 5000;
+const MAX_USERS = 50000;
 const MAX_HISTORY = 20;
 const MAX_ITEMS = 20;
 const MAX_INVENTORY = 50;
@@ -34,7 +35,8 @@ const MAX_ITEM_NAME = 40;
 const PAY_CONFIRM_OVER = 1000;
 const TOP_SIZE = 10;
 const MEDALS = ['🥇', '🥈', '🥉'];
-const DEFAULT_CURRENCY = { name: 'coins', emoji: '🪙' };
+const OWNER_ONLY_EARN = `Only the bot owner can change how many ${CURRENCY.name} people earn.`;
+const OWNER_ONLY_MOVE = `Only the bot owner can hand out or take ${CURRENCY.name}.`;
 
 const BEG_YES = [
   'A kind stranger dropped {amount} in your cup.',
@@ -50,9 +52,9 @@ const BEG_YES = [
 const BEG_NO = [
   'Everyone walked right past you. Nothing this time.',
   'A cat stared at you, judged you, and left. Nothing.',
-  'Someone offered you advice instead of coins.',
+  'Someone offered you advice instead of Shards.',
   'You got a high five. Morale up, wallet the same.',
-  'A seagull stole the one coin you were about to get.',
+  'A seagull stole the one Shard you were about to get.',
 ];
 
 const JOBS = [
@@ -81,35 +83,20 @@ const isAuto = (r) => !!r?.auto && r.auto !== 'none';
 
 const busy = new Set();
 const warned = new Set();
+let eng = null;
 
 const clock = (engine) => engine.scheduler?.now?.() ?? Date.now();
 const fmt = (n) => Math.trunc(Number(n) || 0).toLocaleString('en-US');
 const botId = (engine) => engine.bot.me?.id;
-const cfgOf = (engine, sid) => engine.settings.appConfig(sid, ID);
+const cfgOf = (engine) => globalConfig(engine, ID);
+const patchCfg = (ctx, patch) => patchGlobalConfig(ctx.engine, ID, patch);
 const readableMentions = (text) => String(text ?? '').replace(/<@&[\w-]+>/g, '@role').replace(/<@!?[\w-]+>/g, '@someone').replace(/<#[\w-]+>/g, '#channel').replace(/<a?:([\w~-]{1,32}):[\w-]+>/g, ':$1:');
 const plainName = (name) => readableMentions(name).replace(/[<>*_~`|\\]/g, '').replace(/@/g, '@​').trim() || 'someone';
 const nameOfMember = (m) => plainName(m?.nickname || m?.display_name || m?.username || 'someone');
 const plural = (n, word) => (Math.abs(n) === 1 && /s$/i.test(word) && word.length > 2 ? word.slice(0, -1) : word);
 
-function currencyOf(engine, sid) {
-  const cfg = cfgOf(engine, sid);
-  return { name: cleanCurrencyName(cfg.currencyName) || DEFAULT_CURRENCY.name, emoji: cleanEmoji(cfg.currencyEmoji) || DEFAULT_CURRENCY.emoji };
-}
-
-function cleanCurrencyName(text) {
-  const s = String(text ?? '').replace(/[\r\n]+/g, ' ').replace(/[<>@#*_~`|\\:]/g, '').replace(/\s+/g, ' ').trim();
-  return s.length >= 1 && s.length <= 20 ? s : '';
-}
-
-const CUSTOM_EMOJI = /^<a?:[\w~-]{1,32}:[\w-]{1,64}>$/;
-const SHORTCODE_EMOJI = /^:[\w~-]{1,32}:$/;
-
-function cleanEmoji(text) {
-  const s = String(text ?? '').trim();
-  if (!s || s.length > 80) return '';
-  if (CUSTOM_EMOJI.test(s) || SHORTCODE_EMOJI.test(s)) return s;
-  if (s.length > 16 || /[\x00-\x7f]/.test(s.replace(/[#*0-9]️?⃣/g, ''))) return '';
-  return s;
+function currencyOf() {
+  return CURRENCY;
 }
 
 const money = (cur, n) => `**${fmt(n)}** ${plural(n, cur.name)}`;
@@ -129,7 +116,7 @@ function agoText(ms) {
 }
 
 const AMOUNT_SHAPE = /^\d+(?:\.\d+)?[kmbt]?$/;
-const AMOUNT_HELP = 'Use a whole number of coins, like `500`, `2k`, `5m` or `3b`.';
+const AMOUNT_HELP = `Use a whole number of ${CURRENCY.name}, like \`500\`, \`2k\`, \`5m\` or \`3b\`.`;
 
 export function parseAmount(token) {
   const t = String(token ?? '').trim().toLowerCase().replace(/,/g, '').replace(/^\+/, '');
@@ -155,6 +142,8 @@ function fixDoc(d) {
 }
 
 const readDoc = (engine, sid) => fixDoc(engine.store.get(ID, sid, null));
+const readUsers = (engine) => fixDoc(engine.store.get(ID, GLOBAL_KEY, null));
+const mutateUsers = (engine, fn) => mutate(engine, GLOBAL_KEY, fn);
 
 function mutate(engine, sid, fn) {
   let out;
@@ -167,6 +156,49 @@ function mutate(engine, sid, fn) {
 }
 
 const blankUser = (start, t) => ({ bal: start, streak: 0, lastDaily: 0, lastWork: 0, inv: {}, hist: [], seen: t });
+const invKey = (sid, itemId) => `${sid}:${itemId}`;
+
+function foldUser(into, from, sid) {
+  into.bal = Math.max(0, Math.min(MAX_BALANCE, (into.bal || 0) + (Number(from.bal) || 0)));
+  if ((Number(from.lastDaily) || 0) > (into.lastDaily || 0)) {
+    into.lastDaily = Number(from.lastDaily) || 0;
+    into.streak = Math.max(0, Math.floor(Number(from.streak) || 0));
+  }
+  if ((Number(from.lastWork) || 0) > (into.lastWork || 0)) into.lastWork = Number(from.lastWork) || 0;
+  if ((Number(from.lastBeg) || 0) > (into.lastBeg || 0)) into.lastBeg = Number(from.lastBeg) || 0;
+  into.seen = Math.max(into.seen || 0, Number(from.seen) || 0);
+  into.inv = into.inv && typeof into.inv === 'object' ? into.inv : {};
+  for (const [key, slot] of Object.entries(from.inv || {})) {
+    const n = Math.floor(Number(slot?.n) || 0);
+    if (n <= 0) continue;
+    const mine = key.includes(':') ? key : invKey(sid, key);
+    const have = into.inv[mine] || { name: slot.name || 'Item', n: 0 };
+    have.name = have.name || slot.name || 'Item';
+    have.n = Math.min(MAX_STACK, (have.n || 0) + n);
+    into.inv[mine] = have;
+  }
+  const hist = [...(Array.isArray(into.hist) ? into.hist : []), ...(Array.isArray(from.hist) ? from.hist : [])]
+    .filter((e) => Array.isArray(e) && e.length >= 3)
+    .sort((a, b) => (Number(a[0]) || 0) - (Number(b[0]) || 0));
+  into.hist = hist.slice(-MAX_HISTORY);
+}
+
+function migrate(engine) {
+  return mergeOnce(engine, ID, {
+    blank: blankDoc,
+    fold: (into, from, sid) => {
+      const doc = fixDoc(into);
+      for (const [uid, u] of Object.entries(from?.users || {})) {
+        if (!u || typeof u !== 'object') continue;
+        if (!doc.users[uid]) {
+          while (Object.keys(doc.users).length >= MAX_USERS) evictOne(doc, uid);
+          doc.users[uid] = blankUser(0, Number(u.seen) || 0);
+        }
+        foldUser(doc.users[uid], u, sid);
+      }
+    },
+  });
+}
 
 function evictOne(doc, keep) {
   let worst = null;
@@ -204,10 +236,10 @@ function change(u, delta, reason, t) {
   return real;
 }
 
-function balanceOf(engine, sid, uid) {
-  const u = readDoc(engine, sid).users[uid];
+function balanceOf(engine, uid) {
+  const u = readUsers(engine).users[uid];
   if (u) return u.bal || 0;
-  return clampSetting(cfgOf(engine, sid).startBalance, 0);
+  return clampSetting(cfgOf(engine).startBalance, 0);
 }
 
 function needIds(sid, uid) {
@@ -215,7 +247,7 @@ function needIds(sid, uid) {
 }
 
 function needAmount(amount) {
-  if (!validAmount(amount)) throw friendly(`Amounts are whole numbers of coins, from 1 up. ${AMOUNT_HELP}`, { title: "That amount didn't work" });
+  if (!validAmount(amount)) throw friendly(`Amounts are whole numbers of ${CURRENCY.name}, from 1 up. ${AMOUNT_HELP}`, { title: "That amount didn't work" });
 }
 
 function serviceAdd(engine, sid, uid, amount, reason) {
@@ -223,8 +255,8 @@ function serviceAdd(engine, sid, uid, amount, reason) {
   needAmount(amount);
   if (uid === botId(engine)) return 0;
   const t = clock(engine);
-  const cfg = cfgOf(engine, sid);
-  return mutate(engine, sid, (doc) => {
+  const cfg = cfgOf(engine);
+  return mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, uid, cfg, t);
     change(u, amount, reason || 'Added', t);
     return u.bal;
@@ -235,10 +267,10 @@ function serviceTake(engine, sid, uid, amount, reason) {
   needIds(sid, uid);
   needAmount(amount);
   if (uid === botId(engine)) return null;
-  if (balanceOf(engine, sid, uid) < amount) return null;
+  if (balanceOf(engine, uid) < amount) return null;
   const t = clock(engine);
-  const cfg = cfgOf(engine, sid);
-  return mutate(engine, sid, (doc) => {
+  const cfg = cfgOf(engine);
+  return mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, uid, cfg, t);
     if ((u.bal || 0) < amount) return null;
     change(u, -amount, reason || 'Spent', t);
@@ -251,10 +283,10 @@ function serviceTransfer(engine, sid, fromId, toId, amount, reason) {
   needIds(sid, toId);
   needAmount(amount);
   if (fromId === toId || fromId === botId(engine) || toId === botId(engine)) return false;
-  if (balanceOf(engine, sid, fromId) < amount) return false;
+  if (balanceOf(engine, fromId) < amount) return false;
   const t = clock(engine);
-  const cfg = cfgOf(engine, sid);
-  return mutate(engine, sid, (doc) => {
+  const cfg = cfgOf(engine);
+  return mutateUsers(engine, (doc) => {
     const from = ensureUser(doc, fromId, cfg, t);
     if ((from.bal || 0) < amount) return false;
     const to = ensureUser(doc, toId, cfg, t);
@@ -265,9 +297,9 @@ function serviceTransfer(engine, sid, fromId, toId, amount, reason) {
   });
 }
 
-function ranked(engine, sid) {
+function ranked(engine) {
   const me = botId(engine);
-  return Object.entries(readDoc(engine, sid).users)
+  return Object.entries(readUsers(engine).users)
     .filter(([uid, u]) => uid !== me && (u.bal || 0) > 0)
     .map(([uid, u]) => ({ id: uid, bal: u.bal || 0 }))
     .sort((a, b) => b.bal - a.bal || a.id.localeCompare(b.id));
@@ -299,7 +331,7 @@ async function findMember(ctx, query, what = 'them') {
   const found = await ctx.findUser(q);
   if (!found?.id) return { problem: ["I couldn't find them", `Nobody here matches **${plainName(clip(q, 40))}**. Try a mention, like @sam.`] };
   const m = await memberOf(ctx.engine, ctx.serverId, found.id);
-  if (!m && found.id !== botId(ctx.engine)) return { problem: ["They aren't here", "That person isn't in this server, so they can't have coins here."] };
+  if (!m && found.id !== botId(ctx.engine)) return { problem: ["They aren't here", "That person isn't in this server, so I can't find them here."] };
   return { member: m || found, id: found.id, name: nameOfMember(m || found) };
 }
 
@@ -369,7 +401,7 @@ function stockText(it) {
 
 async function shopView(engine, sid, mode = 'select') {
   const doc = readDoc(engine, sid);
-  const cur = currencyOf(engine, sid);
+  const cur = currencyOf();
   const roles = await engine.perms.roles(sid).catch(() => []);
   const roleName = (id) => { const r = roles.find((x) => x.id === id); return r ? `@${plainName(r.name)}` : 'a deleted role'; };
   const items = doc.items.slice(0, MAX_ITEMS);
@@ -445,12 +477,12 @@ async function postShop(ctx) {
 
 async function walletView(ctx, targetId, { self = true } = {}) {
   const { engine, serverId: sid } = ctx;
-  const cur = currencyOf(engine, sid);
-  const cfg = ctx.config();
-  const doc = readDoc(engine, sid);
+  const cur = currencyOf();
+  const cfg = cfgOf(ctx.engine);
+  const doc = readUsers(engine);
   const u = doc.users[targetId] || blankUser(clampSetting(cfg.startBalance, 0), 0);
   const t = clock(engine);
-  const list = ranked(engine, sid);
+  const list = ranked(engine);
   const pos = list.findIndex((x) => x.id === targetId);
   const name = await displayName(engine, sid, targetId);
   const alive = u.lastDaily && t - u.lastDaily <= STREAK_GRACE_MS ? u.streak || 0 : 0;
@@ -460,13 +492,13 @@ async function walletView(ctx, targetId, { self = true } = {}) {
   const inv = Object.values(u.inv || {}).filter((x) => x && x.n > 0);
   const fields = [
     { name: 'Wallet', value: `${fmt(u.bal || 0)} ${plural(u.bal || 0, cur.name)} ${cur.emoji}`, inline: true },
-    { name: 'Rank', value: pos >= 0 ? `#${pos + 1} of ${fmt(list.length)}` : 'Not ranked yet', inline: true },
+    { name: 'Rank', value: pos >= 0 ? `#${pos + 1} of ${fmt(list.length)} everywhere` : 'Not ranked yet', inline: true },
     { name: 'Daily streak', value: alive ? `${alive} day${alive === 1 ? '' : 's'}${alive > 1 ? ' 🔥' : ''}` : 'None yet', inline: true },
     { name: 'Daily', value: !dailyOn ? 'Off' : dailyLeft > 0 ? `in ${waitText(dailyLeft)}` : 'Ready!', inline: true },
     cfg.workEnabled !== false ? { name: 'Work', value: workLeft > 0 ? `in ${waitText(workLeft)}` : 'Ready!', inline: true } : null,
     { name: 'Inventory', value: clip(inv.map((x) => `${fmt(x.n)}× ${plainName(x.name)}`).join(', '), 1024) || 'Empty', inline: false },
   ];
-  const body = self ? `Earn ${cur.name} with **/daily** and **/balance work**, spend them in **/shop**.` : null;
+  const body = self ? `One wallet for every server. Earn ${cur.name} with **/daily** and **/balance work**, spend them in **/shop**.` : null;
   const view = { embeds: [card({ title: `${cur.emoji} ${name}'s wallet`, body, fields, color: 'economy' })], components: [] };
   if (self) {
     const btns = dailyOn ? [button('Daily', cid('daily'), dailyLeft > 0 ? 'secondary' : 'success', '📅')] : [];
@@ -484,18 +516,18 @@ async function showWallet(ctx, query, how = 'reply') {
   if (!found?.id) return ctx.warn("I couldn't find them", `Nobody here matches **${plainName(clip(q, 40))}**. Try a mention, like \`/balance @sam\`.`);
   if (found.id === ctx.userId) return ctx[how](await walletView(ctx, ctx.userId, { self: true }));
   const m = await memberOf(ctx.engine, ctx.serverId, found.id);
-  if (isBotMember(ctx.engine, m, found.id)) return ctx.info('Bots have no wallet', "Bots don't collect coins. Their pockets are full of code.");
+  if (isBotMember(ctx.engine, m, found.id)) return ctx.info('Bots have no wallet', `Bots don't collect ${CURRENCY.name}. Their pockets are full of code.`);
   return ctx[how](await walletView(ctx, found.id, { self: false }));
 }
 
 async function claimDaily(ctx) {
-  const { engine, serverId: sid } = ctx;
-  const cfg = ctx.config();
-  const cur = currencyOf(engine, sid);
+  const { engine } = ctx;
+  const cfg = cfgOf(ctx.engine);
+  const cur = currencyOf();
   const base = clampSetting(cfg.dailyAmount, 100);
-  if (base <= 0) return ctx.info('Daily is off', 'An admin turned the daily reward off for this server.');
+  if (base <= 0) return ctx.info('Daily is off', 'The daily reward is switched off right now.');
   const t = clock(engine);
-  const res = mutate(engine, sid, (doc) => {
+  const res = mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, ctx.userId, cfg, t);
     if (u.lastDaily && t - u.lastDaily < DAY) return { wait: u.lastDaily + DAY - t, streak: u.streak || 0 };
     const kept = u.lastDaily && t - u.lastDaily <= STREAK_GRACE_MS;
@@ -508,7 +540,7 @@ async function claimDaily(ctx) {
     return { got, bonus, streak: u.streak, bal: u.bal, lost };
   });
   if (res.wait) {
-    return ctx.warn('Already claimed today', `Your next daily is ready in **${waitText(res.wait)}**.${res.streak > 1 ? ` Keep your **${res.streak}-day streak** 🔥 going!` : ''}`);
+    return ctx.warn('Already claimed today', `You get one daily for the whole bot. Your next one is ready in **${waitText(res.wait)}**.${res.streak > 1 ? ` Keep your **${res.streak}-day streak** 🔥 going!` : ''}`);
   }
   const streakText = res.streak > 1 ? `day ${res.streak} streak 🔥` : 'day 1';
   const extra = [];
@@ -519,14 +551,14 @@ async function claimDaily(ctx) {
 }
 
 async function doBeg(ctx) {
-  const { engine, serverId: sid } = ctx;
-  const cfg = ctx.config();
-  if (cfg.begEnabled === false) return ctx.info('Begging is off', 'An admin turned off **/beg** here. **/daily** still works.');
-  const cur = currencyOf(engine, sid);
+  const { engine } = ctx;
+  const cfg = cfgOf(ctx.engine);
+  if (cfg.begEnabled === false) return ctx.info('Begging is off', '**/beg** is switched off right now. **/daily** still works.');
+  const cur = currencyOf();
   const t = clock(engine);
   const miss = Math.random() < BEG_MISS;
   const pay = miss ? 0 : BEG_MIN + Math.floor(Math.random() * (BEG_MAX - BEG_MIN + 1));
-  const res = mutate(engine, sid, (doc) => {
+  const res = mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, ctx.userId, cfg, t);
     if (u.lastBeg && t - u.lastBeg < BEG_COOLDOWN_MS) return { wait: u.lastBeg + BEG_COOLDOWN_MS - t };
     u.lastBeg = t;
@@ -540,15 +572,15 @@ async function doBeg(ctx) {
 }
 
 async function doWork(ctx) {
-  const { engine, serverId: sid } = ctx;
-  const cfg = ctx.config();
-  if (cfg.workEnabled === false) return ctx.info('Work is off', 'An admin turned off **/balance work** here. **/daily** still works.');
-  const cur = currencyOf(engine, sid);
+  const { engine } = ctx;
+  const cfg = cfgOf(ctx.engine);
+  if (cfg.workEnabled === false) return ctx.info('Work is off', '**/balance work** is switched off right now. **/daily** still works.');
+  const cur = currencyOf();
   const lo = Math.max(1, clampSetting(cfg.workMin, 20));
   const hi = Math.max(lo, clampSetting(cfg.workMax, 80));
   const t = clock(engine);
   const pay = lo + Math.floor(Math.random() * (hi - lo + 1));
-  const res = mutate(engine, sid, (doc) => {
+  const res = mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, ctx.userId, cfg, t);
     if (u.lastWork && t - u.lastWork < WORK_COOLDOWN_MS) return { wait: u.lastWork + WORK_COOLDOWN_MS - t };
     u.lastWork = t;
@@ -561,30 +593,29 @@ async function doWork(ctx) {
 }
 
 async function topView(ctx) {
-  const { engine, serverId: sid } = ctx;
-  const cur = currencyOf(engine, sid);
-  const list = ranked(engine, sid);
+  const { engine } = ctx;
+  const cur = currencyOf();
+  const list = ranked(engine);
   const members = await ctx.members().catch(() => []);
-  const nameOf = (id) => { const m = members.find((x) => x.id === id); return m ? nameOfMember(m) : 'someone who left'; };
+  const nameOf = (id) => { const m = members.find((x) => x.id === id); return m ? nameOfMember(m) : 'a yapper elsewhere'; };
   const lines = list.slice(0, TOP_SIZE).map((x, i) => `${MEDALS[i] || `**${i + 1}.**`} ${nameOf(x.id)} · ${price(cur, x.bal)}`);
   const pos = list.findIndex((x) => x.id === ctx.userId);
-  const mine = pos >= 0 ? `You: **#${pos + 1}** · ${price(cur, list[pos].bal)}` : `You aren't ranked yet. Grab your **/daily**!`;
-  const body = lines.length ? `${lines.join('\n')}\n\n${mine}` : `Nobody has any ${cur.name} yet. Be the first with **/daily**!`;
-  const server = await engine.perms.server(sid).catch(() => null);
-  return { embeds: [card({ title: `🏆 Richest in ${server?.name ? plainName(server.name) : 'this server'}`, body, color: 'economy' })] };
+  const mine = pos >= 0 ? `You: **#${pos + 1}** of ${fmt(list.length)} · ${price(cur, list[pos].bal)}` : `You aren't ranked yet. Grab your **/daily**!`;
+  const body = lines.length ? `${lines.join('\n')}\n\n${mine}\n-# One leaderboard for every server YapOS is in.` : `Nobody has any ${cur.name} yet. Be the first with **/daily**!`;
+  return { embeds: [card({ title: `🏆 Richest yappers everywhere`, body, color: 'economy' })] };
 }
 
 async function historyView(ctx, targetId) {
   const { engine, serverId: sid } = ctx;
-  const cur = currencyOf(engine, sid);
-  const u = readDoc(engine, sid).users[targetId];
+  const cur = currencyOf();
+  const u = readUsers(engine).users[targetId];
   const t = clock(engine);
   const name = await displayName(engine, sid, targetId);
   const list = (u?.hist || []).slice().reverse();
   const lines = list.map(([at, delta, reason]) => `${delta >= 0 ? '➕' : '➖'} ${delta >= 0 ? '+' : '−'}${fmt(Math.abs(delta))} ${cur.emoji} · ${plainName(reason)} · ${agoText(t - at)}`);
   const body = lines.length ? lines.join('\n') : `No ${cur.name} have moved yet.`;
   const title = lines.length ? `📜 ${name}'s last ${lines.length} change${lines.length === 1 ? '' : 's'}` : `📜 ${name}'s history`;
-  return { embeds: [card({ title, body: `${body}\n-# Balance now: ${fmt(u?.bal ?? balanceOf(engine, sid, targetId))} ${cur.emoji} · the last ${MAX_HISTORY} changes are kept.`, color: 'economy' })] };
+  return { embeds: [card({ title, body: `${body}\n-# Balance now: ${fmt(u?.bal ?? balanceOf(engine, targetId))} ${cur.emoji} · the last ${MAX_HISTORY} changes are kept.`, color: 'economy' })] };
 }
 
 async function showHistory(ctx, query) {
@@ -601,16 +632,16 @@ async function showHistory(ctx, query) {
 
 async function startPay(ctx, tokens) {
   const { engine, serverId: sid } = ctx;
-  const cur = currencyOf(engine, sid);
+  const cur = currencyOf();
   const { amount, before, after } = splitAmount(tokens);
   const who = [...before, ...after].join(' ').trim();
   if (amount === null || !who) return ctx.warn('Pay who, and how much?', 'Try `/balance pay @sam 50`.');
-  if (!validAmount(amount)) return ctx.warn("That amount didn't work", `Pay a whole number of coins, from 1 up, like \`/balance pay @sam 50\`.`);
+  if (!validAmount(amount)) return ctx.warn("That amount didn't work", `Pay a whole number of ${cur.name}, from 1 up, like \`/balance pay @sam 50\`.`);
   const target = await findMember(ctx, who, 'who to pay');
   if (target.problem) return ctx.warn(...target.problem);
-  if (target.id === ctx.userId) return ctx.warn("You can't pay yourself", 'Nice try! Your coins are already yours.');
-  if (isBotMember(engine, target.member, target.id)) return ctx.warn("Bots can't take coins", 'Pay a person instead.');
-  const have = balanceOf(engine, sid, ctx.userId);
+  if (target.id === ctx.userId) return ctx.warn("You can't pay yourself", `Nice try! Those ${cur.name} are already yours.`);
+  if (isBotMember(engine, target.member, target.id)) return ctx.warn(`Bots can't take ${cur.name}`, 'Pay a person instead.');
+  const have = balanceOf(engine, ctx.userId);
   if (have < amount) return ctx.warn(`Not enough ${cur.name}`, `You have ${price(cur, have)} and tried to pay ${price(cur, amount)}.`);
   if (amount > PAY_CONFIRM_OVER) {
     const s = engine.router.session({ sid, from: ctx.userId, to: target.id, amount, name: target.name });
@@ -624,23 +655,23 @@ async function startPay(ctx, tokens) {
 
 async function finishPay(ctx, p, how) {
   const { engine, serverId: sid } = ctx;
-  const cur = currencyOf(engine, sid);
+  const cur = currencyOf();
   const fromName = await displayName(engine, sid, p.from);
-  const ok = mutatePay(engine, sid, p, fromName);
+  const ok = mutatePay(engine, p, fromName);
   if (!ok) {
-    const have = balanceOf(engine, sid, p.from);
+    const have = balanceOf(engine, p.from);
     const embed = dialog.warn(`Not enough ${cur.name}`, `You have ${price(cur, have)} now, so ${price(cur, p.amount)} didn't go through.`);
     return how === 'update' ? ctx.update({ embeds: [embed], components: [] }) : ctx.ephemeral({ embeds: [embed] });
   }
-  const after = balanceOf(engine, sid, p.from);
+  const after = balanceOf(engine, p.from);
   const embed = card({ title: `💸 ${fromName} paid ${p.name}`, body: `${money(cur, p.amount)} ${cur.emoji} sent. ${fromName} has ${price(cur, after)} left.`, color: 'economy', footer: false });
   return how === 'update' ? ctx.update({ embeds: [embed], components: [] }) : ctx.reply({ embeds: [embed] });
 }
 
-function mutatePay(engine, sid, p, fromName) {
+function mutatePay(engine, p, fromName) {
   const t = clock(engine);
-  const cfg = cfgOf(engine, sid);
-  return mutate(engine, sid, (doc) => {
+  const cfg = cfgOf(engine);
+  return mutateUsers(engine, (doc) => {
     const from = ensureUser(doc, p.from, cfg, t);
     if ((from.bal || 0) < p.amount) return false;
     const to = ensureUser(doc, p.to, cfg, t);
@@ -667,7 +698,7 @@ async function runBalance(ctx, tokensIn) {
 async function openBuy(ctx, itemId) {
   const { engine, serverId: sid } = ctx;
   const doc = readDoc(engine, sid);
-  const cur = currencyOf(engine, sid);
+  const cur = currencyOf();
   const item = doc.items.find((it) => it.id === itemId);
   if (!item) return ctx.warn('That item is gone', 'It was taken out of the shop. Run **/shop** for the current list.');
   if (item.stock !== null && item.stock !== undefined && item.stock <= 0) return ctx.warn('Sold out', `**${plainName(item.name)}** is sold out. An admin can restock it with \`/shop stock\`.`);
@@ -679,10 +710,10 @@ async function openBuy(ctx, itemId) {
     if (check.reason) return pausedItem(ctx, item, check.reason, 'ephemeral');
     roleLine = `You get the **@${plainName(check.role.name)}** role.`;
   } else {
-    const inv = doc.users[ctx.userId]?.inv || {};
-    if (!inv[item.id] && Object.keys(inv).length >= MAX_INVENTORY) return ctx.warn('Inventory full', `You can hold ${MAX_INVENTORY} different items. Ask an admin to clear some out.`);
+    const inv = readUsers(engine).users[ctx.userId]?.inv || {};
+    if (!inv[invKey(sid, item.id)] && Object.keys(inv).length >= MAX_INVENTORY) return ctx.warn('Inventory full', `You can hold ${MAX_INVENTORY} different items. Ask an admin to clear some out.`);
   }
-  const have = balanceOf(engine, sid, ctx.userId);
+  const have = balanceOf(engine, ctx.userId);
   if (have < item.price) return ctx.warn(`Not enough ${cur.name}`, `**${plainName(item.name)}** costs ${price(cur, item.price)} and you have ${price(cur, have)}. You need ${price(cur, item.price - have)} more.\n-# Earn ${cur.name} with /daily and /balance work.`);
   const ticket = buyTicket(engine, sid, ctx.userId, item);
   return ctx.ephemeral({
@@ -699,7 +730,7 @@ async function pausedItem(ctx, item, reason, how) {
     warned.add(key);
     await modLog(engine, sid, card({ title: `${ICONS.economy} Shop item paused`, body: `Someone tried to buy **${plainName(item.name)}**, but I can't hand out its role: ${reason}\nFix the role, or take the item out with \`/shop remove\`.`, color: 'economy' }), `economy:paused:${item.id}`);
   }
-  const embed = dialog.warn("Can't sell this right now", `**${plainName(item.name)}** is paused: ${reason}\nNo ${currencyOf(engine, sid).name} were taken. I've let the admins know.`);
+  const embed = dialog.warn("Can't sell this right now", `**${plainName(item.name)}** is paused: ${reason}\nNo ${currencyOf().name} were taken. I've let the admins know.`);
   return how === 'update' ? ctx.update({ embeds: [embed], components: [] }) : ctx.ephemeral({ embeds: [embed] });
 }
 
@@ -727,8 +758,8 @@ async function completeBuy(ctx) {
 
 async function buyNow(ctx, itemId, agreed) {
   const { engine, serverId: sid } = ctx;
-  const cur = currencyOf(engine, sid);
-  const cfg = ctx.config();
+  const cur = currencyOf();
+  const cfg = cfgOf(ctx.engine);
   const done = (embed) => ctx.update({ embeds: [embed], components: [] });
   const item = readDoc(engine, sid).items.find((it) => it.id === itemId);
   if (!item) return done(dialog.warn('That item is gone', 'It was taken out of the shop, so nothing was bought.'));
@@ -742,57 +773,71 @@ async function buyNow(ctx, itemId, agreed) {
     roleName = plainName(check.role.name);
   }
   const t = clock(engine);
-  const res = mutate(engine, sid, (doc) => {
+  const claim = mutate(engine, sid, (doc) => {
     const it = doc.items.find((x) => x.id === itemId);
     if (!it || it.price !== agreed) return { gone: true };
     if (it.stock !== null && it.stock !== undefined && it.stock <= 0) return { soldOut: true };
-    const u = ensureUser(doc, ctx.userId, cfg, t);
-    if ((u.bal || 0) < it.price) return { short: u.bal || 0 };
-    u.inv ||= {};
-    if (!it.roleId && !u.inv[it.id] && Object.keys(u.inv).length >= MAX_INVENTORY) return { full: true };
-    change(u, -it.price, `Bought ${it.name}`, t);
     if (it.stock !== null && it.stock !== undefined) it.stock -= 1;
     it.sold = (it.sold || 0) + 1;
-    if (!it.roleId) {
-      const slot = u.inv[it.id] || { name: it.name, n: 0 };
-      slot.name = it.name;
-      slot.n = Math.min(MAX_STACK, slot.n + 1);
-      u.inv[it.id] = slot;
-    }
-    return { ok: true, bal: u.bal, limited: it.stock !== null && it.stock !== undefined };
+    return { ok: true, name: it.name, cost: it.price, roleId: it.roleId, limited: it.stock !== null && it.stock !== undefined };
   });
-  if (res.gone) return done(dialog.warn('That item changed', 'Nothing was bought. Run **/shop** for the current list.'));
-  if (res.soldOut) return done(dialog.warn('Sold out', `Someone got the last **${plainName(item.name)}** first. Nothing was taken.`));
-  if (res.full) return done(dialog.warn('Inventory full', `You can hold ${MAX_INVENTORY} different items. Nothing was taken.`));
-  if (res.short !== undefined) return done(dialog.warn(`Not enough ${cur.name}`, `You have ${price(cur, res.short)} and it costs ${price(cur, item.price)}. Nothing was taken.`));
+  if (claim.gone) return done(dialog.warn('That item changed', 'Nothing was bought. Run **/shop** for the current list.'));
+  if (claim.soldOut) return done(dialog.warn('Sold out', `Someone got the last **${plainName(item.name)}** first. Nothing was taken.`));
+  const res = mutateUsers(engine, (doc) => {
+    const u = ensureUser(doc, ctx.userId, cfg, t);
+    if ((u.bal || 0) < claim.cost) return { short: u.bal || 0 };
+    u.inv ||= {};
+    const key = invKey(sid, itemId);
+    if (!claim.roleId && !u.inv[key] && Object.keys(u.inv).length >= MAX_INVENTORY) return { full: true };
+    change(u, -claim.cost, `Bought ${claim.name}`, t);
+    if (!claim.roleId) {
+      const slot = u.inv[key] || { name: claim.name, n: 0 };
+      slot.name = claim.name;
+      slot.n = Math.min(MAX_STACK, slot.n + 1);
+      u.inv[key] = slot;
+    }
+    return { ok: true, bal: u.bal };
+  });
+  if (!res.ok) {
+    releaseItem(engine, sid, itemId, claim.limited);
+    if (claim.limited) refreshShops(engine, sid).catch(() => {});
+    if (res.full) return done(dialog.warn('Inventory full', `You can hold ${MAX_INVENTORY} different items. Nothing was taken.`));
+    return done(dialog.warn(`Not enough ${cur.name}`, `You have ${price(cur, res.short)} and it costs ${price(cur, claim.cost)}. Nothing was taken.`));
+  }
   if (item.roleId) {
     try {
       await engine.bot.addRole(sid, ctx.userId, item.roleId);
       engine.perms.invalidate(`m:${sid}:${ctx.userId}`);
     } catch (e) {
-      refund(engine, sid, ctx.userId, itemId, item, res.limited);
-      if (res.limited) refreshShops(engine, sid).catch(() => {});
+      refund(engine, sid, ctx.userId, itemId, claim);
+      if (claim.limited) refreshShops(engine, sid).catch(() => {});
       const why = e?.status === 403 ? `My role must be above **@${roleName}** and have Manage Roles.` : "Yapin' didn't let me give the role just now.";
-      return done(dialog.error("Couldn't give the role", `${why} Your ${price(cur, item.price)} went back to your wallet.`));
+      return done(dialog.error("Couldn't give the role", `${why} Your ${price(cur, claim.cost)} went back to your wallet.`));
     }
   }
-  if (res.limited) refreshShops(engine, sid).catch(() => {});
+  if (claim.limited) refreshShops(engine, sid).catch(() => {});
   const got = item.roleId ? `You now have the **@${roleName}** role. Enjoy!` : `It's in your inventory. See it with **/balance**.`;
-  return done(dialog.ok(`Bought ${plainName(item.name)}`, `${got}\nPaid ${price(cur, item.price)} · balance ${price(cur, res.bal)}`, { footer: false }));
+  return done(dialog.ok(`Bought ${plainName(item.name)}`, `${got}
+Paid ${price(cur, claim.cost)} · balance ${price(cur, res.bal)}`, { footer: false }));
 }
 
-function refund(engine, sid, uid, itemId, item, limited) {
-  const t = clock(engine);
-  const cfg = cfgOf(engine, sid);
+function releaseItem(engine, sid, itemId, limited) {
   mutate(engine, sid, (doc) => {
-    const u = ensureUser(doc, uid, cfg, t);
-    change(u, item.price, `Refund: ${item.name}`, t);
     const it = doc.items.find((x) => x.id === itemId);
-    if (it) {
-      if (limited && it.stock !== null && it.stock !== undefined) it.stock += 1;
-      it.sold = Math.max(0, (it.sold || 0) - 1);
-    }
+    if (!it) return;
+    if (limited && it.stock !== null && it.stock !== undefined) it.stock += 1;
+    it.sold = Math.max(0, (it.sold || 0) - 1);
   });
+}
+
+function refund(engine, sid, uid, itemId, claim) {
+  const t = clock(engine);
+  const cfg = cfgOf(engine);
+  mutateUsers(engine, (doc) => {
+    const u = ensureUser(doc, uid, cfg, t);
+    change(u, claim.cost, `Refund: ${claim.name}`, t);
+  });
+  releaseItem(engine, sid, itemId, claim.limited);
 }
 
 const SHOP_SUBS = ['add', 'remove', 'stock', 'price', 'buy', 'list'];
@@ -819,7 +864,7 @@ async function runShop(ctx) {
 
 async function shopAdd(ctx, tokens) {
   const { engine, serverId: sid } = ctx;
-  const cur = currencyOf(engine, sid);
+  const cur = currencyOf();
   let kind = (tokens[0] || '').toLowerCase();
   let rest = tokens.slice(1);
   if (kind !== 'role' && kind !== 'item') {
@@ -921,7 +966,7 @@ async function shopStock(ctx, tokens) {
 
 async function shopPrice(ctx, tokens) {
   const { engine, serverId: sid } = ctx;
-  const cur = currencyOf(engine, sid);
+  const cur = currencyOf();
   const items = readDoc(engine, sid).items;
   const cost = parseAmount(tokens[tokens.length - 1]);
   const item = findItem(items, tokens.slice(0, -1).join(' ')) || (items.length === 1 && tokens.length === 1 ? items[0] : null);
@@ -932,13 +977,14 @@ async function shopPrice(ctx, tokens) {
   return ctx.ok('Price saved', `**${plainName(item.name)}** now costs ${price(cur, cost)}.`);
 }
 
-function adminUndo(ctx, label, revert) {
+function adminUndo(ctx, label, revert, { giver = false } = {}) {
   const { engine, serverId: sid } = ctx;
   return engine.router.addUndo({
     serverId: sid, actorId: ctx.userId, label, perm: 'admin',
     run: async (i) => {
       if (i?.server_id && i.server_id !== sid) throw friendly('That Undo button belongs to another server, so it does nothing here.', { title: 'Wrong server' });
       if (i?.user_id) await engine.perms.require(sid, i.user_id, 'admin');
+      if (giver && !canGiveCurrency(engine, i?.user_id || ctx.userId)) throw friendly(OWNER_ONLY_MOVE, { title: 'Owner only' });
       return revert();
     },
   });
@@ -946,37 +992,36 @@ function adminUndo(ctx, label, revert) {
 
 async function settingsView(ctx) {
   const { engine, serverId: sid } = ctx;
-  const cfg = ctx.config();
-  const cur = currencyOf(engine, sid);
-  const list = ranked(engine, sid);
+  const cfg = cfgOf(ctx.engine);
+  const cur = currencyOf();
+  const list = ranked(engine);
   const total = list.reduce((a, x) => Math.min(Number.MAX_SAFE_INTEGER, a + x.bal), 0);
   const items = readDoc(engine, sid).items;
   const work = cfg.workEnabled !== false;
   const fields = [
-    { name: 'Currency', value: `${cur.emoji} ${cur.name}`, inline: true },
+    { name: 'Currency', value: `${cur.emoji} ${cur.name} · the same everywhere`, inline: true },
     { name: 'Daily', value: clampSetting(cfg.dailyAmount, 100) > 0 ? `${price(cur, clampSetting(cfg.dailyAmount, 100))} · streak bonus up to +${STREAK_MAX}%` : 'Off', inline: true },
     { name: 'Work', value: `${onOff(work)} · ${fmt(clampSetting(cfg.workMin, 20))} to ${fmt(clampSetting(cfg.workMax, 80))} ${cur.emoji}, once an hour`, inline: false },
     { name: 'Starting balance', value: price(cur, clampSetting(cfg.startBalance, 0)), inline: true },
-    { name: 'Shop', value: `${items.length}/${MAX_ITEMS} items`, inline: true },
-    { name: 'Members with coins', value: `${fmt(list.length)} · ${price(cur, total)} in total`, inline: true },
+    { name: 'Shop', value: `${items.length}/${MAX_ITEMS} items here`, inline: true },
+    { name: `People with ${cur.name}`, value: `${fmt(list.length)} · ${price(cur, total)} in total`, inline: true },
   ];
-  const body = 'Members earn with /daily and /balance work, pay each other and spend in /shop.\nTyped settings: `/economy give @sam 100` · `/economy take @sam 50` · `/economy reset @sam` · `/economy daily 150` · `/economy work 20 80` · `/economy currency gems 💎` · `/economy start 50`';
+  const body = `Wallets are shared across every server. Earn rates are set once for the whole bot, so only the bot owner can change them. Your shop stays yours.
+Typed settings: \`/economy give @sam 100\` · \`/economy take @sam 50\` · \`/economy reset @sam\` · \`/economy daily 150\` · \`/economy work 20 80\` · \`/economy allow @sam\``;
+  const rate = [
+    button('Daily amount', cid('dailyform'), 'secondary', '📅'),
+    button(work ? 'Work: on' : 'Work: off', cid('twork'), work ? 'success' : 'secondary', '💼'),
+    button('Work pay', cid('workform'), 'secondary', '💰'),
+    button('Starting balance', cid('startform'), 'secondary', '🎒'),
+  ];
+  const move = [
+    button(`Give ${cur.name}`, cid('giveform'), 'primary', '➕'),
+    button(`Take ${cur.name}`, cid('takeform'), 'secondary', '➖'),
+    button('Reset someone', cid('resetform'), 'danger', '🧽'),
+  ];
   return {
     embeds: [card({ title: `${ICONS.economy} Economy settings`, body, fields, color: 'economy' })],
-    components: [
-      row(
-        button('Currency', cid('curform'), 'secondary', '✏️'),
-        button('Daily amount', cid('dailyform'), 'secondary', '📅'),
-        button(work ? 'Work: on' : 'Work: off', cid('twork'), work ? 'success' : 'secondary', '💼'),
-        button('Work pay', cid('workform'), 'secondary', '💰'),
-        button('Starting balance', cid('startform'), 'secondary', '🎒'),
-      ),
-      row(
-        button('Give coins', cid('giveform'), 'primary', '➕'),
-        button('Take coins', cid('takeform'), 'secondary', '➖'),
-        button('Reset someone', cid('resetform'), 'danger', '🧽'),
-      ),
-    ],
+    components: canGiveCurrency(engine, ctx.userId) ? [row(rate), row(move)] : [],
   };
 }
 
@@ -990,10 +1035,16 @@ async function showSettings(ctx) {
   return ctx.ephemeral(await settingsView(ctx));
 }
 
+async function needGiver(ctx, why) {
+  if (canGiveCurrency(ctx.engine, ctx.userId)) return true;
+  await ctx.ephemeral({ embeds: [dialog.denied(null, { title: 'Owner only', body: why })] });
+  return false;
+}
+
 async function adminMove(ctx, tokens, dir) {
   const { engine, serverId: sid } = ctx;
-  await ctx.require('admin');
-  const cur = currencyOf(engine, sid);
+  if (!(await needGiver(ctx, OWNER_ONLY_MOVE))) return undefined;
+  const cur = currencyOf();
   const { amount, before, after } = splitAmount(tokens);
   const who = before.join(' ').trim();
   const reason = clip(readableMentions(after.join(' ')).replace(/\s+/g, ' ').trim(), MAX_REASON);
@@ -1002,58 +1053,49 @@ async function adminMove(ctx, tokens, dir) {
   if (!validAmount(amount)) return ctx.warn("That amount didn't work", `Amounts start at 1. ${AMOUNT_HELP}`);
   const target = await findMember(ctx, who);
   if (target.problem) return ctx.warn(...target.problem);
-  if (isBotMember(engine, target.member, target.id)) return ctx.warn("Bots can't hold coins", 'Pick a person instead.');
+  if (isBotMember(engine, target.member, target.id)) return ctx.warn(`Bots can't hold ${cur.name}`, 'Pick a person instead.');
   const actor = await displayName(engine, sid, ctx.userId);
   const t = clock(engine);
-  const cfg = ctx.config();
-  const moved = mutate(engine, sid, (doc) => {
+  const cfg = cfgOf(ctx.engine);
+  const moved = mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, target.id, cfg, t);
     const real = change(u, dir * amount, `${dir > 0 ? 'Given' : 'Taken'} by ${actor}${reason ? `: ${reason}` : ''}`, t);
     return { real: Math.abs(real), bal: u.bal };
   });
   if (!moved.real) return ctx.info('Nothing changed', dir > 0 ? `**${target.name}** is at the wallet limit.` : `**${target.name}** has no ${cur.name} to take.`);
-  await modLog(engine, sid, card({ title: `${ICONS.economy} ${dir > 0 ? 'Coins given' : 'Coins taken'}`, body: `**${actor}** ${dir > 0 ? 'gave' : 'took'} ${money(cur, moved.real)} ${cur.emoji} ${dir > 0 ? 'to' : 'from'} **${target.name}**.${reason ? `\nReason: ${plainName(reason)}` : ''}\nNew balance: ${price(cur, moved.bal)}`, color: 'economy' }));
+  await modLog(engine, sid, card({ title: `${ICONS.economy} ${cur.name} ${dir > 0 ? 'given' : 'taken'}`, body: `**${actor}** ${dir > 0 ? 'gave' : 'took'} ${money(cur, moved.real)} ${cur.emoji} ${dir > 0 ? 'to' : 'from'} **${target.name}**.${reason ? `\nReason: ${plainName(reason)}` : ''}\nNew balance: ${price(cur, moved.bal)}`, color: 'economy' }));
   const undo = adminUndo(ctx, `${verb} ${fmt(moved.real)}`, async () => {
     const t2 = clock(engine);
-    mutate(engine, sid, (doc) => {
-      const u = ensureUser(doc, target.id, cfgOf(engine, sid), t2);
+    mutateUsers(engine, (doc) => {
+      const u = ensureUser(doc, target.id, cfgOf(engine), t2);
       change(u, -dir * moved.real, `Undo: ${dir > 0 ? 'gift' : 'take'} by ${actor}`, t2);
     });
-  });
+  }, { giver: true });
   const partial = dir < 0 && moved.real < amount ? ` (all they had)` : '';
-  return ctx.ok(dir > 0 ? 'Coins given' : 'Coins taken', `${dir > 0 ? 'Gave' : 'Took'} ${money(cur, moved.real)} ${cur.emoji}${partial} ${dir > 0 ? 'to' : 'from'} **${target.name}**. They have ${price(cur, moved.bal)} now.`, { components: [row(undo.button)] });
+  return ctx.ok(dir > 0 ? `${cur.name} given` : `${cur.name} taken`, `${dir > 0 ? 'Gave' : 'Took'} ${money(cur, moved.real)} ${cur.emoji}${partial} ${dir > 0 ? 'to' : 'from'} **${target.name}**. They have ${price(cur, moved.bal)} now.`, { components: [row(undo.button)] });
 }
 
 async function resetUser(ctx, query) {
   const { engine, serverId: sid } = ctx;
-  await ctx.require('admin');
+  if (!(await needGiver(ctx, OWNER_ONLY_MOVE))) return undefined;
   const q = String(query ?? '').trim();
   if (!q) return ctx.warn('Reset who?', 'Try `/economy reset @sam`.');
   const found = await ctx.findUser(q);
   if (!found?.id) return ctx.warn("I couldn't find them", `Nobody here matches **${plainName(clip(q, 40))}**.`);
   const name = await displayName(engine, sid, found.id);
-  const saved = readDoc(engine, sid).users[found.id];
+  const saved = readUsers(engine).users[found.id];
   if (!saved) return ctx.info('Nothing to reset', `**${name}** has no wallet yet.`);
-  mutate(engine, sid, (doc) => { delete doc.users[found.id]; });
-  const cur = currencyOf(engine, sid);
+  mutateUsers(engine, (doc) => { delete doc.users[found.id]; });
+  const cur = currencyOf();
   const undo = adminUndo(ctx, `reset of ${clip(name, 30)}`, async () => {
-    mutate(engine, sid, (doc) => { doc.users[found.id] = saved; });
-  });
+    mutateUsers(engine, (doc) => { doc.users[found.id] = saved; });
+  }, { giver: true });
   return ctx.ok('Wallet reset', `**${name}** starts over: their ${price(cur, saved.bal || 0)}, streak, history and inventory are cleared. Roles they bought stay.`, { components: [row(undo.button)] });
 }
 
-async function setCurrency(ctx, tokens) {
-  const parts = [...tokens];
-  let emoji = '';
-  if (parts.length > 1 && cleanEmoji(parts[parts.length - 1]) && !/^[a-z0-9]+$/i.test(parts[parts.length - 1])) emoji = cleanEmoji(parts.pop());
-  return saveCurrency(ctx, parts.join(' '), emoji);
-}
-
-const NAME_HELP = 'Use 1 to 20 plain letters, like **gems** or **star dust**.';
-const EMOJI_HELP = 'Use one emoji, like 💎.';
-const DAILY_HELP = 'Use a whole number of coins, like `500`, `2k` or `5m` (0 turns daily off).';
-const WORK_HELP = 'Use whole numbers of coins from 1 up, like `/economy work 20 80`. `2k` and `5m` work too.';
-const START_HELP = 'Use a whole number of coins, like `0`, `500`, `2k` or `5m`.';
+const DAILY_HELP = `Use a whole number of ${CURRENCY.name}, like \`500\`, \`2k\` or \`5m\` (0 turns daily off).`;
+const WORK_HELP = `Use whole numbers of ${CURRENCY.name} from 1 up, like \`/economy work 20 80\`. \`2k\` and \`5m\` work too.`;
+const START_HELP = `Use a whole number of ${CURRENCY.name}, like \`0\`, \`500\`, \`2k\` or \`5m\`.`;
 
 function workPair(loText, hiText) {
   const lo = numberIn(loText, { min: 1 });
@@ -1062,51 +1104,84 @@ function workPair(loText, hiText) {
   return lo <= hi ? [lo, hi] : [hi, lo];
 }
 
-async function saveCurrency(ctx, nameText, emojiText) {
-  const name = cleanCurrencyName(nameText);
-  if (!name) return ctx.warn("That name didn't work", NAME_HELP);
-  const patch = { currencyName: name };
-  if (emojiText !== undefined && String(emojiText).trim()) {
-    const emoji = cleanEmoji(emojiText);
-    if (!emoji) return ctx.warn("That emoji didn't work", EMOJI_HELP);
-    patch.currencyEmoji = emoji;
-  }
-  ctx.patchConfig(patch);
-  const cur = currencyOf(ctx.engine, ctx.serverId);
-  return ctx.ok('Currency saved', `Your server pays in **${cur.name}** ${cur.emoji} now. Balances stay the same.`);
-}
-
 function numberIn(text, { min = 0, max = MAX_SETTING } = {}) {
   const n = parseAmount(String(text ?? '').trim());
   return Number.isInteger(n) && n >= min && n <= max ? n : null;
 }
 
 async function saveDaily(ctx, text) {
+  if (!(await needGiver(ctx, OWNER_ONLY_EARN))) return undefined;
   const n = numberIn(text, { min: 0 });
   if (n === null) return ctx.warn("That amount didn't work", DAILY_HELP);
-  ctx.patchConfig({ dailyAmount: n });
-  const cur = currencyOf(ctx.engine, ctx.serverId);
-  return ctx.ok('Daily saved', n ? `/daily gives ${price(cur, n)}, plus up to +${STREAK_MAX}% for streaks.` : '/daily is off now.');
+  patchCfg(ctx, { dailyAmount: n });
+  const cur = currencyOf();
+  return ctx.ok('Daily saved', n ? `/daily gives ${price(cur, n)} everywhere, plus up to +${STREAK_MAX}% for streaks.` : '/daily is off now.');
 }
 
 async function saveWork(ctx, loText, hiText) {
+  if (!(await needGiver(ctx, OWNER_ONLY_EARN))) return undefined;
   const pair = workPair(loText, hiText);
   if (!pair) return ctx.warn("That pay didn't work", WORK_HELP);
   const [a, b] = pair;
-  ctx.patchConfig({ workMin: a, workMax: b });
-  const cur = currencyOf(ctx.engine, ctx.serverId);
-  return ctx.ok('Work pay saved', `A shift pays ${fmt(a)} to ${fmt(b)} ${cur.emoji}, once an hour.`);
+  patchCfg(ctx, { workMin: a, workMax: b });
+  const cur = currencyOf();
+  return ctx.ok('Work pay saved', `A shift pays ${fmt(a)} to ${fmt(b)} ${cur.emoji}, once an hour, in every server.`);
 }
 
 async function saveStart(ctx, text) {
+  if (!(await needGiver(ctx, OWNER_ONLY_EARN))) return undefined;
   const n = numberIn(text, { min: 0 });
   if (n === null) return ctx.warn("That amount didn't work", START_HELP);
-  ctx.patchConfig({ startBalance: n });
-  const cur = currencyOf(ctx.engine, ctx.serverId);
+  patchCfg(ctx, { startBalance: n });
+  const cur = currencyOf();
   return ctx.ok('Starting balance saved', `New wallets start with ${price(cur, n)}. Existing wallets don't change.`);
 }
 
-const ECON_SUBS = ['give', 'take', 'reset', 'currency', 'daily', 'work', 'start', 'settings'];
+async function saveWorkEnabled(ctx, on) {
+  if (!(await needGiver(ctx, OWNER_ONLY_EARN))) return undefined;
+  patchCfg(ctx, { workEnabled: on });
+  return ctx.ok('Saved', on ? '**/balance work** is on everywhere.' : '**/balance work** is off everywhere. /daily still works.');
+}
+
+async function listGivers(ctx) {
+  if (!(await needGiver(ctx, OWNER_ONLY_MOVE))) return undefined;
+  const list = ownerIds(ctx.engine);
+  const lines = list.length ? list.map((id) => `• <@${id}>`).join('\n') : 'Nobody yet. Add someone with `/economy allow @sam`.';
+  return ctx.ephemeral({ embeds: [card({ title: `${ICONS.economy} Who can hand out ${CURRENCY.name}`, body: `You can, always.
+${lines}`, color: 'economy' })] });
+}
+
+async function changeGiver(ctx, query, on) {
+  if (!ctx.engine.isBotOwner(ctx.userId)) {
+    await ctx.ephemeral({ embeds: [dialog.denied(null, { title: 'Owner only', body: `Only the bot owner can change who hands out ${CURRENCY.name}.` })] });
+    return undefined;
+  }
+  const q = String(query ?? '').trim();
+  if (!q) return ctx.warn(on ? 'Allow who?' : 'Take it from who?', `Try \`/economy ${on ? 'allow' : 'deny'} @sam\`.`);
+  const found = await ctx.findUser(q);
+  if (!found?.id) return ctx.warn("I couldn't find them", `Nobody here matches **${plainName(clip(q, 40))}**.`);
+  const name = await displayName(ctx.engine, ctx.serverId, found.id);
+  if (on) {
+    allowGiver(ctx.engine, found.id);
+    return ctx.ok('Allowed', `**${name}** can hand out ${CURRENCY.name} now, in any server.`);
+  }
+  denyGiver(ctx.engine, found.id);
+  return ctx.ok('Taken back', `**${name}** can't hand out ${CURRENCY.name} anymore.`);
+}
+
+const ECON_SUBS = ['give', 'take', 'reset', 'daily', 'work', 'start', 'allow', 'deny', 'givers', 'settings'];
+
+const globalField = (field) => ({
+  ...field,
+  owner: true,
+  read: (cfg) => (eng ? cfgOf(eng)[field.key] : cfg[field.key]),
+  save: async (ctx, value, all) => {
+    if (!canGiveCurrency(ctx.engine, ctx.userId)) return { error: OWNER_ONLY_EARN };
+    if (typeof field.save === 'function') return field.save(ctx, value, all);
+    patchCfg(ctx, { [field.key]: value });
+    return undefined;
+  },
+});
 
 const amountField = (key, label, help, min, error) => ({
   key, label, help, type: 'number', web: true, min, max: MAX_SETTING, step: 1,
@@ -1119,39 +1194,23 @@ const amountField = (key, label, help, min, error) => ({
 const workField = (key, label, help) => ({
   ...amountField(key, label, help, 1, WORK_HELP),
   save: (ctx, value, all) => {
-    const cfg = ctx.config();
+    const cfg = cfgOf(ctx.engine);
     const other = key === 'workMin' ? 'workMax' : 'workMin';
     const otherValue = all && all[other] !== undefined && numberIn(all[other], { min: 1 }) !== null ? numberIn(all[other], { min: 1 }) : cfg[other];
     const pair = key === 'workMin' ? workPair(value, otherValue) : workPair(otherValue, value);
     if (!pair) return { error: WORK_HELP };
-    ctx.patchConfig({ workMin: pair[0], workMax: pair[1] });
+    patchCfg(ctx, { workMin: pair[0], workMax: pair[1] });
     return { applied: { workMin: pair[0], workMax: pair[1] } };
   },
 });
 
 const DASHBOARD = [
-  {
-    key: 'currencyName', label: 'Currency name', type: 'string', web: true, maxLength: 20,
-    help: 'What your coins are called, like gems or star dust.',
-    validate: (ctx, v) => {
-      const name = cleanCurrencyName(v);
-      return name ? accept(name) : reject(NAME_HELP);
-    },
-  },
-  {
-    key: 'currencyEmoji', label: 'Currency emoji', type: 'emoji', web: true, maxLength: 80,
-    help: 'The emoji shown next to prices and balances.',
-    validate: (ctx, v) => {
-      const emoji = cleanEmoji(v);
-      return emoji ? accept(emoji) : reject(EMOJI_HELP);
-    },
-  },
-  amountField('dailyAmount', 'Daily reward', 'Coins from /daily, before the streak bonus. 0 turns /daily off.', 0, DAILY_HELP),
-  workField('workMin', 'Work pay (lowest)', 'The least a shift of /balance work pays.'),
-  workField('workMax', 'Work pay (highest)', 'The most a shift of /balance work pays.'),
-  boolField({ key: 'workEnabled', label: '/balance work enabled', help: 'Lets members earn coins once an hour with /balance work.' }),
-  boolField({ key: 'begEnabled', label: '/beg enabled', help: 'Lets members beg for a few coins.' }),
-  amountField('startBalance', 'Starting balance', 'Coins every new wallet starts with. Existing wallets do not change.', 0, START_HELP),
+  globalField(amountField('dailyAmount', 'Daily reward', `${CURRENCY.name} from /daily, before the streak bonus. 0 turns /daily off. Set once for every server.`, 0, DAILY_HELP)),
+  globalField(workField('workMin', 'Work pay (lowest)', 'The least a shift of /balance work pays, in every server.')),
+  globalField(workField('workMax', 'Work pay (highest)', 'The most a shift of /balance work pays, in every server.')),
+  globalField(boolField({ key: 'workEnabled', label: '/balance work enabled', help: `Lets people earn ${CURRENCY.name} once an hour with /balance work.` })),
+  globalField(boolField({ key: 'begEnabled', label: '/beg enabled', help: `Lets people beg for a few ${CURRENCY.name}.` })),
+  globalField(amountField('startBalance', 'Starting balance', `${CURRENCY.name} every new wallet starts with. Existing wallets do not change.`, 0, START_HELP)),
 ];
 
 async function runEconomy(ctx) {
@@ -1163,33 +1222,28 @@ async function runEconomy(ctx) {
   if (['give', 'add', 'grant'].includes(sub)) return adminMove(ctx, rest, 1);
   if (['take', 'remove', 'deduct'].includes(sub)) return adminMove(ctx, rest, -1);
   if (sub === 'reset') return resetUser(ctx, rest.join(' '));
-  if (sub === 'currency' || sub === 'name') {
-    if (!rest.length) return ctx.info('Currency', `Now: ${currencyOf(ctx.engine, ctx.serverId).emoji} ${currencyOf(ctx.engine, ctx.serverId).name}. Change it with \`/economy currency gems 💎\`.`);
-    return setCurrency(ctx, rest);
+  if (sub === 'currency' || sub === 'name' || sub === 'emoji') {
+    return ctx.info('One currency everywhere', `YapOS pays in ${CURRENCY.emoji} ${CURRENCY.name} in every server, so there is nothing to change.`);
   }
-  if (sub === 'emoji') {
-    const emoji = cleanEmoji(rest[0]);
-    if (!emoji) return ctx.warn("That emoji didn't work", 'Try `/economy emoji 💎`.');
-    ctx.patchConfig({ currencyEmoji: emoji });
-    return ctx.ok('Emoji saved', `Prices show ${emoji} now.`);
-  }
+  if (sub === 'allow') return changeGiver(ctx, rest.join(' '), true);
+  if (sub === 'deny') return changeGiver(ctx, rest.join(' '), false);
+  if (['givers', 'allowed'].includes(sub)) return listGivers(ctx);
   if (sub === 'daily') return saveDaily(ctx, rest[0]);
   if (sub === 'work') {
     const v = (rest[0] || '').toLowerCase();
-    if (['on', 'off', 'enable', 'disable', 'yes', 'no'].includes(v)) {
-      const on = ['on', 'enable', 'yes'].includes(v);
-      ctx.patchConfig({ workEnabled: on });
-      return ctx.ok('Saved', on ? '**/balance work** is on.' : '**/balance work** is off. /daily still works.');
-    }
+    if (['on', 'off', 'enable', 'disable', 'yes', 'no'].includes(v)) return saveWorkEnabled(ctx, ['on', 'enable', 'yes'].includes(v));
     if (!rest.length) return ctx.warn('Work pay', 'Try `/economy work 20 80`, `/economy work on` or `/economy work off`.');
     return saveWork(ctx, rest[0], rest[1]);
   }
   if (sub === 'start' || sub === 'starting') return saveStart(ctx, rest[0]);
   const guess = didYouMean(sub, ECON_SUBS);
-  return ctx.warn("I didn't get that", `I don't know **${plainName(clip(sub, 30))}**.${guess.length ? ` Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?` : ''}\nTry \`/economy\` on its own for the settings panel.`);
+  return ctx.warn("I didn't get that", `I don't know **${plainName(clip(sub, 30))}**.${guess.length ? ` Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?` : ''}
+Try \`/economy\` on its own for the settings panel.`);
 }
 
 const admin = (run) => ({ perm: 'admin', run: async (ctx) => { await ctx.require('admin'); return run(ctx); } });
+const rateOwner = (run) => admin(async (ctx) => ((await needGiver(ctx, OWNER_ONLY_EARN)) ? run(ctx) : undefined));
+const moveOwner = (run) => admin(async (ctx) => ((await needGiver(ctx, OWNER_ONLY_MOVE)) ? run(ctx) : undefined));
 const refresh = async (ctx) => (ownsPanel(ctx) ? ctx.update(await settingsView(ctx)) : ctx.ephemeral(await settingsView(ctx)));
 const ownerOnly = (argIndex, run) => ({
   run: async (ctx) => {
@@ -1202,13 +1256,11 @@ export const { setup, teardown, check } = defineApp({
   id: ID,
   name: 'Economy',
   icon: ICONS.economy,
-  description: 'Coins, daily rewards, work, payments and a shop.',
+  description: `${CURRENCY.name}, daily rewards, work, payments and a shop.`,
   category: 'Fun',
   panelPerm: 'member',
 
   defaults: {
-    currencyName: DEFAULT_CURRENCY.name,
-    currencyEmoji: DEFAULT_CURRENCY.emoji,
     dailyAmount: 100,
     workMin: 20,
     workMax: 80,
@@ -1218,11 +1270,11 @@ export const { setup, teardown, check } = defineApp({
   },
 
   commands: {
-    daily: { description: 'Claim your daily coins. Come back every day for a streak bonus: /daily', run: claimDaily },
-    beg: { description: 'Beg for a few coins. Sometimes people help, sometimes not: /beg', run: doBeg },
+    daily: { description: 'Claim your daily Shards. Come back every day for a streak bonus: /daily', run: claimDaily },
+    beg: { description: 'Beg for a few Shards. Sometimes people help, sometimes not: /beg', run: doBeg },
     balance: { description: 'Your wallet: /balance, /balance @sam, /balance pay @sam 50, work, top, history', run: (ctx) => runBalance(ctx) },
     shop: { description: 'The server shop: /shop, /shop buy Name. Admins: /shop add role @Supporter 500', run: runShop },
-    economy: { description: 'Economy settings (admins): /economy give @sam 100, take, reset @sam, daily 150', perm: 'admin', run: runEconomy },
+    economy: { description: 'Economy settings: /economy give @sam 100, take, reset @sam, daily 150, allow @sam', perm: 'admin', run: runEconomy },
   },
 
   components: {
@@ -1248,52 +1300,48 @@ export const { setup, teardown, check } = defineApp({
     }),
     payno: ownerOnly(1, (ctx) => {
       ctx.engine.router.dropSession(ctx.argv[0]);
-      return ctx.update({ embeds: [dialog.info('Cancelled', 'No coins were sent.')], components: [] });
+      return ctx.update({ embeds: [dialog.info('Cancelled', `No ${CURRENCY.name} were sent.`)], components: [] });
     }),
-    twork: admin(async (ctx) => { ctx.patchConfig({ workEnabled: ctx.config().workEnabled === false }); return refresh(ctx); }),
-    curform: admin((ctx) => {
-      const cur = currencyOf(ctx.engine, ctx.serverId);
-      return ctx.form({ title: 'Currency', action: 'cursave', fields: [
-        { id: 'name', label: 'Name (like coins, gems, star dust)', style: 'short', value: cur.name, max: 20 },
-        { id: 'emoji', label: 'Emoji', style: 'short', value: cur.emoji, max: 80 },
-      ] });
+    twork: admin(async (ctx) => {
+      if (!(await needGiver(ctx, OWNER_ONLY_EARN))) return undefined;
+      patchCfg(ctx, { workEnabled: cfgOf(ctx.engine).workEnabled === false });
+      return refresh(ctx);
     }),
-    cursave: admin((ctx) => saveCurrency(ctx, ctx.values?.name, ctx.values?.emoji)),
-    dailyform: admin((ctx) => ctx.form({ title: 'Daily amount', action: 'dailysave', fields: [
-      { id: 'amount', label: 'Coins per /daily (0 turns it off)', style: 'short', value: String(clampSetting(ctx.config().dailyAmount, 100)), max: 20 },
+    dailyform: rateOwner((ctx) => ctx.form({ title: 'Daily amount', action: 'dailysave', fields: [
+      { id: 'amount', label: `${CURRENCY.name} per /daily (0 turns it off)`, style: 'short', value: String(clampSetting(cfgOf(ctx.engine).dailyAmount, 100)), max: 20 },
     ] })),
-    dailysave: admin((ctx) => saveDaily(ctx, ctx.values?.amount)),
-    workform: admin((ctx) => ctx.form({ title: 'Work pay', action: 'worksave', fields: [
-      { id: 'min', label: 'Lowest pay per shift', style: 'short', value: String(clampSetting(ctx.config().workMin, 20)), max: 20 },
-      { id: 'max', label: 'Highest pay per shift', style: 'short', value: String(clampSetting(ctx.config().workMax, 80)), max: 20 },
+    dailysave: rateOwner((ctx) => saveDaily(ctx, ctx.values?.amount)),
+    workform: rateOwner((ctx) => ctx.form({ title: 'Work pay', action: 'worksave', fields: [
+      { id: 'min', label: 'Lowest pay per shift', style: 'short', value: String(clampSetting(cfgOf(ctx.engine).workMin, 20)), max: 20 },
+      { id: 'max', label: 'Highest pay per shift', style: 'short', value: String(clampSetting(cfgOf(ctx.engine).workMax, 80)), max: 20 },
     ] })),
-    worksave: admin((ctx) => saveWork(ctx, ctx.values?.min, ctx.values?.max)),
-    startform: admin((ctx) => ctx.form({ title: 'Starting balance', action: 'startsave', fields: [
-      { id: 'amount', label: 'Coins a new wallet starts with', style: 'short', value: String(clampSetting(ctx.config().startBalance, 0)), max: 20 },
+    worksave: rateOwner((ctx) => saveWork(ctx, ctx.values?.min, ctx.values?.max)),
+    startform: rateOwner((ctx) => ctx.form({ title: 'Starting balance', action: 'startsave', fields: [
+      { id: 'amount', label: `${CURRENCY.name} a new wallet starts with`, style: 'short', value: String(clampSetting(cfgOf(ctx.engine).startBalance, 0)), max: 20 },
     ] })),
-    startsave: admin((ctx) => saveStart(ctx, ctx.values?.amount)),
-    giveform: admin((ctx) => ctx.form({ title: 'Give coins', action: 'givesave', fields: [
+    startsave: rateOwner((ctx) => saveStart(ctx, ctx.values?.amount)),
+    giveform: moveOwner((ctx) => ctx.form({ title: `Give ${CURRENCY.name}`, action: 'givesave', fields: [
       { id: 'user', label: 'Who? (@name or username)', style: 'short', placeholder: '@sam', max: 100 },
       { id: 'amount', label: 'How many?', style: 'short', placeholder: '100', max: 20 },
       { id: 'reason', label: 'Reason (optional)', style: 'short', required: false, max: MAX_REASON },
     ] })),
-    givesave: admin((ctx) => adminMove(ctx, [...tokenize(ctx.values?.user), String(ctx.values?.amount ?? '').trim() || 'x', ...tokenize(ctx.values?.reason)], 1)),
-    takeform: admin((ctx) => ctx.form({ title: 'Take coins', action: 'takesave', fields: [
+    givesave: moveOwner((ctx) => adminMove(ctx, [...tokenize(ctx.values?.user), String(ctx.values?.amount ?? '').trim() || 'x', ...tokenize(ctx.values?.reason)], 1)),
+    takeform: moveOwner((ctx) => ctx.form({ title: `Take ${CURRENCY.name}`, action: 'takesave', fields: [
       { id: 'user', label: 'Who? (@name or username)', style: 'short', placeholder: '@sam', max: 100 },
       { id: 'amount', label: 'How many?', style: 'short', placeholder: '100', max: 20 },
       { id: 'reason', label: 'Reason (optional)', style: 'short', required: false, max: MAX_REASON },
     ] })),
-    takesave: admin((ctx) => adminMove(ctx, [...tokenize(ctx.values?.user), String(ctx.values?.amount ?? '').trim() || 'x', ...tokenize(ctx.values?.reason)], -1)),
-    resetform: admin((ctx) => ctx.form({ title: 'Reset a wallet', action: 'resetsave', fields: [
+    takesave: moveOwner((ctx) => adminMove(ctx, [...tokenize(ctx.values?.user), String(ctx.values?.amount ?? '').trim() || 'x', ...tokenize(ctx.values?.reason)], -1)),
+    resetform: moveOwner((ctx) => ctx.form({ title: 'Reset a wallet', action: 'resetsave', fields: [
       { id: 'user', label: 'Who? (@name or username)', style: 'short', placeholder: '@sam', max: 100 },
     ] })),
-    resetsave: admin((ctx) => resetUser(ctx, ctx.values?.user)),
+    resetsave: moveOwner((ctx) => resetUser(ctx, ctx.values?.user)),
   },
 
   yap: [
     { words: ['daily'], run: claimDaily },
     { words: ['beg', 'plead'], run: doBeg },
-    { words: ['balance', 'bal', 'wallet', 'coins', 'money'], run: (ctx) => runBalance(ctx, ctx.argv) },
+    { words: ['balance', 'bal', 'wallet', 'coins', 'shards', 'money'], run: (ctx) => runBalance(ctx, ctx.argv) },
     { words: ['pay', 'work', 'richest'], run: (ctx) => runBalance(ctx, [ctx.word, ...ctx.argv]) },
     { words: ['shop', 'store', 'buy'], run: (ctx) => (ctx.word === 'buy' ? runShopTokens(ctx, ['buy', ...ctx.argv]) : runShopTokens(ctx, ctx.argv)) },
     {
@@ -1313,12 +1361,12 @@ export const { setup, teardown, check } = defineApp({
   dashboard: DASHBOARD,
 
   services: (engine) => ({
-    ranked: (sid) => ranked(engine, sid),
-    currency: (sid) => currencyOf(engine, sid),
+    ranked: (sid) => ranked(engine),
+    currency: (sid) => currencyOf(),
     balance: (sid, uid) => {
       needIds(sid, uid);
       if (uid === botId(engine)) return 0;
-      return balanceOf(engine, sid, uid);
+      return balanceOf(engine, uid);
     },
     add: (sid, uid, amount, reason) => serviceAdd(engine, sid, uid, amount, reason),
     take: (sid, uid, amount, reason) => serviceTake(engine, sid, uid, amount, reason),
@@ -1327,20 +1375,27 @@ export const { setup, teardown, check } = defineApp({
   }),
 
   presets: {
-    gaming: { enabled: true, config: { dailyAmount: 100 } },
+    gaming: { enabled: true, config: {} },
     friends: { enabled: true, config: {} },
     study: { enabled: false, config: {} },
-    community: { enabled: true, config: { dailyAmount: 100 } },
-    roleplay: { enabled: true, config: { currencyName: 'gold', currencyEmoji: '🪙' } },
+    community: { enabled: true, config: {} },
+    roleplay: { enabled: true, config: {} },
   },
 
   help: [
-    '/daily gives coins once a day. Claim again within 48 hours to keep your streak: +10% for each streak day, up to +100% from day 10.',
-    '/balance work pays a little once an hour. Pay a friend with /balance pay @sam 50 (over 1,000 asks you to confirm). /balance top shows the richest 10, /balance history your last 20 changes.',
-    'Admins: /shop add role @Supporter 500 · /shop add item "Golden ticket" 200 · /shop stock 1 10 · /shop price 1 750 · /shop remove 1 · /economy give @sam 100 · /economy reset @sam',
+    `Your wallet of ${CURRENCY.emoji} ${CURRENCY.name} and your level follow you to every server YapOS is in.`,
+    '/daily gives Shards once a day. Claim again within 48 hours to keep your streak: +10% for each streak day, up to +100% from day 10. One claim per person, not per server.',
+    '/balance work pays a little once an hour. Pay a friend with /balance pay @sam 50 (over 1,000 asks you to confirm). /balance top is the one global leaderboard, /balance history your last 20 changes.',
+    'Admins run the shop here: /shop add role @Supporter 500 · /shop add item "Golden ticket" 200 · /shop stock 1 10 · /shop price 1 750 · /shop remove 1',
+    `Only the bot owner hands out ${CURRENCY.name} or changes earn rates: /economy give @sam 100 · /economy daily 150 · /economy allow @sam lets someone else help.`,
   ],
 
-  dispose: () => { busy.clear(); warned.clear(); },
+  init: (engine) => {
+    eng = engine;
+    migrate(engine);
+  },
+
+  dispose: () => { busy.clear(); warned.clear(); eng = null; },
 });
 
 async function runShopTokens(ctx, tokens) {

@@ -2,6 +2,7 @@ import { VERSION, hideSecret } from './config.js';
 import { parseBool, parseDuration } from './parse.js';
 import { avatarUrl } from './links.js';
 import { HARD_CAP } from './limits.js';
+import { canGiveCurrency, CURRENCY, GLOBAL_KEY } from './global.js';
 
 const IDLE_MS = 15_000;
 const HOT_MS = 2_000;
@@ -22,6 +23,7 @@ const MAX_VALUE_CHARS = 20_000;
 const MAX_DATA_CHARS = 100_000;
 const MAX_PENDING_RESULTS = 100;
 const TOP = 100;
+const BOARD_SERVERS = 25;
 const RECENT = 10;
 const MEMBER_CASES = 50;
 const APP_RE = /^[a-z0-9_-]{1,32}$/;
@@ -58,6 +60,7 @@ const MOD_OFF = "Mod isn't installed here. Install it first.";
 const TICKETS_OFF = "Tickets isn't installed here. Install it first.";
 const UNKNOWN_JOB = "I don't know that job.";
 const BAD_LENGTH = "I couldn't read that length. Try something like 10m, 2h or 3d.";
+const OWNER_ONLY = 'Only the bot owner can change this.';
 
 export const SLUG_RE = /^[a-z0-9-]{3,32}$/;
 
@@ -182,6 +185,7 @@ export function publicSchema(field, defaults = {}) {
   if (field.unlimited === true) out.unlimited = true;
   if (Array.isArray(field.options)) out.options = field.options.map((o) => (typeof o === 'object' ? { value: o.value, label: String(o.label ?? o.value) } : { value: o, label: String(o) }));
   out.web = field.web === true;
+  out.owner = field.owner === true;
   if (typeof field.editor === 'string') out.editor = field.editor;
   if (field.note) out.note = field.note;
   return out;
@@ -266,7 +270,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
   const state = {
     timer: null, stopped: true, busy: false, failures: 0, delay: null, hot: false,
     used: new Map(), snapped: new Map(), published: new Map(), pending: [],
-    gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(),
+    gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity,
   };
 
   async function request(method, path, body) {
@@ -446,61 +450,64 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     return new Map(members.map((m) => [m.id, m]));
   }
 
-  async function plainWrapped(sid, wrapped, members) {
-    if (!plainObject(wrapped) || !plainObject(wrapped.card)) return wrapped;
-    const channels = await engine.cache.channels(sid).catch(() => []);
-    const rooms = new Map(channels.map((c) => [c.id, c]));
-    const clean = (text) => String(text ?? '')
-      .replace(/\[[^\]]*\]\([^)]*\)/g, '')
-      .replace(/<@!?([\w-]+)>/g, (m, id) => (members.has(id) ? memberName(members.get(id)) : 'Former member'))
-      .replace(/<#([\w-]+)>/g, (m, id) => (rooms.has(id) ? `#${String(rooms.get(id).name ?? 'channel').slice(0, 64)}` : '#channel'))
-      .replace(/<@&[\w-]+>/g, '')
-      .replace(/[ \t]*·[ \t]*$/gm, '')
-      .trim();
-    const { card } = wrapped;
-    const out = { ...card };
-    for (const k of ['title', 'description']) if (typeof card[k] === 'string') out[k] = clean(card[k]);
-    if (plainObject(card.footer) && typeof card.footer.text === 'string') out.footer = { ...card.footer, text: clean(card.footer.text) };
-    if (Array.isArray(card.fields)) {
-      out.fields = card.fields.filter(plainObject).map((f) => ({ ...f, name: clean(f.name), value: clean(f.value) })).filter((f) => f.name && f.value);
+  function serverIds() {
+    return engine.settings.servers().filter((sid) => sid !== GLOBAL_KEY && SERVER_ID.test(sid));
+  }
+
+  async function knownPeople() {
+    const out = new Map();
+    let left = BOARD_SERVERS;
+    for (const sid of serverIds()) {
+      if (left-- <= 0) break;
+      for (const m of (await namesFor(sid).catch(() => new Map())).values()) if (m?.id && !out.has(m.id)) out.set(m.id, m);
     }
-    return { ...wrapped, card: out };
+    return out;
+  }
+
+  async function globalBoard() {
+    const known = await knownPeople();
+    const who = (u) => {
+      const m = known.get(u.id);
+      const saved = typeof u.name === 'string' && u.name.trim() ? plainName(u.name) : null;
+      return { name: m ? memberName(m) : saved || 'Someone', avatar_url: avatarUrl(m?.avatar_path ?? u.avatar_path ?? null) };
+    };
+    const levelsSvc = engine.service('levels');
+    const econSvc = engine.service('economy');
+    const levels = (levelsSvc?.ranked?.() || []).slice(0, TOP).map((u, i) => ({ rank: i + 1, id: u.id, ...who(u), level: u.level, xp: u.xp, messages: u.messages || 0 }));
+    const economy = (econSvc?.ranked?.() || []).slice(0, TOP).map((u, i) => ({ rank: i + 1, id: u.id, ...who(u), balance: u.bal }));
+    return { levels, economy, currency: { ...CURRENCY }, updatedAt: now() };
   }
 
   async function publicPage(sid) {
-    const { settings } = engine;
-    const core = settings.core(sid);
+    const core = engine.settings.core(sid);
     const page = plainObject(core.publicPage) ? core.publicPage : {};
     const server = await engine.perms.server(sid).catch(() => null);
-    const members = await namesFor(sid);
-    const who = (id) => {
-      const m = members.get(id);
-      return { name: m ? memberName(m) : 'Former member', avatar_url: avatarUrl(m?.avatar_path ?? null) };
-    };
-    const levelsSvc = settings.isEnabled(sid, 'levels') ? engine.service('levels') : null;
-    const econSvc = settings.isEnabled(sid, 'economy') ? engine.service('economy') : null;
-    const wrappedSvc = settings.isEnabled(sid, 'wrapped') ? engine.service('wrapped') : null;
-    const levels = (levelsSvc?.ranked?.(sid) || []).slice(0, TOP).map((u, i) => ({ rank: i + 1, id: u.id, ...who(u.id), level: u.level, xp: u.xp, messages: u.messages || 0 }));
-    const economy = (econSvc?.ranked?.(sid) || []).slice(0, TOP).map((u, i) => ({ rank: i + 1, id: u.id, ...who(u.id), balance: u.bal }));
-    let wrapped = null;
-    try { wrapped = wrappedSvc?.lastMonth ? await plainWrapped(sid, await wrappedSvc.lastMonth(sid, server?.name || 'this server'), members) : null; } catch (e) { log.debug('[dashboard] wrapped for the public page failed', e?.message); }
     return {
       enabled: page.enabled === true,
       slug: typeof page.slug === 'string' ? page.slug : null,
       name: server?.name || 'Server',
       icon: avatarUrl(server?.icon_path ?? server?.icon ?? null),
-      levels,
-      economy,
-      wrapped,
+      global: await globalBoard(),
       updatedAt: now(),
     };
+  }
+
+  async function publishGlobal() {
+    if (!enabled) return { ok: false, status: 0 };
+    const r = await request('PUT', '/bot/global', await globalBoard());
+    if (r.ok) state.boardAt = now();
+    else log.debug(`[dashboard] the global board answered ${r.status}`);
+    return { ok: r.ok, status: r.status };
   }
 
   async function publishPublic(sid) {
     if (!enabled) return { ok: false, status: 0 };
     const body = await publicPage(sid);
     const r = await request('PUT', `/bot/public/${encodeURIComponent(sid)}`, body);
-    if (r.ok) state.published.set(sid, now());
+    if (r.ok) {
+      state.published.set(sid, now());
+      state.boardAt = now();
+    }
     return { ok: r.ok, status: r.status };
   }
 
@@ -577,6 +584,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
             const field = k.length <= 100 ? fields.find((f) => f.key === k) : null;
             if (!field) { errors[k.slice(0, 100)] = "That setting doesn't exist."; continue; }
             if (field.web !== true || typeof field.validate !== 'function') { errors[k] = field.note || "That setting can't be changed on the dashboard."; continue; }
+            if (field.owner === true && !canGiveCurrency(engine, uid)) { errors[k] = OWNER_ONLY; continue; }
             if (!engine.settings.isEnabled(sid, meta.id)) { errors[k] = `${meta.name} isn't installed here. Install it first.`; continue; }
             if (tooBig(value)) { errors[k] = 'That value is too long.'; continue; }
             try {
@@ -992,7 +1000,12 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       budget--;
       await pushSnapshot(sid).catch((e) => log.debug('[dashboard] snapshot refresh failed', e?.message));
     }
-    for (const sid of engine.settings.servers()) {
+    if (budget > 0 && t - state.boardAt >= PUBLIC_EVERY_MS) {
+      budget--;
+      const g = await publishGlobal().catch(() => ({ ok: false }));
+      if (!g.ok) state.boardAt = t;
+    }
+    for (const sid of serverIds()) {
       if (budget <= 0) break;
       const page = engine.settings.core(sid).publicPage;
       if (!plainObject(page) || page.enabled !== true) { state.published.delete(sid); continue; }
@@ -1084,6 +1097,8 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     runJob,
     snapshot,
     publicPage,
+    globalBoard,
+    publishGlobal,
     publishPublic,
     unpublishPublic,
     serverGone,

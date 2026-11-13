@@ -10,7 +10,7 @@ const FEATURES = [
   { icon: 'apps', title: 'Every app in one place', body: 'Install or remove apps like Levels, Tickets and Automod with a single switch.' },
   { icon: 'sliders', title: 'Settings without commands', body: 'Pick channels and roles from a list. YapOS checks every change before it applies.' },
   { icon: 'shield', title: 'Moderation history', body: 'Search every case, filter by type and open a member to see their full record.' },
-  { icon: 'trophy', title: 'Shareable leaderboards', body: 'Publish a public page with levels, coins and your monthly Wrapped.' },
+  { icon: 'trophy', title: 'One global leaderboard', body: 'Levels and 💎 Shards count everywhere, on a public board anyone can open.' },
 ];
 
 const ACTIVITY = [
@@ -18,7 +18,7 @@ const ACTIVITY = [
   ['ticket', 'Ticket #42 opened by Sam', '1m'],
   ['shield', 'Automod stopped a spam burst', '3m'],
   ['users', 'Ava joined the server', '4m'],
-  ['coins', 'Leo claimed 250 daily coins', '6m'],
+  ['coins', 'Leo claimed 250 daily 💎 Shards', '6m'],
   ['star', 'A message hit the starboard', '9m'],
 ];
 
