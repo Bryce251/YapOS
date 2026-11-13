@@ -214,6 +214,24 @@ export function createFakeYapin() {
       return { ok: true };
     }],
     ['DELETE', /^\/channels\/([^/]+)\/permissions\/([^/]+)$/, ([cid, rid]) => { delete state.overrides[`${cid}:${rid}`]; return { ok: true }; }],
+    ['GET', /^\/channels\/([^/]+)\/overrides$/, ([cid]) => ({ overrides: Object.entries(state.overrides).filter(([k]) => k.startsWith(`${cid}:`)).map(([k, v]) => { const id = k.split(':')[1]; return { object: 'override', type: id === 'everyone' ? 'everyone' : userIds().has(id) ? 'member' : 'role', id, role_id: userIds().has(id) || id === 'everyone' ? null : id, channel_id: cid, ...v }; }) })],
+    ['PUT', /^\/channels\/([^/]+)\/overrides\/([^/]+)$/, ([cid, target], b) => {
+      if (!channelById(cid)) throw httpError(404, 'No such channel');
+      if (userIds().has(target) && !features.memberOverrides) throw httpError(400, "A user id answers 400 for now: Yapin' has no per-member overrides yet.");
+      if (!b.allow?.length && !b.deny?.length) { delete state.overrides[`${cid}:${target}`]; return { override: null }; }
+      state.overrides[`${cid}:${target}`] = { allow: b.allow || [], deny: b.deny || [] };
+      return { override: { object: 'override', id: target, channel_id: cid, allow: b.allow || [], deny: b.deny || [] } };
+    }],
+    ['DELETE', /^\/channels\/([^/]+)\/overrides\/([^/]+)$/, ([cid, target]) => { delete state.overrides[`${cid}:${target}`]; return { ok: true }; }],
+    ['GET', /^\/channels\/([^/]+)\/permissions\/([^/]+)$/, ([cid, uid]) => {
+      if (!features.memberOverrides) throw httpError(404, 'Not found');
+      const c = channelById(cid); if (!c) throw httpError(404, 'No such channel');
+      const m = memberOf(c.server_id, uid);
+      const own = state.overrides[`${cid}:${uid}`];
+      const viaRole = !c.private || (m?.roles || []).some((r) => (c.role_ids || []).includes(r));
+      const view = own?.deny?.includes('view_channel') ? false : (own?.allow?.includes('view_channel') && features.memberOverridesWork !== false) || viaRole;
+      return { permissions: { object: 'permissions', owner: false, administrator: false, permissions: { view_channel: Boolean(view) } } };
+    }],
     ['GET', /^\/channels\/([^/]+)\/messages\?/, ([cid], b, q) => {
       let list = (state.messages[cid] || []).filter((m) => !m.deleted);
       const limit = Math.min(100, Number(q.get('limit') || 50));

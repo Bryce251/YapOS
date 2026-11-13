@@ -108,7 +108,8 @@ test('full open flow from the posted panel button', async () => {
   assert.equal(t.status, 'open');
   assert.equal(t.typeId, 'support');
   const role = h.fake.state.roles[S].find((r) => r.id === t.roleId);
-  assert.equal(role.name, 'ticket-0001');
+  assert.equal(role.name, '🎫 0001');
+  assert.equal(t.access[IDS.member], 'role');
   assert.equal(role.mentionable, false);
   assert.ok(hasRole(h, IDS.member, t.roleId), 'opener got the ticket role');
   const ch = channel(h, t.channelId);
@@ -1547,4 +1548,60 @@ test('the setup panel keeps long staff lists per type short', async () => {
   const setup = await h.slash('tickets', '', { user: IDS.admin });
   const field = setup[setup.length - 1].embeds[0].fields.find((f) => /^Types/.test(f.name));
   assert.match(field.value, /Extra staff: (<@&[^>]+> ){3}\+1 more/);
+});
+
+const overrideOf = (h, cid, uid) => h.fake.state.overrides[`${cid}:${uid}`] || null;
+const overridePuts = (h) => h.fake.calls.filter((c) => c.method === 'PUT' && /\/overrides\//.test(c.path)).length;
+
+test('when Yapin lets bots add one person, tickets use no roles at all', async () => {
+  const h = await make({ features: { memberOverrides: true } });
+  const rolesBefore = h.fake.state.roles[S].length;
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  assert.equal(t.roleId, null);
+  assert.equal(t.mode, 'direct');
+  assert.equal(t.access[IDS.member], 'direct');
+  assert.deepEqual(overrideOf(h, t.channelId, IDS.member).allow, ['view_channel', 'send_messages']);
+  assert.equal(channel(h, t.channelId).private, true);
+  const added = await h.slash('ticket', `add <@${IDS.member2}>`, { user: IDS.member, channel: t.channelId });
+  assert.match(lastText(h, added), /Added to the ticket/);
+  assert.ok(overrideOf(h, t.channelId, IDS.member2), 'riley was added straight to the channel');
+  assert.equal(ticketOf(h, IDS.member).access[IDS.member2], 'direct');
+  assert.equal(h.fake.state.roles[S].length, rolesBefore, 'no role was made');
+  await h.slash('ticket', 'remove riley', { user: IDS.mod, channel: t.channelId });
+  assert.equal(overrideOf(h, t.channelId, IDS.member2), null);
+  assert.equal(ticketOf(h, IDS.member).access[IDS.member2], undefined);
+  assert.deepEqual(ticketOf(h, IDS.member).members, []);
+});
+
+test('while Yapin says no to adding one person, a ticket role is used and the answer is remembered', async () => {
+  const h = await make();
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  assert.equal(t.mode, 'role');
+  assert.ok(t.roleId);
+  assert.equal(overrideOf(h, t.channelId, IDS.member), null);
+  assert.ok(channel(h, t.channelId).role_ids.includes(t.roleId), 'the ticket role was let into the channel');
+  assert.ok(hasRole(h, IDS.member, t.roleId));
+  const tries = overridePuts(h);
+  assert.equal(tries, 1);
+  await h.slash('ticket', `add <@${IDS.member2}>`, { user: IDS.member, channel: t.channelId });
+  assert.ok(hasRole(h, IDS.member2, t.roleId));
+  assert.equal(overridePuts(h), tries, 'no second try while Yapin still says no');
+});
+
+test('an override that does not really let them in falls back to the ticket role', async () => {
+  const h = await make({ features: { memberOverrides: true, memberOverridesWork: false } });
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  assert.equal(t.mode, 'role');
+  assert.ok(hasRole(h, IDS.member, t.roleId));
+  assert.equal(overrideOf(h, t.channelId, IDS.member), null, 'the useless override was taken back');
+});
+
+test('an older ticket made with a role keeps using it for adds and removes', async () => {
+  const h = await make();
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  h.engine.store.update('tickets', S, (d) => { delete d.tickets[t.number].access; return d; }, { tickets: {} });
+  h.fake.features.memberOverrides = true;
+  await h.slash('ticket', `add <@${IDS.member2}>`, { user: IDS.member, channel: t.channelId });
+  await h.slash('ticket', 'remove riley', { user: IDS.mod, channel: t.channelId });
+  assert.ok(!hasRole(h, IDS.member2, t.roleId));
 });

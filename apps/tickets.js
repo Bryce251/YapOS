@@ -491,33 +491,108 @@ async function cleanupMade(engine, sid, made) {
   engine.cache.invalidate(sid);
 }
 
+const MEMBER_CAP = 'member_access';
+const MEMBER_ALLOW = ['view_channel', 'send_messages'];
+
+async function grantDirect(engine, sid, channelId, uid) {
+  if (engine.caps.state(sid, MEMBER_CAP) === false || typeof engine.bot.setOverride !== 'function') return false;
+  try {
+    await engine.bot.setOverride(channelId, uid, { allow: MEMBER_ALLOW });
+  } catch (e) {
+    if (e?.status === 400 || looksLikeFeatureOff(e)) engine.caps.mark(sid, MEMBER_CAP, false, e?.message);
+    else engine.log.debug(`[tickets] adding a member straight to a ticket failed: ${e?.message}`);
+    return false;
+  }
+  const seen = typeof engine.bot.getPermissions === 'function' ? await engine.bot.getPermissions(sid, uid, channelId).catch(() => null) : null;
+  if (seen && !seen.administrator && !seen.owner && seen.permissions && seen.permissions.view_channel === false) {
+    await engine.bot.deleteOverride(channelId, uid).catch(() => null);
+    engine.caps.mark(sid, MEMBER_CAP, false, 'a member override did not let them see the channel');
+    return false;
+  }
+  engine.caps.mark(sid, MEMBER_CAP, true);
+  return true;
+}
+
+async function makeTicketRole(engine, sid, number) {
+  try {
+    return await engine.bot.createRole(sid, { name: `🎫 ${pad(number)}`, mentionable: false, permissions: {} });
+  } catch (e) {
+    if (e?.status !== 400) throw e;
+    return engine.bot.createRole(sid, { name: `ticket-${pad(number)}`, mentionable: false, permissions: {} });
+  }
+}
+
+async function ensureTicketRole(engine, sid, space) {
+  if (space.roleId) return space.roleId;
+  if (engine.caps.state(sid, 'roles') === false) return null;
+  let role;
+  try {
+    role = await makeTicketRole(engine, sid, space.number);
+    engine.caps.mark(sid, 'roles', true);
+  } catch (e) {
+    if (looksLikeFeatureOff(e)) { engine.caps.mark(sid, 'roles', false, e?.message); return null; }
+    e.ticketStep = { action: 'make the ticket role', perm: 'manage_roles' };
+    throw e;
+  }
+  space.roleId = role.id;
+  space.roleIds = uniq([...(space.roleIds || []), role.id]);
+  try {
+    await engine.bot.editChannel(space.channelId, { private: true, roleIds: space.roleIds });
+  } catch (e) {
+    await engine.bot.deleteRole(sid, role.id).catch(() => null);
+    space.roleId = null;
+    space.roleIds = space.roleIds.filter((r) => r !== role.id);
+    e.ticketStep = { action: 'let the ticket role into the channel', perm: 'manage_channels' };
+    throw e;
+  }
+  return role.id;
+}
+
+async function grantAccess(engine, sid, space, uid) {
+  if (await grantDirect(engine, sid, space.channelId, uid)) return 'direct';
+  const roleId = await ensureTicketRole(engine, sid, space);
+  if (!roleId) return null;
+  await withStep('let them into the ticket', 'manage_roles', () => engine.bot.addRole(sid, uid, roleId));
+  return 'role';
+}
+
+function accessOf(t, uid) {
+  return (t.access && t.access[uid]) || (t.roleId ? 'role' : null);
+}
+
+async function revokeAccess(engine, sid, t, uid) {
+  const how = accessOf(t, uid);
+  if (how === 'direct') await engine.bot.deleteOverride(t.channelId, uid);
+  else if (how === 'role' && t.roleId) await engine.bot.removeRole(sid, uid, t.roleId);
+}
+
+async function ticketRoleIds(engine, sid, t) {
+  const ch = await engine.bot.channel(t.channelId).catch(() => null);
+  const live = ch && Array.isArray(ch.role_ids) ? ch.role_ids : null;
+  if (live) return live;
+  const [staff, botRole] = await Promise.all([staffRoleIds(engine, sid, t.typeId), botTopRoleId(engine, sid)]);
+  return uniq([t.roleId, ...staff, botRole]);
+}
+
 async function makeSpace(ctx, { number, cfg, type }) {
   const { engine, bot, serverId: sid, userId: uid } = ctx;
-  const made = { roleId: null, channelId: null, mode: 'role', rolesError: null };
+  const made = { roleId: null, channelId: null, mode: 'role', rolesError: null, number, access: {} };
   try {
-    if (engine.caps.state(sid, 'roles') === false) made.mode = 'staff';
-    else {
-      try {
-        const role = await bot.createRole(sid, { name: `ticket-${pad(number)}`, mentionable: false, permissions: {} });
-        made.roleId = role.id;
-        engine.caps.mark(sid, 'roles', true);
-      } catch (e) {
-        if (!looksLikeFeatureOff(e)) { e.ticketStep = { action: 'make the ticket role', perm: 'manage_roles' }; throw e; }
-        engine.caps.mark(sid, 'roles', false, e?.message);
-        made.mode = 'staff';
-      }
-      if (made.roleId) {
-        await withStep('give you the ticket role', 'manage_roles', () => bot.addRole(sid, uid, made.roleId));
-        made.givenTo = uid;
-      }
-    }
     const name = ticketChannelName(number, await usernameOf(engine, sid, uid, ctx.username));
     const ch = await withStep('make the ticket channel', 'manage_channels', () => bot.createChannel(sid, name, { kind: 'text', categoryId: cfg.categoryId || undefined }));
     made.channelId = ch.id;
     made.name = ch.name || name;
     const [staff, botRole] = await Promise.all([staffRoleIds(engine, sid, type?.id), botTopRoleId(engine, sid)]);
-    made.roleIds = uniq([made.roleId, ...staff, botRole]);
+    made.roleIds = uniq([...staff, botRole]);
     await withStep('make the ticket channel private', 'manage_channels', () => bot.editChannel(ch.id, { private: true, roleIds: made.roleIds }));
+    const how = await grantAccess(engine, sid, made, uid);
+    if (how) {
+      made.access[uid] = how;
+      made.mode = how === 'direct' ? 'direct' : 'role';
+      if (how === 'role') made.givenTo = uid;
+    } else {
+      made.mode = 'staff';
+    }
     engine.cache.invalidate(sid);
     return made;
   } catch (e) {
@@ -543,7 +618,7 @@ async function buildTicket(ctx, { type, topic, answers, cfg }) {
   const t = {
     id: `${sid}:${number}`, number, channelId: made.channelId, roleId: made.roleId, openerId: uid, typeId: type.id,
     claimedBy: null, status: 'open', createdAt: now, closedAt: null, closedBy: null, reason: null,
-    answers, topic: clip(topic, 1000), members: [], mode: made.mode, name: made.name, cardId: null, anchorAt: new Date(startedAt - 1000).toISOString(),
+    answers, topic: clip(topic, 1000), members: [], access: made.access, mode: made.mode, name: made.name, cardId: null, anchorAt: new Date(startedAt - 1000).toISOString(),
     lastActivityAt: engine.scheduler.now(), quietWarn: null, rating: null, ratingAsk: null,
   };
   writeData(engine, sid, (d) => { d.tickets[number] = t; });
@@ -1247,35 +1322,39 @@ function noRolesHere() {
 
 async function addPerson(ctx, t, token) {
   if (!(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can add people.');
-  if (t.mode === 'staff' || !t.roleId) return ctx.warn(...noRolesHere());
+  if (t.mode === 'staff') return ctx.warn(...noRolesHere());
   if (!token) return ctx.warn('Who should I add?', 'Try `/ticket add @sam`.');
   const user = await ctx.findUser(token);
   if (!user) return ctx.warn("I couldn't find them", `Nobody here matches **${clip(token, 40)}**. Mention them, like @sam.`);
   if (user.id === ctx.bot.me?.id) return ctx.info('Already here', 'I can already see this ticket.');
   if (user.id === t.openerId || (t.members || []).includes(user.id)) return ctx.info('Already in', `<@${user.id}> can already see this ticket.`);
+  let how;
   try {
-    await ctx.bot.addRole(ctx.serverId, user.id, t.roleId);
+    const space = { channelId: t.channelId, number: t.number, roleId: t.roleId || null, roleIds: t.roleId ? null : await ticketRoleIds(ctx.engine, ctx.serverId, t) };
+    how = await grantAccess(ctx.engine, ctx.serverId, space, user.id);
+    if (space.roleId && space.roleId !== t.roleId) patchTicket(ctx.engine, ctx.serverId, t.number, { roleId: space.roleId });
   } catch (e) {
-    return ctx.fail(e, { action: 'add them to the ticket', perm: 'manage_roles' });
+    return ctx.fail(e, e.ticketStep || { action: 'add them to the ticket', perm: 'manage_roles' });
   }
-  patchTicket(ctx.engine, ctx.serverId, t.number, (x) => ({ members: uniq([...(x.members || []), user.id]) }));
+  if (!how) return ctx.warn(...noRolesHere());
+  patchTicket(ctx.engine, ctx.serverId, t.number, (x) => ({ members: uniq([...(x.members || []), user.id]), access: { ...(x.access || {}), [user.id]: how } }));
   return ctx.reply({ content: `<@${user.id}>`, embeds: [dialog.ok('Added to the ticket', `<@${user.id}> can now see this ticket. Added by <@${ctx.userId}>.`, { color: 'tickets' })] });
 }
 
 async function removePerson(ctx, t, token) {
   if (!(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can remove people.');
-  if (t.mode === 'staff' || !t.roleId) return ctx.warn(...noRolesHere());
+  if (t.mode === 'staff') return ctx.warn(...noRolesHere());
   if (!token) return ctx.warn('Who should I remove?', 'Try `/ticket remove @sam`.');
   const user = await ctx.findUser(token);
   if (!user) return ctx.warn("I couldn't find them", `Nobody here matches **${clip(token, 40)}**.`);
   if (user.id === t.openerId) return ctx.warn("Can't remove them", 'They opened this ticket. Close the ticket instead.');
   if (!(t.members || []).includes(user.id)) return ctx.info('Not in this ticket', `<@${user.id}> wasn't added to this ticket. Staff see every ticket through their role.`);
   try {
-    await ctx.bot.removeRole(ctx.serverId, user.id, t.roleId);
+    await revokeAccess(ctx.engine, ctx.serverId, t, user.id);
   } catch (e) {
-    return ctx.fail(e, { action: 'remove them from the ticket', perm: 'manage_roles' });
+    return ctx.fail(e, { action: 'remove them from the ticket', perm: accessOf(t, user.id) === 'direct' ? 'manage_channels' : 'manage_roles' });
   }
-  patchTicket(ctx.engine, ctx.serverId, t.number, (x) => ({ members: (x.members || []).filter((m) => m !== user.id) }));
+  patchTicket(ctx.engine, ctx.serverId, t.number, (x) => { const access = { ...(x.access || {}) }; delete access[user.id]; return { members: (x.members || []).filter((m) => m !== user.id), access }; });
   return ctx.reply({ embeds: [dialog.ok('Removed from the ticket', `<@${user.id}> can't see this ticket anymore. Removed by <@${ctx.userId}>.`, { color: 'tickets' })], components: [row(button('Undo: add them back', cid('readd', t.number, user.id), 'secondary', ICONS.undo))] });
 }
 
@@ -1444,7 +1523,7 @@ async function setupView(ctx) {
     { name: 'Open tickets and ratings', value: `${open} open · ${ratingSummary(engine, sid)}`, inline: true },
     { name: 'Features on this server', value: CAP_CHECKS.map((c) => capLine(engine, sid, c)).join('\n'), inline: false },
   ];
-  const body = `${warnings.length ? `${warnings.join('\n')}\n\n` : ''}Members open a private channel with the staff. Each ticket gets its own role, so only the member, people they add, and staff can see it.\n-# Typed: \`/tickets panel #channel\`, \`/tickets staff @role\`, \`/tickets log #channel\`, \`/tickets limit 1\`, \`/tickets category name\`, \`/tickets type report staff @role\`, \`/tickets autoclose 48\`.`;
+  const body = `${warnings.length ? `${warnings.join('\n')}\n\n` : ''}Members open a private channel with the staff. Only the member, people they add, and staff can see it. People are added straight to the ticket; while Yapin' can't do that yet, I use a ticket role that is deleted when the ticket closes.\n-# Typed: \`/tickets panel #channel\`, \`/tickets staff @role\`, \`/tickets log #channel\`, \`/tickets limit 1\`, \`/tickets category name\`, \`/tickets type report staff @role\`, \`/tickets autoclose 48\`.`;
   return {
     embeds: [card({ title: `${ICONS.tickets} Ticket setup`, body, fields, color: 'tickets' })],
     components: [
@@ -2128,7 +2207,7 @@ export const { setup, teardown, check } = defineApp({
     },
     addp: ticketComponent(async (ctx, t) => {
       if (!(await canManage(ctx, t))) return refuse(ctx, 'staff', 'Only staff or the person who opened this ticket can add people.');
-      if (t.mode === 'staff' || !t.roleId) return ctx.warn(...noRolesHere());
+      if (t.mode === 'staff') return ctx.warn(...noRolesHere());
       return ctx.form({ title: `Add someone to #${pad(t.number)}`, action: 'addsave', fields: [{ id: 'who', label: 'Who? (a name or @mention)', style: 'short', required: true, max: 100, placeholder: 'riley' }] });
     }),
     addsave: {
@@ -2225,7 +2304,7 @@ export const { setup, teardown, check } = defineApp({
   },
 
   help: [
-    'Each ticket is a private channel with its own role: the member, people they add, and staff see it.',
+    "Each ticket is a private channel: the member, people they add, and staff see it. People are added straight to the ticket, with a temporary ticket role only while Yapin' needs one.",
     'Closing saves a transcript to the log channel and DMs a copy to the member when DMs work.',
     'Staff can close a ticket from anywhere with /ticket close 12, even if its channel was deleted by hand.',
     'After closing, the member gets a DM asking for a 1 to 5 star rating (and an optional comment); it shows up in the ticket log.',
