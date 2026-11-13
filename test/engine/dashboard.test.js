@@ -13,7 +13,7 @@ const C = IDS.channels;
 const OTHER = '5e000000-0000-4000-8000-0000000000aa';
 
 function fakeWorker() {
-  const w = { queue: [], results: [], snapshots: {}, publics: {}, board: null, slugs: new Map(), requests: [], hot: false, fail: 0, failWith: null, inFlight: 0, maxInFlight: 0, resultPosts: [], resultsStatus: [] };
+  const w = { wanted: [], profiles: [], profilesStatus: 200, queue: [], results: [], snapshots: {}, publics: {}, board: null, slugs: new Map(), requests: [], hot: false, fail: 0, failWith: null, inFlight: 0, maxInFlight: 0, resultPosts: [], resultsStatus: [] };
   let seq = 0;
   w.add = (type, user, data = {}, server = S) => {
     const id = `job-${++seq}`;
@@ -32,7 +32,8 @@ function fakeWorker() {
       if (w.fail > 0) { w.fail--; throw w.failWith || new Error('network down'); }
       if (init.headers?.authorization !== `Bearer ${SECRET}`) return reply(401, { error: 'unauthorized' });
       const body = init.body ? JSON.parse(init.body) : undefined;
-      if (init.method === 'GET' && u.pathname === '/bot/poll') return reply(200, { jobs: w.queue.splice(0, 25), hot: w.hot });
+      if (init.method === 'GET' && u.pathname === '/bot/poll') return reply(200, { jobs: w.queue.splice(0, 25), hot: w.hot, wanted: w.wanted.splice(0, 25) });
+      if (init.method === 'POST' && u.pathname === '/bot/profiles') { w.profiles.push(body); return reply(w.profilesStatus, { ok: w.profilesStatus === 200 }); }
       if (init.method === 'POST' && u.pathname === '/bot/results') {
         w.resultPosts.push({ bytes: Buffer.byteLength(init.body), ids: body.results.map((r) => r.id) });
         if (w.resultsStatus.length) return reply(w.resultsStatus.shift(), { error: 'refused' });
@@ -1392,4 +1393,74 @@ test('one global board is published, with no server id and nobody dropped', asyn
   assert.equal(await dash.publishGlobal().then((r) => r.ok), true);
   assert.equal(w.requests.filter((r) => r.path === '/bot/global').length, 1);
   assert.deepEqual(w.board.economy[0].balance, 500);
+});
+
+test('profiles the dashboard asks for are looked up with bot.user and uploaded with public fields only', async () => {
+  const { h, w, dash } = await setup();
+  const asked = [];
+  const real = h.engine.bot.user.bind(h.engine.bot);
+  h.engine.bot.user = async (id) => {
+    asked.push(id);
+    if (id === 'broken') throw Object.assign(new Error('server sad'), { status: 500 });
+    if (id === IDS.admin) return { id, username: 'alex', display_name: 'Alex\u0000', avatar_path: 'pic.png', email: 'secret@example.test', badges: ['x'] };
+    if (id === IDS.member) return { id, username: 'sam', display_name: 'Sam', avatar_url: 'https://evil.example/a.png' };
+    return real(id);
+  };
+  w.wanted.push(IDS.admin, IDS.member, 'nobody-here', 'broken', '../../etc', IDS.admin);
+  await dash.tick();
+  assert.ok(dash.profileWork, 'lookups run in the background, not inside the job loop');
+  await dash.profileWork;
+  assert.deepEqual(asked.sort(), [IDS.admin, IDS.member, 'nobody-here', 'broken'].sort());
+  assert.equal(w.profiles.length, 1);
+  const sent = w.profiles[0];
+  const by = Object.fromEntries(sent.profiles.map((p) => [p.id, p]));
+  assert.deepEqual(by[IDS.admin], { id: IDS.admin, username: 'alex', display_name: 'Alex', avatar_url: 'https://files.yapper.website/avatars/pic.png' });
+  assert.deepEqual(Object.keys(by[IDS.member]).sort(), ['avatar_url', 'display_name', 'id', 'username']);
+  assert.equal(by[IDS.member].avatar_url, null);
+  assert.deepEqual(sent.missing, ['nobody-here']);
+  assert.ok(!('broken' in by) && !sent.missing.includes('broken'), 'a failed lookup is left for a later poll');
+  assert.ok(!JSON.stringify(sent).includes('secret@example.test'));
+  assert.equal(dash.profileWork, null);
+});
+
+test('profile lookups are capped, run a few at a time and never block the next poll', async () => {
+  const { h, w, dash } = await setup();
+  let live = 0;
+  let peak = 0;
+  const gates = [];
+  h.engine.bot.user = (id) => new Promise((resolve) => {
+    live++;
+    peak = Math.max(peak, live);
+    gates.push(() => { live--; resolve({ id, username: `u${id}`, display_name: null, avatar_path: null }); });
+  });
+  for (let i = 0; i < 30; i++) w.wanted.push(`id-${i}`);
+  await dash.tick();
+  const work = dash.profileWork;
+  assert.ok(work);
+  w.add('servers', IDS.admin);
+  await dash.tick();
+  assert.equal(w.results.length, 1, 'jobs still run while lookups wait');
+  assert.equal(dash.profileWork, work, 'a second batch waits for the first');
+  while (gates.length) {
+    gates.shift()();
+    await new Promise((r) => setImmediate(r));
+  }
+  await work;
+  assert.ok(peak <= 4, `at most 4 lookups at once, saw ${peak}`);
+  assert.equal(w.profiles.length, 1);
+  assert.equal(w.profiles[0].profiles.length, 25);
+});
+
+test('a missing bot.user or a refused upload never breaks the poll loop', async () => {
+  const { h, w, dash } = await setup();
+  w.profilesStatus = 500;
+  w.wanted.push(IDS.admin);
+  assert.equal(await dash.tick(), 15_000);
+  await dash.profileWork;
+  assert.equal(w.profiles.length, 1);
+  h.engine.bot.user = undefined;
+  w.wanted.push(IDS.admin);
+  assert.equal(await dash.tick(), 15_000);
+  assert.equal(dash.profileWork, null);
+  assert.equal(await dash.lookupProfiles([]), null);
 });

@@ -1,6 +1,7 @@
 import { MINUTE, ID_RE, SERVER_ID_RE, APP_RE, SLUG_RE, SETTING_KEY_RE, USER_BODY_LIMIT, HttpError, json, fail, redirect, readJson, isPlainObject, parseJsonSafe, publicOrigin, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { getSession, touchSession, publicUser } from './sessions.js';
+import { profileRoute } from './profiles.js';
 import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
 
 const SERVERS_TTL = 2 * MINUTE;
@@ -409,6 +410,8 @@ export async function handleApi(request, env, deps, url) {
   });
   const mutating = MUTATING.has(method);
   const readOnly = method === 'GET' || method === 'HEAD';
+
+  if (segs[1] === 'activity') return profileRoute(request, env, segs, url, t);
 
   if (segs[1] === 'public') {
     if (!readOnly) return fail(405, 'method_not_allowed', 'That action is not allowed here.');

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { room, seeded } from './activity-kit.test.js';
 import { installDom, FakeEvent } from './dom-shim.js';
-import draw, { judge, distance, guessPoints, drawerPoints, nextSeat, chooseWords, hintSpots, hintCount, blanks, mask, unmask, GUESS_MAX, GUESS_MIN, PICK_MS, REVEAL_MS } from '../web/activity/js/games/draw.js';
+import draw, { judge, distance, guessPoints, drawerShare, drawerGain, handleOf, AUTO_START, DRAWER_STEP, nextSeat, chooseWords, hintSpots, hintCount, blanks, mask, unmask, GUESS_MAX, GUESS_MIN, PICK_MS, REVEAL_MS } from '../web/activity/js/games/draw.js';
 import { WORDS, TIERS, wordById } from '../web/activity/data/draw.js';
 import {
   encodeStroke,
@@ -51,9 +51,16 @@ function secret(st) {
   return wordById(unmask(st.w, st.nonce)).w;
 }
 
+function joinIn(e) {
+  if (e.lobby && typeof e.lobby.join === 'function') e.lobby.join();
+  else if (typeof e.join === 'function') e.join();
+}
+
 async function startDraw(n = 3, settings = {}) {
   const r = room(n);
   await r.clock.advance(500);
+  for (const e of r.engines) joinIn(e);
+  await r.clock.advance(400);
   const host = r.engines[0];
   assert.equal(host.lobby.pick('draw'), true);
   for (const [k, v] of Object.entries(settings)) assert.equal(host.lobby.setting(k, v), true, k);
@@ -221,13 +228,96 @@ test('guesses are judged right, close, hidden or a miss', () => {
   assert.equal(judge('!!!', 'cat'), 'miss');
 });
 
-test('speed scoring rewards fast guessers and the drawer', () => {
+test('speed scoring rewards fast guessers', () => {
   assert.equal(guessPoints(0, 0, 80000), GUESS_MAX);
   assert.equal(guessPoints(80000, 0, 80000), GUESS_MIN);
   assert.equal(guessPoints(40000, 0, 80000), 300);
   assert.ok(guessPoints(10000, 0, 80000) > guessPoints(20000, 0, 80000));
-  assert.equal(drawerPoints(500), 250);
-  assert.equal(drawerPoints(300), 150);
+});
+
+test('the drawer earns about an average guesser, never more than the best one', () => {
+  assert.equal(drawerShare([], 4), 0);
+  assert.equal(drawerShare([420], 1), 420);
+  assert.equal(drawerShare([500, 300], 2), 400);
+  assert.equal(drawerShare([500, 300], 4), 200);
+  assert.equal(drawerShare([300], 8), 35);
+  assert.equal(drawerShare([500], 0), 500);
+  for (const n of [1, 2, 3, 4, 5, 7, 8, 11]) {
+    const random = seeded(30 + n);
+    for (let trial = 0; trial < 300; trial += 1) {
+      const pts = [];
+      for (let i = 0; i < n; i += 1) if (random() < 0.8) pts.push(guessPoints(Math.floor(random() * 80000), 0, 80000));
+      const share = drawerShare(pts, n);
+      assert.equal(share % DRAWER_STEP, 0);
+      assert.ok(share <= (pts.length ? Math.max(...pts) : 0), `${n} guessers: ${share} > best of ${pts}`);
+      assert.ok(share * n <= pts.reduce((a, b) => a + b, 0));
+    }
+  }
+  for (const players of [2, 4, 8]) {
+    const guessers = players - 1;
+    const fast = Array.from({ length: guessers }, () => GUESS_MAX);
+    assert.ok(drawerShare(fast, guessers) <= GUESS_MAX, `${players} players, everyone fast`);
+    assert.ok(drawerShare(fast, guessers) >= GUESS_MAX - DRAWER_STEP);
+    const mixed = Array.from({ length: guessers }, (_, i) => GUESS_MAX - i * 50);
+    assert.ok(drawerShare(mixed, guessers) <= Math.max(...mixed), `${players} players, mixed speeds`);
+    assert.ok(drawerShare([GUESS_MAX], guessers) <= GUESS_MAX / guessers, `${players} players, one guesser`);
+  }
+  const got = [];
+  let given = 0;
+  for (const [slot, pts, guessers] of [[1, 480, 3], [2, 300, 3], [3, 200, 4], [4, 500, 4]]) {
+    got.push([slot, pts]);
+    const extra = drawerGain(got, guessers, given);
+    assert.ok(extra >= 0);
+    given += extra;
+  }
+  assert.ok(given <= 500, String(given));
+  assert.equal(given, 370);
+});
+
+test('Draw & Guess counts down 90 seconds once two people join', () => {
+  assert.deepEqual(draw.autoStart, { min: 2, ms: 90000 });
+  assert.deepEqual(AUTO_START, { min: 2, ms: 90000 });
+});
+
+test('a late joiner is added to the end of the drawing order once', () => {
+  let st = { order: [0, 1, 2], drawer: 1, pos: 1, round: 1, rounds: 2, got: [] };
+  const api = { get: () => JSON.parse(JSON.stringify(st)), put: (k, v) => { assert.equal(k, 'draw'); st = v; } };
+  draw.join(api, 5);
+  assert.deepEqual(st.order, [0, 1, 2, 5]);
+  draw.join(api, 5);
+  draw.join(api, 1);
+  draw.join(api, 'x');
+  assert.deepEqual(st.order, [0, 1, 2, 5]);
+  assert.deepEqual(nextSeat(st.order, [0, 1, 2, 5], 1, 2, 2), { round: 1, pos: 2, slot: 2 });
+  assert.deepEqual(nextSeat(st.order, [0, 1, 2, 5], 1, 3, 2), { round: 1, pos: 3, slot: 5 });
+  let wrote = false;
+  draw.join({ get: () => null, put: () => { wrote = true; } }, 3);
+  assert.equal(wrote, false);
+});
+
+test('usernames are cleaned so a missing one never shows as @null', () => {
+  assert.equal(handleOf('@Greninjite'), 'Greninjite');
+  assert.equal(handleOf('  '), null);
+  assert.equal(handleOf(null), null);
+  assert.equal(handleOf(undefined), null);
+  assert.equal(handleOf('a\u202eb c'), 'abc');
+  assert.equal(Array.from(handleOf('x'.repeat(80))).length, 32);
+});
+
+test('someone who pressed Leave keeps their seat number but only watches and cannot guess', () => {
+  const st = { phase: 'draw', round: 1, rounds: 2, n: 1, nonce: 7, drawer: 0, w: mask(WORDS[0].id, 7), opts: [], got: [], feed: [], gained: {}, starts: 0, ends: 60000 };
+  const players = [0, 1, 2].map((slot) => ({ id: 'u' + slot, slot, name: 'P' + slot, initials: 'P', hue: 1, avatar: null, isMe: slot === 2 }));
+  const base = { state: { draw: st }, players, now: 1000, meSlot: 2 };
+  const left = draw.model({ ...base, meJoined: false });
+  assert.equal(left.canGuess, false);
+  assert.equal(left.spectator, true);
+  assert.equal(left.word, null);
+  const playing = draw.model({ ...base, meJoined: true });
+  assert.equal(playing.canGuess, true);
+  assert.equal(playing.spectator, false);
+  const watcher = draw.model({ ...base, meSlot: null, meJoined: false });
+  assert.equal(watcher.canGuess, false);
+  assert.equal(watcher.spectator, true);
 });
 
 test('drawers rotate, skip people who left and stop after the last round', () => {
@@ -323,7 +413,9 @@ test('a full Draw & Guess turn: pick, guess, close hint, speed points and reveal
   const g = b.snapshot().scores.g;
   assert.equal(g[1], aPts);
   assert.equal(g[2], bPts);
-  assert.equal(g[0], drawerPoints(aPts) + drawerPoints(bPts));
+  assert.equal(g[0], drawerShare([aPts, bPts], 2));
+  assert.ok(g[0] <= Math.max(aPts, bPts), 'the drawer never beats the best guesser');
+  assert.equal(st.gained[0], g[0]);
   assert.equal(draw.model(b.snapshot()).word, word);
   await r.clock.advance(REVEAL_MS + 300);
   st = host.snapshot().state.draw;
@@ -477,6 +569,8 @@ test('the draw view lets the drawer pick and draw, and shows guessers the blanks
   installDom({ url: 'https://yapos.dev/activity/' });
   const r = room(2);
   await r.clock.advance(500);
+  for (const e of r.engines) joinIn(e);
+  await r.clock.advance(400);
   const [hostEngine, guestEngine] = r.engines;
   const calls = [];
   const make2d = document.createElement.bind(document);
@@ -502,7 +596,7 @@ test('the draw view lets the drawer pick and draw, and shows guessers the blanks
   hostView.v.update(hostEngine.snapshot());
   guestView.v.update(guestEngine.snapshot());
   await r.clock.advance(400);
-  assert.match(text(guestView.v.el), /Player 1 is picking a word/);
+  assert.match(text(guestView.v.el), /Player 1\s+is picking a word/);
   assert.equal(byKey(guestView.v.el, 'word-0'), null);
   byKey(hostView.v.el, 'word-2').click();
   await r.clock.advance(400);
@@ -551,4 +645,101 @@ test('the draw view lets the drawer pick and draw, and shows guessers the blanks
   hostView.v.destroy();
   guestView.v.destroy();
   assert.deepEqual(r.hub.violations, []);
+});
+
+test('someone who joins mid-turn can guess right away, never sees the word, and gets a turn to draw', async () => {
+  const r = await startDraw(3, { rounds: 1, time: 80 });
+  const [host, a, b] = r.engines;
+  let st = await pickWord(r, 0);
+  const word = secret(st);
+  a.act({ type: 'guess', text: word });
+  await r.clock.advance(800);
+  const late = r.add(4);
+  await r.clock.advance(600);
+  joinIn(late);
+  await r.clock.advance(800);
+  b.act({ type: 'guess', text: word });
+  await r.clock.advance(800);
+  st = host.snapshot().state.draw;
+  const lateSlot = late.snapshot().meSlot;
+  assert.ok(Number.isInteger(lateSlot), 'the late joiner has a seat');
+  assert.equal(st.phase, 'draw', 'the turn waits for the new guesser');
+  assert.ok(st.order.includes(lateSlot));
+  assert.ok(st.order.indexOf(lateSlot) > st.pos, 'they draw later in the rotation');
+  const m = draw.model(late.snapshot());
+  assert.equal(m.word, null);
+  assert.equal(m.canGuess, true);
+  assert.equal(m.hint.filter((c) => c === '_').length, word.replace(/ /g, '').length);
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const view = VIEWS.draw({ engine: late, fx: { confetti() {} }, toast() {}, win: { setTimeout: r.clock.setTimeout, clearTimeout: r.clock.clearTimeout, setInterval: () => 0, clearInterval() {} } });
+  view.update(late.snapshot());
+  assert.equal(text(view.el).toLowerCase().includes(word), false, 'the word stays hidden from the late joiner');
+  view.destroy();
+  late.act({ type: 'guess', text: word });
+  await r.clock.advance(800);
+  st = host.snapshot().state.draw;
+  assert.equal(st.phase, 'reveal');
+  assert.equal(st.note, 'all');
+  assert.equal(st.got.length, 3);
+  const best = Math.max(...st.got.map((g) => g[1]));
+  assert.equal(st.gained[0], drawerShare(st.got.map((g) => g[1]), 3));
+  assert.ok(st.gained[0] <= best);
+  const drawers = [st.drawer];
+  for (let i = 0; i < 6 && host.snapshot().room.phase === 'game'; i += 1) {
+    await r.clock.advance(REVEAL_MS + 300);
+    const now = host.snapshot().state.draw;
+    if (!now) break;
+    if (!drawers.includes(now.drawer)) drawers.push(now.drawer);
+    await r.clock.advance(PICK_MS + 80000 + 600);
+  }
+  assert.ok(drawers.includes(lateSlot), `late joiner drew: ${drawers}`);
+  assert.deepEqual(r.hub.violations, []);
+});
+
+test('the drawer shows with their picture, name and @username so they can be reported', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await startDraw(3, { rounds: 1 });
+  const [host, a] = r.engines;
+  const win = { setTimeout: r.clock.setTimeout, clearTimeout: r.clock.clearTimeout, setInterval: () => 0, clearInterval() {} };
+  const pic = 'https://files.yapper.website/avatars/p1.png';
+  const dress = (snap, named = true) => ({
+    ...snap,
+    players: snap.players.map((p) => ({ ...p, username: named ? `handle${p.slot}` : null, avatar: p.slot === 0 ? pic : p.avatar })),
+  });
+  const view = VIEWS.draw({ engine: a, fx: { confetti() {} }, toast() {}, win });
+  view.update(dress(a.snapshot()));
+  let shown = text(view.el);
+  assert.match(shown, /Player 1\s+is picking a word/);
+  assert.match(shown, /@handle0/);
+  const pics = all(view.el).filter((x) => x.localName === 'img' && x.src === pic);
+  assert.ok(pics.length >= 1, 'the real avatar is used');
+  let st = await pickWord(r, 0);
+  view.update(dress(a.snapshot()));
+  shown = text(view.el);
+  assert.match(shown, /Player 1\s+is drawing/);
+  assert.match(shown, /@handle0/);
+  const word = secret(st);
+  a.act({ type: 'guess', text: word });
+  await r.clock.advance(800);
+  r.engines[2].act({ type: 'guess', text: word });
+  await r.clock.advance(800);
+  st = host.snapshot().state.draw;
+  assert.equal(st.phase, 'reveal');
+  view.update(dress(a.snapshot()));
+  shown = text(view.el);
+  assert.match(shown, /Player 1\s+drew this/);
+  assert.match(shown, /@handle0/);
+  assert.ok(shown.includes(`+${st.gained[0]} for the drawing`), shown);
+  const pencil = all(view.el).find((x) => x.classList && (x.classList.contains('draw-pencil') || x.classList.contains('board-badge')));
+  assert.ok(pencil || all(view.el).some((x) => x.dataset && x.dataset.badge), 'the drawer is marked on the scoreboard');
+  view.update(dress(a.snapshot(), false));
+  shown = text(view.el);
+  assert.equal(shown.includes('@'), false, 'no handle when the username is unknown');
+  assert.equal(shown.includes('null'), false);
+  view.destroy();
+  const mine = VIEWS.draw({ engine: host, fx: { confetti() {} }, toast() {}, win });
+  mine.update(dress(host.snapshot()));
+  assert.match(text(mine.el), /You drew this/);
+  assert.match(text(mine.el), /for your drawing/);
+  mine.destroy();
 });

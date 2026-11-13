@@ -1,4 +1,5 @@
 import { h, memo, button } from './dom.js';
+import { joinButton } from './lobby.js';
 import { board, standings } from './board.js';
 
 export const FRESH_MS = 8000;
@@ -7,7 +8,7 @@ export function resultsModel(snap, games) {
   const last = snap.room.last || null;
   const game = games.find((g) => last && g.id === last.game) || null;
   const winners = last ? snap.players.filter((p) => last.winners.includes(p.slot)) : [];
-  const keep = (p) => ({ id: p.id, name: p.name, initials: p.initials, hue: p.hue, avatar: p.avatar, pts: p.pts, place: p.place, isMe: p.isMe, present: p.present, slot: p.slot });
+  const keep = (p) => ({ id: p.id, name: p.name, username: p.username || null, initials: p.initials, hue: p.hue, avatar: p.avatar, pts: p.pts, place: p.place, isMe: p.isMe, present: p.present, slot: p.slot });
   return {
     at: last ? last.at : 0,
     game: game ? { id: game.id, name: game.name, emoji: game.emoji } : null,
@@ -15,6 +16,9 @@ export function resultsModel(snap, games) {
     iWon: winners.some((p) => p.isMe),
     isHost: snap.isHost,
     hostName: snap.hostName,
+    meJoined: Boolean(snap.meJoined),
+    joining: snap.joining || null,
+    playing: snap.players.filter((p) => p.joined).length,
     round: standings(snap.players, 'game').map(keep),
     totals: standings(snap.players, 'total').map(keep),
   };
@@ -33,7 +37,15 @@ export function createResults({ engine, fx }) {
   const paint = memo(render);
   let celebrated = 0;
 
+  function onJoinTap(e) {
+    const key = e && e.currentTarget && e.currentTarget.dataset ? e.currentTarget.dataset.key : '';
+    if (key === 'leave-game') engine.leave();
+    else engine.join();
+  }
+
   function render(m) {
+    const join = m.meJoined ? null : joinButton(m, { size: 'lg', key: 'join' });
+    if (join) join.addEventListener('click', onJoinTap);
     const actions = m.isHost
       ? h(
           'div',
@@ -52,6 +64,7 @@ export function createResults({ engine, fx }) {
         m.game ? h('span', { class: 'eyebrow', text: `${m.game.emoji} ${m.game.name}` }) : null,
         h('h2', { class: 'winner-title', text: headline(m) }),
         actions,
+        join ? h('div', { class: 'join-row is-results' }, join, h('p', { class: 'join-hint', text: 'Join to play in the next game.' })) : null,
       ),
       h('div', { class: 'card glass' }, h('div', { class: 'card-head' }, h('h3', { class: 'card-title', text: 'This game' })), board(m.round, { empty: 'Nobody scored this time.', label: 'This game' })),
       h('div', { class: 'card glass' }, h('div', { class: 'card-head' }, h('h3', { class: 'card-title', text: 'All games' })), board(m.totals, { empty: 'No points yet.', label: 'All games' })),

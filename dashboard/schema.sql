@@ -77,3 +77,20 @@ CREATE TABLE IF NOT EXISTS global_board (
   data TEXT NOT NULL,
   updated INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS profiles (
+  id TEXT PRIMARY KEY,
+  username TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+  missing INTEGER NOT NULL DEFAULT 0,
+  fetched INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS profiles_fetched ON profiles (fetched);
+
+CREATE TABLE IF NOT EXISTS profile_wanted (
+  id TEXT PRIMARY KEY,
+  asked INTEGER NOT NULL,
+  given INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS profile_wanted_asked ON profile_wanted (asked);

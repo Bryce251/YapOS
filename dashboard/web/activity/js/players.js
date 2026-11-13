@@ -1,3 +1,5 @@
+import { profileOf, profileAvatar, cleanUsername } from './profiles.js';
+
 const AVATAR_HOSTS = new Set(['files.yapper.website', 'www.yapin.gg']);
 export const NAME_MAX = 24;
 
@@ -50,11 +52,21 @@ export function hueOf(id) {
   return h;
 }
 
+function ownName(p) {
+  if (!p || typeof p !== 'object') return null;
+  const raw = p.display_name || p.displayName || p.name || p.username || null;
+  return typeof raw === 'string' && raw.trim() ? raw : null;
+}
+
 export function person(p) {
   const id = idOf(p);
   if (!id) return null;
-  const name = nameOf(p);
-  return { id, name, avatar: avatarOf(p), initials: initials(name), hue: hueOf(id) };
+  const prof = profileOf(id);
+  const name = ownName(p) || !(prof && prof.displayName) ? nameOf(p) : cleanName(prof.displayName);
+  const own = p && typeof p === 'object' ? p : null;
+  const username = (prof && prof.username) || (own ? cleanUsername(own.username) : null) || null;
+  const avatar = (prof && profileAvatar(prof.avatar)) || avatarOf(p) || null;
+  return { id, name, username, avatar, initials: initials(name), hue: hueOf(id) };
 }
 
 export function people(list) {

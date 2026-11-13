@@ -33,8 +33,12 @@ function newId() {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
+function fakeId(n) {
+  return `de7e0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+}
+
 function participant(p) {
-  return { id: p.id, display_name: p.name, username: p.name.toLowerCase().replace(/\s+/g, ''), avatar_url: null };
+  return { id: p.id, display_name: p.name };
 }
 
 const participants = () => players.map(participant);
@@ -209,7 +213,7 @@ function addPlayer() {
   seq += 1;
   const base = NAMES[(seq - 1) % NAMES.length];
   const round = Math.floor((seq - 1) / NAMES.length);
-  const p = { n: seq, id: newId(), name: round ? `${base} ${round + 1}` : base, ready: false, upAt: 0, downAt: 0 };
+  const p = { n: seq, id: fakeId(seq), name: round ? `${base} ${round + 1}` : base, ready: false, upAt: 0, downAt: 0 };
   players.push(p);
   $('stage').append(buildTile(p));
   log(`${p.name} joined the call${players.length === 1 ? ' and is the host' : ''}.`);

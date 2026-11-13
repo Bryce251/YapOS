@@ -65,16 +65,64 @@ export function button(label, { variant = 'ghost', size, key, on, disabled, attr
 export function avatar(p, size = 'md') {
   const wrap = h('span', { class: ['avatar', `avatar-${size}`], vars: { '--hue': p.hue ?? 20 }, attrs: { 'aria-hidden': 'true' } });
   if (p.avatar) {
-    const img = h('img', { src: p.avatar, alt: '', attrs: { loading: 'lazy', referrerpolicy: 'no-referrer', draggable: 'false' } });
+    wrap.classList.add('has-img');
+    const img = h('img', { alt: '', attrs: { loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', draggable: 'false' } });
     img.addEventListener('error', () => {
       img.remove();
+      wrap.classList.remove('has-img');
       wrap.textContent = p.initials || '?';
     });
+    img.src = p.avatar;
     wrap.append(img);
   } else {
     wrap.textContent = p.initials || '?';
   }
   return wrap;
+}
+
+export function who(p, { size = 'md', you = true, extra = null } = {}) {
+  return h(
+    'span',
+    { class: 'who' },
+    avatar(p, size),
+    h(
+      'span',
+      { class: 'who-text' },
+      h('span', { class: 'who-line' }, h('strong', { class: 'who-name', text: p.name }), you && p.isMe ? h('span', { class: 'tag', text: 'you' }) : null, extra),
+      p.username ? h('span', { class: 'who-handle', text: `@${p.username}` }) : null,
+    ),
+  );
+}
+
+export function clock(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+export function countdown(starts, ends, { lead = 'Starting in', label = 'Time until the game starts' } = {}) {
+  return h(
+    'div',
+    { class: 'countdown', dataset: { starts, ends, lead }, attrs: { role: 'timer', 'aria-label': label } },
+    h('span', { class: 'countdown-text' }, h('span', { class: 'countdown-lead', text: `${lead} ` }), h('strong', { class: 'countdown-num', text: '' })),
+    h('span', { class: 'countdown-track' }, h('span', { class: 'countdown-fill' })),
+  );
+}
+
+export function tickCountdowns(root, now) {
+  for (const el of root.querySelectorAll('.countdown')) {
+    const starts = Number(el.dataset.starts);
+    const ends = Number(el.dataset.ends);
+    if (!ends) continue;
+    const span = Math.max(1, ends - starts);
+    const left = Math.min(1, Math.max(0, (ends - now) / span));
+    el.style.setProperty('--left', left.toFixed(4));
+    const num = el.querySelector('.countdown-num');
+    const text = clock(ends - now);
+    if (num && num.textContent !== text) num.textContent = text;
+    el.classList.toggle('is-low', ends - now <= 10000);
+  }
 }
 
 export function plural(n, one, many) {
@@ -95,6 +143,8 @@ export function timer(starts, ends, label) {
 }
 
 export function tickTimers(root, now) {
+  tickCountdowns(root, now);
+
   for (const el of root.querySelectorAll('.timer')) {
     const starts = Number(el.dataset.starts);
     const ends = Number(el.dataset.ends);

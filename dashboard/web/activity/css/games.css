@@ -622,3 +622,185 @@
     animation: none;
   }
 }
+
+.who {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+}
+
+.who-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.who-line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.who-name {
+  color: var(--text);
+  font-weight: 750;
+}
+
+.who-verb {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.who-handle {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.who-big .who-line {
+  font-size: 17px;
+}
+
+.who-big .who-handle {
+  font-size: 13px;
+}
+
+.drawer-tag .who-line {
+  font-size: 14px;
+}
+
+.pick-wait {
+  padding: 6px 0;
+}
+
+.draw-reveal {
+  min-width: 0;
+}
+
+.reveal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  animation: pop 420ms var(--pop);
+}
+
+.reveal-drawer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.reveal-gain {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 15px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.reveal-gain.is-zero {
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-weight: 650;
+}
+
+.reveal-got {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reveal-guess {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  padding: 2px 10px 2px 2px;
+  border-radius: 999px;
+  border: 1px solid rgba(74, 222, 128, 0.35);
+  background: var(--success-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.reveal-guess.is-me {
+  border-color: var(--success);
+}
+
+.reveal-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reveal-pts {
+  color: var(--success);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.reveal-none {
+  margin: 0;
+  font-size: 14px;
+}
+
+.draw-scores {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.draw-scores .board-row.is-drawing {
+  grid-template-columns: 30px auto minmax(0, 1fr) auto auto;
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.draw-pencil {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.play:has(.game-draw) > .strip > .strip-list,
+.play:has(.game-draw) > .strip > .strip-empty {
+  display: none;
+}
+
+@media (max-width: 420px) {
+  .reveal-drawer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .who-big .who-line {
+    font-size: 15px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal-card {
+    animation: none;
+  }
+}

@@ -4,6 +4,8 @@ import { h, memo, timer, avatar, plural } from '../ui/dom.js';
 export function verdict(m) {
   if (m.phase === 'vote') {
     const count = `${m.voted} of ${plural(m.players, 'player', 'players')} voted`;
+    if (m.waiting) return `You joined near the end of this one, so you're in from the next prompt. ${count}`;
+    if (m.watching) return `You're watching this one. ${count}`;
     return m.myVote ? `Vote in! ${count}` : count;
   }
   if (!m.split.a && !m.split.b) return 'Nobody voted on this one.';
@@ -18,7 +20,7 @@ function faces(list) {
   if (!list.length) return null;
   return h(
     'span',
-    { class: 'faces' },
+    { class: 'faces', attrs: { title: list.map((p) => (p.isMe ? 'You' : p.username ? `${p.name} (@${p.username})` : p.name)).join(', ') } },
     list.slice(0, 7).map((p) => avatar(p, 'xs')),
     list.length > 7 ? h('span', { class: 'faces-more', text: `+${list.length - 7}` }) : null,
   );
@@ -32,7 +34,7 @@ export function createWyrView({ engine, fx }) {
   const paint = memo(render);
 
   function vote(m, side) {
-    if (m.phase !== 'vote' || m.myVote) return;
+    if (!m.canVote || m.myVote) return;
     local.pid = m.pid;
     local.side = side;
     engine.act({ type: 'vote', side, p: m.pid });
@@ -48,7 +50,7 @@ export function createWyrView({ engine, fx }) {
       {
         class: ['choice', `choice-${side}`, 'spot', m.myVote === side ? 'is-mine' : null, winner ? 'is-win' : null, reveal && !winner ? 'is-dim' : null],
         type: 'button',
-        disabled: reveal || Boolean(m.myVote),
+        disabled: reveal || Boolean(m.myVote) || !m.canVote,
         dataset: { key: `side-${side}` },
         attrs: { 'aria-pressed': m.myVote === side ? 'true' : 'false' },
         on: { click: () => vote(m, side) },
@@ -82,7 +84,12 @@ export function createWyrView({ engine, fx }) {
             h('span', { class: 'split-b', vars: { '--pct': m.pctB } }),
           )
         : null,
-      h('div', { class: ['game-foot', reveal && m.myGain ? 'is-good' : null], attrs: { role: 'status', 'aria-live': 'polite' } }, h('span', { class: 'foot-text', text: verdict(m) })),
+      h(
+        'div',
+        { class: ['game-foot', reveal && m.myGain ? 'is-good' : null], attrs: { role: 'status', 'aria-live': 'polite' } },
+        h('span', { class: 'foot-text', text: verdict(m) }),
+        !reveal ? faces(m.votedBy) : null,
+      ),
     ];
   }
 

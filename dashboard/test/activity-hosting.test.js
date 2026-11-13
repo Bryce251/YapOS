@@ -14,6 +14,9 @@ const devDir = path.join(root, 'dev', 'activity-dev');
 const ACTIVITY_HTML = '<!doctype html><html><head><title>YapOS Party</title></head><body>party</body></html>';
 const CONTRACT_CSP = "default-src 'self'; img-src 'self' https://files.yapper.website https://www.yapin.gg data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors https://www.yapin.gg https://yapin.gg https://www.yapper.website https://yapper.website; base-uri 'none'; form-action 'none'";
 
+const WORDS_ETAG = '"words-1"';
+const WORDS_BODY = ['aah', 'apple', 'zebra', ''].join('\n');
+
 function activityAssets() {
   return {
     requests: [],
@@ -23,6 +26,11 @@ function activityAssets() {
       const headers = { 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'" };
       if (u.pathname === '/activity/') return new Response(ACTIVITY_HTML, { status: 200, headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' } });
       if (u.pathname === '/activity/js/app.js') return new Response('export {};', { status: 200, headers: { ...headers, 'Content-Type': 'text/javascript' } });
+      if (u.pathname === '/activity/data/words.txt') {
+        const cache = { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=0, must-revalidate', ETag: WORDS_ETAG };
+        if (request.headers.get('If-None-Match') === WORDS_ETAG) return new Response(null, { status: 304, headers: { ...headers, ...cache } });
+        return new Response(WORDS_BODY, { status: 200, headers: { ...headers, ...cache } });
+      }
       if (u.pathname === '/' || u.pathname === '/index.html') return new Response('<!doctype html><title>YapOS</title>', { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
       return new Response('missing', { status: 404 });
     },
@@ -71,6 +79,30 @@ test('the Worker serves activity files from ASSETS with the activity headers', a
   assert.equal(head.status, 200);
   assertActivityHeaders(head, 'head');
   assert.deepEqual(assets.requests, ['/activity/', '/activity/js/app.js', '/activity/']);
+});
+
+test('the Worker serves the word list as cacheable text with the activity headers', async () => {
+  const assets = activityAssets();
+  const h = createHarness({ ASSETS: assets });
+  const res = await h.request('GET', '/activity/data/words.txt');
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), WORDS_BODY);
+  assert.match(res.headers.get('Content-Type') || '', /^text\/plain/);
+  assert.doesNotMatch(res.headers.get('Cache-Control') || '', /no-store/);
+  assert.equal(res.headers.get('ETag'), WORDS_ETAG);
+  assertActivityHeaders(res, 'words');
+  assert.match(ACTIVITY_CSP, /connect-src 'self'/);
+  const again = await h.request('GET', '/activity/data/words.txt', { headers: { 'If-None-Match': WORDS_ETAG } });
+  assert.equal(again.status, 304, 'a repeat visit can reuse the cached list');
+  assertActivityHeaders(again, 'words 304');
+});
+
+test('the word list file is in place and loads with a relative URL', () => {
+  const file = path.join(root, 'web', 'activity', 'data', 'words.txt');
+  assert.equal(existsSync(file), true);
+  const src = readFileSync(path.join(root, 'web', 'activity', 'js', 'dictionary.js'), 'utf8');
+  assert.match(src, /new URL\('\.\.\/data\/words\.txt', import\.meta\.url\)/);
+  assert.doesNotMatch(src, /https?:\/\//);
 });
 
 test('the activity headers drop HSTS on local http', async () => {
@@ -315,6 +347,18 @@ test('the local server serves the test call only at /activity-dev/', async () =>
     assert.equal(res.status, 404, p);
     await res.arrayBuffer();
   }
+});
+
+test('the local server serves the real word list as cacheable text', async () => {
+  const file = path.join(root, 'web', 'activity', 'data', 'words.txt');
+  const res = await fetch(`${dev.url}/activity/data/words.txt`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('Content-Type') || '', /^text\/plain/);
+  assert.doesNotMatch(res.headers.get('Cache-Control') || '', /no-store/);
+  assertActivityHeaders(res, 'words', false);
+  const body = await res.text();
+  assert.equal(body.length, readFileSync(file, 'utf8').length);
+  assert.ok(body.startsWith('aaa\n'));
 });
 
 test('the local server mirrors the Worker for activity paths', async () => {

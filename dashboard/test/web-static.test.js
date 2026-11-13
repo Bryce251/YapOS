@@ -188,6 +188,7 @@ test('no external resources and no forbidden wording', () => {
       assert.ok(bridgeOrigin || u.startsWith('http://www.w3.org/2000/svg') || (rel(f) === 'js/links.js' && u.startsWith('https://www.yapin.gg/bot/')), `${rel(f)} references ${u}`);
     }
     assert.equal(/url\(/.test(src) && f.endsWith('.css'), false, `${rel(f)} loads a url()`);
+    if (rel(f) === 'activity/data/words.txt') continue;
     assert.equal(/\b(claude|anthropic)\b/i.test(src), false, rel(f));
     assert.equal(/\bAI\b/.test(src), false, rel(f));
     assert.equal(/\bgenerated\b/i.test(src), false, rel(f));

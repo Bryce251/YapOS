@@ -2,10 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { room } from './activity-kit.test.js';
 import { installDom } from './dom-shim.js';
-import chain, { checkWord, cleanWord, wordPoints, votesNeeded, nextUp, standing, lastLetter, PROBLEMS, WIN_BONUS, MIN_LETTERS } from '../web/activity/js/games/chain.js';
+import chain, { checkWord, cleanWord, wordPoints, votesNeeded, nextUp, standing, lastLetter, usedFrom, wordHash, hashesIn, lateLives, seat, PROBLEMS, WIN_BONUS, MIN_LETTERS, MAX_LETTERS, USED_PREFIX, HASH_LEN } from '../web/activity/js/games/chain.js';
+import * as dictionary from '../web/activity/js/dictionary.js';
 import { VIEWS } from '../web/activity/js/views/index.js';
 import { eventText, turnText } from '../web/activity/js/views/chain.js';
 import { jsonBytes, MAX_VALUE_BYTES } from '../web/activity/js/limits.js';
+
+await dictionary.load(() => Promise.reject(new Error('offline')));
 
 const BANNED = [/\b(claude|anthropic)\b/i, /\bAI\b/, /\bgenerated\b/i];
 
@@ -44,12 +47,20 @@ test('words are checked for letters, length, start letter and repeats', () => {
   assert.equal(checkWord('  apple ', 'a', []), null);
   assert.equal(checkWord('', 'a', []), 'empty');
   assert.equal(checkWord('ab', 'a', []), 'short');
-  assert.equal(checkWord('a'.repeat(25), 'a', []), 'long');
+  assert.equal(checkWord('a'.repeat(25), 'a', []), null);
+  assert.equal(checkWord('a'.repeat(45), 'a', []), null);
+  assert.equal(checkWord('a'.repeat(46), 'a', []), 'long');
+  assert.equal(MAX_LETTERS, 45);
+  assert.match(PROBLEMS.long, /45 letters/);
   assert.equal(checkWord('ice cream', 'i', []), 'letters');
   assert.equal(checkWord('abc1', 'a', []), 'letters');
   assert.equal(checkWord('café', 'c', []), 'letters');
   assert.equal(checkWord('banana', 'a', []), 'start');
   assert.equal(checkWord('apple', 'a', ['apple']), 'used');
+  const state = { [`${USED_PREFIX}0`]: wordHash('apple') + wordHash('kiosk') };
+  assert.equal(checkWord('Apple', 'a', usedFrom(state)), 'used');
+  assert.equal(checkWord('acorn', 'a', usedFrom(state)), null);
+  assert.equal(usedFrom(state).size, 2);
   assert.equal(cleanWord(' HeLLo '), 'hello');
   assert.equal(lastLetter('Tiger'), 'r');
   assert.equal(MIN_LETTERS, 3);
@@ -88,7 +99,8 @@ test('players take turns, the chain follows last letters and repeats are refused
   assert.equal(s.count, 1);
   assert.equal(s.letter, 'k');
   assert.equal(s.cur, (first + 1) % 3);
-  assert.deepEqual(s.used, [w1]);
+  assert.equal(s.n, 1);
+  assert.equal(usedFrom(r.engines[1].snapshot().state).has(w1), true);
   const wrongPlayer = bySlot(r, (s.cur + 1) % 3);
   wrongPlayer.act({ type: 'word', text: 'kite', t: s.t });
   await r.clock.advance(400);
@@ -104,6 +116,8 @@ test('players take turns, the chain follows last letters and repeats are refused
   assert.equal(s.letter, 'k');
   s = await play(r, 'kiosk');
   assert.equal(s.count, 2, 'no repeats');
+  assert.equal(s.bad.why, 'used');
+  assert.equal(chain.model(bySlot(r, s.cur).snapshot()).bad.why, 'used');
   s = await play(r, 'kayak');
   assert.equal(s.count, 3);
   assert.equal(s.cur, first);
@@ -170,7 +184,8 @@ test('a majority "Not a word" vote strikes the word and costs a life', async () 
   assert.equal(s.vote, null);
   assert.equal(s.letter, before);
   assert.equal(s.lives[author], 2);
-  assert.deepEqual(s.used, []);
+  assert.equal(s.n, 0);
+  assert.equal(usedFrom(r.engines[0].snapshot().state).size, 0);
   assert.equal(s.words.length, 0);
   assert.equal(s.cur, next, 'the next player keeps the turn');
   assert.equal(s.note, 'again');
@@ -258,17 +273,130 @@ test('the game ends with a winner when everyone else leaves', async () => {
   assert.deepEqual(snap.room.last.winners, [snap.meSlot]);
 });
 
-test('the used-word list stays small even in a very long game', async () => {
+test('no word can be played twice, even after hundreds of words', async () => {
   const r = await startChain(2, { timer: 20 });
   let s = st(r);
-  for (let i = 0; i < 260; i += 1) {
+  const played = [];
+  for (let i = 0; i < 620; i += 1) {
     const w = `${s.letter}${'bcdfghjklmnpqrstvwxyz'[i % 21]}${'bcdfghjklmnpqrstvwxyz'[Math.floor(i / 21) % 21]}${'aeiou'[i % 5]}ster${i % 2 ? 'x' : 'n'}`;
+    const before = s.count;
     s = await play(r, w);
+    if (s.count > before) played.push(w);
   }
-  assert.ok(s.count >= 250, String(s.count));
-  assert.ok(s.used.length < s.count, 'the oldest words drop off the used list');
+  assert.ok(s.count >= 600, String(s.count));
+  assert.equal(s.n, s.count);
+  await r.clock.advance(1000);
+  const snap = r.engines[1].snapshot();
+  const used = usedFrom(snap.state);
+  assert.equal(used.size, played.length);
+  for (const w of played) assert.equal(used.has(w), true, w);
+  const keys = Object.keys(snap.state).filter((k) => k.startsWith(USED_PREFIX));
+  assert.equal(keys.length, 2);
+  for (const k of keys) assert.ok(jsonBytes(snap.state[k]) <= MAX_VALUE_BYTES, k);
+  const old = played.find((w) => w[0] === s.letter);
+  const count = s.count;
+  s = await play(r, old);
+  assert.equal(s.count, count, 'an early word is still refused');
+  assert.equal(s.bad.why, 'used');
   assert.ok(jsonBytes(s) <= MAX_VALUE_BYTES, String(jsonBytes(s)));
   assert.deepEqual(r.hub.violations, []);
+});
+
+test('hashes are short, stable and spread out', () => {
+  assert.equal(wordHash('Apple'), wordHash('apple'));
+  assert.equal(wordHash('apple').length, HASH_LEN);
+  assert.notEqual(wordHash('apple'), wordHash('appel'));
+  assert.deepEqual([...hashesIn([wordHash('a') + wordHash('b'), 5, null])], [wordHash('a'), wordHash('b')]);
+});
+
+function fakeApi(st, slots) {
+  const store = { chain: st };
+  return {
+    store,
+    players: () => slots.map((slot) => ({ slot, id: `u${slot}`, name: `P${slot}` })),
+    get: (k) => (store[k] === undefined ? null : JSON.parse(JSON.stringify(store[k]))),
+    put: (k, v) => {
+      store[k] = v;
+    },
+    keys: () => Object.keys(store),
+  };
+}
+
+test('late joiners slot in after the current player with the fewest lives anyone still has', () => {
+  assert.deepEqual(seat([0, 1, 2], 5, 1), [0, 1, 5, 2]);
+  assert.deepEqual(seat([0, 1, 2], 5, 2), [0, 1, 2, 5]);
+  assert.deepEqual(seat([0, 1, 2], 1, 0), [0, 1, 2]);
+  assert.deepEqual(seat([0, 1], 4, null), [0, 1, 4]);
+  assert.equal(lateLives({ order: [0, 1, 2], lives: { 0: 3, 1: 2, 2: 0 } }, [0, 1, 2]), 2);
+  assert.equal(lateLives({ order: [0, 1, 2], lives: { 0: 3, 1: 1, 2: 2 } }, [0, 2]), 2);
+  assert.equal(lateLives({ order: [0, 1], lives: { 0: 0, 1: 0 } }, [0, 1]), 1);
+  const st = { phase: 'turn', order: [0, 1, 2], lives: { 0: 3, 1: 1, 2: 2 }, cur: 1, max: 3 };
+  const api = fakeApi(st, [0, 1, 2, 3]);
+  chain.join(api, 3);
+  assert.deepEqual(api.store.chain.order, [0, 1, 3, 2]);
+  assert.equal(api.store.chain.lives[3], 1);
+  chain.join(api, 3);
+  assert.deepEqual(api.store.chain.order, [0, 1, 3, 2], 'joining twice changes nothing');
+  const over = fakeApi({ ...st, phase: 'over' }, [0, 1, 2, 4]);
+  chain.join(over, 4);
+  assert.deepEqual(over.store.chain.order, [0, 1, 2]);
+});
+
+test('a late joiner takes turns in a running game', async () => {
+  const r = await startChain(2, { lives: 3 });
+  let s = st(r);
+  const first = s.cur;
+  await r.clock.advance(15000 + 200);
+  s = st(r);
+  assert.equal(s.lives[first], 2);
+  const late = r.add(3);
+  await r.clock.advance(800);
+  const slot = late.snapshot().meSlot;
+  s = st(r);
+  assert.ok(Number.isInteger(slot), 'the late joiner gets a slot');
+  assert.ok(s.order.includes(slot), 'the late joiner is seated');
+  assert.equal(s.lives[slot], 2);
+  assert.equal(s.order.indexOf(slot), s.order.indexOf(s.cur) + 1);
+  const before = s.t;
+  while (st(r).cur !== slot) {
+    const now = st(r);
+    bySlot(r, now.cur).act({ type: 'word', text: wordFor(now.letter, now.t), t: now.t });
+    await r.clock.advance(400);
+    assert.ok(st(r).t > now.t, 'the turn moves on');
+    assert.ok(st(r).t - before < 6, 'the late joiner gets a turn soon');
+  }
+  const mine = st(r);
+  late.act({ type: 'word', text: wordFor(mine.letter, 99), t: mine.t });
+  await r.clock.advance(400);
+  assert.notEqual(st(r).cur, slot, 'the late joiner played a word');
+  assert.deepEqual(r.hub.violations, []);
+});
+
+test('a spectator cannot play a word or seat themselves', async () => {
+  const r = await startChain(2, { lives: 3 });
+  const watcher = r.add(3);
+  watcher.leave();
+  await r.clock.advance(800);
+  const s = st(r);
+  const slot = watcher.snapshot().meSlot;
+  assert.ok(slot === null || !s.order.includes(slot), 'a spectator is not seated');
+  watcher.act({ type: 'word', text: wordFor(s.letter, 3), t: s.t });
+  await r.clock.advance(400);
+  assert.equal(st(r).t, s.t, 'nothing moved');
+  assert.equal(st(r).count, s.count);
+  assert.deepEqual(r.hub.violations, []);
+});
+
+test('without the dictionary the game says so and falls back to voting', async () => {
+  assert.equal(dictionary.ready, false);
+  assert.equal(dictionary.failed, true);
+  const r = await startChain(4);
+  let s = st(r);
+  assert.equal(s.dict, 0);
+  assert.equal(chain.model(r.engines[0].snapshot()).dict, false);
+  s = await play(r, `${s.letter}zzq`);
+  assert.equal(s.count, 1, 'made-up words go through when the dictionary is missing');
+  assert.ok(s.vote, 'and the others can vote them out');
 });
 
 function all(node, out = []) {

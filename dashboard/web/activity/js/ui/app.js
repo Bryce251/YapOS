@@ -1,8 +1,8 @@
-import { h, swap, memo, button, tickTimers, avatar } from './dom.js';
+import { h, swap, memo, button, tickTimers } from './dom.js';
 import { createFx } from './fx.js';
-import { createLobby } from './lobby.js';
+import { createLobby, joinButton } from './lobby.js';
 import { createResults } from './results.js';
-import { standings } from './board.js';
+import { board, standings } from './board.js';
 import { viewFor } from '../views/index.js';
 
 export function headerModel(snap, { alone = false } = {}) {
@@ -22,11 +22,22 @@ export function headerModel(snap, { alone = false } = {}) {
   };
 }
 
-function stripModel(snap) {
-  return standings(snap.players, 'game')
-    .filter((p) => p.present || p.pts > 0)
-    .slice(0, 8)
-    .map((p) => ({ id: p.id, name: p.name, initials: p.initials, hue: p.hue, avatar: p.avatar, pts: p.pts, isMe: p.isMe, place: p.place }));
+export const STRIP_MAX = 12;
+export const PROFILES_MS = 120;
+export const PROFILES_EVENT = 'yapos:profiles';
+
+export function stripModel(snap, extra = null) {
+  const rows = standings(snap.players, 'game')
+    .filter((p) => (p.present && p.joined) || p.pts > 0)
+    .slice(0, STRIP_MAX)
+    .map((p) => ({ id: p.id, slot: p.slot, name: p.name, username: p.username || null, initials: p.initials, hue: p.hue, avatar: p.avatar || null, pts: p.pts, isMe: p.isMe, place: p.place, present: p.present }));
+  const opts = extra && typeof extra === 'object' ? extra : {};
+  return { rows, badge: opts.badge || null, gains: opts.gains || null };
+}
+
+export function spectateModel(snap) {
+  if (!snap.ready || snap.room.phase !== 'game' || snap.meJoined) return null;
+  return { meJoined: false, joining: snap.joining || null };
 }
 
 export function mountApp({ root, engine, bridge, win }) {
@@ -48,9 +59,13 @@ export function mountApp({ root, engine, bridge, win }) {
   const lobby = createLobby({ engine, toast });
   const results = createResults({ engine, fx });
   const gameWrap = h('div', { class: 'screen play' });
+  const spectate = h('div', { class: 'spectate-slot' });
   const gameCard = h('div', { class: 'card glass play-card' });
   const strip = h('div', { class: 'strip' });
-  gameWrap.append(gameCard, strip);
+  gameWrap.append(spectate, gameCard, strip);
+  const now = () => (typeof engine.now === 'function' ? engine.now() : Date.now());
+  let renders = 0;
+  let profileTimer = null;
   let view = null;
   let viewKey = '';
   let screen = '';
@@ -74,20 +89,50 @@ export function mountApp({ root, engine, bridge, win }) {
         'span',
         { class: 'top-actions' },
         m.canEnd ? button('End game', { variant: 'ghost', size: 'sm', key: 'end', on: () => engine.lobby.end(), attrs: { 'aria-label': 'End game', title: 'End game' }, kids: h('span', { class: 'btn-icon', text: '⏹', attrs: { 'aria-hidden': 'true' } }) }) : null,
-        button('Leave', { variant: 'ghost', size: 'sm', key: 'leave', on: leave, attrs: { 'aria-label': 'Leave', title: 'Leave' }, kids: h('span', { class: 'btn-icon', text: '🚪', attrs: { 'aria-hidden': 'true' } }) }),
+        button('Close', { variant: 'ghost', size: 'sm', key: 'leave', on: leave, attrs: { 'aria-label': 'Close YapOS Party', title: 'Close YapOS Party' }, kids: h('span', { class: 'btn-icon', text: '🚪', attrs: { 'aria-hidden': 'true' } }) }),
       ),
     ),
   );
 
-  const paintStrip = memo((rows) =>
-    rows.length && rows.some((r) => r.pts > 0)
-      ? h(
-          'ol',
-          { class: 'strip-list', attrs: { 'aria-label': 'Points this game' } },
-          rows.map((r) => h('li', { class: ['strip-item', r.isMe ? 'is-me' : null] }, avatar(r, 'xs'), h('span', { class: 'strip-name', text: r.name }), h('span', { class: 'strip-pts', text: r.pts.toLocaleString('en-US') }))),
-        )
-      : h('p', { class: 'strip-empty', text: 'Points show up here as you score.' }),
+  const paintStrip = memo((m) =>
+    m
+      ? board(m.rows, { empty: 'Points show up here as you score.', label: 'Points this game', layout: 'bar', max: STRIP_MAX, badge: m.badge, gains: m.gains })
+      : null,
   );
+
+  const paintSpectate = memo((m) => {
+    if (!m) return null;
+    const btn = joinButton(m, { size: 'sm', key: 'join-late' });
+    btn.addEventListener('click', () => engine.join());
+    return h(
+      'div',
+      { class: 'spectate', attrs: { role: 'status' } },
+      h('span', { class: 'spectate-label' }, h('span', { class: 'spectate-eye', text: '👀', attrs: { 'aria-hidden': 'true' } }), h('span', { text: 'Watching' })),
+      h('span', { class: 'spectate-hint', text: 'Hop in any time.' }),
+      btn,
+    );
+  });
+
+  function viewBoard(snap) {
+    if (!view || typeof view.board !== 'function') return null;
+    try {
+      return view.board(snap);
+    } catch {
+      return null;
+    }
+  }
+
+  function ownsBoard() {
+    return Boolean(view && view.el && typeof view.el.querySelector === 'function' && view.el.querySelector('[data-scoreboard]'));
+  }
+
+  function onProfiles() {
+    if (profileTimer !== null) return;
+    profileTimer = win.setTimeout(() => {
+      profileTimer = null;
+      render(engine.snapshot());
+    }, PROFILES_MS);
+  }
 
   const paintConnect = memo((m) => {
     if (m.lost) {
@@ -150,6 +195,7 @@ export function mountApp({ root, engine, bridge, win }) {
   }
 
   function render(snap) {
+    renders += 1;
     const hm = headerModel(snap, { alone });
     paintHead(head, hm);
     root.dataset.phase = hm.phase;
@@ -163,6 +209,7 @@ export function mountApp({ root, engine, bridge, win }) {
       if (screen !== 'lobby') swap(stage, lobby.el);
       screen = 'lobby';
       lobby.update(snap);
+      tickTimers(stage, now());
       return;
     }
     if (hm.phase === 'results') {
@@ -182,14 +229,16 @@ export function mountApp({ root, engine, bridge, win }) {
     if (screen !== 'game') swap(stage, gameWrap);
     screen = 'game';
     if (view) view.update(snap);
-    paintStrip(strip, stripModel(snap));
-    tickTimers(stage, Date.now());
+    paintSpectate(spectate, spectateModel(snap));
+    paintStrip(strip, ownsBoard() ? null : stripModel(snap, viewBoard(snap)));
+    tickTimers(stage, now());
   }
 
   const stopSpot = fx.spotlight(root);
   const offChange = engine.on('change', render);
+  if (typeof win.addEventListener === 'function') win.addEventListener(PROFILES_EVENT, onProfiles);
   const ticker = win.setInterval(() => {
-    tickTimers(stage, Date.now());
+    tickTimers(stage, now());
     if (screen === 'connecting') render(engine.snapshot());
   }, 200);
   render(engine.snapshot());
@@ -197,8 +246,14 @@ export function mountApp({ root, engine, bridge, win }) {
   return {
     render,
     toast,
+    get renders() {
+      return renders;
+    },
     destroy() {
       offChange();
+      if (typeof win.removeEventListener === 'function') win.removeEventListener(PROFILES_EVENT, onProfiles);
+      if (profileTimer !== null) win.clearTimeout(profileTimer);
+      profileTimer = null;
       stopSpot();
       win.clearInterval(ticker);
       if (view) view.destroy();

@@ -1,26 +1,70 @@
-import { jsonBytes } from '../limits.js';
+import { ready as dictReady, failed as dictFailed, isWord, load as loadDictionary } from '../dictionary.js';
 
 export const KEY = 'chain';
+export const USED_PREFIX = 'chain.u.';
 export const MIN_LETTERS = 3;
-export const MAX_LETTERS = 24;
+export const MAX_LETTERS = 45;
 export const RECENT = 10;
-export const USED_BYTES = 2400;
+export const HASH_LEN = 7;
+export const PER_CHUNK = 500;
+export const MAX_CHUNKS = 8;
+export const MAX_TRIES = 6;
 export const WIN_BONUS = 250;
 export const START_LETTERS = 'abcdefghilmnoprstw';
 
+const HI = 1679616;
+const LO = 46656;
+
 export function cleanWord(text) {
-  const w = String(text ?? '').trim().toLowerCase();
-  return w;
+  return String(text ?? '').trim().toLowerCase();
 }
 
-export function checkWord(text, letter, used) {
+export function wordHash(word) {
+  const w = cleanWord(word);
+  let a = 0x811c9dc5;
+  let b = 0x9747b28c;
+  for (let i = 0; i < w.length; i += 1) {
+    const c = w.charCodeAt(i);
+    a = Math.imul(a ^ c, 16777619);
+    b = Math.imul(b ^ c, 0x5bd1e995);
+    b ^= b >>> 13;
+  }
+  const n = ((a >>> 0) % HI) * LO + ((b >>> 0) % LO);
+  return n.toString(36).padStart(HASH_LEN, '0');
+}
+
+export function hashesIn(values) {
+  const out = new Set();
+  for (const v of values) {
+    if (typeof v !== 'string') continue;
+    for (let i = 0; i + HASH_LEN <= v.length; i += HASH_LEN) out.add(v.slice(i, i + HASH_LEN));
+  }
+  return out;
+}
+
+export function usedFrom(state) {
+  const values = Object.keys(state || {}).filter((k) => k.startsWith(USED_PREFIX)).map((k) => state[k]);
+  const set = hashesIn(values);
+  return { size: set.size, has: (w) => set.has(wordHash(w)) };
+}
+
+function isUsed(used, w) {
+  if (!used) return false;
+  if (Array.isArray(used)) return used.includes(w);
+  if (typeof used.has === 'function') return used.has(w);
+  return false;
+}
+
+export function checkWord(text, letter, used, opts = {}) {
   const w = cleanWord(text);
   if (!w) return 'empty';
   if (!/^[a-z]+$/.test(w)) return 'letters';
   if (w.length < MIN_LETTERS) return 'short';
   if (w.length > MAX_LETTERS) return 'long';
   if (letter && w[0] !== letter) return 'start';
-  if ((used || []).includes(w)) return 'used';
+  if (isUsed(used, w)) return 'used';
+  const dict = opts.dictionary === undefined ? dictReady : Boolean(opts.dictionary) && dictReady;
+  if (dict && !isWord(w)) return 'unknown';
   return null;
 }
 
@@ -28,9 +72,10 @@ export const PROBLEMS = Object.freeze({
   empty: 'Type a word first.',
   letters: 'Letters only, please. No spaces, numbers or symbols.',
   short: `Words need at least ${MIN_LETTERS} letters.`,
-  long: `That word is too long. Keep it under ${MAX_LETTERS + 1} letters.`,
+  long: `That word is too long. Words can have up to ${MAX_LETTERS} letters.`,
   start: 'That word starts with the wrong letter.',
   used: 'Someone already played that word.',
+  unknown: "That's not a word in my English dictionary. Check the spelling.",
 });
 
 export function wordPoints(word) {
@@ -69,14 +114,42 @@ export function standing(order, lives, present) {
   return order.filter((s) => (lives[s] || 0) > 0 && live.has(s));
 }
 
-function trimUsed(list) {
-  const out = list.slice();
-  while (out.length > 1 && jsonBytes(out) > USED_BYTES) out.shift();
-  return out;
-}
-
 function presentSlots(api) {
   return api.players().map((p) => p.slot);
+}
+
+function chunkKey(i) {
+  return `${USED_PREFIX}${i % MAX_CHUNKS}`;
+}
+
+function hostUsed(api) {
+  const values = api.keys().filter((k) => k.startsWith(USED_PREFIX)).map((k) => api.get(k));
+  const set = hashesIn(values);
+  return { has: (w) => set.has(wordHash(w)) };
+}
+
+function remember(api, st, word) {
+  const n = st.n || 0;
+  const key = chunkKey(Math.floor(n / PER_CHUNK));
+  const prev = n % PER_CHUNK === 0 ? '' : api.get(key) || '';
+  api.put(key, prev + wordHash(word));
+  st.n = n + 1;
+}
+
+function forgetLast(api, st) {
+  const n = st.n || 0;
+  if (n <= 0) return;
+  const key = chunkKey(Math.floor((n - 1) / PER_CHUNK));
+  const prev = api.get(key) || '';
+  const next = prev.slice(0, Math.max(0, prev.length - HASH_LEN));
+  api.put(key, next || null);
+  st.n = n - 1;
+}
+
+function dictState(st) {
+  if (dictReady) return 1;
+  if (dictFailed) return 0;
+  return st.dict === 0 ? 0 : 1;
 }
 
 function endIfDone(api, st) {
@@ -91,7 +164,7 @@ function endIfDone(api, st) {
 function startTurn(api, st, slot, note) {
   const starts = api.now();
   const ends = starts + api.settings.timer * 1000;
-  const next = { ...st, phase: 'turn', cur: slot, t: (st.t || 0) + 1, note: note || null, starts, ends };
+  const next = { ...st, phase: 'turn', cur: slot, t: (st.t || 0) + 1, note: note || null, starts, ends, dict: dictState(st), bad: null };
   api.put(KEY, next);
   api.setDeadline(ends);
   return next;
@@ -116,16 +189,30 @@ function play(api, slot, action) {
   const st = api.get(KEY);
   if (!st || st.phase !== 'turn' || slot !== st.cur) return;
   if (action.t !== undefined && action.t !== st.t) return;
-  if (checkWord(action.text, st.letter, st.used)) return;
+  const checked = dictReady;
+  const was = st.dict;
+  st.dict = dictState(st);
+  const problem = checkWord(action.text, st.letter, hostUsed(api), { dictionary: checked });
+  if (problem) {
+    const tries = st.bad && st.bad.t === st.t ? st.bad.k : 0;
+    if (tries >= MAX_TRIES || problem === 'empty') {
+      if (was !== st.dict) api.put(KEY, st);
+      return;
+    }
+    st.bad = { t: st.t, k: tries + 1, s: slot, why: problem };
+    api.put(KEY, st);
+    return;
+  }
   const word = cleanWord(action.text);
   const pts = wordPoints(word);
   api.addPoints(slot, pts);
   st.count = (st.count || 0) + 1;
   st.words = st.words.concat([[st.count, slot, word]]).slice(-RECENT);
-  st.used = trimUsed(st.used.concat([word]));
-  st.vote = { n: st.count, w: word, s: slot, no: [], prev: st.letter, pts };
+  remember(api, st, word);
+  st.vote = checked ? null : { n: st.count, w: word, s: slot, no: [], prev: st.letter, pts };
   st.letter = lastLetter(word);
   st.last = { kind: 'word', s: slot, w: word };
+  st.bad = null;
   advance(api, st);
 }
 
@@ -143,8 +230,7 @@ function nope(api, slot, action) {
     return;
   }
   st.words = st.words.filter((x) => x[0] !== v.n);
-  const at = st.used.lastIndexOf(v.w);
-  if (at >= 0) st.used = st.used.slice(0, at).concat(st.used.slice(at + 1));
+  if (v.n === st.count) forgetLast(api, st);
   st.letter = v.prev;
   st.struck = (st.struck || 0) + 1;
   st.vote = null;
@@ -159,6 +245,18 @@ function nope(api, slot, action) {
   startTurn(api, st, st.cur, 'again');
 }
 
+export function lateLives(st, present) {
+  const alive = standing(st.order, st.lives, present).map((s) => st.lives[s] || 0);
+  return Math.max(1, alive.length ? Math.min(...alive) : 1);
+}
+
+export function seat(order, slot, cur) {
+  if (order.includes(slot)) return order.slice();
+  const at = order.indexOf(cur);
+  if (at < 0) return order.concat([slot]);
+  return order.slice(0, at + 1).concat([slot], order.slice(at + 1));
+}
+
 const chain = {
   id: 'chain',
   name: 'Word Chain',
@@ -166,17 +264,23 @@ const chain = {
   blurb: 'Say a word that starts with the last letter of the one before. Run out of time and you lose a life.',
   minPlayers: 2,
   keys: [KEY],
+  prefixes: [USED_PREFIX],
   settings: [
     { id: 'timer', label: 'Time per turn', type: 'choice', options: [10, 15, 20].map((v) => ({ value: v, label: `${v} s` })), default: 15 },
     { id: 'lives', label: 'Lives', type: 'choice', options: [1, 2, 3, 5].map((v) => ({ value: v, label: String(v) })), default: 3 },
   ],
 
+  prepare() {
+    loadDictionary();
+  },
+
   start(api) {
+    loadDictionary();
     const order = presentSlots(api);
     const lives = {};
     for (const s of order) lives[s] = api.settings.lives;
     const letter = START_LETTERS[Math.floor(api.random() * START_LETTERS.length)];
-    const st = { v: 1, order, lives, max: api.settings.lives, out: [], letter, words: [], used: [], count: 0, vote: null, last: null, t: 0, cur: null, phase: 'turn' };
+    const st = { v: 2, order, lives, max: api.settings.lives, out: [], letter, words: [], n: 0, count: 0, vote: null, bad: null, dict: dictFailed && !dictReady ? 0 : 1, last: null, t: 0, cur: null, phase: 'turn' };
     const first = order[Math.floor(api.random() * order.length)];
     startTurn(api, st, first, 'first');
   },
@@ -196,7 +300,18 @@ const chain = {
     return advance(api, st);
   },
 
+  join(api, slot) {
+    const st = api.get(KEY);
+    if (!st || st.phase !== 'turn' || !Number.isInteger(slot)) return;
+    if (st.order.includes(slot)) return;
+    const present = presentSlots(api).filter((s) => s !== slot);
+    st.lives = { ...st.lives, [slot]: lateLives(st, present) };
+    st.order = seat(st.order, slot, st.cur);
+    api.put(KEY, st);
+  },
+
   resume(api) {
+    loadDictionary();
     const st = api.get(KEY);
     if (!st) return chain.start(api);
     if (st.phase !== 'turn') return undefined;
@@ -223,8 +338,8 @@ const chain = {
     const who = (slot) => {
       const p = bySlot.get(slot);
       return p
-        ? { slot, name: p.name, initials: p.initials, hue: p.hue, avatar: p.avatar, isMe: p.isMe, present: p.present }
-        : { slot, name: 'Player', initials: 'P', hue: 20, avatar: null, isMe: false, present: false };
+        ? { slot, name: p.name, username: p.username || null, initials: p.initials, hue: p.hue, avatar: p.avatar || null, isMe: p.isMe, present: p.present }
+        : { slot, name: 'Player', username: null, initials: 'P', hue: 20, avatar: null, isMe: false, present: false };
     };
     const present = snap.players.filter((p) => p.present && p.slot !== null).map((p) => p.slot);
     const v = st.vote;
@@ -246,6 +361,7 @@ const chain = {
       };
     }
     const myTurn = st.phase === 'turn' && mine !== null && st.cur === mine;
+    const bad = st.bad && st.bad.t === st.t && st.bad.s === mine ? { k: st.bad.k, why: st.bad.why } : null;
     return {
       phase: st.phase,
       t: st.t,
@@ -263,6 +379,8 @@ const chain = {
       vote,
       last: st.last ? { kind: st.last.kind, w: st.last.w, ...who(st.last.s) } : null,
       note: st.note,
+      dict: st.dict !== 0,
+      bad,
     };
   },
 };

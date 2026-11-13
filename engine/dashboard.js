@@ -61,6 +61,10 @@ const TICKETS_OFF = "Tickets isn't installed here. Install it first.";
 const UNKNOWN_JOB = "I don't know that job.";
 const BAD_LENGTH = "I couldn't read that length. Try something like 10m, 2h or 3d.";
 const OWNER_ONLY = 'Only the bot owner can change this.';
+const MAX_WANTED = 25;
+const PROFILE_WORKERS = 4;
+const PROFILE_LOOKUP_MS = 5_000;
+const PROFILE_TEXT_MAX = 64;
 
 export const SLUG_RE = /^[a-z0-9-]{3,32}$/;
 
@@ -270,7 +274,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
   const state = {
     timer: null, stopped: true, busy: false, failures: 0, delay: null, hot: false,
     used: new Map(), snapped: new Map(), published: new Map(), pending: [],
-    gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity,
+    gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity, profileRun: null,
   };
 
   async function request(method, path, body) {
@@ -1026,6 +1030,71 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     }
   }
 
+  function profileText(v) {
+    if (typeof v !== 'string') return null;
+    const text = v.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+    return text ? Array.from(text).slice(0, PROFILE_TEXT_MAX).join('') : null;
+  }
+
+  async function lookupProfile(id) {
+    let timer;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ skip: true }), PROFILE_LOOKUP_MS);
+      timer.unref?.();
+    });
+    const ask = Promise.resolve()
+      .then(() => engine.bot.user(id))
+      .then((user) => (user && typeof user === 'object' ? { user } : { gone: true }))
+      .catch((e) => (e?.status === 404 ? { gone: true } : { skip: true }));
+    try {
+      return await Promise.race([ask, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function profileBatch(ids) {
+    const profiles = [];
+    const missing = [];
+    let next = 0;
+    async function worker() {
+      while (next < ids.length) {
+        const id = ids[next++];
+        const out = await lookupProfile(id);
+        if (out.gone) missing.push(id);
+        else if (out.user) {
+          profiles.push({
+            id,
+            username: profileText(out.user.username),
+            display_name: profileText(out.user.display_name ?? out.user.displayName ?? null),
+            avatar_url: avatarUrl(out.user.avatar_url ?? out.user.avatar_path ?? null),
+          });
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PROFILE_WORKERS, ids.length) }, worker));
+    if (!profiles.length && !missing.length) return { profiles, missing, posted: false };
+    const r = await request('POST', '/bot/profiles', { profiles, missing });
+    if (!r.ok) log.debug(`[dashboard] profile upload answered ${r.status}`);
+    return { profiles, missing, posted: r.ok };
+  }
+
+  function lookupProfiles(list) {
+    if (state.profileRun) return state.profileRun;
+    const ids = [...new Set((Array.isArray(list) ? list : []).filter((id) => typeof id === 'string' && SAFE_ID.test(id)))].slice(0, MAX_WANTED);
+    if (!ids.length || typeof engine.bot?.user !== 'function') return Promise.resolve(null);
+    const run = profileBatch(ids)
+      .catch((e) => {
+        log.debug('[dashboard] profile lookups failed', e?.message);
+        return null;
+      })
+      .finally(() => {
+        if (state.profileRun === run) state.profileRun = null;
+      });
+    state.profileRun = run;
+    return run;
+  }
+
   async function tick() {
     if (!enabled) return null;
     if (state.busy) return state.delay;
@@ -1036,6 +1105,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       if (!r.ok) throw Object.assign(new Error(`poll answered ${r.status}`), { status: r.status });
       const jobs = Array.isArray(r.data?.jobs) ? r.data.jobs.slice(0, MAX_JOBS) : [];
       state.hot = r.data?.hot === true;
+      if (Array.isArray(r.data?.wanted) && r.data.wanted.length) lookupProfiles(r.data.wanted);
       const results = [];
       for (const job of jobs) results.push(await runJob(job));
       await postResults(results);
@@ -1093,8 +1163,10 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       if (state.timer) clearT(state.timer);
       state.timer = null;
     },
+    get profileWork() { return state.profileRun; },
     tick,
     runJob,
+    lookupProfiles,
     snapshot,
     publicPage,
     globalBoard,

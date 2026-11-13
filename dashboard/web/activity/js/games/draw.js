@@ -1,8 +1,12 @@
 import { WORDS, TIERS, wordById, wordsIn } from '../../data/draw.js';
 import { shuffle } from '../engine.js';
 import { INK_PREFIX } from './ink.js';
+import { person } from '../players.js';
 
 export const KEY = 'draw';
+export const DRAWER_STEP = 5;
+export const AUTO_START = Object.freeze({ min: 2, ms: 90000 });
+export const HANDLE_MAX = 32;
 export const PICK_MS = 15000;
 export const REVEAL_MS = 6000;
 export const GUESS_MAX = 500;
@@ -60,8 +64,24 @@ export function guessPoints(at, starts, ends) {
   return Math.round((GUESS_MIN + (GUESS_MAX - GUESS_MIN) * left) / 10) * 10;
 }
 
-export function drawerPoints(points) {
-  return Math.round(points / 20) * 10;
+export function drawerShare(points, guessers) {
+  const list = (Array.isArray(points) ? points : []).filter((p) => Number.isFinite(p) && p > 0);
+  if (!list.length) return 0;
+  const sum = list.reduce((a, b) => a + b, 0);
+  const n = Math.max(1, list.length, Number.isFinite(guessers) ? Math.floor(guessers) : 0);
+  return Math.floor(sum / n / DRAWER_STEP) * DRAWER_STEP;
+}
+
+export function drawerGain(got, guessers, already = 0) {
+  return Math.max(0, drawerShare(got.map((g) => g[1]), guessers) - (already || 0));
+}
+
+export function handleOf(raw) {
+  if (typeof raw !== 'string') return null;
+  const text = raw.replace(/^@+/, '').replace(/[\s\u0000-\u001f\u007f​-‏‪-‮⁦-⁩]/g, '');
+  if (!text) return null;
+  const chars = Array.from(text);
+  return chars.length > HANDLE_MAX ? chars.slice(0, HANDLE_MAX).join('') : text;
 }
 
 export function mask(id, nonce) {
@@ -217,6 +237,12 @@ function everyoneGot(api, st) {
   return guessers.length > 0 && guessers.every((s) => st.got.some((g) => g[0] === s));
 }
 
+function guesserCount(api, st) {
+  const all = new Set(presentSlots(api).filter((s) => s !== st.drawer));
+  for (const g of st.got) all.add(g[0]);
+  return all.size;
+}
+
 function guess(api, slot, action) {
   const st = api.get(KEY);
   if (!st || st.phase !== 'draw' || slot === st.drawer) return;
@@ -232,11 +258,12 @@ function guess(api, slot, action) {
   const verdict = judge(raw, word);
   if (verdict === 'right') {
     const pts = guessPoints(Math.min(at, st.ends), st.starts, st.ends);
-    const extra = drawerPoints(pts);
     st.got.push([slot, pts]);
-    st.gained = { ...st.gained, [slot]: pts, [st.drawer]: (st.gained[st.drawer] || 0) + extra };
+    const had = (st.gained && st.gained[st.drawer]) || 0;
+    const extra = drawerGain(st.got, guesserCount(api, st), had);
+    st.gained = { ...st.gained, [slot]: pts, [st.drawer]: had + extra };
     api.addPoints(slot, pts);
-    api.addPoints(st.drawer, extra);
+    if (extra) api.addPoints(st.drawer, extra);
     pushFeed(st, slot, '', 'ok');
   } else {
     pushFeed(st, slot, verdict === 'hidden' ? '•••' : raw, verdict === 'close' ? 'close' : 'guess');
@@ -251,6 +278,7 @@ const draw = {
   emoji: '🎨',
   blurb: 'Take turns drawing a secret word. Guess fast to score big.',
   minPlayers: 2,
+  autoStart: { min: AUTO_START.min, ms: AUTO_START.ms },
   keys: [KEY],
   prefixes: [INK_PREFIX],
   open: [INK_PREFIX],
@@ -298,6 +326,14 @@ const draw = {
     return turn(api, st, st.round, st.pos + 1);
   },
 
+  join(api, slot) {
+    const st = api.get(KEY);
+    if (!st || !Number.isInteger(slot)) return undefined;
+    if (!Array.isArray(st.order) || st.order.includes(slot)) return undefined;
+    api.put(KEY, { ...st, order: st.order.concat([slot]) });
+    return undefined;
+  },
+
   resume(api) {
     const st = api.get(KEY);
     if (!st) return draw.start(api);
@@ -324,9 +360,12 @@ const draw = {
     const bySlot = new Map(snap.players.filter((p) => p.slot !== null).map((p) => [p.slot, p]));
     const who = (slot) => {
       const p = bySlot.get(slot);
-      return p ? { slot, id: p.id, name: p.name, initials: p.initials, hue: p.hue, avatar: p.avatar, isMe: p.isMe } : { slot, id: null, name: 'Player', initials: 'P', hue: 20, avatar: null, isMe: false };
+      if (!p) return { slot, id: null, name: 'Player', username: null, initials: 'P', hue: 20, avatar: null, isMe: false };
+      const prof = person({ id: p.id, name: p.name }) || {};
+      return { slot, id: p.id, name: p.name, username: handleOf(p.username || prof.username || null), initials: p.initials, hue: p.hue, avatar: p.avatar || prof.avatar || null, isMe: p.isMe };
     };
     const amDrawer = mine !== null && mine === st.drawer;
+    const playing = mine !== null && snap.meJoined !== false;
     const secret = wordOf(st);
     const shown = st.phase === 'reveal' ? st.word || secret : null;
     let word = null;
@@ -362,11 +401,12 @@ const draw = {
       got: st.got.map(([slot, pts]) => ({ ...who(slot), pts })),
       gotMe: Boolean(gotMe),
       myPts: gotMe ? gotMe[1] : 0,
-      canGuess: st.phase === 'draw' && !amDrawer && mine !== null && !gotMe,
+      canGuess: st.phase === 'draw' && !amDrawer && playing && !gotMe,
       feed: (st.feed || []).map(([id, slot, text, kind]) => ({ id, ...who(slot), text: kind === 'close' && slot !== mine ? '' : text, kind, mine: slot === mine })),
       gained: mine !== null && st.gained ? st.gained[mine] || 0 : 0,
       drawerGain: st.gained ? st.gained[st.drawer] || 0 : 0,
       note: st.note,
+      spectator: !playing && !amDrawer,
     };
   },
 };

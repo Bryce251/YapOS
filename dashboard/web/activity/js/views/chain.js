@@ -1,4 +1,5 @@
-import chain, { checkWord, PROBLEMS, MAX_LETTERS } from '../games/chain.js';
+import chain, { checkWord, usedFrom, PROBLEMS, MAX_LETTERS } from '../games/chain.js';
+import { load as loadDictionary } from '../dictionary.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
 
 export function eventText(m) {
@@ -19,7 +20,7 @@ export function turnText(m) {
   const L = m.letter.toUpperCase();
   if (m.myTurn) return `Your turn! Type a word that starts with ${L}.`;
   if (!m.playing) return `You're watching. ${m.cur.name} needs a word that starts with ${L}.`;
-  if (!m.alive) return `You're out, but you can still vote. ${m.cur.name} is up.`;
+  if (!m.alive) return m.dict ? `You're out, but you can keep watching. ${m.cur.name} is up.` : `You're out, but you can still vote. ${m.cur.name} is up.`;
   return `${m.cur.name} needs a word that starts with ${L}.`;
 }
 
@@ -47,7 +48,8 @@ export function createChainView({ engine, toast }) {
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
   el.append(head, ring, stage, entry, voteBox, foot);
 
-  const local = { nope: null, t: null, sentT: null };
+  const local = { nope: null, t: null, sentT: null, sent: '', bad: null };
+  loadDictionary();
   let snap = null;
   let model = null;
 
@@ -65,13 +67,14 @@ export function createChainView({ engine, toast }) {
     if (!model || !model.myTurn || !snap) return;
     const st = snap.state.chain;
     if (local.sentT === model.t) return;
-    const problem = checkWord(input.value, st.letter, st.used);
+    const problem = checkWord(input.value, st.letter, usedFrom(snap.state));
     if (problem) {
       hint.textContent = PROBLEMS[problem] || 'That word does not work.';
       return;
     }
     local.sentT = model.t;
-    engine.act({ type: 'word', text: input.value.trim().toLowerCase(), t: model.t });
+    local.sent = input.value.trim().toLowerCase();
+    engine.act({ type: 'word', text: local.sent, t: model.t });
     input.value = '';
     hint.textContent = 'Sent!';
   }
@@ -133,9 +136,10 @@ export function createChainView({ engine, toast }) {
 
   const paintVote = memo((m) => {
     const v = m.vote;
-    if (!v || m.phase !== 'turn') return null;
+    const off = !m.dict && m.phase === 'turn' ? h('p', { class: 'muted vote-note', text: "The word list didn't load this time, so players vote out anything that isn't a real word." }) : null;
+    if (!v || m.phase !== 'turn') return off;
     const mineWord = v.by.isMe;
-    return h(
+    const card = h(
       'div',
       { class: 'vote-card' },
       h('span', { class: 'vote-text' }, mineWord ? 'Your word ' : `${v.by.name} played `, h('strong', { text: `“${v.word}”` }), '.'),
@@ -147,6 +151,7 @@ export function createChainView({ engine, toast }) {
         ? h('span', { class: 'muted vote-note', text: v.count ? `${v.count} of ${v.need} votes say it isn't a word. The others decide while it's your turn.` : "The others can vote while it's your turn." })
         : button(v.voted ? `Voted (${v.count}/${v.need})` : `Not a word? (${v.count}/${v.need})`, { variant: v.voted ? 'ghost' : 'secondary', size: 'sm', key: 'nope', disabled: !v.canVote, on: () => nope(v) }),
     );
+    return off ? [off, card] : card;
   });
 
   const paintFoot = memo((m) => h('span', { class: 'foot-text', text: [eventText(m), turnText(m)].filter(Boolean).join(' ') }));
@@ -162,7 +167,14 @@ export function createChainView({ engine, toast }) {
     paintHead(head, { count: m.count, phase: m.phase, starts: m.starts, ends: m.ends });
     paintRing(ring, m);
     paintStage(stage, { letter: m.letter, words: m.words });
-    paintVote(voteBox, { vote: m.vote, phase: m.phase });
+    paintVote(voteBox, { vote: m.vote, phase: m.phase, dict: m.dict });
+    const badKey = m.bad ? `${m.t}:${m.bad.k}` : null;
+    if (badKey && badKey !== local.bad && local.sentT === m.t) {
+      local.bad = badKey;
+      local.sentT = null;
+      if (!input.value) input.value = local.sent;
+      hint.textContent = PROBLEMS[m.bad.why] || 'That word does not work.';
+    }
     paintFoot(foot, m);
     const open = m.myTurn && local.sentT !== m.t;
     input.disabled = !open;
@@ -176,7 +188,7 @@ export function createChainView({ engine, toast }) {
       if (m.note === 'again' && m.myTurn) hint.textContent = m.last && m.last.kind === 'reject' && m.last.isMe ? 'That word was voted out. Try another!' : `The last word was voted out, so it's back to ${m.letter.toUpperCase()}. Your clock restarted.`;
       else if (!m.myTurn) hint.textContent = '';
       if (open && typeof input.focus === 'function') input.focus();
-      if (m.last && m.last.isMe && m.last.kind === 'out') toast("You're out of lives! You can still vote on words.");
+      if (m.last && m.last.isMe && m.last.kind === 'out') toast(m.dict ? "You're out of lives! You can keep watching the chain." : "You're out of lives! You can still vote on words.");
     }
   }
 

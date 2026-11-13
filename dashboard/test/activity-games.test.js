@@ -316,3 +316,183 @@ test('nobody voting moves on when time is up', async () => {
   assert.deepEqual(st.split, { a: 0, b: 0 });
   assert.equal(wyr.model(r.engines[1].snapshot()).pctA, 50);
 });
+
+function fakeApi(slots, settings, clock = { t: 1000 }) {
+  const store = {};
+  const scores = {};
+  const api = {
+    now: () => clock.t,
+    random: seeded(7),
+    settings,
+    memory: {},
+    list: slots.slice(),
+    deadline: null,
+    finished: false,
+    players: () => api.list.map((slot) => ({ slot, id: `id-${slot}`, name: `Player ${slot + 1}` })),
+    get: (k) => (store[k] === undefined ? null : JSON.parse(JSON.stringify(store[k]))),
+    put: (k, v) => {
+      store[k] = JSON.parse(JSON.stringify(v));
+    },
+    setDeadline: (at) => {
+      api.deadline = at;
+    },
+    clearDeadline: () => {
+      api.deadline = null;
+    },
+    addPoints: (slot, n) => {
+      scores[slot] = (scores[slot] || 0) + n;
+    },
+    points: () => ({ ...scores }),
+    finish: () => {
+      api.finished = true;
+    },
+  };
+  return { api, store, scores, clock };
+}
+
+function lateSnap(store, key, slots, me) {
+  const players = slots.map((slot) => ({ slot, id: `id-${slot}`, name: `Player ${slot + 1}`, initials: `P${slot + 1}`, hue: 10, avatar: null, present: true }));
+  return { state: { [key]: store[key] }, players, meSlot: me };
+}
+
+test('a trivia late joiner plays the open question, starts at zero and counts toward everyone answered', () => {
+  const { api, store, scores, clock } = fakeApi([0, 1], { rounds: 5, timer: 20, cats: [] });
+  trivia.start(api);
+  const right = rightIndex(store.trivia);
+  trivia.intent(api, 0, { type: 'answer', i: right });
+  trivia.intent(api, 2, { type: 'answer', i: right });
+  assert.deepEqual(store.trivia.answered, [0]);
+  clock.t += 3000;
+  api.list.push(2);
+  trivia.join(api, 2);
+  assert.deepEqual(store.trivia.in, [0, 1, 2]);
+  assert.equal(scores[2], undefined);
+  let m = trivia.model(lateSnap(store, 'trivia', [0, 1, 2], 2));
+  assert.equal(m.canAnswer, true);
+  assert.equal(m.players, 3);
+  trivia.intent(api, 1, { type: 'answer', i: right });
+  assert.equal(store.trivia.phase, 'question');
+  trivia.intent(api, 2, { type: 'answer', i: right });
+  assert.equal(store.trivia.phase, 'reveal');
+  assert.deepEqual(store.trivia.right, [0, 1, 2]);
+  assert.ok(scores[0] > scores[2]);
+  m = trivia.model(lateSnap(store, 'trivia', [0, 1, 2], 2));
+  assert.deepEqual(m.right.map((p) => p.isMe), [false, false, true]);
+  assert.ok(m.right.every((p) => 'avatar' in p && 'username' in p && p.initials));
+});
+
+test('a trivia player who joins in the last seconds waits for the next question without holding anyone up', () => {
+  const { api, store, scores, clock } = fakeApi([0, 1], { rounds: 5, timer: 10, cats: [] });
+  trivia.start(api);
+  const first = store.trivia.q.id;
+  trivia.intent(api, 0, { type: 'answer', i: 0 });
+  clock.t += 8000;
+  api.list.push(5);
+  trivia.join(api, 5);
+  trivia.join(api, 5);
+  assert.deepEqual(store.trivia.wait, [5]);
+  assert.deepEqual(store.trivia.in, [0, 1]);
+  const m = trivia.model(lateSnap(store, 'trivia', [0, 1, 5], 5));
+  assert.equal(m.waiting, true);
+  assert.equal(m.canAnswer, false);
+  assert.equal(m.players, 2);
+  trivia.intent(api, 5, { type: 'answer', i: 0 });
+  assert.deepEqual(store.trivia.answered, [0]);
+  trivia.intent(api, 1, { type: 'answer', i: 0 });
+  assert.equal(store.trivia.phase, 'reveal');
+  assert.equal(scores[5], undefined);
+  trivia.join(api, 5);
+  assert.equal(store.trivia.phase, 'reveal');
+  trivia.deadline(api);
+  assert.notEqual(store.trivia.q.id, first);
+  assert.deepEqual(store.trivia.in, [0, 1, 5]);
+  assert.deepEqual(store.trivia.wait, []);
+});
+
+test('trivia lets someone who only shows up in the roster answer, and spectators cannot', () => {
+  const { api, store } = fakeApi([0], { rounds: 5, timer: 20, cats: [] });
+  trivia.start(api);
+  trivia.intent(api, 3, { type: 'answer', i: 0 });
+  assert.deepEqual(store.trivia.answered, []);
+  const m = trivia.model(lateSnap(store, 'trivia', [0, 3], 3));
+  assert.equal(m.watching, true);
+  assert.equal(m.canAnswer, false);
+  api.list.push(3);
+  trivia.roster(api);
+  assert.deepEqual(store.trivia.in, [0, 3]);
+  trivia.intent(api, 3, { type: 'answer', i: 0 });
+  assert.deepEqual(store.trivia.answered, [3]);
+});
+
+test('a would you rather late joiner votes on the open prompt and counts toward everyone voted', () => {
+  const { api, store, scores, clock } = fakeApi([0, 1], { rounds: 5, timer: 15, mode: 'majority' });
+  wyr.start(api);
+  wyr.intent(api, 0, { type: 'vote', side: 'a' });
+  wyr.intent(api, 1, { type: 'vote', side: 'a' });
+  assert.equal(store.wyr.phase, 'reveal');
+  assert.deepEqual(scores, { 0: WIN_POINTS, 1: WIN_POINTS });
+  wyr.deadline(api);
+  wyr.intent(api, 0, { type: 'vote', side: 'b' });
+  clock.t += 2000;
+  api.list.push(2);
+  wyr.join(api, 2);
+  assert.deepEqual(store.wyr.in, [0, 1, 2]);
+  assert.equal(scores[2], undefined);
+  const m = wyr.model(lateSnap(store, 'wyr', [0, 1, 2], 2));
+  assert.equal(m.canVote, true);
+  assert.equal(m.players, 3);
+  assert.deepEqual(m.votedBy.map((p) => p.id), ['id-0']);
+  wyr.intent(api, 1, { type: 'vote', side: 'b' });
+  assert.equal(store.wyr.phase, 'vote');
+  wyr.intent(api, 2, { type: 'vote', side: 'a' });
+  assert.equal(store.wyr.phase, 'reveal');
+  assert.deepEqual(store.wyr.split, { a: 1, b: 2 });
+  assert.equal(scores[2], undefined);
+  assert.equal(scores[0], 2 * WIN_POINTS);
+  const after = wyr.model(lateSnap(store, 'wyr', [0, 1, 2], 2));
+  assert.deepEqual(after.voters.a.map((p) => p.isMe), [true]);
+});
+
+test('a would you rather player who joins too late sits out this prompt only', () => {
+  const { api, store, clock } = fakeApi([0, 1], { rounds: 5, timer: 10, mode: 'majority' });
+  wyr.start(api);
+  clock.t += 9000;
+  api.list.push(4);
+  wyr.join(api, 4);
+  assert.deepEqual(store.wyr.wait, [4]);
+  const m = wyr.model(lateSnap(store, 'wyr', [0, 1, 4], 4));
+  assert.equal(m.waiting, true);
+  assert.equal(m.canVote, false);
+  wyr.intent(api, 4, { type: 'vote', side: 'a' });
+  assert.deepEqual(store.wyr.voted, []);
+  wyr.intent(api, 0, { type: 'vote', side: 'a' });
+  wyr.intent(api, 1, { type: 'vote', side: 'b' });
+  assert.equal(store.wyr.phase, 'reveal');
+  wyr.deadline(api);
+  assert.deepEqual(store.wyr.in, [0, 1, 4]);
+  wyr.intent(api, 4, { type: 'vote', side: 'a' });
+  assert.deepEqual(store.wyr.voted, [4]);
+});
+
+test('trivia and would you rather declare late join and keep a manual start', () => {
+  for (const g of [trivia, wyr]) {
+    assert.equal(typeof g.join, 'function');
+    assert.equal(g.autoStart, undefined);
+  }
+});
+
+test('a joined player whose answer or vote beats the join hook still gets in, and too late still waits', () => {
+  const t = fakeApi([0, 1], { rounds: 5, timer: 20, cats: [] });
+  trivia.start(t.api);
+  t.api.list.push(2);
+  trivia.intent(t.api, 2, { type: 'answer', i: 0 });
+  assert.deepEqual(t.store.trivia.in, [0, 1, 2]);
+  assert.deepEqual(t.store.trivia.answered, [2]);
+  const w = fakeApi([0, 1], { rounds: 5, timer: 10, mode: 'majority' });
+  wyr.start(w.api);
+  w.clock.t += 9000;
+  w.api.list.push(3);
+  wyr.intent(w.api, 3, { type: 'vote', side: 'a' });
+  assert.deepEqual(w.store.wyr.wait, [3]);
+  assert.deepEqual(w.store.wyr.voted, []);
+});

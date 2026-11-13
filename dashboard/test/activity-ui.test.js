@@ -73,8 +73,10 @@ test('the activity page works under the strict activity CSP', () => {
     }
     if (f.endsWith('.js')) {
       assert.equal(/\.style\.(?!setProperty)[a-zA-Z]+\s*=/.test(src), false, `${f} sets inline styles`);
-      const bare = f.endsWith(path.join('ui', 'app.js')) ? src.replace("win.fetch('/api/me', ", '') : src;
-      assert.equal(/localStorage|sessionStorage|fetch\(|XMLHttpRequest|WebSocket/.test(bare), false, f);
+      const fetches = [path.join('ui', 'app.js'), path.join('js', 'dictionary.js'), path.join('js', 'profiles.js')].some((x) => f.endsWith(x));
+      assert.equal(/localStorage|sessionStorage|XMLHttpRequest|WebSocket/.test(src), false, f);
+      assert.equal(/fetch\(\s*['"`](?:https?:)?\/\//.test(src), false, `${f} fetches another site`);
+      if (!fetches) assert.equal(/fetch\(/.test(src), false, f);
       assert.equal(/postMessage\([^)]*['"]\*['"]/.test(src), false, `${f} posts to any origin`);
     }
   }
@@ -82,7 +84,7 @@ test('the activity page works under the strict activity CSP', () => {
 
 test('the lobby, a Would You Rather round and the results render and respond to taps', async () => {
   installDom({ url: 'https://yapos.dev/activity/' });
-  const r = room(2);
+  const r = room(2, { join: false });
   await r.clock.advance(500);
   const [hostEngine, guestEngine] = r.engines;
   const host = await mount(hostEngine);
@@ -93,9 +95,15 @@ test('the lobby, a Would You Rather round and the results render and respond to 
   assert.match(text(guest.root), /Player 2/);
   assert.equal(byKey(guest.root, 'start'), null);
   assert.equal(byKey(guest.root, 'pick-wyr').disabled, true);
-  byKey(guest.root, 'ready').click();
+  assert.match(text(guest.root), /You're watching/);
+  assert.match(text(host.root), /0 playing/);
+  byKey(guest.root, 'join').click();
   await r.clock.advance(400);
-  assert.match(text(host.root), /1\/2 ready/);
+  assert.match(text(host.root), /1 playing/);
+  assert.ok(byKey(guest.root, 'leave-game'));
+  byKey(host.root, 'join').click();
+  await r.clock.advance(400);
+  assert.match(text(guest.root), /2 playing/);
   byKey(host.root, 'pick-wyr').click();
   await r.clock.advance(300);
   byKey(host.root, 'set-rounds-5').click();

@@ -23,6 +23,11 @@ const ACTIVITY_DEV_FILE = /^\/activity-dev\/([a-z0-9-]+\.(?:html|js|css))?$/;
 export const ACTIVITY_DEV_CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const SKIP_HEADERS = new Set(['host', 'connection', 'keep-alive', 'transfer-encoding', 'cf-connecting-ip', 'upgrade']);
 const CLEANUP_EVERY_MS = 15 * 60_000;
+const FAKE_PERSON = /^de7e0000-0000-4000-8000-(\d{12})$/;
+const FAKE_AVATAR = /^\/activity-dev\/avatars\/(\d{1,3})\.svg$/;
+const FAKE_NAMES = ['Pip', 'Juno', 'Rex', 'Mila', 'Ozzy', 'Tess', 'Bo', 'Kit'];
+const FAKE_HANDLES = ['pipsqueak', 'junebug', 'rexplorer', 'milawaves', 'ozzyosprey', 'tessellate', 'bobaboba', 'kitkatz'];
+const FAKE_COLORS = [['#f2613f', '#ff9a6b'], ['#8b5cf6', '#c4b5fd'], ['#ec4899', '#f9a8d4'], ['#0ea5e9', '#7dd3fc'], ['#22c55e', '#86efac'], ['#eab308', '#fde047'], ['#14b8a6', '#5eead4'], ['#6366f1', '#a5b4fc']];
 const CODE_TTL_MS = 5 * 60_000;
 
 const TYPES = {
@@ -137,10 +142,62 @@ export function allowDevFraming(response, url) {
   return out;
 }
 
+export function fakeProfile(id) {
+  const m = FAKE_PERSON.exec(String(id || ''));
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isInteger(n) || n < 1 || n > 999) return null;
+  const i = (n - 1) % FAKE_NAMES.length;
+  const round = Math.floor((n - 1) / FAKE_NAMES.length);
+  return {
+    id,
+    username: round ? `${FAKE_HANDLES[i]}${round + 1}` : FAKE_HANDLES[i],
+    display_name: round ? `${FAKE_NAMES[i]} ${round + 1}` : FAKE_NAMES[i],
+    avatar: n % 4 === 0 ? null : `/activity-dev/avatars/${n}.svg`,
+  };
+}
+
+export function fakeAvatarSvg(n) {
+  const i = (n - 1) % FAKE_NAMES.length;
+  const [a, b] = FAKE_COLORS[i];
+  const letter = FAKE_NAMES[i].slice(0, 1);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="128" height="128" fill="url(#g)"/><circle cx="64" cy="52" r="22" fill="#ffffff" fill-opacity="0.85"/><path d="M24 118c6-24 22-36 40-36s34 12 40 36z" fill="#ffffff" fill-opacity="0.85"/><text x="64" y="61" font-family="system-ui,sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="${a}">${letter}</text></svg>`;
+}
+
+async function withFakeProfiles(response, url) {
+  if (response.status !== 200) return response;
+  const ids = String(url.searchParams.get('ids') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const fakes = ids.map(fakeProfile).filter(Boolean);
+  if (!fakes.length) return response;
+  let body;
+  try {
+    body = await response.clone().json();
+  } catch {
+    return response;
+  }
+  const fakeIds = new Set(fakes.map((f) => f.id));
+  const profiles = (Array.isArray(body.profiles) ? body.profiles : []).filter((p) => !fakeIds.has(p.id)).concat(fakes);
+  const pending = (Array.isArray(body.pending) ? body.pending : []).filter((id) => !fakeIds.has(id));
+  const headers = new Headers(response.headers);
+  headers.set('Cache-Control', 'no-store');
+  headers.delete('Content-Length');
+  return new Response(JSON.stringify({ profiles, pending }), { status: 200, headers });
+}
+
 async function activityDev(request) {
   const url = new URL(request.url);
   if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Method not allowed', { status: 405, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   if (url.pathname === '/activity-dev') return new Response(null, { status: 308, headers: { Location: `/activity-dev/${url.search}`, 'Cache-Control': 'no-store' } });
+  const pic = FAKE_AVATAR.exec(url.pathname);
+  if (pic && Number(pic[1]) >= 1) {
+    const headers = new Headers({
+      'Content-Type': 'image/svg+xml',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'no-store',
+    });
+    return new Response(request.method === 'HEAD' ? null : fakeAvatarSvg(Number(pic[1])), { status: 200, headers });
+  }
   const m = ACTIVITY_DEV_FILE.exec(url.pathname);
   const name = m ? m[1] || 'index.html' : null;
   const file = name ? path.join(ACTIVITY_DEV, name) : null;
@@ -489,6 +546,7 @@ export async function startDev({
     }
     const response = await worker.fetch(request, env, ctx);
     if (url.pathname === '/activity' || url.pathname.startsWith('/activity/')) return allowDevFraming(response, url);
+    if (url.pathname === '/api/activity/profiles' && request.method === 'GET') return withFakeProfiles(response, url);
     if (url.pathname.startsWith('/api/') && (response.status === 202 || response.status === 403)) poke();
     return response;
   }

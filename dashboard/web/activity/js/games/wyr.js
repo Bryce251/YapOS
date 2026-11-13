@@ -1,10 +1,12 @@
 import { PROMPTS, promptById } from '../../data/wyr.js';
 import { shuffle } from '../engine.js';
+import { face } from './trivia.js';
 
 export const KEY = 'wyr';
 export const REVEAL_MS = 6000;
 export const WIN_POINTS = 100;
 export const TIE_POINTS = 50;
+export const LATE_MIN_MS = 4000;
 
 export function buildDeck(count, random = Math.random) {
   return shuffle(PROMPTS, random).slice(0, Math.max(1, count)).map((p) => p.id);
@@ -44,6 +46,8 @@ function ask(api, deck, i, note) {
     phase: 'vote',
     mode: api.settings.mode,
     p: { id: p.id, a: p.a, b: p.b },
+    in: api.players().map((x) => x.slot),
+    wait: [],
     voted: [],
     votes: null,
     split: null,
@@ -74,9 +78,24 @@ function reveal(api) {
   api.setDeadline(ends);
 }
 
+function inPlay(st) {
+  return Array.isArray(st.in) ? st.in : null;
+}
+
 function everyoneVoted(api, st) {
-  const live = api.players().map((p) => p.slot);
+  const playing = inPlay(st);
+  const live = api.players().map((p) => p.slot).filter((s) => !playing || playing.includes(s));
   return live.length > 0 && live.every((s) => st.voted.includes(s));
+}
+
+function admit(api, st, slot) {
+  if (!Number.isInteger(slot) || st.phase !== 'vote') return false;
+  if (!Array.isArray(st.in)) st.in = [];
+  if (!Array.isArray(st.wait)) st.wait = [];
+  if (st.in.includes(slot) || st.wait.includes(slot)) return false;
+  if (st.ends - api.now() >= LATE_MIN_MS) st.in.push(slot);
+  else st.wait.push(slot);
+  return true;
 }
 
 const wyr = {
@@ -112,6 +131,13 @@ const wyr = {
     if (!st || st.phase !== 'vote' || !cur || cur.pid !== st.p.id) return;
     if (action.p !== undefined && action.p !== st.p.id) return;
     if (cur.votes[slot]) return;
+    if (inPlay(st) && !st.in.includes(slot)) {
+      const admitted = api.players().some((p) => p.slot === slot) && admit(api, st, slot);
+      if (!st.in.includes(slot)) {
+        if (admitted) api.put(KEY, st);
+        return;
+      }
+    }
     cur.votes[slot] = action.side;
     if (!st.voted.includes(slot)) st.voted.push(slot);
     api.put(KEY, st);
@@ -133,9 +159,18 @@ const wyr = {
     return undefined;
   },
 
+  join(api, slot) {
+    const st = api.get(KEY);
+    if (st && admit(api, st, slot)) api.put(KEY, st);
+  },
+
   roster(api) {
     const st = api.get(KEY);
-    if (st && st.phase === 'vote' && everyoneVoted(api, st)) reveal(api);
+    if (!st || st.phase !== 'vote') return;
+    let added = false;
+    for (const p of api.players()) if (admit(api, st, p.slot)) added = true;
+    if (added) api.put(KEY, st);
+    if (everyoneVoted(api, st)) reveal(api);
   },
 
   model(snap, local = {}) {
@@ -145,13 +180,16 @@ const wyr = {
     const people = snap.players.filter((p) => p.slot !== null);
     const bySlot = new Map(people.map((p) => [p.slot, p]));
     const revealed = st.phase === 'reveal';
+    const playing = inPlay(st);
+    const waiting = mine !== null && Array.isArray(st.wait) && st.wait.includes(mine);
+    const watching = !waiting && (mine === null || (playing ? !playing.includes(mine) : false));
     const myVote = revealed && st.votes && st.votes[mine] ? st.votes[mine] : local.pid === st.p.id ? local.side || null : null;
     const sideOf = (side) =>
       Object.entries(st.votes || {})
         .filter(([, v]) => v === side)
         .map(([s]) => bySlot.get(Number(s)))
         .filter(Boolean)
-        .map((p) => ({ id: p.id, name: p.name, initials: p.initials, hue: p.hue, avatar: p.avatar }));
+        .map((p) => face(p, mine));
     const split = st.split || { a: 0, b: 0 };
     const total = split.a + split.b;
     return {
@@ -165,7 +203,11 @@ const wyr = {
       ends: st.ends,
       starts: st.starts,
       voted: st.voted.length,
-      players: snap.players.filter((p) => p.present).length,
+      players: playing ? playing.length : snap.players.filter((p) => p.present).length,
+      votedBy: st.voted.map((s) => bySlot.get(s)).filter(Boolean).map((p) => face(p, mine)),
+      waiting,
+      watching,
+      canVote: st.phase === 'vote' && !waiting && !watching,
       myVote,
       note: st.note,
       split,

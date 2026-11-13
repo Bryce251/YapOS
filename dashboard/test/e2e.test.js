@@ -537,3 +537,33 @@ test('a ticket can be claimed and then closed from the dashboard', async () => {
   const noCsrf = await b.req('POST', path, { body: { action: 'claim' }, headers: { Origin: dev.url } });
   assert.equal(noCsrf.status, 403);
 });
+
+test('the activity gets real profiles through the bot, and the test call gets fake ones', async () => {
+  const fake = 'de7e0000-0000-4000-8000-000000000002';
+  const quiet = 'de7e0000-0000-4000-8000-000000000004';
+  const ask = async (ids) => {
+    const res = await fetch(`${dev.url}/api/activity/profiles?ids=${ids.join(',')}`);
+    assert.equal(res.status, 200);
+    return res.json();
+  };
+  const first = await ask([IDS.member2, 'nobody-at-all', fake, quiet]);
+  const fakeOne = first.profiles.find((p) => p.id === fake);
+  assert.deepEqual(fakeOne, { id: fake, username: 'junebug', display_name: 'Juno', avatar: '/activity-dev/avatars/2.svg' });
+  assert.equal(first.profiles.find((p) => p.id === quiet).avatar, null);
+  assert.deepEqual(first.pending.sort(), [IDS.member2, 'nobody-at-all'].sort());
+
+  await dev.dashboard.tick();
+  await dev.dashboard.profileWork;
+  const second = await ask([IDS.member2, 'nobody-at-all']);
+  assert.deepEqual(second.pending, []);
+  const riley = second.profiles.find((p) => p.id === IDS.member2);
+  assert.equal(riley.username, 'riley');
+  assert.equal(riley.display_name, 'Riley');
+  assert.deepEqual(second.profiles.find((p) => p.id === 'nobody-at-all'), { id: 'nobody-at-all', username: null, display_name: null, avatar: null });
+
+  const pic = await fetch(`${dev.url}/activity-dev/avatars/2.svg`);
+  assert.equal(pic.status, 200);
+  assert.match(pic.headers.get('Content-Type'), /image\/svg\+xml/);
+  assert.match(await pic.text(), /^<svg /);
+  assert.equal((await fetch(`${dev.url}/activity-dev/avatars/x.svg`)).status, 404);
+});

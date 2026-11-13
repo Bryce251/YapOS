@@ -1,18 +1,35 @@
-import { h, memo, avatar, button, plural } from './dom.js';
+import { h, memo, avatar, button, plural, who, countdown } from './dom.js';
 import { board, standings } from './board.js';
+
+function slim(p) {
+  return { id: p.id, name: p.name, username: p.username || null, initials: p.initials, hue: p.hue, avatar: p.avatar || null, isHost: p.isHost, isMe: p.isMe };
+}
+
+export function needText(n) {
+  if (n <= 0) return '';
+  return n === 1 ? 'Waiting for one more player' : `Waiting for ${n} more players`;
+}
 
 export function lobbyModel(snap, games) {
   const present = snap.players.filter((p) => p.present);
-  const me = snap.players.find((p) => p.isMe) || null;
+  const playing = present.filter((p) => p.joined).map(slim);
+  const watching = present.filter((p) => !p.joined).map(slim);
+  const spec = snap.autoStart || null;
+  const pick = snap.pick ? snap.pick.id : null;
+  const live = snap.room && snap.room.auto && spec && snap.room.auto.g === pick ? snap.room.auto : null;
   return {
     isHost: snap.isHost,
     hostName: snap.hostName,
-    pick: snap.pick ? snap.pick.id : null,
+    pick,
     settings: snap.settings,
-    meReady: Boolean(me && me.ready),
-    readyCount: present.filter((p) => p.ready).length,
-    players: present.map((p) => ({ id: p.id, name: p.name, initials: p.initials, hue: p.hue, avatar: p.avatar, ready: p.ready, isHost: p.isHost, isMe: p.isMe, total: p.total, slot: p.slot, present: true })),
-    totals: standings(snap.players, 'total').map((p) => ({ id: p.id, name: p.name, initials: p.initials, hue: p.hue, avatar: p.avatar, pts: p.pts, place: p.place, isMe: p.isMe, present: p.present, slot: p.slot })),
+    meJoined: Boolean(snap.meJoined),
+    joining: snap.joining || null,
+    playing,
+    watching,
+    auto: spec ? { min: spec.min, ms: spec.ms } : null,
+    need: spec ? Math.max(0, spec.min - playing.length) : 0,
+    countdown: live ? { from: live.from, at: live.at } : null,
+    totals: standings(snap.players, 'total').map((p) => ({ id: p.id, name: p.name, username: p.username || null, initials: p.initials, hue: p.hue, avatar: p.avatar || null, pts: p.pts, place: p.place, isMe: p.isMe, present: p.present, slot: p.slot })),
     games: games.map((g) => ({ id: g.id, name: g.name, emoji: g.emoji, blurb: g.blurb, min: g.minPlayers || 1 })),
     rounds: snap.room.round || 0,
   };
@@ -26,11 +43,34 @@ function playerRow(p) {
   return h(
     'li',
     { class: ['player', p.isMe ? 'is-me' : null] },
-    h('span', { class: 'player-face' }, avatar(p, 'md'), h('span', { class: ['ready-dot', p.ready ? 'is-ready' : null], attrs: { title: p.ready ? 'Ready' : 'Not ready yet' } })),
-    h('span', { class: 'player-name', text: p.name }),
-    p.isMe ? h('span', { class: 'tag', text: 'you' }) : null,
+    who(p, { size: 'md' }),
     p.isHost ? h('span', { class: 'tag tag-host', text: '👑 Host' }) : null,
   );
+}
+
+function watcher(p) {
+  return h(
+    'li',
+    { class: ['watcher', p.isMe ? 'is-me' : null], attrs: { title: p.username ? `${p.name} (@${p.username})` : p.name } },
+    avatar(p, 'xs'),
+    h('span', { class: 'watcher-name', text: p.isMe ? `${p.name} (you)` : p.name }),
+    p.isHost ? h('span', { class: 'watcher-host', text: '👑', attrs: { title: 'Host', 'aria-label': 'Host' } }) : null,
+  );
+}
+
+export function joinButton(m, { size = 'xl', key = 'join' } = {}) {
+  if (m.meJoined) {
+    const busy = m.joining === 'out';
+    return button(busy ? 'Leaving…' : 'Leave game', { variant: 'ghost', size: 'sm', key: 'leave-game', disabled: busy });
+  }
+  const busy = m.joining === 'in';
+  return button(busy ? 'Joining…' : 'Join game', {
+    variant: 'primary',
+    size,
+    key,
+    disabled: busy,
+    kids: h('span', { class: 'btn-icon-inline', text: '🎮', attrs: { 'aria-hidden': 'true' } }),
+  });
 }
 
 function settingControl(spec, value, isHost, onSet) {
@@ -91,6 +131,10 @@ function settingControl(spec, value, isHost, onSet) {
   );
 }
 
+function waiting(text) {
+  return h('p', { class: 'waiting', attrs: { role: 'status' } }, h('span', { class: 'pulse-dot', attrs: { 'aria-hidden': 'true' } }), text);
+}
+
 export function createLobby({ engine, toast }) {
   const el = h('section', { class: 'screen lobby', attrs: { 'aria-label': 'Lobby' } });
   const games = engine.games;
@@ -128,9 +172,36 @@ export function createLobby({ engine, toast }) {
   function start() {
     const res = engine.lobby.start();
     if (!res.ok && toast) {
-      if (res.reason === 'players') toast(`This game needs at least ${plural(res.need, 'player', 'players')}.`);
+      if (res.reason === 'players') toast(`This game needs at least ${plural(res.need, 'player', 'players')}. Ask people to tap Join game.`);
       else toast('That did not start. Try again in a moment.');
     }
+  }
+
+  function onJoinTap(e) {
+    const key = e && e.currentTarget && e.currentTarget.dataset ? e.currentTarget.dataset.key : '';
+    if (key === 'leave-game') engine.leave();
+    else engine.join();
+  }
+
+  function joinBlock(m) {
+    const btn = joinButton(m);
+    btn.addEventListener('click', onJoinTap);
+    const hint = m.meJoined ? "You're in! Have fun." : "You're watching. Join to play in the next game.";
+    return h('div', { class: ['join-row', m.meJoined ? 'is-in' : null] }, btn, h('p', { class: 'join-hint', text: hint }));
+  }
+
+  function actionRow(m, gameMeta) {
+    if (m.auto && m.countdown) {
+      return h(
+        'div',
+        { class: 'auto-row' },
+        countdown(m.countdown.from, m.countdown.at, { lead: 'Starting in', label: `${gameMeta.name} starts soon` }),
+        m.isHost ? button('Start now', { variant: 'primary', size: 'lg', key: 'start', on: start }) : null,
+      );
+    }
+    if (m.auto && m.need > 0) return waiting(needText(m.need));
+    if (m.isHost) return button(`Start ${gameMeta.name}`, { variant: 'primary', size: 'xl', key: 'start', on: start });
+    return waiting(`Waiting for ${m.hostName} to start`);
   }
 
   function render(m) {
@@ -139,15 +210,15 @@ export function createLobby({ engine, toast }) {
     const playersCard = h(
       'div',
       { class: 'card glass players-card' },
-      h('div', { class: 'card-head' }, h('h2', { class: 'card-title', text: 'Players' }), h('span', { class: 'count-pill', text: `${m.readyCount}/${m.players.length} ready` })),
-      h('ul', { class: 'players' }, m.players.map(playerRow)),
-      button(m.meReady ? 'Ready!' : "I'm ready", {
-        variant: m.meReady ? 'ready' : 'secondary',
-        size: 'lg',
-        key: 'ready',
-        attrs: { 'aria-pressed': m.meReady ? 'true' : 'false' },
-        on: () => engine.ready(!m.meReady),
-      }),
+      h('div', { class: 'card-head' }, h('h2', { class: 'card-title', text: 'Players' }), h('span', { class: 'count-pill', text: `${m.playing.length} playing` })),
+      joinBlock(m),
+      h('h3', { class: 'group-title', text: 'Playing' }),
+      m.playing.length
+        ? h('ul', { class: 'players' }, m.playing.map(playerRow))
+        : h('p', { class: 'group-empty', text: 'Nobody has joined yet. Tap Join game to play.' }),
+      m.watching.length
+        ? h('div', { class: 'watchers' }, h('h3', { class: 'group-title', text: `Watching · ${m.watching.length}` }), h('ul', { class: 'watcher-list' }, m.watching.map(watcher)))
+        : null,
     );
     const picker = h(
       'div',
@@ -176,16 +247,13 @@ export function createLobby({ engine, toast }) {
         h('div', { class: 'setting' }, h('span', { class: 'setting-label', text: spec.label }), settingControl(spec, m.settings[spec.id], m.isHost, setSetting)),
       ),
     );
-    const action = m.isHost
-      ? button(`Start ${gameMeta.name}`, { variant: 'primary', size: 'xl', key: 'start', on: start })
-      : h('p', { class: 'waiting', attrs: { role: 'status' } }, h('span', { class: 'pulse-dot', attrs: { 'aria-hidden': 'true' } }), `Waiting for ${m.hostName} to start`);
     const gameCard = h(
       'div',
       { class: 'card glass game-card' },
       h('div', { class: 'card-head' }, h('h2', { class: 'card-title', text: m.isHost ? 'Pick a game' : 'Up next' })),
       picker,
       settings,
-      h('div', { class: 'start-row' }, action),
+      h('div', { class: 'start-row' }, actionRow(m, gameMeta)),
     );
     const scoreCard = h(
       'div',

@@ -1,10 +1,12 @@
 import { CATEGORIES, QUESTIONS, questionById } from '../../data/trivia.js';
 import { shuffle } from '../engine.js';
+import { person } from '../players.js';
 
 export const KEY = 'trivia';
 export const REVEAL_MS = 5000;
 export const MIN_POINTS = 400;
 export const MAX_POINTS = 1000;
+export const LATE_MIN_MS = 4000;
 
 const CAT_NAMES = new Map(CATEGORIES.map((c) => [c.id, c]));
 
@@ -34,6 +36,8 @@ function ask(api, deck, i) {
     total: deck.length,
     phase: 'question',
     q: { id: q.id, cat: q.cat, text: q.q, options },
+    in: api.players().map((p) => p.slot),
+    wait: [],
     answered: [],
     answer: null,
     chose: null,
@@ -81,9 +85,37 @@ function reveal(api, skipped) {
   api.setDeadline(ends);
 }
 
+function inPlay(st) {
+  return Array.isArray(st.in) ? st.in : null;
+}
+
 function everyoneAnswered(api, st) {
-  const live = api.players().map((p) => p.slot);
+  const playing = inPlay(st);
+  const live = api.players().map((p) => p.slot).filter((s) => !playing || playing.includes(s));
   return live.length > 0 && live.every((s) => st.answered.includes(s));
+}
+
+function admit(api, st, slot) {
+  if (!Number.isInteger(slot) || st.phase !== 'question') return false;
+  if (!Array.isArray(st.in)) st.in = [];
+  if (!Array.isArray(st.wait)) st.wait = [];
+  if (st.in.includes(slot) || st.wait.includes(slot)) return false;
+  if (st.ends - api.now() >= LATE_MIN_MS) st.in.push(slot);
+  else st.wait.push(slot);
+  return true;
+}
+
+export function face(p, mine) {
+  const known = person({ id: p.id, name: p.name }) || {};
+  return {
+    id: p.id,
+    name: p.name,
+    username: p.username || known.username || null,
+    initials: p.initials || known.initials || '?',
+    hue: p.hue ?? known.hue ?? 20,
+    avatar: p.avatar || known.avatar || null,
+    isMe: mine !== null && mine !== undefined && p.slot === mine,
+  };
 }
 
 const trivia = {
@@ -113,6 +145,13 @@ const trivia = {
     const i = action.i;
     if (!Number.isInteger(i) || i < 0 || i >= st.q.options.length) return;
     if (cur.picks[slot] || st.answered.includes(slot)) return;
+    if (inPlay(st) && !st.in.includes(slot)) {
+      const admitted = api.players().some((p) => p.slot === slot) && admit(api, st, slot);
+      if (!st.in.includes(slot)) {
+        if (admitted) api.put(KEY, st);
+        return;
+      }
+    }
     const at = Math.min(api.now(), st.ends);
     cur.picks[slot] = { i, at };
     st.answered.push(slot);
@@ -135,9 +174,18 @@ const trivia = {
     return undefined;
   },
 
+  join(api, slot) {
+    const st = api.get(KEY);
+    if (st && admit(api, st, slot)) api.put(KEY, st);
+  },
+
   roster(api) {
     const st = api.get(KEY);
-    if (st && st.phase === 'question' && everyoneAnswered(api, st)) reveal(api, false);
+    if (!st || st.phase !== 'question') return;
+    let added = false;
+    for (const p of api.players()) if (admit(api, st, p.slot)) added = true;
+    if (added) api.put(KEY, st);
+    if (everyoneAnswered(api, st)) reveal(api, false);
   },
 
   model(snap, local = {}) {
@@ -145,6 +193,9 @@ const trivia = {
     if (!st) return null;
     const bySlot = new Map(snap.players.filter((p) => p.slot !== null).map((p) => [p.slot, p]));
     const mine = snap.meSlot;
+    const playing = inPlay(st);
+    const waiting = mine !== null && Array.isArray(st.wait) && st.wait.includes(mine);
+    const watching = !waiting && (mine === null || (playing ? !playing.includes(mine) : false));
     const myPick = st.phase === 'reveal' && st.chose && st.chose[mine] !== undefined ? st.chose[mine] : local.qid === st.q.id ? local.pick ?? null : null;
     const counts = st.q.options.map((_, i) => Object.values(st.chose || {}).filter((x) => x === i).length);
     const cat = CAT_NAMES.get(st.q.cat) || { name: 'Trivia', emoji: '❓' };
@@ -159,7 +210,11 @@ const trivia = {
       ends: st.ends,
       starts: st.starts,
       answered: st.answered.length,
-      players: snap.players.filter((p) => p.present).length,
+      players: playing ? playing.length : snap.players.filter((p) => p.present).length,
+      answeredBy: st.answered.map((s) => bySlot.get(s)).filter(Boolean).map((p) => face(p, mine)),
+      waiting,
+      watching,
+      canAnswer: st.phase === 'question' && !waiting && !watching,
       iAnswered: myPick !== null || (mine !== null && st.answered.includes(mine)),
       myPick,
       skipped: Boolean(st.skipped),
@@ -170,7 +225,7 @@ const trivia = {
         mine: myPick === i,
         count: st.phase === 'reveal' ? counts[i] : null,
       })),
-      right: (st.right || []).map((s) => bySlot.get(s)).filter(Boolean).map((p) => ({ name: p.name, id: p.id, pts: st.gained[p.slot] || 0 })),
+      right: (st.right || []).map((s) => bySlot.get(s)).filter(Boolean).map((p) => ({ ...face(p, mine), pts: st.gained[p.slot] || 0 })),
       myGain: mine !== null && st.gained ? st.gained[mine] || 0 : 0,
       gotIt: mine !== null && (st.right || []).includes(mine),
     };

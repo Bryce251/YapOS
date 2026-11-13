@@ -1,5 +1,6 @@
 import { SERVER_ID_RE, SLUG_RE, PART_LIMIT, HttpError, json, fail, readJson, isPlainObject, safeEqual, isLocalHost, byteLength, clipString, safeHttpsUrl } from './util.js';
 import { expireJobs, claimJobs, isHot, DENIED, SERVER_JOB_TYPES } from './jobs.js';
+import { claimWanted, hasWanted, putProfiles } from './profiles.js';
 
 const RESULTS_LIMIT = 2 * 1024 * 1024;
 const SNAPSHOT_LIMIT = 4 * PART_LIMIT + 64 * 1024;
@@ -57,8 +58,9 @@ function cleanServers(list) {
 async function poll(env, t) {
   await expireJobs(env.DB, t);
   const jobs = await claimJobs(env.DB, t, 25);
-  const hot = await isHot(env.DB, t);
-  return json({ jobs, hot });
+  const wanted = await claimWanted(env.DB, t);
+  const hot = wanted.length > 0 || (await isHot(env.DB, t)) || (await hasWanted(env.DB, t));
+  return json({ jobs, hot, wanted });
 }
 
 async function results(request, env, t) {
@@ -253,6 +255,10 @@ export async function handleBot(request, env, deps, url) {
   const method = request.method;
   if (segs.length === 2 && segs[1] === 'poll' && method === 'GET') return poll(env, t);
   if (segs.length === 2 && segs[1] === 'results' && method === 'POST') return results(request, env, t);
+  if (segs.length === 2 && segs[1] === 'profiles') {
+    if (method === 'POST') return putProfiles(request, env, t);
+    return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  }
   if (segs.length === 2 && segs[1] === 'global') {
     if (method === 'PUT') return putGlobal(request, env, t);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');

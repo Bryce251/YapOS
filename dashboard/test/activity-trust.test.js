@@ -167,6 +167,8 @@ test('guests nudge a host whose timer is late, but never early', async () => {
   const mk = (n, st) => createEngine({ transport: hub.join(person(n)), games, now: clock.now, setTimeout: st, clearTimeout: clock.clearTimeout });
   const host = mk(1, sleepy);
   const guest = mk(2, clock.setTimeout);
+  host.join();
+  guest.join();
   await clock.advance(500);
   host.lobby.start();
   await clock.advance(300);

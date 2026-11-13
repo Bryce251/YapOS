@@ -1,6 +1,8 @@
 import draw, { GUESS_CHARS, REVEAL_MS, PICK_MS } from '../games/draw.js';
 import { GRID_W, GRID_H, COLORS, COLOR_NAMES, SIZES, SIZE_NAMES, ERASER, MAX_CHUNKS, inkKey, fitInk, readInk, liveMessage, applyLive, pruneLive, quantise } from '../games/ink.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { board as scoreBoard, standings } from '../ui/board.js';
+import { person } from '../players.js';
 
 export const SCALE = 2;
 export const LIVE_MS = 250;
@@ -21,6 +23,7 @@ export function footText(m) {
   }
   if (m.amDrawer) return m.got.length ? `${m.got.length} guessed it so far. Keep drawing!` : 'Draw the word. No letters or numbers!';
   if (m.gotMe) return `You got it! +${m.myPts}. Wait for the others.`;
+  if (m.spectator) return "You're watching. Join the game to guess too.";
   return 'Type your guess below.';
 }
 
@@ -33,6 +36,71 @@ export function feedLine(f) {
   if (f.kind === 'ok') return 'guessed the word! 🎉';
   if (f.kind === 'close') return f.mine ? `${f.text} · so close!` : 'is so close!';
   return f.text;
+}
+
+export const PENCIL = '✏️';
+export const BOARD_MAX = 12;
+
+export function handleText(p) {
+  return p && !p.isMe && typeof p.username === 'string' && p.username ? `@${p.username}` : null;
+}
+
+export function gainText(m) {
+  if (!m.drawerGain) return 'No points for the drawing this time';
+  return m.amDrawer ? `+${m.drawerGain} for your drawing` : `+${m.drawerGain} for the drawing`;
+}
+
+export function boardRows(snap, drawerSlot) {
+  return standings(snap.players || [], 'game')
+    .filter((p) => p.present || p.pts > 0)
+    .slice(0, BOARD_MAX)
+    .map((p) => {
+      const prof = person({ id: p.id, name: p.name }) || {};
+      const drawing = drawerSlot !== null && drawerSlot !== undefined && p.slot === drawerSlot;
+      return {
+        id: p.id,
+        slot: p.slot,
+        name: p.name,
+        username: p.username || prof.username || null,
+        initials: p.initials,
+        hue: p.hue,
+        avatar: p.avatar || prof.avatar || null,
+        pts: p.pts,
+        place: p.place,
+        isMe: p.isMe,
+        present: p.present,
+        badge: drawing ? { icon: PENCIL, label: 'Drawing now' } : null,
+      };
+    });
+}
+
+function who(p, { verb = '', me = 'You', size = 'sm', cls = null } = {}) {
+  const handle = handleText(p);
+  return h(
+    'span',
+    { class: ['who', cls] },
+    avatar(p, size),
+    h(
+      'span',
+      { class: 'who-text' },
+      h('span', { class: 'who-line' }, h('strong', { class: 'who-name', text: p.isMe ? me : p.name }), verb && !p.isMe ? h('span', { class: 'who-verb', text: ` ${verb}` }) : null),
+      handle ? h('span', { class: 'who-handle', text: handle }) : null,
+    ),
+  );
+}
+
+function markDrawer(list, rows) {
+  if (!list || list.localName !== 'ol') return list;
+  const i = rows.findIndex((r) => r.badge);
+  if (i < 0) return list;
+  const marked = list.querySelector('[data-badge], .board-badge, .board-role');
+  if (marked) return list;
+  const li = Array.from(list.children)[i];
+  if (li) {
+    li.classList.add('is-drawing');
+    li.append(h('span', { class: 'draw-pencil', text: PENCIL, attrs: { title: rows[i].badge.label, 'aria-label': rows[i].badge.label } }));
+  }
+  return list;
 }
 
 function strokeOn(ctx, s, from = 0) {
@@ -105,7 +173,9 @@ export function createDrawView({ engine, fx, toast, win }) {
   const guessRow = h('div', { class: 'entry-row guess-row' }, input, sendBtn);
   const side = h('div', { class: 'draw-side' }, feedBox, guessRow);
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
-  el.append(head, wordBar, gotBox, pickBox, h('div', { class: 'draw-main' }, board, side), foot);
+  const revealBox = h('div', { class: 'draw-reveal' });
+  const boardBox = h('div', { class: 'draw-scores' });
+  el.append(head, wordBar, revealBox, gotBox, pickBox, h('div', { class: 'draw-main' }, board, side), foot, boardBox);
 
   const mine = { k: null, strokes: [], level: 0, count: 0, chunks: [] };
   const live = new Map();
@@ -335,14 +405,17 @@ export function createDrawView({ engine, fx, toast, win }) {
       'div',
       { class: 'game-head' },
       h('span', { class: 'chip chip-static', text: `Round ${m.round} of ${m.rounds}` }),
-      h('span', { class: 'drawer-tag' }, avatar(m.drawer, 'xs'), h('span', { text: m.drawer.isMe ? "You're drawing" : `${m.drawer.name} is drawing` })),
+      who(m.drawer, { verb: m.phase === 'pick' ? 'is up next' : 'is drawing', me: m.phase === 'pick' ? "You're up next" : "You're drawing", size: 'sm', cls: 'drawer-tag' }),
       timer(m.timerStarts, m.ends, m.phase === 'pick' ? 'Time left to pick' : m.phase === 'reveal' ? 'Next turn in' : 'Time left to draw'),
     ),
   );
 
   const paintWord = memo((m) => {
     if (m.phase === 'reveal') return h('p', { class: 'word-line' }, h('span', { class: 'muted', text: 'The word was ' }), h('strong', { class: 'word-reveal', text: m.word || '???' }));
-    if (m.phase === 'pick') return h('p', { class: 'word-line muted', text: m.amDrawer ? 'Your turn to draw! Pick a word.' : `${m.drawer.name} is picking a word…` });
+    if (m.phase === 'pick') {
+      if (m.amDrawer) return h('p', { class: 'word-line muted', text: 'Your turn to draw! Pick a word.' });
+      return h('div', { class: 'word-line pick-wait' }, who(m.drawer, { verb: 'is picking a word…', size: 'md', cls: 'who-big' }));
+    }
     if (m.amDrawer) return h('p', { class: 'word-line' }, h('span', { class: 'muted', text: 'Draw this: ' }), h('strong', { class: 'word-secret', text: m.word }));
     if (!m.hint) return null;
     return h(
@@ -362,6 +435,29 @@ export function createDrawView({ engine, fx, toast, win }) {
       h('ul', { class: 'got-list' }, m.got.map((g) => h('li', { class: ['got-item', g.isMe ? 'is-me' : null], attrs: { title: g.isMe ? 'You' : g.name } }, avatar(g, 'xs'), h('span', { class: 'got-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'got-tick', text: '✓', attrs: { 'aria-hidden': 'true' } })))),
     );
   });
+
+  const paintReveal = memo((m) => {
+    if (m.phase !== 'reveal') return null;
+    return h(
+      'div',
+      { class: 'reveal-card', attrs: { 'aria-label': 'How the turn went' } },
+      h(
+        'div',
+        { class: 'reveal-drawer' },
+        who(m.drawer, { verb: 'drew this', me: 'You drew this', size: 'md', cls: 'who-big' }),
+        h('span', { class: ['reveal-gain', m.drawerGain ? null : 'is-zero'], text: gainText(m) }),
+      ),
+      m.got.length
+        ? h(
+            'ul',
+            { class: 'reveal-got', attrs: { 'aria-label': 'Who guessed it' } },
+            m.got.map((g) => h('li', { class: ['reveal-guess', g.isMe ? 'is-me' : null] }, avatar(g, 'xs'), h('span', { class: 'reveal-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'reveal-pts', text: `+${g.pts}` }))),
+          )
+        : h('p', { class: 'reveal-none muted', text: 'Nobody guessed it this time.' }),
+    );
+  });
+
+  const paintScores = memo((m) => markDrawer(scoreBoard(m.rows, { empty: 'Points show up here as you score.', label: 'Points this game', max: BOARD_MAX, badge: m.badge }), m.rows));
 
   const paintPick = memo((m) => {
     if (m.phase !== 'pick' || !m.amDrawer) return null;
@@ -457,6 +553,8 @@ export function createDrawView({ engine, fx, toast, win }) {
     const timerStarts = m.phase === 'reveal' ? m.ends - REVEAL_MS : m.phase === 'pick' ? m.ends - PICK_MS : m.starts;
     paintHead(head, { round: m.round, rounds: m.rounds, drawer: m.drawer, phase: m.phase, timerStarts, ends: m.ends });
     paintWord(wordBar, { phase: m.phase, amDrawer: m.amDrawer, word: m.word, hint: m.hint, letters: m.letters, words: m.words, gotMe: m.gotMe, drawer: m.drawer });
+    paintReveal(revealBox, { phase: m.phase, drawer: m.drawer, drawerGain: m.drawerGain, amDrawer: m.amDrawer, got: m.got.map((g) => ({ id: g.id, slot: g.slot, name: g.name, initials: g.initials, hue: g.hue, avatar: g.avatar, isMe: g.isMe, pts: g.pts })) });
+    paintScores(boardBox, { rows: boardRows(next, m.drawer.slot), badge: { slot: m.drawer.slot, id: m.drawer.id, icon: PENCIL, label: 'Drawing now' } });
     paintGot(gotBox, { phase: m.phase, got: m.got.map((g) => ({ id: g.id, slot: g.slot, name: g.name, initials: g.initials, hue: g.hue, avatar: g.avatar, isMe: g.isMe })) });
     paintPick(pickBox, { phase: m.phase, amDrawer: m.amDrawer, choices: m.choices, n: m.n });
     paintFeed(feedBox, { feed: m.feed, phase: m.phase });

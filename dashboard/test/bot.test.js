@@ -323,3 +323,19 @@ test('a big members answer over 512 KB becomes a friendly error', async () => {
   assert.equal(res.status, 'error');
   assert.match(res.message, /too big/);
 });
+
+test('poll answers with the profile ids the activity is waiting for', async () => {
+  const h = createHarness();
+  const empty = await h.poll();
+  assert.deepEqual(empty.wanted, []);
+  await h.request('GET', `/api/activity/profiles?ids=${USERS.alice.id}`);
+  const busy = await h.poll();
+  assert.deepEqual(busy.wanted, [USERS.alice.id]);
+  assert.equal(busy.hot, true);
+  const done = await h.bot('POST', '/bot/profiles', { profiles: [{ id: USERS.alice.id, username: 'alice', display_name: 'Alice', avatar_url: USERS.alice.avatar_url }] });
+  assert.equal(done.status, 200);
+  advance(h, 3 * MIN);
+  const calm = await h.poll();
+  assert.deepEqual(calm.wanted, []);
+  assert.equal(calm.hot, false);
+});

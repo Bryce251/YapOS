@@ -1,5 +1,5 @@
 import { OpBudget, OPS_WINDOW_MS, MAX_VALUE_BYTES, checkSet, jsonBytes, validKey } from './limits.js';
-import { idOf, people, cleanName, initials, hueOf } from './players.js';
+import { idOf, people, person, cleanName, initials, hueOf } from './players.js';
 
 export const FLUSH_MS = 120;
 export const SOFT_OPS = 60;
@@ -9,6 +9,8 @@ export const PLAYERS_BYTES = 3800;
 export const STORED_NAME_BYTES = 48;
 export const RESEND_MS = 3000;
 export const LATE_MS = 1500;
+export const WANT_MS = 4000;
+export const WANT_TRIES = 5;
 export const ROOM = 'room';
 export const SCORES = 'scores';
 export const PLAYERS = 'players';
@@ -60,7 +62,7 @@ export function settingsFor(game, room) {
 }
 
 export function newRoom(pick) {
-  return { v: 1, phase: 'lobby', pick, game: null, opts: {}, deadline: null, round: 0, last: null };
+  return { v: 1, phase: 'lobby', pick, game: null, opts: {}, deadline: null, round: 0, last: null, auto: null };
 }
 
 export function newScores() {
@@ -83,6 +85,21 @@ export function topSlots(points) {
   const list = rank(points);
   if (!list.length || list[0].pts <= 0) return [];
   return list.filter((x) => x.pts === list[0].pts).map((x) => x.slot);
+}
+
+export function autoOf(game) {
+  const a = game && game.autoStart;
+  if (!a || typeof a !== 'object') return null;
+  const min = Math.max(1, Math.floor(Number(a.min) || 1));
+  const ms = Math.max(1000, Math.floor(Number(a.ms) || 0));
+  return { min, ms };
+}
+
+export function timerAt(room) {
+  if (!room) return null;
+  if (room.phase === 'game' && typeof room.deadline === 'number') return room.deadline;
+  if (room.phase === 'lobby' && room.auto && typeof room.auto.at === 'number') return room.auto.at;
+  return null;
 }
 
 export function storedName(name) {
@@ -116,6 +133,9 @@ export function createEngine(opts) {
   let resendTimer = null;
   let lateTimer = null;
   let lateSent = null;
+  let want = null;
+  let wantTimer = null;
+  let wantTries = 0;
   let changeQueued = false;
   let lastHost = null;
   let hosting = false;
@@ -276,7 +296,7 @@ export function createEngine(opts) {
     if (isHost()) return true;
     const room = read(ROOM);
     const game = room && games.get(room.game);
-    return isOpen(game, key) && writerOk(game, key, slotOf(meId()), val);
+    return isOpen(game, key) && isJoined(meId()) && writerOk(game, key, slotOf(meId()), val);
   }
 
   function drop(prefix, test = () => true) {
@@ -298,9 +318,9 @@ export function createEngine(opts) {
     }
     scheduleLate();
     if (!isHost() || destroyed) return;
-    const room = read(ROOM);
-    if (!room || room.phase !== 'game' || typeof room.deadline !== 'number') return;
-    deadlineTimer = setT(onDeadline, Math.max(0, room.deadline - now()));
+    const at = timerAt(read(ROOM));
+    if (at === null) return;
+    deadlineTimer = setT(onDeadline, Math.max(0, at - now()));
   }
 
   function scheduleLate() {
@@ -309,13 +329,11 @@ export function createEngine(opts) {
       lateTimer = null;
     }
     if (isHost() || destroyed || !hostId()) return;
-    const room = read(ROOM);
-    if (!room || room.phase !== 'game' || typeof room.deadline !== 'number' || lateSent === room.deadline) return;
-    const d = room.deadline;
+    const d = timerAt(read(ROOM));
+    if (d === null || lateSent === d) return;
     lateTimer = setT(() => {
       lateTimer = null;
-      const r = read(ROOM);
-      if (destroyed || isHost() || !r || r.phase !== 'game' || r.deadline !== d || lateSent === d) return;
+      if (destroyed || isHost() || timerAt(read(ROOM)) !== d || lateSent === d) return;
       lateSent = d;
       queueSend({ t: 'late', d });
     }, Math.max(0, d + LATE_MS - now()));
@@ -326,6 +344,10 @@ export function createEngine(opts) {
     deadlineTimer = null;
     if (!isHost() || destroyed) return;
     const room = read(ROOM);
+    if (room && room.phase === 'lobby') {
+      onAuto();
+      return;
+    }
     if (!room || room.phase !== 'game' || typeof room.deadline !== 'number') return;
     if (now() < room.deadline) {
       scheduleDeadline();
@@ -341,6 +363,34 @@ export function createEngine(opts) {
     const after = read(ROOM);
     if (after && after.phase === 'game' && after.deadline === before) patchRoom({ deadline: null });
     scheduleDeadline();
+  }
+
+  function onAuto() {
+    const room = read(ROOM);
+    if (!room || room.phase !== 'lobby' || !room.auto || typeof room.auto.at !== 'number') return;
+    if (now() < room.auto.at) {
+      scheduleDeadline();
+      return;
+    }
+    const res = room.auto.g === room.pick ? lobby.start() : { ok: false };
+    if (res.ok) return;
+    const r = read(ROOM);
+    if (r && r.phase === 'lobby' && r.auto) patchRoom({ auto: null });
+  }
+
+  function checkAuto() {
+    if (!hostOnly()) return;
+    const room = read(ROOM);
+    if (!room) return;
+    const game = games.get(room.pick);
+    const spec = room.phase === 'lobby' ? autoOf(game) : null;
+    if (!spec || activePlayers().length < spec.min) {
+      if (room.auto) patchRoom({ auto: null });
+      return;
+    }
+    if (room.auto && room.auto.g === game.id && typeof room.auto.at === 'number') return;
+    const at = now();
+    patchRoom({ auto: { g: game.id, from: at, at: at + spec.ms } });
   }
 
   function patchRoom(p) {
@@ -404,11 +454,15 @@ export function createEngine(opts) {
     const present = presentIds();
     const scores = read(SCORES) || newScores();
     const worth = (id) => (scores.t[ps.p[id].s] || 0) + (scores.g[ps.p[id].s] || 0);
+    const tier = (id) => {
+      if (present.has(id) && ps.p[id].y) return 4;
+      return (worth(id) > 0 ? 2 : 0) + (present.has(id) ? 1 : 0);
+    };
     const order = Object.keys(ps.p).sort((a, b) => {
-      const pa = present.has(a) ? 1 : 0;
-      const pb = present.has(b) ? 1 : 0;
-      if (pa !== pb) return pa - pb;
-      if (!pa) return worth(a) - worth(b) || ps.p[a].j - ps.p[b].j;
+      const ta = tier(a);
+      const tb = tier(b);
+      if (ta !== tb) return ta - tb;
+      if (!present.has(a)) return worth(a) - worth(b) || ps.p[a].j - ps.p[b].j;
       return ps.p[b].s - ps.p[a].s;
     });
     while (order.length && (Object.keys(ps.p).length > PLAYER_CAP || jsonBytes(ps) > PLAYERS_BYTES)) delete ps.p[order.shift()];
@@ -434,15 +488,81 @@ export function createEngine(opts) {
       added.push(id);
     }
     if (!added.length && !renamed) return;
+    commitPlayers(ps, renamed || added.some((id) => ps.p[id]));
+  }
+
+  function commitPlayers(ps, keep = true) {
     prune(ps);
     const s = clone(read(SCORES));
     if (s && s.g && s.t && s.w && trimScores(s, ps)) write(SCORES, s);
-    if (!renamed && !added.some((id) => ps.p[id])) return;
+    if (keep) write(PLAYERS, ps);
+  }
+
+  function isJoined(id) {
+    const e = id ? playersState().p[id] : null;
+    return Boolean(e && e.y);
+  }
+
+  function setJoined(id, on) {
+    const ps = clone(playersState());
+    let e = ps.p[id];
+    if (!e && on) {
+      e = { s: ps.n, n: storedName(nameFor(id) || 'Player'), j: now(), r: 0 };
+      ps.p[id] = e;
+      ps.n += 1;
+    }
+    if (!e || Boolean(e.y) === on) return false;
+    if (on) {
+      e.y = 1;
+      e.j = now();
+      commitPlayers(ps);
+      return Boolean(ps.p[id]);
+    }
+    delete e.y;
+    e.r = 0;
     write(PLAYERS, ps);
+    return true;
   }
 
   function syncPlayers() {
     addPlayers(presentList().map((p) => ({ id: p.id, name: p.name })));
+    const present = presentIds();
+    if (!present.has(meId())) return false;
+    const ps = clone(playersState());
+    let cut = false;
+    for (const [id, e] of Object.entries(ps.p)) {
+      if (!e.y || present.has(id)) continue;
+      delete e.y;
+      e.r = 0;
+      cut = true;
+    }
+    if (cut) write(PLAYERS, ps);
+    return cut;
+  }
+
+  function gameRoster() {
+    const room = read(ROOM);
+    if (!room || room.phase !== 'game') return;
+    const game = games.get(room.game);
+    if (!game || typeof game.roster !== 'function') return;
+    try {
+      game.roster(gameApi(game));
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  function lateJoin(id) {
+    const room = read(ROOM);
+    if (!room || room.phase !== 'game') return;
+    const game = games.get(room.game);
+    const slot = slotOf(id);
+    if (!game || slot === null || typeof game.join !== 'function') return;
+    try {
+      game.join(gameApi(game), slot);
+    } catch (e) {
+      fail(e);
+    }
   }
 
   function nameFor(id) {
@@ -460,7 +580,7 @@ export function createEngine(opts) {
   function activePlayers() {
     const ps = playersState().p;
     return presentList()
-      .filter((p) => ps[p.id])
+      .filter((p) => ps[p.id] && ps[p.id].y)
       .map((p) => ({ slot: ps[p.id].s, id: p.id, name: ps[p.id].n }))
       .sort((a, b) => a.slot - b.slot);
   }
@@ -543,10 +663,19 @@ export function createEngine(opts) {
       if (data.t === 'many') {
         if (depth === 0 && Array.isArray(data.m)) for (const x of data.m.slice(0, MAX_BATCH)) handleIntent(from, x, 1);
       } else if (data.t === 'late') {
-        const room = read(ROOM);
-        if (room && room.phase === 'game' && typeof room.deadline === 'number' && now() >= room.deadline) onDeadline();
-      } else if (data.t === 'join') {
-        addPlayers([{ id: from, name: nameFor(from) }]);
+        const at = timerAt(read(ROOM));
+        if (at !== null && now() >= at) onDeadline();
+      } else if (data.t === 'in') {
+        if (!presentIds().has(from)) return;
+        if (setJoined(from, true)) {
+          lateJoin(from);
+          checkAuto();
+        }
+      } else if (data.t === 'out') {
+        if (setJoined(from, false)) {
+          gameRoster();
+          checkAuto();
+        }
       } else if (data.t === 'ready') {
         addPlayers([{ id: from, name: nameFor(from) }]);
         setReady(from, Boolean(data.v));
@@ -555,7 +684,7 @@ export function createEngine(opts) {
         if (!room || room.phase !== 'game' || data.g !== room.game) return;
         const game = games.get(room.game);
         if (!game || typeof game.intent !== 'function') return;
-        addPlayers([{ id: from, name: nameFor(from) }]);
+        if (!isJoined(from) || !presentIds().has(from)) return;
         const slot = slotOf(from);
         if (slot === null) return;
         game.intent(gameApi(game), slot, data.a && typeof data.a === 'object' ? data.a : {});
@@ -585,6 +714,7 @@ export function createEngine(opts) {
         if (!game) patchRoom({ phase: 'lobby', game: null, deadline: null });
         else if (typeof game.resume === 'function') game.resume(gameApi(game));
       }
+      checkAuto();
     } catch (e) {
       fail(e);
     }
@@ -606,17 +736,17 @@ export function createEngine(opts) {
       lastHost = h;
       if (isHost()) becomeHost();
       else if (hosting) loseHost();
+      pushWant();
     } else if (isHost()) {
       try {
         syncPlayers();
-        const room = read(ROOM);
-        if (room && room.phase === 'game') {
-          const game = games.get(room.game);
-          if (game && typeof game.roster === 'function') game.roster(gameApi(game));
-        }
+        gameRoster();
+        checkAuto();
       } catch (e) {
         fail(e);
       }
+    } else if (want) {
+      pushWant();
     }
     changed();
   }
@@ -631,7 +761,7 @@ export function createEngine(opts) {
     trustAll();
     lastHost = hostId();
     if (isHost()) becomeHost();
-    else queueSend({ t: 'join' });
+    pushWant();
     scheduleDeadline();
     changed();
   }
@@ -648,15 +778,16 @@ export function createEngine(opts) {
       try {
         ensureCore();
         syncPlayers();
+        checkAuto();
       } catch (e) {
         fail(e);
       }
       scheduleDeadline();
     } else {
       if (hosting) loseHost();
-      queueSend({ t: 'join' });
       scheduleDeadline();
     }
+    pushWant();
     changed();
     return undefined;
   }
@@ -678,7 +809,7 @@ export function createEngine(opts) {
     if (!from || from === hostId()) return true;
     const room = read(ROOM);
     const game = room && games.get(room.game);
-    if (!isOpen(game, key)) return false;
+    if (!isOpen(game, key) || !isJoined(from)) return false;
     return writerOk(game, key, slotOf(from), value);
   }
 
@@ -706,7 +837,57 @@ export function createEngine(opts) {
       if (same(mine, val) || (from && from !== meId())) overlay.delete(key);
     }
     if (key === ROOM) scheduleDeadline();
+    if (key === PLAYERS) settleWant();
     changed();
+  }
+
+  function settleWant() {
+    if (!want || isJoined(meId()) !== (want === 'in')) return;
+    want = null;
+    wantTries = 0;
+    if (wantTimer !== null) clearT(wantTimer);
+    wantTimer = null;
+  }
+
+  function pushWant() {
+    if (!want || destroyed || !readySeen || !meId()) return;
+    settleWant();
+    if (!want) return;
+    if (isHost()) {
+      const w = want;
+      want = null;
+      wantTries = 0;
+      handleIntent(meId(), { t: w });
+      changed();
+      return;
+    }
+    try {
+      queueSend({ t: want });
+    } catch (e) {
+      fail(e);
+    }
+    if (wantTimer !== null) clearT(wantTimer);
+    wantTimer = setT(() => {
+      wantTimer = null;
+      if (!want || destroyed) return;
+      wantTries += 1;
+      if (wantTries >= WANT_TRIES) {
+        want = null;
+        wantTries = 0;
+        changed();
+        return;
+      }
+      pushWant();
+    }, WANT_MS);
+  }
+
+  function setWant(w) {
+    if (destroyed) return false;
+    want = w;
+    wantTries = 0;
+    pushWant();
+    changed();
+    return true;
   }
 
   function onMessage({ data, by }) {
@@ -725,6 +906,7 @@ export function createEngine(opts) {
       const room = read(ROOM);
       if (!room || room.phase === 'game') return false;
       patchRoom({ pick: id });
+      checkAuto();
       return true;
     },
     setting(id, value) {
@@ -754,7 +936,7 @@ export function createEngine(opts) {
         s.g = {};
         write(SCORES, s);
         memory[game.id] = {};
-        patchRoom({ phase: 'game', game: game.id, deadline: null, round: (room.round || 0) + 1, last: null });
+        patchRoom({ phase: 'game', game: game.id, deadline: null, round: (room.round || 0) + 1, last: null, auto: null });
         game.start(gameApi(game));
       } catch (e) {
         fail(e);
@@ -773,14 +955,16 @@ export function createEngine(opts) {
     toLobby() {
       if (!hostOnly()) return false;
       for (const g of gameList) clearGameKeys(g);
-      patchRoom({ phase: 'lobby', game: null, deadline: null });
+      patchRoom({ phase: 'lobby', game: null, deadline: null, auto: null });
+      checkAuto();
       return true;
     },
     reset() {
       if (!hostOnly()) return false;
       for (const g of gameList) clearGameKeys(g);
       write(SCORES, newScores());
-      patchRoom({ phase: 'lobby', game: null, deadline: null, last: null });
+      patchRoom({ phase: 'lobby', game: null, deadline: null, last: null, auto: null });
+      checkAuto();
       return true;
     },
   };
@@ -796,9 +980,17 @@ export function createEngine(opts) {
     }
   }
 
+  function join() {
+    return setWant('in');
+  }
+
+  function leave() {
+    return setWant('out');
+  }
+
   function act(action) {
     const room = read(ROOM);
-    if (!room || room.phase !== 'game' || !action || typeof action !== 'object') return false;
+    if (!room || room.phase !== 'game' || !action || typeof action !== 'object' || !isJoined(meId())) return false;
     if (isHost()) handleIntent(meId(), { t: 'g', g: room.game, a: action });
     else queueSend({ t: 'g', g: room.game, a: action });
     return true;
@@ -807,7 +999,7 @@ export function createEngine(opts) {
   function direct(key, value) {
     const room = read(ROOM);
     const game = room && games.get(room.game);
-    if (!isOpen(game, key)) return false;
+    if (!isOpen(game, key) || !isJoined(meId())) return false;
     if (!writerOk(game, key, slotOf(meId()), value === undefined ? null : value)) return false;
     try {
       write(key, value);
@@ -841,14 +1033,17 @@ export function createEngine(opts) {
       const e = ps.p[id];
       const live = present.get(id);
       seen.add(id);
+      const look = live || person({ id, name: e.n }) || {};
       list.push({
         id,
         slot: e.s,
         name: live ? live.name : e.n,
-        avatar: live ? live.avatar : null,
+        username: look.username || null,
+        avatar: look.avatar || null,
         initials: live ? live.initials : initials(e.n),
         hue: live ? live.hue : hueOf(id),
         present: Boolean(live),
+        joined: Boolean(live) && Boolean(e.y),
         ready: Boolean(e.r),
         isHost: id === h,
         isMe: id === me,
@@ -859,15 +1054,20 @@ export function createEngine(opts) {
     }
     for (const [id, p] of present) {
       if (seen.has(id)) continue;
-      list.push({ ...p, slot: null, present: true, ready: false, isHost: id === h, isMe: id === me, game: 0, total: 0, wins: 0 });
+      list.push({ ...p, username: p.username || null, slot: null, present: true, joined: false, ready: false, isHost: id === h, isMe: id === me, game: 0, total: 0, wins: 0 });
     }
     list.sort((a, b) => (a.slot ?? 1e9) - (b.slot ?? 1e9));
     const state = merged();
     const pick = games.get(room.pick) || gameList[0] || null;
+    const mine = list.find((p) => p.isMe);
     return {
       ready: Boolean(t.ready),
       me,
       meSlot: slotOf(me),
+      meJoined: Boolean(mine && mine.joined),
+      joining: want,
+      playing: list.filter((p) => p.joined).length,
+      autoStart: room.phase === 'lobby' ? autoOf(pick) : null,
       host: h,
       hostName: (list.find((p) => p.id === h) || {}).name || 'the host',
       isHost: isHost(),
@@ -908,6 +1108,7 @@ export function createEngine(opts) {
     if (deadlineTimer !== null) clearT(deadlineTimer);
     if (resendTimer !== null) clearT(resendTimer);
     if (lateTimer !== null) clearT(lateTimer);
+    if (wantTimer !== null) clearT(wantTimer);
   }
 
   return {
@@ -916,6 +1117,8 @@ export function createEngine(opts) {
     snapshot,
     lobby,
     ready,
+    join,
+    leave,
     act,
     direct,
     drop,
@@ -925,6 +1128,7 @@ export function createEngine(opts) {
     stats,
     budget,
     isHost,
+    now,
     games: gameList,
     get pendingCount() {
       return pending.size + outbox.length;
