@@ -331,7 +331,7 @@ async function seedBot(h) {
     },
   });
 
-  for (const id of ['mod', 'automod', 'levels', 'economy', 'welcome', 'wrapped', 'starboard', 'tickets', 'engage', 'games', 'voice']) {
+  for (const id of ['mod', 'automod', 'levels', 'economy', 'welcome', 'wrapped', 'starboard', 'tickets', 'engage', 'games', 'casino', 'voice']) {
     if (engine.apps.get(id)) engine.settings.setEnabled(S, id, true);
   }
   engine.settings.patchCore(S, { logChannel: C.modlog });

@@ -10,12 +10,12 @@ export const COLORS = {
   muted: 0x95a5a6,
   system: 0x7c5cff, setup: 0x00b8d9, mod: 0xed4245, automod: 0xe67e22, welcome: 0x57f287, roles: 0x9b59b6,
   levels: 0xfee75c, economy: 0xf1c40f, engage: 0xeb459e, tickets: 0x3498db, tools: 0x1abc9c, voice: 0x2ecc71,
-  music: 0xe91e63, games: 0x9b59b6, characters: 0xff8c69, pocket: 0x00bcd4, ai: 0x8e44ad, extras: 0x607d8b,
+  music: 0xe91e63, games: 0x9b59b6, casino: 0xd4af37, characters: 0xff8c69, pocket: 0x00bcd4, ai: 0x8e44ad, extras: 0x607d8b,
 };
 
 export const ICONS = {
   system: '🖥️', setup: '🚀', mod: '🛡️', automod: '🤖', welcome: '👋', roles: '🎭', levels: '📈', economy: '🪙',
-  engage: '🎉', tickets: '🎫', tools: '🧰', voice: '🔊', music: '🎵', games: '🎮', characters: '🎭', pocket: '📱',
+  engage: '🎉', tickets: '🎫', tools: '🧰', voice: '🔊', music: '🎵', games: '🎮', casino: '🎰', characters: '🎭', pocket: '📱',
   ai: '✨', extras: '🧩', ok: '✅', error: '⛔', warn: '⚠️', info: 'ℹ️', lock: '🔒', unlock: '🔓', undo: '↩️',
 };
 

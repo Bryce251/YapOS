@@ -30,6 +30,7 @@ async function press(h, msg, match, user) {
 const EXPECTED_COMMANDS = {
   system: ['menu', 'help', 'status', 'apps', 'yap'],
   automod: ['automod'],
+  casino: ['casino', 'coinflip', 'dice', 'slots', 'blackjack', 'roulette', 'crash'],
   economy: ['daily', 'balance', 'shop', 'economy'],
   engage: ['poll', 'giveaway'],
   games: ['game', 'trivia'],
@@ -58,7 +59,7 @@ test('every app loads together with its own commands, well under the 100 limit',
     for (const n of names) assert.equal(owner.get(n), app, `/${n} belongs to ${app}`);
   }
   assert.equal(owner.size, h.bot.commands.size);
-  assert.ok(owner.size <= 50, `${owner.size} commands`);
+  assert.ok(owner.size <= 60, `${owner.size} commands`);
   for (const c of h.bot.commands.values()) assert.ok(c.description.length > 0 && c.description.length <= 100);
   const words = new Map();
   for (const r of h.engine.yap.routes()) for (const w of r.words) {

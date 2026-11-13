@@ -198,6 +198,22 @@ test('a change saves valid settings exactly like the typed command does', async 
   await typedThenWeb(['mod'], ['mod', 'log #mod-log'], { 'core.logChannel': C.modlog }, 'mod');
 });
 
+test('casino bet limits save from the web like the typed command, checking min against max in the same change', async () => {
+  const a = await createHarness({ apps: ['casino'] });
+  a.engine.settings.setEnabled(S, 'casino', true);
+  await a.slash('casino', 'maxbet 500', { user: IDS.admin });
+  const { h, change } = await setup({ harness: { apps: ['casino'] } });
+  const r = await change(IDS.admin, 'casino', { enabled: true, settings: { maxBet: 500 } });
+  assert.deepEqual(r.result.errors, {});
+  assert.deepEqual(h.engine.settings.appConfig(S, 'casino'), a.engine.settings.appConfig(S, 'casino'));
+  const bad = await change(IDS.admin, 'casino', { settings: { minBet: 600 } });
+  assert.equal(bad.result.errors.minBet, "The smallest bet can't be bigger than the biggest bet (500).");
+  const both = await change(IDS.admin, 'casino', { settings: { minBet: 2000, maxBet: 5000, crashMax: 101 } });
+  assert.deepEqual(Object.keys(both.result.errors), ['crashMax']);
+  assert.equal(h.engine.settings.appConfig(S, 'casino').minBet, 2000);
+  assert.equal(h.engine.settings.appConfig(S, 'casino').maxBet, 5000);
+});
+
 test('a change refuses invalid values with the same message the command gives', async () => {
   const a = await createHarness({ apps: ['levels', 'starboard', 'welcome'] });
   const typedRate = a.textOf((await a.slash('levels', 'rate 9', { user: IDS.admin }))[0]);

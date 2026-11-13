@@ -4,7 +4,7 @@ import { createHarness, IDS } from '../harness.js';
 
 test('every command fits Yapin limits and the total stays well under 100', async () => {
   const h = await createHarness();
-  assert.ok(h.bot.commands.size <= 50, `${h.bot.commands.size} commands`);
+  assert.ok(h.bot.commands.size <= 60, `${h.bot.commands.size} commands`);
   for (const [name, c] of h.bot.commands) {
     assert.match(name, /^[a-z0-9_-]{1,32}$/);
     assert.ok(c.description.length <= 100, `/${name} description too long`);
