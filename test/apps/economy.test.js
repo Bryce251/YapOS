@@ -39,8 +39,12 @@ test('amount parsing and streak bonus', () => {
   assert.equal(parseAmount('1,000'), 1000);
   assert.equal(parseAmount('2.5k'), 2500);
   assert.equal(parseAmount('1m'), 1_000_000);
+  assert.equal(parseAmount('3b'), 3_000_000_000);
+  assert.equal(parseAmount('1t'), 1_000_000_000_000);
   assert.ok(Number.isNaN(parseAmount('1.5')));
+  assert.ok(Number.isNaN(parseAmount('9999t')));
   assert.equal(parseAmount('sam'), null);
+  assert.equal(parseAmount('inf'), null);
   assert.equal(parseAmount('-5'), null);
   assert.equal(streakBonus(1), 10);
   assert.equal(streakBonus(5), 50);
@@ -87,6 +91,28 @@ test('daily streak resets after 48 hours and says so', async () => {
   assert.match(lastText(h, ans), /\+110 coins \(day 1\)/);
   assert.match(lastText(h, ans), /2-day streak ended/);
   assert.equal(userDoc(h, IDS.member).streak, 1);
+});
+
+test('coin amounts and settings go far past a million', async () => {
+  const h = await make();
+  await h.slash('economy', 'daily 5b', { user: IDS.admin });
+  assert.equal(h.engine.settings.appConfig(S, 'economy').dailyAmount, 5_000_000_000);
+  await h.slash('economy', 'start 1b', { user: IDS.admin });
+  assert.equal(bal(h, IDS.member2), 1_000_000_000);
+
+  const give = await h.slash('economy', 'give @sam 2t', { user: IDS.admin });
+  assert.match(lastText(h, give), /2,000,000,000,000/);
+  assert.equal(bal(h, IDS.member), 2_001_000_000_000);
+  assert.match(lastText(h, await h.slash('economy', 'give @sam 9999t', { user: IDS.admin })), /didn't work/);
+
+  await stockShop(h);
+  const cost = await h.slash('shop', 'price 2 3b', { user: IDS.admin });
+  assert.match(lastText(h, cost), /3,000,000,000/);
+  const stock = await h.slash('shop', 'stock "Golden ticket" 50m', { user: IDS.admin });
+  assert.match(lastText(h, stock), /50,000,000 left/);
+  const open = await h.slash('shop', 'stock "Golden ticket" inf', { user: IDS.admin });
+  assert.match(lastText(h, open), /no limit/);
+  assert.equal(h.engine.store.get('economy', S).items[1].stock, null);
 });
 
 test('daily amount 0 turns daily off', async () => {

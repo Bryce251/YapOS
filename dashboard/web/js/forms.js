@@ -19,6 +19,18 @@ export const STEP_ACTIONS = [
 ];
 export const MAX_LEVEL = 1000;
 const MAX_STEPS = 20;
+export const HUGE_MAX = 1e12;
+const INF_WORDS = new Set(['inf', 'infinite', 'infinity', 'unlimited', 'nolimit', 'nocap', 'none', 'any', 'anyamount', 'forever', '∞']);
+
+export function isUnlimitedValue(value) {
+  if (value === Infinity) return true;
+  if (typeof value === 'number' || value === null || value === undefined) return false;
+  return INF_WORDS.has(String(value).trim().toLowerCase().replace(/[\s_-]/g, ''));
+}
+
+export function bigNumberText(n) {
+  return Number(n).toLocaleString('en-US');
+}
 
 function cleanLabels(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -53,6 +65,7 @@ export function normalizeField(raw) {
     options: Array.isArray(f.options)
       ? f.options.filter((o) => o && o.value !== undefined).map((o) => ({ value: o.value, label: String(o.label ?? o.value) }))
       : [],
+    unlimited: f.unlimited === true,
     readOnly,
     editor: readOnly ? '' : editor,
     labels: cleanLabels(f.labels) || FALLBACK_LABELS[key] || null,
@@ -207,6 +220,7 @@ export function toEditValue(field, raw) {
     case 'boolean':
       return value === true;
     case 'number': {
+      if (field.unlimited && isUnlimitedValue(value)) return 'inf';
       const n = toNumber(value);
       return n === null ? '' : String(n);
     }
@@ -244,6 +258,7 @@ export function fromEditValue(field, edit) {
     case 'boolean':
       return edit === true;
     case 'number':
+      if (field.unlimited && isUnlimitedValue(edit)) return 'inf';
       return edit === '' ? null : Number(edit);
     case 'select': {
       const opt = field.options.find((o) => String(o.value) === edit);
@@ -286,10 +301,11 @@ export function validateField(field, edit) {
   switch (field.type) {
     case 'number': {
       if (edit === '') return '';
+      if (isUnlimitedValue(edit)) return field.unlimited ? '' : 'This one needs a number, not "inf".';
       const n = Number(edit);
       if (!Number.isFinite(n)) return 'Enter a number.';
-      if (field.min !== null && n < field.min) return `Use ${field.min} or more.`;
-      if (field.max !== null && n > field.max) return `Use ${field.max} or less.`;
+      if (field.min !== null && n < field.min) return `Use ${bigNumberText(field.min)} or more.`;
+      if (field.max !== null && n > field.max) return field.max >= HUGE_MAX ? 'That number is too big. Try a smaller one.' : `Use ${bigNumberText(field.max)} or less.`;
       if (field.step !== null && field.step >= 1 && !Number.isInteger(n)) return 'Use a whole number.';
       return '';
     }
@@ -424,6 +440,8 @@ export function describeReadOnly(field, value, lookups) {
   const type = field && typeof field === 'object' ? field.type : '';
   if (value === null || value === undefined || value === '') return 'Not set';
   if (typeof value === 'boolean') return value ? 'On' : 'Off';
+  if (type === 'number' && isUnlimitedValue(value)) return 'Any amount';
+  if (type === 'number' && typeof value === 'number' && !Number.isFinite(value)) return 'Not set';
   if (CHANNEL_TYPES.has(type) || ROLE_TYPES.has(type)) {
     const ids = Array.isArray(value) ? value : [value];
     if (!ids.length) return 'None';

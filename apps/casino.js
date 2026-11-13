@@ -4,6 +4,7 @@ import { card, dialog, button, row, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
 import { tokenize, didYouMean, clip } from '../engine/parse.js';
 import { accept as acceptValue, reject as rejectValue, boolField } from '../engine/dashboard.js';
+import { HARD_CAP, UNLIMITED, isUnlimited, parseLimit, storeLimit, limitText, limitHelp, atMost, withinLimit } from '../engine/limits.js';
 
 const ID = 'casino';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -13,7 +14,7 @@ const CHECK_MS = 3 * 60_000;
 const IDLE_MS = 2 * 60_000;
 const MAX_LIVE = 10;
 const MAX_CRASH = 3;
-const MAX_BET_LIMIT = 1_000_000;
+const MAX_BET_LIMIT = HARD_CAP;
 const CRASH_TICK_MS = 2_000;
 const CRASH_DOUBLE_MS = 8_000;
 const CRASH_MAX_EDITS = 30;
@@ -206,7 +207,8 @@ const isNatural = (cards) => cards.length === 2 && handTotal(cards).total === 21
 
 const ALL_WORDS = new Set(['all', 'max', 'allin', 'all-in']);
 const SKIP = new Set(['bet', 'bets', 'for', 'on', 'with', 'wager']);
-const AMOUNT_RE = /^-?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:k|m)?(?:coins?|🪙)?$/;
+const AMOUNT_RE = /^-?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:k|m|b|t)?(?:coins?|🪙)?$/;
+const AMOUNT_PLACES = { k: 3, m: 6, b: 9, t: 12 };
 const cleanToken = (t) => String(t ?? '').trim().toLowerCase();
 const amountLike = (w) => AMOUNT_RE.test(w) || ALL_WORDS.has(w) || w === 'half';
 
@@ -215,9 +217,9 @@ export function parseAmountToken(token) {
   if (ALL_WORDS.has(s)) return { kind: 'all' };
   if (s === 'half') return { kind: 'half' };
   let n = null;
-  const m = /^(\d+)(?:\.(\d+))?([km])$/.exec(s);
+  const m = /^(\d+)(?:\.(\d+))?([kmbt])$/.exec(s);
   if (m) {
-    const places = m[3] === 'k' ? 3 : 6;
+    const places = AMOUNT_PLACES[m[3]];
     const frac = m[2] || '';
     if (frac.length > places && /[1-9]/.test(frac.slice(places))) return null;
     n = Number(m[1]) * 10 ** places + Number(frac.slice(0, places).padEnd(places, '0'));
@@ -230,12 +232,12 @@ export function resolveBet(amount, balance, { minBet, maxBet }) {
   if (!amount) return { error: 'none' };
   if (amount.kind === 'number') {
     if (amount.n < minBet) return { error: 'small' };
-    if (amount.n > maxBet) return { error: 'big' };
+    if (!withinLimit(amount.n, maxBet)) return { error: 'big' };
     return { bet: amount.n };
   }
   const bal = Math.max(0, Math.floor(Number(balance) || 0));
   const want = amount.kind === 'all' ? bal : Math.floor(bal / 2);
-  const bet = Math.min(want, maxBet);
+  const bet = atMost(want, maxBet);
   if (bet < minBet) return { error: 'low', bet };
   return { bet };
 }
@@ -697,15 +699,18 @@ const SETTING_RANGES = {
   crashMax: [2, 100],
 };
 
+const UNCAPPED = new Set(['maxBet']);
+
 const SETTING_HELP = {
-  minBet: `Use a whole number from 10 to ${fmt(MAX_BET_LIMIT)}, like \`/casino minbet 10\`.`,
-  maxBet: `Use a whole number from 10 to ${fmt(MAX_BET_LIMIT)}, like \`/casino maxbet 500\`.`,
+  minBet: 'Use a whole number from 10 up, like `/casino minbet 10`.',
+  maxBet: limitHelp('no biggest bet at all', { min: 10, example: '/casino maxbet 500' }),
   cooldownSeconds: 'Use a whole number of seconds from 0 to 300, like `/casino cooldown 5`. 0 turns the wait off.',
   crashMax: 'Use a whole number from 2 to 100, like `/casino crashmax 50`.',
 };
 
 function inRange(key, raw) {
   const [lo, hi] = SETTING_RANGES[key];
+  if (key === 'minBet' || key === 'maxBet') return parseLimit(raw, { min: lo, max: hi, unlimited: UNCAPPED.has(key) });
   const n = typeof raw === 'number' ? raw : wholeNumber(raw);
   return Number.isInteger(n) && n >= lo && n <= hi ? n : null;
 }
@@ -725,19 +730,30 @@ export function checkSetting(engine, sid, key, raw, all = null) {
   if (n === null) return rejectValue(SETTING_HELP[key]);
   if (key === 'minBet') {
     const max = inEffect(engine, sid, 'maxBet', all);
-    if (n > max) return rejectValue(`The smallest bet can't be bigger than the biggest bet (${fmt(max)}).`);
+    if (!withinLimit(n, max)) return rejectValue(`The smallest bet can't be bigger than the biggest bet (${fmt(max)}).`);
   }
-  if (key === 'maxBet') {
+  if (key === 'maxBet' && !isUnlimited(n)) {
     const min = inEffect(engine, sid, 'minBet', all);
     if (n < min) return rejectValue(`The biggest bet can't be smaller than the smallest bet (${fmt(min)}).`);
   }
-  return acceptValue(n);
+  return acceptValue(storeLimit(n));
 }
 
 function limitsOf(cfg) {
   const minBet = inRange('minBet', cfg.minBet) ?? 10;
-  const maxBet = Math.max(minBet, inRange('maxBet', cfg.maxBet) ?? 1000);
+  const saved = inRange('maxBet', cfg.maxBet) ?? 1000;
+  const maxBet = isUnlimited(saved) ? UNLIMITED : Math.max(minBet, saved);
   return { minBet, maxBet };
+}
+
+function maxBetText(engine, sid, maxBet) {
+  return limitText(maxBet, { word: '**any amount**', fmt: (n) => money(engine, sid, n) });
+}
+
+function betRangeText(engine, sid, lim) {
+  return isUnlimited(lim.maxBet)
+    ? `${money(engine, sid, lim.minBet)} and up, with no limit`
+    : `${money(engine, sid, lim.minBet)} to ${money(engine, sid, lim.maxBet)}`;
 }
 
 function crashMaxOf(cfg) {
@@ -790,7 +806,7 @@ async function startGame(ctx, kind, tokens, mode = 'reply', extra = {}) {
     const bal = await balanceOf(eco, sid, uid);
     const r = resolveBet(parsed.amount, bal ?? 0, lim);
     if (r.error === 'small') return ctx.warn('That bet is too small', `The smallest bet here is ${money(engine, sid, lim.minBet)}.`);
-    if (r.error === 'big') return ctx.warn('That bet is too big', `The biggest bet here is ${money(engine, sid, lim.maxBet)}.`);
+    if (r.error === 'big') return ctx.warn('That bet is too big', `The biggest bet here is ${maxBetText(engine, sid, lim.maxBet)}.`);
     if (r.error === 'low') return ctx.warn('Not enough coins', `You have ${money(engine, sid, bal ?? 0)} and the smallest bet is ${money(engine, sid, lim.minBet)}. Get more with **/daily**.`);
     const bet = r.bet;
     if (kind === 'crash' && parsed.target && Math.floor((bet * parsed.target) / 100) <= bet) return ctx.warn("That target can't win", `With a bet of ${money(engine, sid, bet)}, a ${fmtX(parsed.target)} cash-out only gives your bet back. Bet more or pick a higher target.`);
@@ -1388,7 +1404,7 @@ function rulesView(engine, sid) {
     `🎡 **Roulette**${off('roulette')} · one zero · a number pays **36x**, red, black, even, odd, low or high pays **2x**, dozens and columns pay **3x** · \`/roulette red 100\``,
     `🚀 **Crash**${off('crash')} · the multiplier doubles every 8 seconds, cash out before it crashes · it cashes out by itself at **${crashMax}x** · \`/crash 100 2x\``,
     '',
-    `Bets: ${money(engine, sid, lim.minBet)} to ${money(engine, sid, lim.maxBet)}. Amounts: \`100\`, \`2k\`, \`half\` or \`all\`. Wins include your bet.`,
+    `Bets: ${betRangeText(engine, sid, lim)}. Amounts: \`100\`, \`2k\`, \`half\` or \`all\`. Wins include your bet.`,
     'The house keeps a small edge of about 1 to 3 coins per 100 bet, so over time the casino wins. Wins round down to whole coins, so small bets lose a little more.',
     `-# ${FUN_NOTE}`,
   ];
@@ -1403,7 +1419,7 @@ function settingsView(engine, sid) {
   lines.push(
     '',
     `📉 **Smallest bet:** ${money(engine, sid, lim.minBet)}`,
-    `📈 **Biggest bet:** ${money(engine, sid, lim.maxBet)}`,
+    `📈 **Biggest bet:** ${maxBetText(engine, sid, lim.maxBet)}`,
     `⏱️ **Wait between games:** ${cool ? plural(cool, 'second') : 'Off'}`,
     `🚀 **Crash top:** ${crashMaxOf(cfg)}x`,
     '',
@@ -1425,7 +1441,7 @@ async function panelView(engine, sid, uid, isAdmin) {
   const intro = ['Play against the bot with server coins:'];
   if (on.length) for (const k of on) intro.push(`${GAMES[k].icon} **${GAMES[k].name}** · \`${GAMES[k].usage}\``);
   else intro.push('Every game is turned off right now.');
-  intro.push('', `Bets: ${money(engine, sid, lim.minBet)} to ${money(engine, sid, lim.maxBet)} · amounts like \`100\`, \`2k\`, \`half\` or \`all\``);
+  intro.push('', `Bets: ${betRangeText(engine, sid, lim)} · amounts like \`100\`, \`2k\`, \`half\` or \`all\``);
   if (!eco) intro.push('', '⚠️ The casino needs the **Economy** app. An admin can install it with **/apps**.');
   const u = userStats(engine, sid, uid);
   const live = serverGames(st, sid).length;
@@ -1452,7 +1468,7 @@ const SETTING_WORDS = { minbet: 'minBet', maxbet: 'maxBet', cooldown: 'cooldownS
 
 function savedText(engine, sid, key, n) {
   if (key === 'minBet') return `The smallest bet is now ${money(engine, sid, n)}.`;
-  if (key === 'maxBet') return `The biggest bet is now ${money(engine, sid, n)}.`;
+  if (key === 'maxBet') return isUnlimited(n) ? 'There is no biggest bet now, so anyone can bet any amount they have.' : `The biggest bet is now ${money(engine, sid, n)}.`;
   if (key === 'cooldownSeconds') return n ? `Players wait ${plural(n, 'second')} between games.` : 'There is no wait between games now.';
   return `Crash rounds cash out by themselves at ${n}x.`;
 }
@@ -1513,7 +1529,8 @@ async function playForm(ctx) {
   const fields = [];
   const pick = own(PLAY_PICK, kind);
   if (pick) fields.push({ id: 'pick', label: pick.label, style: 'short', placeholder: pick.placeholder, max: 20 });
-  fields.push({ id: 'bet', label: 'Bet (like 100, half or all)', style: 'short', value: String(lim.minBet * 10 <= lim.maxBet ? lim.minBet * 10 : lim.minBet), max: 12 });
+  const suggested = withinLimit(lim.minBet * 10, lim.maxBet) ? lim.minBet * 10 : lim.minBet;
+  fields.push({ id: 'bet', label: 'Bet (like 100, half or all)', style: 'short', value: String(Number.isSafeInteger(suggested) ? suggested : lim.minBet), max: 20 });
   if (kind === 'crash') fields.push({ id: 'target', label: 'Cash out by itself at (like 2x, optional)', style: 'short', required: false, placeholder: '2x', max: 8 });
   return ctx.form({ title: `Play ${gameName(kind)}`, action: 'playsave', args: [kind], fields });
 }
@@ -1540,8 +1557,8 @@ async function limitsForm(ctx) {
     title: 'Casino settings',
     action: 'limitsave',
     fields: [
-      { id: 'minbet', label: 'Smallest bet', style: 'short', value: String(lim.minBet), max: 9 },
-      { id: 'maxbet', label: 'Biggest bet', style: 'short', value: String(lim.maxBet), max: 9 },
+      { id: 'minbet', label: 'Smallest bet', style: 'short', value: String(lim.minBet), max: 20 },
+      { id: 'maxbet', label: 'Biggest bet (inf for no limit)', style: 'short', value: isUnlimited(lim.maxBet) ? 'inf' : String(lim.maxBet), placeholder: 'inf', max: 20 },
       { id: 'cooldown', label: 'Wait between games in seconds (0 = off)', style: 'short', value: String(inRange('cooldownSeconds', cfg.cooldownSeconds) ?? 0), max: 3 },
       { id: 'crashmax', label: 'Crash top multiplier (2 to 100)', style: 'short', value: String(crashMaxOf(cfg)), max: 3 },
     ],
@@ -1562,7 +1579,7 @@ async function limitsSave(ctx) {
     patch[key] = checked.value;
   }
   ctx.patchConfig(patch);
-  return ctx.ok('Saved', `Bets: ${money(engine, sid, patch.minBet)} to ${money(engine, sid, patch.maxBet)}. Wait between games: ${patch.cooldownSeconds ? plural(patch.cooldownSeconds, 'second') : 'off'}. Crash top: ${patch.crashMax}x.`);
+  return ctx.ok('Saved', `Bets: ${betRangeText(engine, sid, limitsOf(patch))}. Wait between games: ${patch.cooldownSeconds ? plural(patch.cooldownSeconds, 'second') : 'off'}. Crash top: ${patch.crashMax}x.`);
 }
 
 async function cleanupJob(job, engine) {
@@ -1598,9 +1615,9 @@ async function cleanupJob(job, engine) {
   return undefined;
 }
 
-const numberField = (key, label, help) => {
+const numberField = (key, label, help, extra = {}) => {
   const [min, max] = SETTING_RANGES[key];
-  return { key, label, type: 'number', web: true, min, max, step: 1, help, validate: (ctx, v, all) => checkSetting(ctx.engine, ctx.serverId, key, v, all) };
+  return { key, label, type: 'number', web: true, min, max, step: 1, help, ...extra, validate: (ctx, v, all) => checkSetting(ctx.engine, ctx.serverId, key, v, all) };
 };
 
 const DASHBOARD = [
@@ -1611,7 +1628,7 @@ const DASHBOARD = [
   boolField({ key: 'roulette', label: 'Roulette', help: 'European wheel with one zero: colors, numbers, dozens and columns.' }),
   boolField({ key: 'crash', label: 'Crash', help: 'A rising multiplier. Cash out before it crashes.' }),
   numberField('minBet', 'Smallest bet', 'The fewest coins someone can bet on one game.'),
-  numberField('maxBet', 'Biggest bet', 'The most coins someone can bet on one game.'),
+  numberField('maxBet', 'Biggest bet', 'The most coins someone can bet on one game. Type inf for no limit at all.', { unlimited: true }),
   numberField('cooldownSeconds', 'Wait between games (seconds)', 'How long someone waits before starting another game. 0 turns it off.'),
   numberField('crashMax', 'Crash top multiplier', 'A crash round cashes out by itself when it reaches this.'),
 ];

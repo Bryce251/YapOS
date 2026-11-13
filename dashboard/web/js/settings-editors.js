@@ -3,7 +3,7 @@ import { icon } from './icons.js';
 import { picker } from './picker.js';
 import { switchControl } from './ui.js';
 import { durationPicker } from './kit.js';
-import { MAX_LEVEL, STEP_ACTIONS, cloneEdit, mapItems, splitEmoji } from './forms.js';
+import { HUGE_MAX, MAX_LEVEL, STEP_ACTIONS, bigNumberText, cloneEdit, isUnlimitedValue, mapItems, splitEmoji } from './forms.js';
 
 const TIMEOUT_PRESETS = [
   { value: '10m', label: '10 min' },
@@ -118,15 +118,30 @@ function decimals(step) {
 
 export function numberSlider({ field, value, onChange, ids }) {
   const step = field.step ?? 1;
-  const useSlider = field.min !== null && field.max !== null && (field.max - field.min) / step <= 2000;
+  const canBeUnlimited = field.unlimited === true;
+  const useSlider = !canBeUnlimited && field.min !== null && field.max !== null && (field.max - field.min) / step <= 2000;
+  const wideInput = canBeUnlimited || (field.max !== null && field.max >= HUGE_MAX);
+  let noLimit = canBeUnlimited && isUnlimitedValue(value);
+  let lastNumber = noLimit ? '' : value;
   const input = h('input', {
     id: ids.input,
-    type: 'number',
+    type: canBeUnlimited ? 'text' : 'number',
     class: 'input input-number stepper-input',
-    value,
+    value: noLimit ? '' : value,
     inputMode: step < 1 ? 'decimal' : 'numeric',
-    attrs: { 'aria-describedby': ids.describedBy, min: field.min ?? null, max: field.max ?? null, step: field.step ?? 'any' },
+    autocomplete: canBeUnlimited ? 'off' : null,
+    attrs: {
+      'aria-describedby': ids.describedBy,
+      min: canBeUnlimited ? null : field.min ?? null,
+      max: canBeUnlimited ? null : field.max ?? null,
+      step: canBeUnlimited ? null : field.step ?? 'any',
+    },
   });
+  const limitChip = canBeUnlimited
+    ? h('button', { type: 'button', class: 'choice-chip limit-chip', attrs: { 'aria-pressed': 'false' } },
+      h('span', { class: 'choice-chip-emoji', text: '∞', attrs: { 'aria-hidden': 'true' } }),
+      h('span', { text: 'No limit' }))
+    : null;
   const range = useSlider ? h('input', { type: 'range', class: 'range', min: field.min, max: field.max, step, value: value === '' ? field.min : value, attrs: { 'aria-label': `${field.label} slider`, tabindex: '-1' } }) : null;
   const minus = h('button', { type: 'button', class: 'stepper-btn', attrs: { 'aria-label': `Lower ${field.label}` } }, h('span', { text: '−', attrs: { 'aria-hidden': 'true' } }));
   const plus = h('button', { type: 'button', class: 'stepper-btn', attrs: { 'aria-label': `Raise ${field.label}` } }, icon('plus', { size: 14 }));
@@ -138,7 +153,27 @@ export function numberSlider({ field, value, onChange, ids }) {
     const pct = field.max === field.min ? 0 : ((v - field.min) / (field.max - field.min)) * 100;
     range.style.setProperty('--fill', `${pct}%`);
   }
+  function paintLimit() {
+    if (!limitChip) return;
+    limitChip.classList.toggle('is-active', noLimit);
+    limitChip.setAttribute('aria-pressed', noLimit ? 'true' : 'false');
+    input.disabled = noLimit;
+    input.placeholder = noLimit ? 'Any amount' : '';
+    minus.disabled = noLimit;
+    plus.disabled = noLimit;
+    stepper.classList.toggle('is-off', noLimit);
+  }
+  function setNoLimit(on, emit = true) {
+    if (!canBeUnlimited) return;
+    if (on && !noLimit && !isUnlimitedValue(input.value)) lastNumber = input.value;
+    noLimit = on;
+    input.value = on ? '' : lastNumber;
+    paintLimit();
+    paintRange();
+    if (emit) onChange(on ? 'inf' : input.value);
+  }
   function bump(dir) {
+    if (noLimit) return;
     const n = Number(input.value);
     const base = input.value === '' || !Number.isFinite(n) ? (field.min ?? 0) : n;
     let next = Number((base + dir * step).toFixed(decimals(step)));
@@ -150,7 +185,14 @@ export function numberSlider({ field, value, onChange, ids }) {
   }
   minus.addEventListener('click', () => bump(-1));
   plus.addEventListener('click', () => bump(1));
+  limitChip?.addEventListener('click', () => setNoLimit(!noLimit));
   input.addEventListener('input', () => {
+    if (canBeUnlimited && isUnlimitedValue(input.value)) {
+      setNoLimit(true);
+      limitChip?.focus();
+      return;
+    }
+    lastNumber = input.value;
     paintRange();
     onChange(input.value);
   });
@@ -161,12 +203,21 @@ export function numberSlider({ field, value, onChange, ids }) {
   });
   paintRange();
   const stepper = h('div', { class: 'stepper' }, minus, input, plus);
-  const limits = field.min !== null && field.max !== null
-    ? h('div', { class: 'range-limits', attrs: { 'aria-hidden': 'true' } }, h('span', { text: String(field.min) }), h('span', { text: String(field.max) }))
+  paintLimit();
+  const limits = field.min !== null && field.max !== null && field.max < HUGE_MAX
+    ? h('div', { class: 'range-limits', attrs: { 'aria-hidden': 'true' } }, h('span', { text: bigNumberText(field.min) }), h('span', { text: bigNumberText(field.max) }))
     : null;
   return {
-    el: h('div', { class: ['number-control', range ? 'has-range' : ''] }, stepper, range ? h('div', { class: 'range-wrap' }, range, limits) : null),
+    el: h('div', { class: ['number-control', range ? 'has-range' : '', limitChip ? 'has-limit' : '', wideInput ? 'has-big' : ''] }, stepper, limitChip, range ? h('div', { class: 'range-wrap' }, range, limits) : null),
     setValue(v) {
+      if (canBeUnlimited) {
+        noLimit = isUnlimitedValue(v);
+        if (!noLimit) lastNumber = v;
+        input.value = noLimit ? '' : v;
+        paintLimit();
+        paintRange();
+        return;
+      }
       input.value = v;
       paintRange();
     },

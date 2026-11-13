@@ -6,8 +6,9 @@ const SID = '44444444-4444-4444-8444-444444444444';
 const { document } = installDom({ url: `https://dash.example.test/servers/${SID}/apps/automod` });
 const { state, setDetail } = await import('../web/js/state.js');
 const { renderAppSettings, sectionOf } = await import('../web/js/pages/app-settings.js');
-const { normalizeField, toEditValue, fromEditValue, validateField, mapItems, sameValue, splitEmoji } = await import('../web/js/forms.js');
+const { normalizeField, toEditValue, fromEditValue, validateField, mapItems, sameValue, splitEmoji, describeReadOnly } = await import('../web/js/forms.js');
 const { fillPlaceholders, placeholdersIn } = await import('../web/js/settings-editors.js');
+const { fieldRow } = await import('../web/js/fields.js');
 
 const lookups = {
   channels: [{ id: 'c-1', name: 'general', kind: 'text' }, { id: 'c-2', name: 'memes', kind: 'text' }],
@@ -65,6 +66,78 @@ test('warning steps become the text the bot understands', () => {
   assert.equal(fromEditValue(f, []), '');
   assert.match(validateField(f, [{ at: '3', action: 'timeout', duration: '' }]), /how long/);
   assert.match(validateField(f, [{ at: '3', action: 'kick', duration: '' }, { at: '3', action: 'ban', duration: '' }]), /two steps/);
+});
+
+const bigNumber = (extra = {}) => normalizeField({ key: 'maxBet', label: 'Biggest bet', type: 'number', web: true, min: 1, max: 1e15, step: 1, ...extra });
+
+test('a number setting that allows no limit round-trips inf', () => {
+  const f = bigNumber({ unlimited: true });
+  assert.equal(f.unlimited, true);
+  assert.equal(toEditValue(f, 'inf'), 'inf');
+  assert.equal(toEditValue(f, Infinity), 'inf');
+  assert.equal(toEditValue(f, 'unlimited'), 'inf');
+  assert.equal(toEditValue(f, 500), '500');
+  assert.equal(fromEditValue(f, ' INF '), 'inf');
+  assert.equal(fromEditValue(f, '2500'), 2500);
+  assert.equal(fromEditValue(f, ''), null);
+  assert.equal(validateField(f, 'inf'), '');
+  assert.equal(validateField(f, '1000000000'), '');
+  assert.match(validateField(f, '0'), /1 or more/);
+});
+
+test('a plain number setting says inf is not a number and keeps a readable ceiling', () => {
+  const f = bigNumber();
+  assert.equal(f.unlimited, false);
+  assert.equal(toEditValue(f, 'inf'), '');
+  assert.match(validateField(f, 'inf'), /needs a number/);
+  assert.equal(validateField(f, '1000000000'), '');
+  assert.match(validateField(f, '2000000000000000'), /too big/);
+  assert.doesNotMatch(validateField(f, '2000000000000000'), /\d{7}/);
+  assert.equal(validateField(bigNumber({ max: 50 }), '51'), 'Use 50 or less.');
+});
+
+test('the no limit toggle flips a number field between any amount and a typed number', () => {
+  const f = bigNumber({ unlimited: true });
+  let latest = '750';
+  const row = fieldRow(f, { edit: '750', rawValue: 750, lookups, onChange: (v) => { latest = v; } });
+  assert.equal(row.el.querySelector('.range'), null);
+  assert.equal(row.el.querySelector('.range-limits'), null);
+  const chip = row.el.querySelector('.limit-chip');
+  const input = row.el.querySelector('.stepper-input');
+  chip.click();
+  assert.equal(latest, 'inf');
+  assert.equal(chip.getAttribute('aria-pressed'), 'true');
+  assert.equal(input.disabled, true);
+  assert.equal(input.placeholder, 'Any amount');
+  chip.click();
+  assert.equal(latest, '750');
+  assert.equal(chip.getAttribute('aria-pressed'), 'false');
+  assert.equal(input.disabled, false);
+  type(input, 'inf');
+  assert.equal(latest, 'inf');
+  assert.equal(chip.getAttribute('aria-pressed'), 'true');
+  row.setValue('750');
+  assert.equal(input.value, '750');
+  assert.equal(chip.getAttribute('aria-pressed'), 'false');
+  row.el.querySelectorAll('.stepper-btn')[1].click();
+  assert.equal(latest, '751');
+  assert.equal(fromEditValue(f, latest), 751);
+});
+
+test('a big number field gets a box wide enough for the digits', () => {
+  const wide = fieldRow(bigNumber(), { edit: '1000000000000000', rawValue: 1e15, lookups, onChange: () => {} });
+  assert.ok(wide.el.querySelector('.number-control').classList.contains('has-big'));
+  const small = fieldRow(normalizeField({ key: 'slow', label: 'Slowmode', type: 'number', web: true, min: 0, max: 60, step: 1 }), { edit: '5', rawValue: 5, lookups, onChange: () => {} });
+  assert.equal(small.el.querySelector('.number-control').classList.contains('has-big'), false);
+});
+
+test('a locked number setting reads as plain language, never Infinity', () => {
+  const locked = normalizeField({ key: 'maxBet', label: 'Biggest bet', type: 'number', min: 1, max: 1e15, unlimited: true });
+  assert.equal(locked.readOnly, true);
+  assert.equal(describeReadOnly(locked, 'inf', lookups), 'Any amount');
+  assert.equal(describeReadOnly(locked, Infinity, lookups), 'Any amount');
+  assert.equal(describeReadOnly(locked, Number.NaN, lookups), 'Not set');
+  assert.equal(describeReadOnly(locked, 2500, lookups), '2500');
 });
 
 test('objects compare by value so toggling back is not a change', () => {

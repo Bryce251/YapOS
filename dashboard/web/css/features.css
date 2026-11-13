@@ -1457,6 +1457,38 @@
   color: var(--accent-text);
 }
 
+.stepper-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.stepper-btn:disabled:hover {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.stepper.is-off {
+  opacity: 0.6;
+}
+
+.stepper.is-off .stepper-input {
+  color: var(--text-3);
+}
+
+.number-control.has-big .stepper-input {
+  width: 160px;
+}
+
+.limit-chip {
+  height: 36px;
+  padding: 0 13px;
+}
+
+.limit-chip .choice-chip-emoji {
+  font-size: 15px;
+  line-height: 1;
+}
+
 .range-wrap {
   display: flex;
   flex: 1 1 160px;

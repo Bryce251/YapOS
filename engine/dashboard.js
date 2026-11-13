@@ -1,6 +1,7 @@
 import { VERSION, hideSecret } from './config.js';
 import { parseBool, parseDuration } from './parse.js';
 import { avatarUrl } from './links.js';
+import { HARD_CAP } from './limits.js';
 
 const IDLE_MS = 15_000;
 const HOT_MS = 2_000;
@@ -160,11 +161,25 @@ function withLabels(out, field, cfg, core) {
   return out;
 }
 
+export function jsonSafe(value, depth = 0) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : value === Infinity ? 'inf' : null;
+  if (depth > 6) return value;
+  if (Array.isArray(value)) return value.map((v) => jsonSafe(v, depth + 1));
+  if (plainObject(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, jsonSafe(v, depth + 1)]));
+  return value;
+}
+
 export function publicSchema(field, defaults = {}) {
   const out = { key: field.key, label: field.label || field.key, help: field.help || '', type: field.type || 'string' };
   const def = field.default !== undefined ? field.default : field.key.startsWith('core.') ? null : readPath(defaults, field.key);
-  out.default = def === undefined ? null : structuredClone(def);
-  for (const k of ['min', 'max', 'step', 'maxLength']) if (typeof field[k] === 'number') out[k] = field[k];
+  out.default = def === undefined ? null : jsonSafe(structuredClone(def));
+  for (const k of ['min', 'max', 'step', 'maxLength']) {
+    const v = field[k];
+    if (typeof v !== 'number') continue;
+    if (Number.isFinite(v)) out[k] = v;
+    else if (k === 'max') out[k] = HARD_CAP;
+  }
+  if (field.unlimited === true) out.unlimited = true;
   if (Array.isArray(field.options)) out.options = field.options.map((o) => (typeof o === 'object' ? { value: o.value, label: String(o.label ?? o.value) } : { value: o, label: String(o) }));
   out.web = field.web === true;
   if (typeof field.editor === 'string') out.editor = field.editor;
@@ -404,7 +419,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       const cfg = engine.settings.appConfig(sid, meta.id);
       const values = {};
       for (const f of fields) {
-        try { values[f.key] = structuredClone(fieldValue(f, cfg, core) ?? null); } catch { values[f.key] = null; }
+        try { values[f.key] = jsonSafe(structuredClone(fieldValue(f, cfg, core) ?? null)); } catch { values[f.key] = null; }
       }
       out[meta.id] = { values, schema: fields.map((f) => withLabels(publicSchema(f, meta.defaults), f, cfg, core)) };
     }
@@ -567,10 +582,11 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
             try {
               const checked = await field.validate(ctx, value, data.settings);
               if (!checked || checked.error) { errors[k] = checked?.error || "That value didn't work."; continue; }
-              const saved = await saveField(ctx, field, checked.value, data.settings);
+              const safe = jsonSafe(checked.value);
+              const saved = await saveField(ctx, field, safe, data.settings);
               if (saved?.error) { errors[k] = saved.error; continue; }
-              if (saved?.applied) Object.assign(applied, saved.applied);
-              else applied[k] = checked.value;
+              if (saved?.applied) Object.assign(applied, jsonSafe(saved.applied));
+              else applied[k] = safe;
               labels.push(field.label || k);
             } catch (e) {
               if (!e?.friendly) log.warn(`[dashboard] saving ${meta.id}.${k} failed:`, e);

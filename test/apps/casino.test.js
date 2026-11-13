@@ -198,7 +198,7 @@ test('math: slots, roulette, dice, coinflip and crash pay back what the rules sa
   assert.equal(handTotal(drawn).total, 22);
 });
 
-test('amounts: numbers, k and m, all, half and the bad ones', () => {
+test('amounts: numbers, k, m, b and t, all, half and the bad ones', () => {
   assert.deepEqual(parseAmountToken('100'), { kind: 'number', n: 100 });
   assert.deepEqual(parseAmountToken('1,000'), { kind: 'number', n: 1000 });
   assert.deepEqual(parseAmountToken('2k'), { kind: 'number', n: 2000 });
@@ -206,6 +206,9 @@ test('amounts: numbers, k and m, all, half and the bad ones', () => {
   assert.deepEqual(parseAmountToken('1.1k'), { kind: 'number', n: 1100 });
   assert.deepEqual(parseAmountToken('1m'), { kind: 'number', n: 1_000_000 });
   assert.deepEqual(parseAmountToken('100coins'), { kind: 'number', n: 100 });
+  assert.deepEqual(parseAmountToken('2b'), { kind: 'number', n: 2_000_000_000 });
+  assert.deepEqual(parseAmountToken('1.5t'), { kind: 'number', n: 1_500_000_000_000 });
+  assert.deepEqual(parseAmountToken('9,000,000,000'), { kind: 'number', n: 9_000_000_000 });
   assert.deepEqual(parseAmountToken('all'), { kind: 'all' });
   assert.deepEqual(parseAmountToken('max'), { kind: 'all' });
   assert.deepEqual(parseAmountToken('half'), { kind: 'half' });
@@ -848,11 +851,11 @@ test('crash: a click after the top pays the top, a click before the target pays 
 
 test('small bets: the smallest allowed bet is 10, and a crash target that cannot win is refused', async () => {
   const { h, eco } = await make();
-  assert.match((await play(h, 'casino', 'minbet 1', IDS.admin)).text, /whole number from 10 to 1,000,000/);
-  assert.match((await play(h, 'casino', 'maxbet 5', IDS.admin)).text, /whole number from 10 to 1,000,000/);
+  assert.match((await play(h, 'casino', 'minbet 1', IDS.admin)).text, /whole number from 10 up/);
+  assert.match((await play(h, 'casino', 'maxbet 5', IDS.admin)).text, /whole number from 10 up/);
   const field = h.engine.apps.get('casino').def.dashboard.find((f) => f.key === 'minBet');
   assert.equal(field.min, 10);
-  assert.match(field.validate({ engine: h.engine, serverId: S }, 1).error, /from 10 to/);
+  assert.match(field.validate({ engine: h.engine, serverId: S }, 1).error, /from 10 up/);
   rolls(h);
   const refused = await play(h, 'crash', '10 1.05x');
   assert.match(refused.text, /That target can't win/);
@@ -947,8 +950,8 @@ test('admin: typed settings, the settings panel, the Bet limits form and validat
   assert.match((await play(h, 'casino', 'maxbet 500', IDS.admin)).text, /biggest bet is now \*\*500\*\*/);
   assert.equal(cfg().maxBet, 500);
   assert.match((await play(h, 'casino', 'minbet 600', IDS.admin)).text, /smallest bet can't be bigger than the biggest bet \(500\)/);
-  assert.match((await play(h, 'casino', 'maxbet 0', IDS.admin)).text, /whole number from 10 to 1,000,000/);
-  assert.match((await play(h, 'casino', 'minbet 5', IDS.admin)).text, /whole number from 10 to 1,000,000/);
+  assert.match((await play(h, 'casino', 'maxbet 0', IDS.admin)).text, /whole number from 10 up[\s\S]*`inf` for no biggest bet/);
+  assert.match((await play(h, 'casino', 'minbet 5', IDS.admin)).text, /whole number from 10 up/);
   assert.match((await play(h, 'casino', 'minbet 15', IDS.admin)).text, /Saved/);
   assert.match((await play(h, 'casino', 'cooldown 301', IDS.admin)).text, /0 to 300/);
   await h.slash('casino', 'cooldown 5', { user: IDS.admin });
@@ -982,6 +985,63 @@ test('admin: typed settings, the settings panel, the Bet limits form and validat
   assert.match(field('crashMax').validate(vctx, 101).error, /2 to 100/);
   assert.deepEqual(field('cooldownSeconds').validate(vctx, '0'), { value: 0 });
   assert.deepEqual(field('slots').validate(vctx, 'off'), { value: false });
+});
+
+test('bet limits: any whole number is allowed and the biggest bet can be inf', async () => {
+  const { h, eco } = await make({}, { eco: { [A]: 20_000_000 } });
+  const cfg = () => h.engine.settings.appConfig(S, 'casino');
+
+  assert.match((await play(h, 'casino', 'maxbet 5m', IDS.admin)).text, /biggest bet is now \*\*5,000,000\*\*/);
+  assert.equal(cfg().maxBet, 5_000_000);
+  assert.match((await play(h, 'casino', 'minbet 2,000,000', IDS.admin)).text, /smallest bet is now \*\*2,000,000\*\*/);
+  assert.equal(cfg().minBet, 2_000_000);
+
+  assert.match((await play(h, 'casino', 'maxbet inf', IDS.admin)).text, /no biggest bet now/);
+  assert.equal(cfg().maxBet, 'inf');
+  assert.match((await play(h, 'casino', 'minbet inf', IDS.admin)).text, /whole number from 10 up/);
+  assert.equal(cfg().minBet, 2_000_000);
+  assert.match((await play(h, 'casino', 'minbet 9m', IDS.admin)).text, /smallest bet is now \*\*9,000,000\*\*/);
+
+  const settings = await h.slash('casino', 'settings', { user: IDS.admin });
+  assert.match(lastText(h, settings), /Biggest bet:\*\* \*\*any amount\*\*/);
+  assert.match((await play(h, 'casino', 'rules', A)).text, /and up, with no limit/);
+  assert.match(lastText(h, await h.slash('casino', '', { user: A })), /and up, with no limit/);
+
+  rolls(h, 0);
+  const won = await play(h, 'coinflip', 'heads 9000000');
+  assert.match(h.textOf(won.msg), /You won \*\*17,550,000\*\*/);
+  assert.equal(eco.bal[A], 20_000_000 - 9_000_000 + 17_550_000);
+
+  const big = { minBet: 10, maxBet: Infinity };
+  assert.deepEqual(resolveBet({ kind: 'all' }, 28_550_000, big), { bet: 28_550_000 });
+  assert.deepEqual(resolveBet({ kind: 'number', n: 9_999_999_999 }, 0, big), { bet: 9_999_999_999 });
+
+  const form = await h.clickButton('Bet limits', { user: IDS.admin, in: settings });
+  const field = form[0].modal.components.find((c) => c.custom_id === 'maxbet');
+  assert.equal(field.value, 'inf');
+  assert.match(field.label, /inf/);
+  assert.ok(field.max_length >= 16);
+  const saved = await h.submit('yo:casino:limitsave', { minbet: '1,000,000', maxbet: 'unlimited', cooldown: '0', crashmax: '50' }, { user: IDS.admin });
+  assert.match(lastText(h, saved), /Saved[\s\S]*1,000,000[\s\S]*no limit/);
+  assert.deepEqual([cfg().minBet, cfg().maxBet], [1_000_000, 'inf']);
+
+  await play(h, 'casino', 'maxbet inf', IDS.admin);
+  await play(h, 'casino', 'minbet 1000t', IDS.admin);
+  const panel = await h.slash('casino', '', { user: A });
+  const playForm = await h.clickButton('Coinflip', { user: A, in: panel });
+  const betField = playForm[0].modal.components.find((c) => c.custom_id === 'bet');
+  assert.deepEqual(parseAmountToken(betField.value), { kind: 'number', n: 1_000_000_000_000_000 });
+  assert.ok(betField.value.length <= betField.max_length);
+
+  const dash = (key) => h.engine.apps.get('casino').def.dashboard.find((f) => f.key === key);
+  assert.equal(dash('maxBet').unlimited, true);
+  assert.equal(dash('maxBet').max, 1_000_000_000_000_000);
+  assert.equal(dash('minBet').unlimited, undefined);
+  assert.equal(dash('minBet').max, 1_000_000_000_000_000);
+  const vctx = { engine: h.engine, serverId: S };
+  assert.deepEqual(dash('maxBet').validate(vctx, 'inf'), { value: 'inf' });
+  assert.deepEqual(dash('minBet').validate(vctx, 50_000_000), { value: 50_000_000 });
+  assert.match(dash('minBet').validate(vctx, 'inf').error, /whole number from 10 up/);
 });
 
 test('panel: members get the games, rules, stats and top; admins also settings; the play form starts a game', async () => {

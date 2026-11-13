@@ -636,6 +636,45 @@ test('admin typed settings and the settings form', async () => {
   assert.match(lastText(h, bad), /didn't work/);
 });
 
+test('big bet caps, inf for no limit and old saved numbers all work', async () => {
+  const h = await make();
+  await h.slash('game', 'maxbet 5m', { user: IDS.admin });
+  assert.equal(h.engine.settings.appConfig(S, 'games').maxBet, 5_000_000);
+  await h.slash('game', 'prize 2,500,000', { user: IDS.admin });
+  assert.equal(h.engine.settings.appConfig(S, 'games').triviaPrize, 2_500_000);
+
+  const off = await h.slash('game', 'maxbet inf', { user: IDS.admin });
+  assert.match(lastText(h, off), /no limit/i);
+  assert.equal(h.engine.settings.appConfig(S, 'games').maxBet, 'inf');
+  assert.match(lastText(h, await h.slash('game', 'settings', { user: IDS.admin })), /Biggest bet:\*\* No limit/);
+  assert.match(lastText(h, await h.slash('game', 'prize inf', { user: IDS.admin })), /didn't work/);
+
+  const form = await h.submit('yo:games:setsave', { prize: '30', maxbet: 'unlimited' }, { user: IDS.admin });
+  assert.match(lastText(h, form), /no limit/i);
+  assert.equal(h.engine.settings.appConfig(S, 'games').maxBet, 'inf');
+  assert.match(lastText(h, await h.slash('game', 'maxbet nope', { user: IDS.admin })), /didn't work/);
+});
+
+test('an unlimited max bet lets any bet through', async () => {
+  const h = await make();
+  withEco(h, fakeEconomy({ [A]: 9_000_000, [B]: 9_000_000 }));
+  await h.slash('game', 'maxbet 100', { user: IDS.admin });
+  assert.match(lastText(h, await h.slash('game', `rps <@${B}> bet 5000`, { user: A })), /too big/);
+  await h.slash('game', 'maxbet inf', { user: IDS.admin });
+  const ok = await h.slash('game', `rps <@${B}> bet 5000`, { user: A });
+  assert.doesNotMatch(lastText(h, ok), /too big/);
+});
+
+test('even with no limit a bet stays a real number of coins', async () => {
+  const h = await make();
+  withEco(h, fakeEconomy({ [A]: 9_000_000, [B]: 9_000_000 }));
+  await h.slash('game', 'maxbet inf', { user: IDS.admin });
+  const huge = lastText(h, await h.slash('game', `rps <@${B}> bet 9000000000000000`, { user: A }));
+  assert.match(huge, /too big/);
+  assert.doesNotMatch(huge, /Infinity|NaN/);
+  assert.match(lastText(h, await h.slash('game', `rps <@${B}> bet 99999999999999999999`, { user: A })), /didn't work/);
+});
+
 test('forged buttons and odd words never reach object internals', async () => {
   const h = await make();
   for (const word of ['constructor', '__proto__', 'toString']) {

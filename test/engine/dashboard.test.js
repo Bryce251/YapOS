@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHarness, IDS } from '../harness.js';
-import { createDashboard } from '../../engine/dashboard.js';
+import { createDashboard, publicSchema, jsonSafe, accept, reject } from '../../engine/dashboard.js';
 import { createLogger } from '../../engine/log.js';
+import { HARD_CAP, UNLIMITED, parseLimit, storeLimit } from '../../engine/limits.js';
 
 const SECRET = 'test-secret-value-for-the-dashboard';
 const S = IDS.server;
@@ -1213,4 +1214,76 @@ test('the overview has mod, ticket and member stats', async () => {
   h.engine.settings.setEnabled(S, 'mod', false);
   await run('access', IDS.admin);
   assert.equal(w.snapshots[S].overview.stats.casesByDay.length, 14);
+});
+
+test('a setting that takes "inf" keeps its flag and its value on the way to the web', async () => {
+  const { h, w, run, change } = await setup({ harness: { apps: ['mod'] } });
+  h.engine.apps.register(
+    { id: 'limits', name: 'Limits', icon: '🔢', category: 'fun', description: 'A test app', defaults: { maxBet: 500, reward: 50 } },
+    {
+      dashboard: [
+        {
+          key: 'maxBet',
+          label: 'Biggest bet',
+          type: 'number',
+          web: true,
+          min: 1,
+          max: HARD_CAP,
+          unlimited: true,
+          validate: (ctx, v) => {
+            const n = parseLimit(v, { min: 1 });
+            return n === null ? reject('Use a whole number or inf.') : accept(storeLimit(n));
+          },
+        },
+        { key: 'reward', label: 'Daily reward', type: 'number', web: true, min: 1, max: HARD_CAP, validate: (ctx, v) => accept(Number(v)) },
+        { key: 'raw', label: 'Raw cap', type: 'number', web: true, min: 1, max: HARD_CAP, unlimited: true, validate: (ctx, v) => accept(parseLimit(v, { min: 1 })) },
+      ],
+    },
+  );
+
+  await run('access', IDS.admin);
+  const schema = w.snapshots[S].settings.limits.schema;
+  const bet = schema.find((f) => f.key === 'maxBet');
+  const reward = schema.find((f) => f.key === 'reward');
+  assert.equal(bet.unlimited, true);
+  assert.equal(bet.max, HARD_CAP);
+  assert.equal(Object.hasOwn(reward, 'unlimited'), false);
+  assert.equal(reward.max, HARD_CAP);
+  assert.equal(w.snapshots[S].settings.limits.values.maxBet, 500);
+
+  const saved = await change(IDS.admin, 'limits', { settings: { maxBet: 'inf' } });
+  assert.deepEqual(saved.result.errors, {});
+  assert.equal(saved.result.applied.maxBet, 'inf');
+  assert.equal(h.engine.settings.appConfig(S, 'limits').maxBet, 'inf');
+  assert.equal(saved.result.snapshot.settings.limits.values.maxBet, 'inf');
+
+  await run('access', IDS.admin);
+  assert.equal(w.snapshots[S].settings.limits.values.maxBet, 'inf');
+
+  const big = await change(IDS.admin, 'limits', { settings: { maxBet: '2b' } });
+  assert.deepEqual(big.result.errors, {});
+  assert.equal(h.engine.settings.appConfig(S, 'limits').maxBet, 2_000_000_000);
+  await run('access', IDS.admin);
+  assert.equal(w.snapshots[S].settings.limits.values.maxBet, 2_000_000_000);
+
+  const raw = await change(IDS.admin, 'limits', { settings: { raw: 'unlimited' } });
+  assert.deepEqual(raw.result.errors, {});
+  assert.equal(raw.result.applied.raw, 'inf');
+  assert.equal(h.engine.settings.appConfig(S, 'limits').raw, 'inf');
+  assert.equal(JSON.parse(JSON.stringify(h.engine.settings.appConfig(S, 'limits'))).raw, 'inf');
+});
+
+test('no setting ever reaches the web as Infinity', () => {
+  const unlimited = publicSchema({ key: 'cap', label: 'Cap', type: 'number', unlimited: true, min: 0, max: UNLIMITED, default: UNLIMITED, web: true });
+  assert.equal(unlimited.unlimited, true);
+  assert.equal(unlimited.max, HARD_CAP);
+  assert.equal(unlimited.default, 'inf');
+  assert.equal(JSON.parse(JSON.stringify(unlimited)).default, 'inf');
+
+  const plain = publicSchema({ key: 'pay', label: 'Pay', type: 'number', min: 1, max: HARD_CAP, default: 100, web: true });
+  assert.equal(Object.hasOwn(plain, 'unlimited'), false);
+  assert.equal(plain.max, HARD_CAP);
+
+  assert.deepEqual(jsonSafe({ a: UNLIMITED, b: [1, UNLIMITED], c: 'inf', d: null }), { a: 'inf', b: [1, 'inf'], c: 'inf', d: null });
+  assert.deepEqual(jsonSafe({ a: NaN, b: -Infinity }), { a: null, b: null });
 });

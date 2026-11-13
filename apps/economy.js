@@ -4,6 +4,7 @@ import { customId } from '../engine/router.js';
 import { tokenize, didYouMean, clip, formatDuration, fuzzyFind, fillTemplate, roleId as roleMention } from '../engine/parse.js';
 import { permName, friendly } from '../engine/errors.js';
 import { accept, reject, boolField } from '../engine/dashboard.js';
+import { HARD_CAP, parseLimit, readLimit, isUnlimited } from '../engine/limits.js';
 
 const ID = 'economy';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -18,15 +19,15 @@ const BEG_MAX = 25;
 const BEG_MISS = 0.3;
 const STREAK_STEP = 10;
 const STREAK_MAX = 100;
-const MAX_BALANCE = 1_000_000_000_000;
-const MAX_AMOUNT = 1_000_000_000;
-const MAX_SETTING = 1_000_000;
+const MAX_BALANCE = HARD_CAP;
+const MAX_AMOUNT = HARD_CAP;
+const MAX_SETTING = HARD_CAP;
 const MAX_USERS = 5000;
 const MAX_HISTORY = 20;
 const MAX_ITEMS = 20;
 const MAX_INVENTORY = 50;
 const MAX_STACK = 9999;
-const MAX_STOCK = 100_000;
+const MAX_STOCK = HARD_CAP;
 const MAX_SHOP_MESSAGES = 5;
 const MAX_REASON = 60;
 const MAX_ITEM_NAME = 40;
@@ -127,13 +128,14 @@ function agoText(ms) {
   return `${formatDuration(ms)} ago`;
 }
 
+const AMOUNT_SHAPE = /^\d+(?:\.\d+)?[kmbt]?$/;
+const AMOUNT_HELP = 'Use a whole number of coins, like `500`, `2k`, `5m` or `3b`.';
+
 export function parseAmount(token) {
   const t = String(token ?? '').trim().toLowerCase().replace(/,/g, '').replace(/^\+/, '');
-  const m = /^(\d+(?:\.\d+)?)([km]?)$/.exec(t);
-  if (!m) return null;
-  const v = Number(m[1]) * (m[2] === 'k' ? 1e3 : m[2] === 'm' ? 1e6 : 1);
-  if (!Number.isFinite(v) || Math.abs(v - Math.round(v)) > 1e-9) return NaN;
-  return Math.round(v);
+  if (!AMOUNT_SHAPE.test(t)) return null;
+  const n = parseLimit(t, { min: 0, max: MAX_AMOUNT, unlimited: false });
+  return n === null ? NaN : n;
 }
 
 export function streakBonus(streak) {
@@ -187,8 +189,7 @@ function ensureUser(doc, uid, cfg, t) {
 }
 
 function clampSetting(v, fallback) {
-  const n = Number(v);
-  return Number.isInteger(n) && n >= 0 && n <= MAX_SETTING ? n : fallback;
+  return readLimit(v, fallback, { min: 0, max: MAX_SETTING, unlimited: false });
 }
 
 function change(u, delta, reason, t) {
@@ -214,7 +215,7 @@ function needIds(sid, uid) {
 }
 
 function needAmount(amount) {
-  if (!validAmount(amount)) throw friendly(`Amounts are whole numbers from 1 to ${fmt(MAX_AMOUNT)}.`, { title: "That amount didn't work" });
+  if (!validAmount(amount)) throw friendly(`Amounts are whole numbers of coins, from 1 up. ${AMOUNT_HELP}`, { title: "That amount didn't work" });
 }
 
 function serviceAdd(engine, sid, uid, amount, reason) {
@@ -604,7 +605,7 @@ async function startPay(ctx, tokens) {
   const { amount, before, after } = splitAmount(tokens);
   const who = [...before, ...after].join(' ').trim();
   if (amount === null || !who) return ctx.warn('Pay who, and how much?', 'Try `/balance pay @sam 50`.');
-  if (!validAmount(amount)) return ctx.warn("That amount didn't work", `Pay a whole number from 1 to ${fmt(MAX_AMOUNT)}, like \`/balance pay @sam 50\`.`);
+  if (!validAmount(amount)) return ctx.warn("That amount didn't work", `Pay a whole number of coins, from 1 up, like \`/balance pay @sam 50\`.`);
   const target = await findMember(ctx, who, 'who to pay');
   if (target.problem) return ctx.warn(...target.problem);
   if (target.id === ctx.userId) return ctx.warn("You can't pay yourself", 'Nice try! Your coins are already yours.');
@@ -830,7 +831,7 @@ async function shopAdd(ctx, tokens) {
   const cost = parseAmount(last);
   const what = rest.slice(0, -1).join(' ').trim();
   if (cost === null || !what) return ctx.warn('Name and price, please', kind === 'role' ? 'Try `/shop add role @Supporter 500`.' : 'Try `/shop add item "Golden ticket" 200`.');
-  if (!validAmount(cost)) return ctx.warn("That price didn't work", `Use a whole number from 1 to ${fmt(MAX_AMOUNT)}.`);
+  if (!validAmount(cost)) return ctx.warn("That price didn't work", `Prices start at 1. ${AMOUNT_HELP}`);
   const items = readDoc(engine, sid).items;
   if (kind === 'role') {
     const role = await ctx.findRole(what);
@@ -906,10 +907,10 @@ async function shopStock(ctx, tokens) {
   const items = readDoc(engine, sid).items;
   if (!items.length) return ctx.info('The shop is empty', 'Add something first with `/shop add`.');
   const last = (tokens[tokens.length - 1] || '').toLowerCase();
-  const unlimited = ['off', 'none', 'unlimited', 'infinite', 'clear', '∞'].includes(last);
+  const unlimited = ['off', 'clear'].includes(last) || isUnlimited(last);
   const n = unlimited ? null : parseAmount(last);
-  if (!unlimited && (n === null || Number.isNaN(n))) return ctx.warn('How many?', 'Try `/shop stock "Golden ticket" 10`, or `/shop stock "Golden ticket" off` for no limit.');
-  if (!unlimited && (n < 0 || n > MAX_STOCK)) return ctx.warn("That stock didn't work", `Use a whole number from 0 to ${fmt(MAX_STOCK)}.`);
+  if (!unlimited && (n === null || Number.isNaN(n))) return ctx.warn('How many?', 'Try `/shop stock "Golden ticket" 10`, or `/shop stock "Golden ticket" inf` for no limit.');
+  if (!unlimited && (n < 0 || n > MAX_STOCK)) return ctx.warn("That stock didn't work", 'Use a whole number from 0 up, like `10` or `5k`, or `inf` for no limit.');
   const q = tokens.slice(0, -1).join(' ');
   const item = q ? findItem(items, q) : items.length === 1 ? items[0] : null;
   if (!item) return ctx.warn(q ? "I couldn't find that item" : 'Which item?', `Name it, like \`/shop stock 2 ${unlimited ? 'off' : n}\`.\n${itemList(items)}`);
@@ -925,7 +926,7 @@ async function shopPrice(ctx, tokens) {
   const cost = parseAmount(tokens[tokens.length - 1]);
   const item = findItem(items, tokens.slice(0, -1).join(' ')) || (items.length === 1 && tokens.length === 1 ? items[0] : null);
   if (!item || cost === null) return ctx.warn('Which item, and what price?', `Try \`/shop price 2 750\`.${items.length ? `\n${itemList(items)}` : ''}`);
-  if (!validAmount(cost)) return ctx.warn("That price didn't work", `Use a whole number from 1 to ${fmt(MAX_AMOUNT)}.`);
+  if (!validAmount(cost)) return ctx.warn("That price didn't work", `Prices start at 1. ${AMOUNT_HELP}`);
   mutate(engine, sid, (doc) => { const it = doc.items.find((x) => x.id === item.id); if (it) it.price = cost; });
   refreshShops(engine, sid).catch(() => {});
   return ctx.ok('Price saved', `**${plainName(item.name)}** now costs ${price(cur, cost)}.`);
@@ -948,7 +949,7 @@ async function settingsView(ctx) {
   const cfg = ctx.config();
   const cur = currencyOf(engine, sid);
   const list = ranked(engine, sid);
-  const total = list.reduce((a, x) => a + x.bal, 0);
+  const total = list.reduce((a, x) => Math.min(Number.MAX_SAFE_INTEGER, a + x.bal), 0);
   const items = readDoc(engine, sid).items;
   const work = cfg.workEnabled !== false;
   const fields = [
@@ -998,7 +999,7 @@ async function adminMove(ctx, tokens, dir) {
   const reason = clip(readableMentions(after.join(' ')).replace(/\s+/g, ' ').trim(), MAX_REASON);
   const verb = dir > 0 ? 'give' : 'take';
   if (amount === null || !who) return ctx.warn(`${dir > 0 ? 'Give' : 'Take'} how much, to whom?`, `Try \`/economy ${verb} @sam 100 prize\`.`);
-  if (!validAmount(amount)) return ctx.warn("That amount didn't work", `Use a whole number from 1 to ${fmt(MAX_AMOUNT)}.`);
+  if (!validAmount(amount)) return ctx.warn("That amount didn't work", `Amounts start at 1. ${AMOUNT_HELP}`);
   const target = await findMember(ctx, who);
   if (target.problem) return ctx.warn(...target.problem);
   if (isBotMember(engine, target.member, target.id)) return ctx.warn("Bots can't hold coins", 'Pick a person instead.');
@@ -1050,9 +1051,9 @@ async function setCurrency(ctx, tokens) {
 
 const NAME_HELP = 'Use 1 to 20 plain letters, like **gems** or **star dust**.';
 const EMOJI_HELP = 'Use one emoji, like 💎.';
-const DAILY_HELP = `Use a whole number from 0 to ${fmt(MAX_SETTING)} (0 turns daily off).`;
-const WORK_HELP = `Use whole numbers from 1 to ${fmt(MAX_SETTING)}, like \`/economy work 20 80\`.`;
-const START_HELP = `Use a whole number from 0 to ${fmt(MAX_SETTING)}.`;
+const DAILY_HELP = 'Use a whole number of coins, like `500`, `2k` or `5m` (0 turns daily off).';
+const WORK_HELP = 'Use whole numbers of coins from 1 up, like `/economy work 20 80`. `2k` and `5m` work too.';
+const START_HELP = 'Use a whole number of coins, like `0`, `500`, `2k` or `5m`.';
 
 function workPair(loText, hiText) {
   const lo = numberIn(loText, { min: 1 });
@@ -1259,27 +1260,27 @@ export const { setup, teardown, check } = defineApp({
     }),
     cursave: admin((ctx) => saveCurrency(ctx, ctx.values?.name, ctx.values?.emoji)),
     dailyform: admin((ctx) => ctx.form({ title: 'Daily amount', action: 'dailysave', fields: [
-      { id: 'amount', label: 'Coins per /daily (0 turns it off)', style: 'short', value: String(clampSetting(ctx.config().dailyAmount, 100)), max: 9 },
+      { id: 'amount', label: 'Coins per /daily (0 turns it off)', style: 'short', value: String(clampSetting(ctx.config().dailyAmount, 100)), max: 20 },
     ] })),
     dailysave: admin((ctx) => saveDaily(ctx, ctx.values?.amount)),
     workform: admin((ctx) => ctx.form({ title: 'Work pay', action: 'worksave', fields: [
-      { id: 'min', label: 'Lowest pay per shift', style: 'short', value: String(clampSetting(ctx.config().workMin, 20)), max: 9 },
-      { id: 'max', label: 'Highest pay per shift', style: 'short', value: String(clampSetting(ctx.config().workMax, 80)), max: 9 },
+      { id: 'min', label: 'Lowest pay per shift', style: 'short', value: String(clampSetting(ctx.config().workMin, 20)), max: 20 },
+      { id: 'max', label: 'Highest pay per shift', style: 'short', value: String(clampSetting(ctx.config().workMax, 80)), max: 20 },
     ] })),
     worksave: admin((ctx) => saveWork(ctx, ctx.values?.min, ctx.values?.max)),
     startform: admin((ctx) => ctx.form({ title: 'Starting balance', action: 'startsave', fields: [
-      { id: 'amount', label: 'Coins a new wallet starts with', style: 'short', value: String(clampSetting(ctx.config().startBalance, 0)), max: 9 },
+      { id: 'amount', label: 'Coins a new wallet starts with', style: 'short', value: String(clampSetting(ctx.config().startBalance, 0)), max: 20 },
     ] })),
     startsave: admin((ctx) => saveStart(ctx, ctx.values?.amount)),
     giveform: admin((ctx) => ctx.form({ title: 'Give coins', action: 'givesave', fields: [
       { id: 'user', label: 'Who? (@name or username)', style: 'short', placeholder: '@sam', max: 100 },
-      { id: 'amount', label: 'How many?', style: 'short', placeholder: '100', max: 13 },
+      { id: 'amount', label: 'How many?', style: 'short', placeholder: '100', max: 20 },
       { id: 'reason', label: 'Reason (optional)', style: 'short', required: false, max: MAX_REASON },
     ] })),
     givesave: admin((ctx) => adminMove(ctx, [...tokenize(ctx.values?.user), String(ctx.values?.amount ?? '').trim() || 'x', ...tokenize(ctx.values?.reason)], 1)),
     takeform: admin((ctx) => ctx.form({ title: 'Take coins', action: 'takesave', fields: [
       { id: 'user', label: 'Who? (@name or username)', style: 'short', placeholder: '@sam', max: 100 },
-      { id: 'amount', label: 'How many?', style: 'short', placeholder: '100', max: 13 },
+      { id: 'amount', label: 'How many?', style: 'short', placeholder: '100', max: 20 },
       { id: 'reason', label: 'Reason (optional)', style: 'short', required: false, max: MAX_REASON },
     ] })),
     takesave: admin((ctx) => adminMove(ctx, [...tokenize(ctx.values?.user), String(ctx.values?.amount ?? '').trim() || 'x', ...tokenize(ctx.values?.reason)], -1)),
