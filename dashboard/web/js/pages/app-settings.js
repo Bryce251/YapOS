@@ -5,10 +5,64 @@ import { loadServer, mountAsync } from './common.js';
 import { serverChrome } from './overview.js';
 import { changeApp } from './apps.js';
 import { serverPath } from '../router.js';
-import { buildPatch, dirtyKeys, initialEdits, normalizeSchema, sameValue, toEditValue, validateAll, validateField } from '../forms.js';
+import { buildPatch, cloneEdit, dirtyKeys, initialEdits, normalizeSchema, sameValue, toEditValue, validateAll, validateField } from '../forms.js';
 import { fieldRow } from '../fields.js';
-import { getDetail } from '../state.js';
+import { getDetail, serverSummary } from '../state.js';
 import { OFFLINE_MESSAGE, SLOW_AFTER_MS, isAbort } from '../api.js';
+
+const SECTIONS = [
+  { id: 'switches', title: 'On and off', icon: 'power', intro: 'Tap a tile to switch it.' },
+  { id: 'behavior', title: 'How it works', icon: 'sliders' },
+  { id: 'places', title: 'Channels and roles', icon: 'hash' },
+  { id: 'messages', title: 'Messages and lists', icon: 'message' },
+  { id: 'numbers', title: 'Limits and numbers', icon: 'activity' },
+];
+
+const PLACE_TYPES = new Set(['channel', 'voice_channel', 'category', 'channels', 'role', 'roles']);
+const MESSAGE_TYPES = new Set(['string', 'text', 'emoji', 'color', 'words']);
+
+export function sectionOf(f) {
+  if (f.type === 'boolean' || f.editor === 'toggles') return 'switches';
+  if (f.editor === 'channelMap' || f.editor === 'roleMap' || PLACE_TYPES.has(f.type)) return 'places';
+  if (f.editor || f.type === 'select') return 'behavior';
+  if (MESSAGE_TYPES.has(f.type)) return 'messages';
+  return 'numbers';
+}
+
+function settingsToolbar(sections, fields, rows, noMatch) {
+  const search = h('input', { type: 'search', class: 'input', placeholder: 'Search settings', attrs: { 'aria-label': 'Search settings' } });
+  const jumps = h('nav', { class: 'settings-jumps', attrs: { 'aria-label': 'Jump to a section' } },
+    ...sections.map((s) => {
+      const b = h('button', { type: 'button', class: 'jump-chip' }, icon(s.def.icon, { size: 14 }), h('span', { text: s.def.title }), h('span', { class: 'jump-count', text: String(s.keys.length) }));
+      b.addEventListener('click', () => s.el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+      s.jump = b;
+      return b;
+    }));
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') e.preventDefault();
+  });
+  const hay = new Map(fields.map((f) => [f.key, `${f.label} ${f.help} ${f.key}`.toLowerCase()]));
+  search.addEventListener('input', () => {
+    const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    for (const s of sections) {
+      let n = 0;
+      for (const k of s.keys) {
+        const hit = !terms.length || terms.every((t) => hay.get(k).includes(t));
+        rows.get(k).el.hidden = !hit;
+        if (hit) n += 1;
+      }
+      for (const grid of s.el.querySelectorAll('.tile-grid')) grid.hidden = ![...grid.children].some((c) => !c.hidden);
+      s.el.hidden = n === 0;
+      s.jump.hidden = n === 0;
+      shown += n;
+    }
+    noMatch.hidden = shown > 0;
+  });
+  return h('div', { class: 'settings-toolbar' },
+    h('div', { class: 'input-shell has-lead settings-search' }, icon('search', { size: 14, className: 'input-lead' }), search),
+    jumps);
+}
 
 function settingsSkeleton() {
   return loadingRegion('Loading settings',
@@ -100,6 +154,7 @@ function buildForm(ctx, body, detail, app, entry) {
   const current = initialEdits(fields, rawValues);
   const serverErrors = {};
   const rows = new Map();
+  const context = { serverName: serverSummary(ctx.params.sid).name };
   let saving = false;
   let saveSeq = 0;
 
@@ -142,13 +197,13 @@ function buildForm(ctx, body, detail, app, entry) {
   }
 
   for (const f of fields) {
-    rows.set(f.key, fieldRow(f, { edit: current[f.key], rawValue: rawValues[f.key] ?? f.default, lookups, onChange: (v) => onChange(f.key, v) }));
+    rows.set(f.key, fieldRow(f, { edit: cloneEdit(current[f.key]), rawValue: rawValues[f.key] ?? f.default, lookups, context, onChange: (v) => onChange(f.key, v) }));
   }
 
   function reset() {
     for (const f of editable) {
-      current[f.key] = Array.isArray(base[f.key]) ? base[f.key].slice() : base[f.key];
-      rows.get(f.key).setValue(current[f.key]);
+      current[f.key] = cloneEdit(base[f.key]);
+      rows.get(f.key).setValue(cloneEdit(current[f.key]));
       rows.get(f.key).setError('');
       delete serverErrors[f.key];
     }
@@ -168,7 +223,7 @@ function buildForm(ctx, body, detail, app, entry) {
       return;
     }
     const patch = buildPatch(fields, base, current);
-    const sent = Object.fromEntries(keys.map((k) => [k, Array.isArray(current[k]) ? current[k].slice() : current[k]]));
+    const sent = Object.fromEntries(keys.map((k) => [k, cloneEdit(current[k])]));
     saveSeq += 1;
     const mine = saveSeq;
     saving = true;
@@ -212,8 +267,8 @@ function buildForm(ctx, body, detail, app, entry) {
           const edit = toEditValue(field, res.applied[key]);
           base[key] = edit;
           if (sameValue(current[key], sent[key])) {
-            current[key] = Array.isArray(edit) ? edit.slice() : edit;
-            row.setValue(current[key]);
+            current[key] = cloneEdit(edit);
+            row.setValue(cloneEdit(edit));
           }
           if (cachedValues && typeof cachedValues === 'object') cachedValues[key] = res.applied[key];
           row.setError('');
@@ -222,6 +277,19 @@ function buildForm(ctx, body, detail, app, entry) {
           serverErrors[key] = "YapOS didn't confirm this change. Try saving again.";
           row.setError(serverErrors[key]);
         }
+      }
+      for (const [key, val] of Object.entries(res.applied)) {
+        if (keys.includes(key)) continue;
+        const field = fields.find((f) => f.key === key && !f.readOnly);
+        if (!field) continue;
+        const edit = toEditValue(field, val);
+        const untouched = sameValue(current[key], base[key]);
+        base[key] = edit;
+        if (untouched) {
+          current[key] = cloneEdit(edit);
+          rows.get(key).setValue(cloneEdit(edit));
+        }
+        if (cachedValues && typeof cachedValues === 'object') cachedValues[key] = val;
       }
       const errorKeys = Object.keys(serverErrors);
       if (errorKeys.length) {
@@ -261,16 +329,39 @@ function buildForm(ctx, body, detail, app, entry) {
   document.addEventListener('keydown', onKey);
   ctx.signal.addEventListener('abort', () => document.removeEventListener('keydown', onKey), { once: true });
 
+  const sections = [];
   if (editable.length) {
-    form.appendChild(card({ title: 'Settings', icon: 'sliders', bodyClass: 'field-list' }, ...editable.map((f) => rows.get(f.key).el)));
-  } else {
-    form.appendChild(card({ title: 'Settings', icon: 'sliders' }, emptyState({ icon: 'sliders', title: 'Nothing to change here', body: 'This app has no settings that can be changed on the dashboard.', compact: true })));
+    for (const def of SECTIONS) {
+      const list = editable.filter((f) => sectionOf(f) === def.id);
+      if (!list.length) continue;
+      const tiles = list.filter((f) => f.type === 'boolean');
+      const others = list.filter((f) => f.type !== 'boolean');
+      const children = [];
+      if (def.intro) children.push(h('p', { class: 'card-intro', text: def.intro }));
+      for (const f of others.filter((x) => x.editor === 'toggles')) children.push(rows.get(f.key).el);
+      if (tiles.length) children.push(h('div', { class: 'tile-grid' }, ...tiles.map((f) => rows.get(f.key).el)));
+      for (const f of others.filter((x) => x.editor !== 'toggles')) children.push(rows.get(f.key).el);
+      const el = card({ title: def.title, icon: def.icon, className: `settings-section section-${def.id}`, bodyClass: 'field-list' }, ...children);
+      el.id = `section-${def.id}`;
+      sections.push({ def, el, keys: list.map((f) => f.key) });
+    }
   }
   if (readOnly.length) {
-    form.appendChild(card({ title: 'Managed with commands', icon: 'lock', bodyClass: 'field-list' },
+    const el = card({ title: 'Managed with commands', icon: 'lock', className: 'settings-section section-readonly', bodyClass: 'field-list' },
       h('p', { class: 'card-intro', text: 'These settings are shown for reference. Change them with the command in your server.' }),
-      ...readOnly.map((f) => rows.get(f.key).el)));
+      ...readOnly.map((f) => rows.get(f.key).el));
+    el.id = 'section-readonly';
+    sections.push({ def: { id: 'readonly', title: 'Commands', icon: 'lock' }, el, keys: readOnly.map((f) => f.key) });
   }
+
+  const noMatch = h('div', { class: 'settings-nomatch', hidden: true }, emptyState({ icon: 'search', title: 'No settings match', body: 'Try a different word.', compact: true }));
+  const toolbar = sections.length > 1 || fields.length > 6 ? settingsToolbar(sections, fields, rows, noMatch) : null;
+  if (toolbar) form.appendChild(toolbar);
+  if (!editable.length) {
+    form.appendChild(card({ title: 'Settings', icon: 'sliders' }, emptyState({ icon: 'sliders', title: 'Nothing to change here', body: 'This app has no settings that can be changed on the dashboard.', compact: true })));
+  }
+  for (const s of sections) form.appendChild(s.el);
+  form.appendChild(noMatch);
   form.appendChild(bar);
 
   body.replaceChildren(settingsHeader(ctx, app, (on) => drawNotice(on)), notice, form);

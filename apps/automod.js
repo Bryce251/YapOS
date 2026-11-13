@@ -1181,6 +1181,8 @@ async function textChannelIds(ctx, v) {
   return { ids: [...new Set(out)] };
 }
 
+const filterLabels = (keys) => Object.fromEntries(keys.map((k) => [k, `${FILTERS[k].emoji} ${FILTERS[k].label}`]));
+
 const DASHBOARD = [
   {
     key: 'strictness', label: 'Strictness', type: 'select', web: true,
@@ -1192,7 +1194,7 @@ const DASHBOARD = [
     },
   },
   {
-    key: 'filters', label: 'Filters on/off', type: 'complex', web: true,
+    key: 'filters', label: 'Filters on/off', type: 'complex', web: true, editor: 'toggles', labels: () => filterLabels(Object.keys(FILTERS)),
     help: 'Turns each filter on or off: spam and flood, mass mentions, caps, links, invites, the word filter and the raid shield.',
     validate: (ctx, v) => {
       if (!plainObject(v)) return reject('Pick filters to turn on or off.');
@@ -1212,8 +1214,8 @@ const DASHBOARD = [
     },
   },
   {
-    key: 'actions', label: 'What each filter does', type: 'complex', web: true,
-    options: Object.entries(ACTIONS).map(([value, a]) => ({ value, label: a.label })),
+    key: 'actions', label: 'What each filter does', type: 'complex', web: true, editor: 'choices', labels: () => filterLabels(ACTION_FILTERS),
+    options: Object.entries(ACTIONS).map(([value, a]) => ({ value, label: `${a.emoji} ${a.label}` })),
     help: 'Per filter: delete, delete plus warn, delete plus a 10 minute timeout, delete plus kick, or log only.',
     validate: (ctx, v) => {
       if (!plainObject(v)) return reject('Pick an action for each filter.');
@@ -1234,7 +1236,7 @@ const DASHBOARD = [
     },
   },
   {
-    key: 'filterExempt', label: 'Per-filter skipped channels', type: 'complex', web: true,
+    key: 'filterExempt', label: 'Per-filter skipped channels', type: 'complex', web: true, editor: 'channelMap', labels: () => filterLabels(ACTION_FILTERS),
     help: 'Channels where one filter is skipped while the others still check them.',
     validate: async (ctx, v) => {
       if (!plainObject(v)) return reject('Pick channels for each filter.');

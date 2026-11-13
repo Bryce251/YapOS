@@ -1058,7 +1058,7 @@ const DASHBOARD = [
     },
   },
   {
-    key: 'rewards', label: 'Role rewards', type: 'complex', web: true, max: MAX_REWARDS,
+    key: 'rewards', label: 'Role rewards', type: 'complex', web: true, editor: 'rewards', max: MAX_REWARDS,
     help: 'Map of level to role. Reaching that level gives the role.',
     validate: validateRewards,
     save: (ctx, value) => { ctx.patchConfig({ rewards: value }); forgetLogged(ctx.engine, ctx.serverId); },

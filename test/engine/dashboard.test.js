@@ -350,6 +350,14 @@ test('the snapshot has the overview, apps, settings with schema and lookups, and
   const modRoles = snap.settings.mod.schema.find((f) => f.key === 'core.modRoles');
   assert.equal(modRoles.web, false);
   assert.ok(modRoles.note);
+  const filters = snap.settings.automod.schema.find((f) => f.key === 'filters');
+  assert.equal(filters.editor, 'toggles');
+  assert.equal(filters.labels.raid, '🛡️ Raid shield');
+  const actions = snap.settings.automod.schema.find((f) => f.key === 'actions');
+  assert.equal(actions.labels.raid, undefined);
+  assert.ok(actions.options.every((o) => /^\S+ \S/.test(o.label)));
+  assert.equal(snap.settings.levels.schema.find((f) => f.key === 'rewards').editor, 'rewards');
+  assert.equal(snap.settings.mod.schema.find((f) => f.key === 'escalation').editor, 'steps');
   for (const app of Object.keys(snap.settings).filter((k) => k !== 'lookups')) {
     for (const f of snap.settings[app].schema) {
       assert.equal(typeof f.validate, 'undefined');

@@ -2015,7 +2015,8 @@ const DASHBOARD = [
   { key: 'autoCloseHours', label: 'Auto-close quiet tickets after (hours)', type: 'number', web: false, min: 0, max: MAX_AUTOCLOSE_HOURS, help: '0 keeps quiet tickets open.', note: 'Change it in the server with /tickets autoclose 48, so open tickets get rescheduled.' },
   { key: 'types', label: 'Ticket types', type: 'complex', web: false, help: 'The kinds of tickets people can open, with their questions.', note: 'Edit them in the server with /tickets types, which also updates the posted panel.' },
   {
-    key: 'typeStaff', label: 'Extra staff per type', type: 'complex', web: true,
+    key: 'typeStaff', label: 'Extra staff per type', type: 'complex', web: true, editor: 'roleMap',
+    labels: (cfg) => Object.fromEntries(typesOf(cfg).map((t) => [t.id, `${t.emoji} ${t.name}`])),
     help: 'Extra roles that see new tickets of one type, on top of the main ticket staff.',
     read: (cfg) => Object.fromEntries(typesOf(cfg).map((t) => [t.id, t.staffRoles])),
     validate: async (ctx, v) => {

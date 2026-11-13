@@ -1934,7 +1934,7 @@ const DASHBOARD = [
     },
   },
   {
-    key: 'escalation', label: 'Automatic warning steps', type: 'complex', web: true, maxLength: STEPS_MAX,
+    key: 'escalation', label: 'Automatic warning steps', type: 'complex', web: true, editor: 'steps', maxLength: STEPS_MAX,
     help: 'What happens automatically when someone reaches a number of active warnings, like: 3 timeout 1h, 5 kick, 7 ban.',
     validate: (ctx, v) => {
       const text = stepsText(v);

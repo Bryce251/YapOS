@@ -151,6 +151,15 @@ export async function saveField(ctx, field, value, all) {
   return undefined;
 }
 
+function withLabels(out, field, cfg, core) {
+  if (typeof field.labels !== 'function') return out;
+  try {
+    const labels = field.labels(cfg, core);
+    if (plainObject(labels)) out.labels = Object.fromEntries(Object.entries(labels).filter(([, v]) => typeof v === 'string').slice(0, 50).map(([k, v]) => [k, v.slice(0, 60)]));
+  } catch {}
+  return out;
+}
+
 export function publicSchema(field, defaults = {}) {
   const out = { key: field.key, label: field.label || field.key, help: field.help || '', type: field.type || 'string' };
   const def = field.default !== undefined ? field.default : field.key.startsWith('core.') ? null : readPath(defaults, field.key);
@@ -158,6 +167,7 @@ export function publicSchema(field, defaults = {}) {
   for (const k of ['min', 'max', 'step', 'maxLength']) if (typeof field[k] === 'number') out[k] = field[k];
   if (Array.isArray(field.options)) out.options = field.options.map((o) => (typeof o === 'object' ? { value: o.value, label: String(o.label ?? o.value) } : { value: o, label: String(o) }));
   out.web = field.web === true;
+  if (typeof field.editor === 'string') out.editor = field.editor;
   if (field.note) out.note = field.note;
   return out;
 }
@@ -396,7 +406,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       for (const f of fields) {
         try { values[f.key] = structuredClone(fieldValue(f, cfg, core) ?? null); } catch { values[f.key] = null; }
       }
-      out[meta.id] = { values, schema: fields.map((f) => publicSchema(f, meta.defaults)) };
+      out[meta.id] = { values, schema: fields.map((f) => withLabels(publicSchema(f, meta.defaults), f, cfg, core)) };
     }
     out.lookups = await lookups(sid);
     return out;

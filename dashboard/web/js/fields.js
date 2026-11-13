@@ -4,6 +4,7 @@ import { picker } from './picker.js';
 import { switchControl } from './ui.js';
 import { addWord, channelMatches, describeReadOnly, wordLimit } from './forms.js';
 import { toHexColor } from './format.js';
+import { choiceRows, messagePreview, numberSlider, optionCards, pickerRows, placeholderChips, placeholdersIn, rewardsEditor, stepsEditor, toggleGrid } from './settings-editors.js';
 
 const ROLE_REASON = "YapOS can't give this role. Move YapOS's role above it in your server settings.";
 
@@ -126,8 +127,10 @@ function tagInput({ value, onChange, inputId, labelId, describedBy, limit = null
   };
 }
 
-function textControl(field, value, onChange, ids) {
+function textControl(field, value, onChange, ids, context = {}) {
   const isArea = field.type === 'text';
+  const names = field.type === 'string' || isArea ? placeholdersIn(field.help) : [];
+  const preview = names.length ? messagePreview(context) : null;
   const maxLength = field.maxLength || null;
   const count = (field.type === 'string' || isArea) && maxLength ? counter(maxLength) : null;
   const attrs = { 'aria-describedby': ids.describedBy };
@@ -149,38 +152,24 @@ function textControl(field, value, onChange, ids) {
   const shell = h('div', { class: ['input-shell', lead ? 'has-lead' : '', isArea ? 'is-area' : '', field.type === 'emoji' ? 'input-narrow' : ''] }, lead, input, count);
   input.addEventListener('input', () => {
     updateCounter(count, input.value, maxLength);
+    preview?.update(input.value);
     onChange(input.value);
   });
   updateCounter(count, value, maxLength);
+  preview?.update(value);
+  const chips = placeholderChips(names, (token) => {
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.setRangeText(token, start, end, 'end');
+    input.focus();
+    input.dispatchEvent(new Event('input'));
+  });
   return {
-    el: shell,
+    el: preview ? h('div', { class: 'text-with-preview' }, shell, chips, preview.el) : shell,
     setValue(v) {
       input.value = v;
       updateCounter(count, v, maxLength);
-    },
-    setInvalid(v) {
-      input.classList.toggle('is-invalid', Boolean(v));
-      if (v) input.setAttribute('aria-invalid', 'true');
-      else input.removeAttribute('aria-invalid');
-    },
-  };
-}
-
-function numberControl(field, value, onChange, ids) {
-  const input = h('input', {
-    id: ids.input,
-    type: 'number',
-    class: 'input input-number',
-    value,
-    inputMode: field.step !== null && field.step < 1 ? 'decimal' : 'numeric',
-    attrs: { 'aria-describedby': ids.describedBy, min: field.min ?? null, max: field.max ?? null, step: field.step ?? 'any' },
-  });
-  const range = field.min !== null && field.max !== null ? h('span', { class: 'input-suffix', text: `${field.min}–${field.max}` }) : null;
-  input.addEventListener('input', () => onChange(input.value));
-  return {
-    el: h('div', { class: 'input-shell input-narrow' }, input, range),
-    setValue(v) {
-      input.value = v;
+      preview?.update(v);
     },
     setInvalid(v) {
       input.classList.toggle('is-invalid', Boolean(v));
@@ -244,18 +233,33 @@ function readOnlyControl(field, rawValue, lookups) {
   };
 }
 
-export function fieldRow(field, { edit, rawValue, lookups, onChange }) {
+const CARD_SELECT_MAX = 4;
+
+function cardSelect(field) {
+  return field.options.length >= 2 && field.options.length <= CARD_SELECT_MAX && field.options.every((o) => String(o.label).length <= 28);
+}
+
+export function fieldRow(field, { edit, rawValue, lookups, onChange, context = {} }) {
   const ids = { input: nextId('f'), label: nextId('l'), help: nextId('h'), error: nextId('e') };
   ids.describedBy = [field.help ? ids.help : '', ids.error].filter(Boolean).join(' ');
   const errorEl = h('p', { class: 'field-error', id: ids.error, attrs: { 'aria-live': 'polite' } });
-  const labelEl = field.multi || ['channel', 'voice_channel', 'category', 'role', 'boolean'].includes(field.type) || field.readOnly
+  const spanLabel = field.multi || field.editor || ['channel', 'voice_channel', 'category', 'role', 'boolean'].includes(field.type) || (field.type === 'select' && cardSelect(field));
+  const labelEl = spanLabel || field.readOnly
     ? h('span', { class: 'field-label', id: ids.label, text: field.label })
     : h('label', { class: 'field-label', id: ids.label, htmlFor: ids.input, text: field.label });
   const helpEl = field.help ? h('p', { class: 'field-help', id: ids.help, text: field.help }) : null;
   let control;
 
   if (field.readOnly) control = readOnlyControl(field, rawValue, lookups);
-  else {
+  else if (field.editor) {
+    const common = { field, value: edit, onChange, labelId: ids.label };
+    if (field.editor === 'toggles') control = toggleGrid(common);
+    else if (field.editor === 'choices') control = choiceRows(common);
+    else if (field.editor === 'channelMap') control = pickerRows({ ...common, items: channelItems(lookups, 'channel'), kindLabel: 'channel' });
+    else if (field.editor === 'roleMap') control = pickerRows({ ...common, items: roleItems(lookups), kindLabel: 'role' });
+    else if (field.editor === 'rewards') control = rewardsEditor({ ...common, roleItems: roleItems(lookups) });
+    else control = stepsEditor(common);
+  } else {
     switch (field.type) {
       case 'boolean': {
         const sw = switchControl({ checked: edit === true, onChange: (v) => onChange(v) });
@@ -265,10 +269,10 @@ export function fieldRow(field, { edit, rawValue, lookups, onChange }) {
         break;
       }
       case 'number':
-        control = numberControl(field, edit, onChange, ids);
+        control = numberSlider({ field, value: edit, onChange, ids });
         break;
       case 'select':
-        control = selectControl(field, edit, onChange, ids);
+        control = cardSelect(field) ? optionCards({ options: field.options, value: edit, onChange, labelId: ids.label }) : selectControl(field, edit, onChange, ids);
         break;
       case 'color':
         control = colorControl(field, edit, onChange, ids);
@@ -289,14 +293,24 @@ export function fieldRow(field, { edit, rawValue, lookups, onChange }) {
         control = picker({ items: roleItems(lookups), value: edit, multi: field.multi, onChange, labelId: ids.label, describedBy: ids.describedBy, kindLabel: 'role', placeholder: 'Choose a role' });
         break;
       default:
-        control = textControl(field, edit, onChange, ids);
+        control = textControl(field, edit, onChange, ids, context);
     }
   }
 
   const head = h('div', { class: 'field-head' }, labelEl, field.readOnly ? h('span', { class: 'field-tag', text: 'Read-only' }) : null);
-  const el = field.type === 'boolean' && !field.readOnly
-    ? h('div', { class: 'field field-inline', dataset: { key: field.key } }, h('div', { class: 'field-text' }, head, helpEl, errorEl), h('div', { class: 'field-control' }, control.el))
-    : h('div', { class: 'field', dataset: { key: field.key } }, h('div', { class: 'field-text' }, head, helpEl), h('div', { class: 'field-control' }, control.el, errorEl));
+  let el;
+  if (field.type === 'boolean' && !field.readOnly) {
+    el = h('div', { class: 'field field-tile', dataset: { key: field.key } },
+      h('div', { class: 'field-tile-top' }, h('span', { class: 'field-tile-icon', attrs: { 'aria-hidden': 'true' } }, icon('power', { size: 16 })), control.el),
+      h('div', { class: 'field-text' }, head, helpEl, errorEl));
+    el.addEventListener('click', (e) => {
+      if (!control.el.contains(e.target) && !e.target.closest('a, button, input')) control.el.click();
+    });
+  } else if (field.editor || (field.type === 'text' && !field.readOnly)) {
+    el = h('div', { class: 'field field-wide', dataset: { key: field.key } }, h('div', { class: 'field-text' }, head, helpEl), h('div', { class: 'field-control' }, control.el, errorEl));
+  } else {
+    el = h('div', { class: 'field', dataset: { key: field.key } }, h('div', { class: 'field-text' }, head, helpEl), h('div', { class: 'field-control' }, control.el, errorEl));
+  }
 
   return {
     el,
