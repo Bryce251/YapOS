@@ -119,7 +119,6 @@
 }
 
 .game-tile .game-emoji {
-  display: inline-block;
   transition: transform 220ms var(--pop);
 }
 
