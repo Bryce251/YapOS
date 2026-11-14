@@ -10,7 +10,7 @@ export const RAIN_DROPS = 18;
 export const BURST_BITS = 14;
 export const TACO_DROPS = 22;
 export const SONG_SAFETY_MS = 11000;
-export const SONG_VOLUME = 0.25;
+export const SONG_VOLUME = 0.125;
 export const TACO_SONG = new URL('../../media/raining-tacos.mp3', import.meta.url).href;
 export const TACO_PICS = [1, 2, 3].map((n) => new URL(`../../media/taco-${n}.png`, import.meta.url).href);
 
