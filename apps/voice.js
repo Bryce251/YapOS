@@ -5,6 +5,7 @@ import { customId } from '../engine/router.js';
 import { tokenize, clip, fuzzyFind, didYouMean, userId as mentionedUser, channelId as mentionedChannel } from '../engine/parse.js';
 import { explain, permName, looksLikeFeatureOff } from '../engine/errors.js';
 import { accept, reject, isBlank, channelById } from '../engine/dashboard.js';
+import { sinkRole } from '../engine/roles.js';
 
 const ID = 'voice';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -558,7 +559,7 @@ async function ensureRole(engine, sid, room) {
   const role = await engine.bot.createRole(sid, { name: fit(`🔊 ${room.name}`), mentionable: false, permissions: {} });
   engine.perms.invalidate(`r:${sid}`);
   if (!role?.id) return null;
-  if (!(await sinkRole(engine, sid, role))) {
+  if (!(await sinkRole(engine, sid, role, 'voice'))) {
     await engine.bot.deleteRole(sid, role.id).catch(debug(engine, 'unplaced room role cleanup failed'));
     engine.perms.invalidate(`r:${sid}`);
     return null;
@@ -566,23 +567,6 @@ async function ensureRole(engine, sid, room) {
   patchRoom(engine, sid, room.id, { roleId: role.id });
   room.roleId = role.id;
   return role.id;
-}
-
-async function sinkRole(engine, sid, role) {
-  const all = await engine.perms.roles(sid).catch(() => []);
-  const isEveryone = (r) => r.id === 'everyone' || r.id === sid || /^@?everyone$/i.test(String(r.name));
-  const others = all.filter((r) => r.id !== role.id && !isEveryone(r) && typeof r.position === 'number');
-  if (!others.length) return true;
-  const bottom = Math.max(1, Math.min(...others.map((r) => r.position)));
-  if (typeof role.position === 'number' && role.position <= bottom) return true;
-  try {
-    const moved = await engine.bot.editRole(sid, role.id, { position: bottom });
-    engine.perms.invalidate(`r:${sid}`);
-    return !(typeof moved?.position === 'number' && moved.position > bottom);
-  } catch (e) {
-    engine.log.debug('[voice] could not move the room role down', e?.message);
-    return false;
-  }
 }
 
 async function grantRole(engine, sid, room, roleId) {

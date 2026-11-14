@@ -4,6 +4,7 @@ import { customId } from '../engine/router.js';
 import { tokenize, clip, normalizeName, didYouMean, parseBool, fuzzyFind, formatDuration, ID_RE } from '../engine/parse.js';
 import { explain, looksLikeFeatureOff } from '../engine/errors.js';
 import { accept, reject, isBlank, boolField, idList, safeId, plainObject, channelById, roleById } from '../engine/dashboard.js';
+import { sinkRole } from '../engine/roles.js';
 
 const ID = 'tickets';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -545,7 +546,24 @@ async function ensureTicketRole(engine, sid, space) {
     e.ticketStep = { action: 'let the ticket role into the channel', perm: 'manage_channels' };
     throw e;
   }
+  await sinkRole(engine, sid, role, 'tickets');
   return role.id;
+}
+
+const SINK_DELAY_MS = 20_000;
+const SINK_LIMIT = 20;
+
+export async function sinkOpenTicketRoles(engine) {
+  let moved = 0;
+  for (const sid of engine.store.keys(ID)) {
+    for (const t of Object.values(readData(engine, sid).tickets)) {
+      if (moved >= SINK_LIMIT) return moved;
+      if (t.status !== 'open' || !t.roleId) continue;
+      moved += 1;
+      await sinkRole(engine, sid, { id: t.roleId }, 'tickets');
+    }
+  }
+  return moved;
 }
 
 async function grantAccess(engine, sid, space, uid) {
@@ -2320,6 +2338,12 @@ export const { setup, teardown, check } = defineApp({
       }
       for (const t of Object.values(d.tickets)) if (t.cleanup) scheduleCleanup(engine, sid, t.number, CLOSE_DELAY_MS);
     }
+    const sweep = setTimeout(() => {
+      rt(engine).timers.delete('sink-roles');
+      sinkOpenTicketRoles(engine).catch((e) => engine.log.debug('[tickets] moving ticket roles down failed', e?.message));
+    }, SINK_DELAY_MS);
+    sweep.unref?.();
+    rt(engine).timers.set('sink-roles', sweep);
   },
 
   dispose(engine) {

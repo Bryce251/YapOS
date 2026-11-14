@@ -2,6 +2,7 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHarness, IDS } from '../harness.js';
 import { customId } from '../../engine/router.js';
+import { sinkOpenTicketRoles } from '../../apps/tickets.js';
 
 const S = IDS.server;
 const G = IDS.channels.general;
@@ -110,6 +111,8 @@ test('full open flow from the posted panel button', async () => {
   const role = h.fake.state.roles[S].find((r) => r.id === t.roleId);
   assert.equal(role.name, '🎫 0001');
   assert.equal(t.access[IDS.member], 'role');
+  const lowest = Math.min(...h.fake.state.roles[S].filter((r) => r.id !== role.id).map((r) => r.position));
+  assert.ok(role.position <= lowest, 'the ticket role sits at the bottom of the role list');
   assert.equal(role.mentionable, false);
   assert.ok(hasRole(h, IDS.member, t.roleId), 'opener got the ticket role');
   const ch = channel(h, t.channelId);
@@ -1604,4 +1607,20 @@ test('an older ticket made with a role keeps using it for adds and removes', asy
   await h.slash('ticket', `add <@${IDS.member2}>`, { user: IDS.member, channel: t.channelId });
   await h.slash('ticket', 'remove riley', { user: IDS.mod, channel: t.channelId });
   assert.ok(!hasRole(h, IDS.member2, t.roleId));
+});
+
+test('ticket roles from before the fix are moved to the bottom after a restart', async () => {
+  const h = await make();
+  await h.slash('tickets', `panel <#${G}>`, { user: IDS.admin });
+  const panelMsg = h.lastSent(G);
+  await h.clickButton('Open a ticket', { user: IDS.member, in: panelMsg });
+  await h.settle();
+  const t = ticketOf(h, IDS.member);
+  assert.ok(t?.roleId, 'this ticket uses a role');
+  const role = h.fake.state.roles[S].find((r) => r.id === t.roleId);
+  role.position = 5;
+  h.engine.perms.invalidate(`r:${S}`);
+  assert.equal(await sinkOpenTicketRoles(h.engine), 1);
+  const lowest = Math.min(...h.fake.state.roles[S].filter((r) => r.id !== role.id).map((r) => r.position));
+  assert.ok(role.position <= lowest, `role at ${role.position}, lowest other ${lowest}`);
 });
