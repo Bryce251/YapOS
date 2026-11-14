@@ -626,10 +626,10 @@ function fakeSong() {
 
 test('the taco song is quieter, follows the sound volume and stops on mute', async () => {
   const { songVolume, SONG_VOLUME } = await import('../web/activity/js/ui/trolls.js');
-  assert.equal(SONG_VOLUME, 0.125);
-  assert.equal(songVolume({ enabled: true, volume: 0.5 }), 0.125);
-  assert.equal(songVolume({ enabled: true, volume: 1 }), 0.25);
-  assert.equal(songVolume({ enabled: true, volume: 0.2 }), 0.05);
+  assert.equal(SONG_VOLUME, 0.09);
+  assert.equal(songVolume({ enabled: true, volume: 0.5 }), 0.09);
+  assert.equal(songVolume({ enabled: true, volume: 1 }), 0.18);
+  assert.equal(songVolume({ enabled: true, volume: 0.2 }), 0.036);
   assert.equal(songVolume({ enabled: false, volume: 1 }), 0);
   assert.equal(songVolume(null), 0);
   const s = await mount();
@@ -637,9 +637,9 @@ test('the taco song is quieter, follows the sound volume and stops on mute', asy
   s.win.Audio = Audio;
   s.app.trolls.apply({ fx: 'tacos', target: null, ms: 9600, by: PAL });
   assert.equal(made.length, 1);
-  assert.equal(made[0].volume, 0.125);
+  assert.equal(made[0].volume, 0.09);
   s.sound.setVolume(0.8);
-  assert.equal(made[0].volume, 0.2);
+  assert.equal(made[0].volume, 0.144);
   s.sound.setEnabled(false);
   assert.equal(made[0].paused, true);
   s.app.trolls.clear();
