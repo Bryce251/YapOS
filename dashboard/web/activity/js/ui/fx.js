@@ -1,3 +1,5 @@
+export const CONFETTI_MAX = 360;
+
 const COLORS = ['#f2613f', '#ff8a6b', '#e5487f', '#f472b6', '#7c5cff', '#a78bfa', '#fbbf24', '#4ade80'];
 
 export function reducedMotion(win) {
@@ -74,6 +76,10 @@ export function createFx(win) {
   }
 
   function draw(ts) {
+    if (reducedMotion(win)) {
+      clear();
+      return;
+    }
     const { w, h: hgt, ctx } = size();
     if (!ctx) return;
     const dt = last ? Math.min(3, (ts - last) / 16.7) : 1;
@@ -106,8 +112,11 @@ export function createFx(win) {
 
   function confetti(amount = 140) {
     if (reducedMotion(win) || typeof win.requestAnimationFrame !== 'function') return false;
+    const room = Math.max(0, CONFETTI_MAX - parts.length);
+    const n = Math.min(room, Math.max(0, Math.round(Number(amount) || 0)));
+    if (!n) return parts.length > 0;
     const { w, h: hgt } = size();
-    parts = parts.concat(makeParticles(amount, w, hgt));
+    parts = parts.concat(makeParticles(n, w, hgt));
     canvas.classList.add('is-on');
     if (!frame) frame = win.requestAnimationFrame(draw);
     return true;
@@ -144,5 +153,9 @@ export function createFx(win) {
     parts = [];
   }
 
-  return { confetti, clear, spotlight, destroy };
+  function live() {
+    return parts.length;
+  }
+
+  return { confetti, clear, spotlight, destroy, live };
 }

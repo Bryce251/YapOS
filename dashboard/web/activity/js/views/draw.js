@@ -125,7 +125,36 @@ function strokeOn(ctx, s, from = 0) {
   ctx.stroke();
 }
 
-export function createDrawView({ engine, fx, toast, win }) {
+const QUIET = { play() {}, burst() {}, float() {} };
+
+export function feedIds(state) {
+  const st = state && state.draw;
+  return st && Array.isArray(st.feed) ? st.feed.map((f) => (Array.isArray(f) ? Number(f[0]) || 0 : 0)) : [];
+}
+
+export function drawMoments(was, m, fids = []) {
+  const feedTop = fids.reduce((a, id) => Math.max(a, id), 0);
+  const now = { n: m.n, phase: m.phase, got: m.got.map((g) => g.slot), feedTop };
+  if (!was) return { now, cues: [] };
+  const cues = [];
+  const sameTurn = was.n === m.n;
+  if (!sameTurn && m.amDrawer) cues.push({ name: 'turn' });
+  if (sameTurn) {
+    const fresh = m.got.filter((g) => !was.got.includes(g.slot));
+    if (fresh.some((g) => g.isMe)) cues.push({ name: 'correct', opts: { volume: 1 }, at: 'guess' });
+    else if (fresh.length) cues.push({ name: 'correct', opts: { volume: 0.45 } });
+    const missed = m.feed.some((f, i) => (fids[i] || 0) > was.feedTop && f.mine && f.kind !== 'ok');
+    if (missed && !fresh.some((g) => g.isMe)) cues.push({ name: 'type', opts: { volume: 0.3 } });
+  }
+  if (m.phase === 'reveal' && (!sameTurn || was.phase !== 'reveal')) {
+    cues.push({ name: 'reveal' });
+    if (m.amDrawer && m.drawerGain) cues.push({ name: 'coin', opts: { at: 380 }, at: 'gain' });
+  }
+  return { now, cues };
+}
+
+export function createDrawView({ engine, fx, toast, win, cues }) {
+  const cue = cues && typeof cues.play === 'function' ? cues : QUIET;
   const el = h('section', { class: 'game game-draw', attrs: { 'aria-label': 'Draw & Guess' } });
   const head = h('div', { class: 'draw-headwrap' });
   const wordBar = h('div', { class: 'draw-word', attrs: { 'aria-live': 'polite' } });
@@ -193,6 +222,20 @@ export function createDrawView({ engine, fx, toast, win }) {
   let wasGot = false;
   let frame = null;
   let shownMode = null;
+  let heard = null;
+
+  function hear(m, fids) {
+    const { now, cues: list } = drawMoments(heard, m, fids);
+    heard = now;
+    for (const c of list) {
+      cue.play(c.name, c.opts);
+      if (c.at === 'guess') cue.burst(wordBar, { count: 18, emoji: ['🎉', '✨', '✏️'] });
+      if (c.at === 'gain') {
+        const gain = revealBox.querySelector('.reveal-gain');
+        if (gain) cue.float(gain, `+${m.drawerGain}`);
+      }
+    }
+  }
 
   function setPen(p) {
     Object.assign(pen, p);
@@ -572,11 +615,13 @@ export function createDrawView({ engine, fx, toast, win }) {
       feedTurn = m.n;
       lastFeed = 0;
     }
-    for (const f of m.feed) {
-      if (f.id <= lastFeed) continue;
+    const fids = feedIds(next.state);
+    m.feed.forEach((f, i) => {
+      if ((fids[i] || 0) <= lastFeed) return;
       if (f.mine && f.kind === 'close' && m.phase === 'draw') toast('So close! Check your spelling.');
-    }
-    lastFeed = m.feed.length ? m.feed[m.feed.length - 1].id : lastFeed;
+    });
+    lastFeed = fids.length ? fids[fids.length - 1] : lastFeed;
+    hear(m, fids);
     if (m.gotMe && !wasGot) fx.confetti(30);
     wasGot = m.gotMe;
     if (m.phase !== 'draw' && cur) cur = null;

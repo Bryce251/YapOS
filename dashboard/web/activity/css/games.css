@@ -823,3 +823,66 @@
     animation: none;
   }
 }
+
+.word-input.is-refused {
+  border-color: var(--danger);
+  animation: refuse-shake 360ms var(--ease);
+}
+
+.options.is-reveal .option.is-right {
+  animation: pop 420ms var(--pop), right-glow 1400ms var(--ease) 420ms 2;
+}
+
+@keyframes refuse-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  20% {
+    transform: translateX(-6px);
+  }
+
+  40% {
+    transform: translateX(5px);
+  }
+
+  60% {
+    transform: translateX(-3px);
+  }
+
+  80% {
+    transform: translateX(2px);
+  }
+}
+
+@keyframes refuse-tint {
+  from {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 35%, transparent);
+  }
+
+  to {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@keyframes right-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 24px -6px rgba(74, 222, 128, 0.6);
+  }
+
+  50% {
+    box-shadow: 0 0 34px 2px rgba(74, 222, 128, 0.75);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .word-input.is-refused {
+    animation: refuse-tint 600ms linear;
+  }
+
+  .options.is-reveal .option.is-right {
+    animation: none;
+  }
+}

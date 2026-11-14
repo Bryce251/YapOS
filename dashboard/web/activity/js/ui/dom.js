@@ -131,7 +131,32 @@ export function countdown(starts, ends, { lead = 'Starting in', label = 'Time un
   );
 }
 
-export function tickCountdowns(root, now) {
+export const FINAL_SECS = 5;
+
+export function finalSeconds(onFinal, last = FINAL_SECS) {
+  let key = null;
+  let prev = null;
+  return (ends, secs) => {
+    if (ends !== key) {
+      key = ends;
+      prev = secs;
+      return false;
+    }
+    if (secs === prev) return false;
+    prev = secs;
+    if (secs < 1 || secs > last) return false;
+    try {
+      onFinal(secs);
+    } catch {
+      return false;
+    }
+    return true;
+  };
+}
+
+export function tickCountdowns(root, now, hooks = null) {
+  const watch = hooks && typeof hooks.countdown === 'function' ? hooks.countdown : null;
+  let first = true;
   for (const el of root.querySelectorAll('.countdown')) {
     const starts = Number(el.dataset.starts);
     const ends = Number(el.dataset.ends);
@@ -143,6 +168,8 @@ export function tickCountdowns(root, now) {
     const text = clock(ends - now);
     if (num && num.textContent !== text) num.textContent = text;
     el.classList.toggle('is-low', ends - now <= 10000);
+    if (watch && first) watch(ends, secondsLeft(ends, now));
+    first = false;
   }
 }
 
@@ -163,9 +190,10 @@ export function timer(starts, ends, label) {
   );
 }
 
-export function tickTimers(root, now) {
-  tickCountdowns(root, now);
-
+export function tickTimers(root, now, hooks = null) {
+  tickCountdowns(root, now, hooks);
+  const watch = hooks && typeof hooks.timer === 'function' ? hooks.timer : null;
+  let first = true;
   for (const el of root.querySelectorAll('.timer')) {
     const starts = Number(el.dataset.starts);
     const ends = Number(el.dataset.ends);
@@ -179,5 +207,7 @@ export function tickTimers(root, now) {
     if (num && num.textContent !== text) num.textContent = text;
     el.classList.toggle('is-low', secs <= 5 && secs > 0);
     el.classList.toggle('is-done', secs === 0);
+    if (watch && first) watch(ends, secs);
+    first = false;
   }
 }

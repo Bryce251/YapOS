@@ -1,10 +1,13 @@
 import { h, avatar, uidOf } from './dom.js';
+import { floatText, burstFrom } from './juice.js';
 
 const MEDALS = ['🥇', '🥈', '🥉'];
 export const COUNT_MS = 650;
 export const TOP_COUNT = 3;
 const seen = new Map();
 const SEEN_MAX = 400;
+const ranks = new Map();
+export const SHIFT_MAX = 3;
 
 export function standings(players, field) {
   const rows = players
@@ -62,6 +65,39 @@ function remember(key, pts) {
   return before;
 }
 
+function rankOf(key, idx) {
+  const before = ranks.has(key) ? ranks.get(key) : null;
+  ranks.delete(key);
+  ranks.set(key, idx);
+  while (ranks.size > SEEN_MAX) ranks.delete(ranks.keys().next().value);
+  return before;
+}
+
+export function motion(scope, r, idx) {
+  const before = rankOf(`${scope}:${r.id}`, idx);
+  if (before === null || before === idx) return { cls: [], shift: 0, rankUp: false };
+  const shift = Math.max(-SHIFT_MAX, Math.min(SHIFT_MAX, before - idx));
+  const rankUp = idx < before && r.pts > 0;
+  return { cls: rankUp ? ['is-climb', 'is-rankup'] : ['is-drop'], shift, rankUp };
+}
+
+function afterMount(fn) {
+  const raf = globalThis.requestAnimationFrame;
+  if (typeof raf !== 'function') return;
+  raf(() => raf(fn));
+}
+
+function cheer(el, gain, rankUp, mine) {
+  if (mine) gain = 0;
+  if (!gain && !rankUp) return;
+  afterMount(() => {
+    if (!el.isConnected) return;
+    const spot = el.querySelector('.board-num, .board-pts') || el;
+    if (gain) floatText(spot, `+${fmt(gain)}`);
+    if (rankUp) burstFrom(el, { count: 8, spread: 46, size: 6, colors: ['var(--amber)', '#ffd76a', 'var(--accent-text)'] });
+  });
+}
+
 function countUp(el, from, to) {
   const win = globalThis;
   if (from === null || from === to || quiet(win) || typeof win.requestAnimationFrame !== 'function') {
@@ -86,7 +122,7 @@ function points(r, scope, cls) {
   const before = remember(`${scope}:${r.id}`, r.pts);
   const up = before !== null && r.pts > before;
   countUp(num, up ? before : null, r.pts);
-  return { num, up };
+  return { num, up, before };
 }
 
 function face(r, size, mark) {
@@ -102,16 +138,18 @@ function nameOf(r) {
   return r.isMe ? `${r.name} (you)` : r.name;
 }
 
-function card(r, opts, scope) {
+function card(r, opts, scope, idx, count) {
   const mark = badgeFor(r, opts.badge);
   const gain = gainFor(r, opts.gains);
   const pts = points(r, scope, 'board-num');
-  return h(
+  const move = motion(scope, r, idx);
+  const el = h(
     'li',
     {
-      class: ['board-card', `place-${r.place}`, r.isMe ? 'is-me' : null, r.present === false ? 'is-away' : null, pts.up ? 'is-up' : null, mark ? 'has-badge' : null],
+      class: ['board-card', `place-${r.place}`, r.isMe ? 'is-me' : null, r.present === false ? 'is-away' : null, pts.up ? 'is-up' : null, mark ? 'has-badge' : null, ...move.cls],
       dataset: { id: r.id, badge: mark ? mark.label || 'marked' : null },
       attrs: { title: r.username ? `${r.name} (@${r.username})` : r.name },
+      vars: { '--rise': Math.max(0, count - 1 - idx), '--shift': move.shift || null },
     },
     h('span', { class: 'board-medal', text: MEDALS[r.place - 1] || String(r.place), attrs: { 'aria-label': `Place ${r.place}` } }),
     face(r, 'md', mark),
@@ -122,19 +160,23 @@ function card(r, opts, scope) {
       h('span', { class: 'board-score' }, pts.num, gain ? h('span', { class: 'board-gain', text: `+${fmt(gain)}` }) : null),
     ),
   );
+  cheer(el, pts.up ? gain || r.pts - (pts.before || 0) : 0, move.rankUp, r.isMe);
+  return el;
 }
 
-function row(r, opts, scope) {
+function row(r, opts, scope, idx, i) {
   const mark = badgeFor(r, opts.badge);
   const gain = gainFor(r, opts.gains);
   const pts = points(r, scope, 'board-pts');
+  const move = motion(scope, r, idx);
   const scored = r.pts > 0;
-  return h(
+  const el = h(
     'li',
     {
-      class: ['board-row', r.isMe ? 'is-me' : null, r.present === false ? 'is-away' : null, pts.up ? 'is-up' : null, mark ? 'has-badge' : null],
+      class: ['board-row', r.isMe ? 'is-me' : null, r.present === false ? 'is-away' : null, pts.up ? 'is-up' : null, mark ? 'has-badge' : null, ...move.cls],
       dataset: { id: r.id, badge: mark ? mark.label || 'marked' : null },
       attrs: { title: r.username ? `${r.name} (@${r.username})` : r.name },
+      vars: { '--rise': i, '--shift': move.shift || null },
     },
     h('span', { class: 'board-place', text: scored ? String(r.place) : '–', attrs: { 'aria-label': scored ? `Place ${r.place}` : 'No points yet' } }),
     face(r, 'sm', mark),
@@ -147,6 +189,8 @@ function row(r, opts, scope) {
     gain ? h('span', { class: 'board-gain', text: `+${fmt(gain)}` }) : null,
     pts.num,
   );
+  cheer(el, pts.up ? gain || r.pts - (pts.before || 0) : 0, move.rankUp, r.isMe);
+  return el;
 }
 
 export function board(rows, opts = {}) {
@@ -154,6 +198,7 @@ export function board(rows, opts = {}) {
   if (!rows.length || (!zero && rows.every((r) => !r.pts))) return h('p', { class: 'board-empty', text: empty, dataset: { scoreboard: 'empty' } });
   const scope = label;
   const { top, rest } = split(rows, max);
+  const order = top.concat(rest);
   return h(
     'div',
     {
@@ -161,7 +206,7 @@ export function board(rows, opts = {}) {
       dataset: { scoreboard: 'list' },
       attrs: { role: 'group', 'aria-label': label },
     },
-    top.length ? h('ol', { class: 'board-top' }, top.map((r) => card(r, opts, scope))) : null,
-    rest.length ? h('ol', { class: 'board-rest' }, rest.map((r) => row(r, opts, scope))) : null,
+    top.length ? h('ol', { class: 'board-top' }, top.map((r) => card(r, opts, scope, order.indexOf(r), top.length))) : null,
+    rest.length ? h('ol', { class: 'board-rest' }, rest.map((r, i) => row(r, opts, scope, order.indexOf(r), i))) : null,
   );
 }

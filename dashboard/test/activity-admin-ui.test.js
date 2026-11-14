@@ -556,7 +556,7 @@ test('Rain Tacos rains the taco pictures, goes disco, plays the song and cleans 
   assert.match(made[0].src, /\/activity\/media\/raining-tacos\.mp3$/);
   assert.equal(made[0].plays, 1);
   assert.equal(made[0].currentTime, 0);
-  assert.equal(made[0].volume, 0.6);
+  assert.equal(made[0].volume, 0.25);
   s.clock.advance(9500);
   assert.equal(byClass(s.root, 'troll-taco-layer').length, 1);
   s.clock.advance(200);

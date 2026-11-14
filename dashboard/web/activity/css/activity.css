@@ -199,6 +199,21 @@ img {
   margin-left: auto;
 }
 
+.btn-sound {
+  min-width: 36px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.btn-sound-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.btn-sound.is-off .btn-sound-icon {
+  opacity: 0.7;
+}
+
 .host-short,
 .top .btn-icon {
   display: none;

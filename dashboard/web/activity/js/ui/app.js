@@ -1,11 +1,12 @@
-import { h, swap, memo, button, tickTimers } from './dom.js';
+import { h, swap, memo, button, tickTimers, finalSeconds } from './dom.js';
 import { createFx } from './fx.js';
 import { createLobby, joinButton } from './lobby.js';
 import { createResults } from './results.js';
-import { board, standings } from './board.js';
+import { board, standings, fmt } from './board.js';
 import { viewFor } from '../views/index.js';
 import { createAdminPanel } from './admin-panel.js';
-import { createTrolls } from './trolls.js';
+import { createTrolls, ALL_FX, seesFx } from './trolls.js';
+import { sfx as defaultSfx } from './sfx.js';
 
 export const ANNOUNCE_MS = 10000;
 export const LEAVE_GRACE_MS = 6000;
@@ -24,7 +25,47 @@ export function announceModel(snap, now) {
   return { text: a.text.slice(0, 140), until, from: until - ANNOUNCE_MS };
 }
 
-export function headerModel(snap, { alone = false, adminOpen = false } = {}) {
+export const DIRECTOR_GAP_MS = 120;
+export const JOIN_TAP_MS = 8000;
+export const TICK_LAST_SECS = 3;
+
+export function soundState(snap, at) {
+  if (!snap || !snap.ready || !snap.room) return null;
+  const players = Array.isArray(snap.players) ? snap.players : [];
+  const mine = players.find((p) => p.isMe) || null;
+  const last = snap.room.last || null;
+  const slot = mine && mine.slot !== undefined && mine.slot !== null ? mine.slot : null;
+  const ann = announceModel(snap, at);
+  return {
+    phase: snap.room.phase,
+    others: players.filter((p) => !p.isMe && p.joined && p.present !== false).map((p) => String(p.id)),
+    meJoined: Boolean(snap.meJoined),
+    pts: mine ? Number(mine.game) || 0 : 0,
+    iWon: Boolean(last && slot !== null && Array.isArray(last.winners) && last.winners.includes(slot)),
+    announce: ann ? `${ann.until}:${ann.text}` : null,
+  };
+}
+
+export function soundCues(prev, next) {
+  if (!prev || !next) return [];
+  const cues = [];
+  const samePhase = prev.phase === next.phase;
+  if (!samePhase && next.phase === 'game' && (prev.phase === 'lobby' || prev.phase === 'results')) cues.push({ sound: 'start' });
+  if (!samePhase && next.phase === 'results' && prev.phase === 'game') cues.push({ sound: next.iWon ? 'win' : 'reveal' });
+  if (!prev.meJoined && next.meJoined) cues.push({ sound: 'join', mine: true });
+  else if (prev.meJoined && !next.meJoined) cues.push({ sound: 'leave', mine: true });
+  if (next.pts > prev.pts) cues.push({ sound: 'coin', gain: next.pts - prev.pts });
+  if (next.announce && next.announce !== prev.announce) cues.push({ sound: 'pop' });
+  if (samePhase) {
+    const before = new Set(prev.others);
+    const after = new Set(next.others);
+    if (next.others.some((id) => !before.has(id))) cues.push({ sound: 'join' });
+    else if (prev.others.some((id) => !after.has(id))) cues.push({ sound: 'leave' });
+  }
+  return cues;
+}
+
+export function headerModel(snap, { alone = false, adminOpen = false, sound = true } = {}) {
   const phase = snap.ready ? snap.room.phase : 'connecting';
   const game = snap.game;
   let status = alone ? 'Not in a call' : 'Connecting';
@@ -40,6 +81,7 @@ export function headerModel(snap, { alone = false, adminOpen = false } = {}) {
     canEnd: snap.isHost && phase === 'game',
     admin: isAdminSnap(snap),
     adminOpen: Boolean(adminOpen) && isAdminSnap(snap),
+    sound: Boolean(sound),
   };
 }
 
@@ -61,10 +103,17 @@ export function spectateModel(snap) {
   return { meJoined: false, joining: snap.joining || null };
 }
 
-export function mountApp({ root, engine, bridge, win }) {
+export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, juice = null }) {
   const alone = !win.parent || win.parent === win;
   let account = alone ? { state: 'loading', name: '' } : null;
   const fx = createFx(win);
+  let destroyed = false;
+  let juiceMod = null;
+  let detachJuice = null;
+  let soundPrev = null;
+  let lastCueAt = -Infinity;
+  let joinTap = null;
+  let unlocked = false;
   const toastRoot = h('div', { class: 'toasts', attrs: { 'aria-live': 'polite' } });
   const head = h('header', { class: 'top' });
   const announceSlot = h('div', { class: 'announce-slot' });
@@ -78,9 +127,10 @@ export function mountApp({ root, engine, bridge, win }) {
     win,
     onToggle: (on) => {
       adminOpen = on;
-      paintHead(head, headerModel(engine.snapshot(), { alone, adminOpen }));
+      repaintHead();
     },
     focusBack: () => head.querySelector('.btn-admin'),
+    sfx: sound,
   });
   root.replaceChildren(h('div', { class: 'aurora', attrs: { 'aria-hidden': 'true' } }), shell, fxLayer, panel.el, toastRoot);
 
@@ -91,7 +141,7 @@ export function mountApp({ root, engine, bridge, win }) {
     win.setTimeout(() => t.remove(), 3000);
   }
 
-  const trolls = createTrolls({ shell, layer: fxLayer, marks: root, win, engine, fx });
+  const trolls = createTrolls({ shell, layer: fxLayer, marks: root, win, engine, fx, sfx: sound });
   const lobby = createLobby({ engine, toast });
   const results = createResults({ engine, fx });
   const gameWrap = h('div', { class: 'screen play' });
@@ -127,6 +177,7 @@ export function mountApp({ root, engine, bridge, win }) {
       h(
         'span',
         { class: 'top-actions' },
+        soundButton(m.sound),
         m.admin
           ? button('ADMIN', {
               variant: 'admin',
@@ -142,6 +193,149 @@ export function mountApp({ root, engine, bridge, win }) {
       ),
     ),
   );
+
+  function soundButton(on) {
+    return h(
+      'button',
+      {
+        class: ['btn', 'btn-ghost', 'btn-sm', 'btn-sound', on ? 'is-on' : 'is-off', 'spot'],
+        type: 'button',
+        dataset: { key: 'sound' },
+        attrs: { 'aria-pressed': on ? 'true' : 'false', 'aria-label': 'Sound', title: on ? 'Sound on' : 'Sound off' },
+        on: { click: toggleSound },
+      },
+      h('span', { class: 'btn-sound-icon', text: on ? '🔊' : '🔇', attrs: { 'aria-hidden': 'true' } }),
+    );
+  }
+
+  function soundOn() {
+    try {
+      return Boolean(sound && sound.enabled);
+    } catch {
+      return false;
+    }
+  }
+
+  function toggleSound() {
+    if (!sound || typeof sound.setEnabled !== 'function') return;
+    const next = !soundOn();
+    sound.setEnabled(next);
+    if (next) {
+      if (typeof sound.unlock === 'function') sound.unlock();
+      sound.play('toggle');
+    }
+    repaintHead();
+  }
+
+  function repaintHead() {
+    if (destroyed) return;
+    paintHead(head, headerModel(engine.snapshot(), { alone, adminOpen, sound: soundOn() }));
+  }
+
+  function stamp() {
+    try {
+      const p = win.performance;
+      if (p && typeof p.now === 'function') return p.now();
+    } catch {
+      return Date.now();
+    }
+    return Date.now();
+  }
+
+  function cue(name) {
+    const t = stamp();
+    if (t - lastCueAt < DIRECTOR_GAP_MS && t >= lastCueAt) return false;
+    lastCueAt = t;
+    try {
+      return Boolean(sound.play(name));
+    } catch {
+      return false;
+    }
+  }
+
+  function juiceCall(fn, ...args) {
+    if (!juiceMod || typeof juiceMod[fn] !== 'function') return false;
+    try {
+      juiceMod[fn](...args);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function centerOf(el) {
+    try {
+      const r = el.getBoundingClientRect();
+      if (r && (r.width || r.height)) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  function myScoreRow() {
+    return stage.querySelector('.board-row.is-me') || stage.querySelector('.board-card.is-me') || null;
+  }
+
+  function direct(snap) {
+    const next = soundState(snap, now());
+    const cues = soundCues(soundPrev, next);
+    soundPrev = next;
+    if (!cues.length) return;
+    cue(cues[0].sound);
+    for (const c of cues) {
+      if (c.mine && c.sound === 'join' && joinTap && stamp() - joinTap.at < JOIN_TAP_MS) {
+        juiceCall('burst', joinTap.x, joinTap.y, { count: 18, emoji: ['🎮', '✨', '🎉'] });
+        joinTap = null;
+      }
+      if (c.sound === 'coin') {
+        const row = myScoreRow();
+        if (row) juiceCall('floatText', row, `+${fmt(c.gain)}`);
+      }
+    }
+  }
+
+  const watchCountdown = finalSeconds((secs) => cue(secs <= TICK_LAST_SECS ? 'tickLast' : 'tick'));
+  const timerHooks = { countdown: watchCountdown };
+
+  function onFx(ev) {
+    if (!ev || typeof ev !== 'object' || !ALL_FX.includes(ev.fx) || ev.fx === 'tacos') return;
+    const snap = engine.snapshot();
+    const me = snap ? snap.me : null;
+    if (ev.by && me && ev.by === me) return;
+    const target = ev.target === undefined || ev.target === '' ? null : ev.target;
+    if (!seesFx(ev.fx, target, me)) return;
+    cue('fx');
+  }
+
+  function unlockOnce() {
+    if (unlocked) return;
+    unlocked = true;
+    if (sound && typeof sound.unlock === 'function') sound.unlock();
+    offUnlock();
+  }
+
+  function unlockTarget() {
+    return typeof win.addEventListener === 'function' ? win : root;
+  }
+
+  function offUnlock() {
+    const t = unlockTarget();
+    t.removeEventListener('pointerdown', unlockOnce, true);
+    t.removeEventListener('keydown', unlockOnce, true);
+  }
+
+  function useJuice(mod) {
+    if (destroyed || !mod || typeof mod !== 'object') return;
+    juiceMod = mod;
+    if (detachJuice || typeof mod.attachJuice !== 'function') return;
+    try {
+      const off = mod.attachJuice(root, { sfx: sound });
+      detachJuice = typeof off === 'function' ? off : null;
+    } catch {
+      detachJuice = null;
+    }
+  }
 
   const paintStrip = memo((m) =>
     m
@@ -208,6 +402,13 @@ export function mountApp({ root, engine, bridge, win }) {
     while (n && n !== root) {
       if (n.dataset && n.dataset.key === 'leave-game') {
         selfLeaveAt = now();
+        return;
+      }
+      if (n.dataset && (n.dataset.key === 'join' || n.dataset.key === 'join-late')) {
+        const c = centerOf(n);
+        const x = c ? c.x : Number(e.clientX) || (win.innerWidth || 360) / 2;
+        const y = c ? c.y : Number(e.clientY) || (win.innerHeight || 640) / 2;
+        joinTap = { x, y, at: stamp() };
         return;
       }
       n = n.parentNode;
@@ -297,7 +498,7 @@ export function mountApp({ root, engine, bridge, win }) {
 
   function render(snap) {
     renders += 1;
-    const hm = headerModel(snap, { alone, adminOpen });
+    const hm = headerModel(snap, { alone, adminOpen, sound: soundOn() });
     paintHead(head, hm);
     root.dataset.phase = hm.phase;
     watchKick(snap);
@@ -307,6 +508,7 @@ export function mountApp({ root, engine, bridge, win }) {
     panel.update(snap);
     paintBody(snap, hm);
     trolls.paint();
+    direct(snap);
   }
 
   function paintBody(snap, hm) {
@@ -320,7 +522,7 @@ export function mountApp({ root, engine, bridge, win }) {
       if (screen !== 'lobby') swap(stage, lobby.el);
       screen = 'lobby';
       lobby.update(snap);
-      tickTimers(stage, now());
+      tickTimers(stage, now(), timerHooks);
       return;
     }
     if (hm.phase === 'results') {
@@ -333,7 +535,7 @@ export function mountApp({ root, engine, bridge, win }) {
     if (key !== viewKey) {
       if (view) view.destroy();
       const make = viewFor(snap.room.game);
-      view = make ? make({ engine, fx, toast, win }) : null;
+      view = make ? make({ engine, fx, toast, win, sfx: sound }) : null;
       viewKey = key;
       swap(gameCard, view ? view.el : h('p', { class: 'waiting', text: 'This game needs a newer version of YapOS Party. Reopen the activity to update.' }));
     }
@@ -342,15 +544,21 @@ export function mountApp({ root, engine, bridge, win }) {
     if (view) view.update(snap);
     paintSpectate(spectate, spectateModel(snap));
     paintStrip(strip, ownsBoard() ? null : stripModel(snap, viewBoard(snap)));
-    tickTimers(stage, now());
+    tickTimers(stage, now(), timerHooks);
   }
 
   const stopSpot = fx.spotlight(root);
   const offChange = engine.on('change', render);
-  root.addEventListener('click', onRootClick);
+  root.addEventListener('click', onRootClick, true);
   if (typeof win.addEventListener === 'function') win.addEventListener(PROFILES_EVENT, onProfiles);
+  unlockTarget().addEventListener('pointerdown', unlockOnce, true);
+  unlockTarget().addEventListener('keydown', unlockOnce, true);
+  const offFx = typeof engine.on === 'function' ? engine.on('fx', onFx) : null;
+  const offSound = sound && typeof sound.on === 'function' ? sound.on('change', repaintHead) : null;
+  if (juice && typeof juice === 'object') useJuice(juice);
+  else if (juice !== false) import('./juice.js').then(useJuice, () => null);
   const ticker = win.setInterval(() => {
-    tickTimers(stage, now());
+    tickTimers(stage, now(), timerHooks);
     tickAnnounce(now());
     if (screen === 'connecting') render(engine.snapshot());
   }, 200);
@@ -365,8 +573,21 @@ export function mountApp({ root, engine, bridge, win }) {
       return renders;
     },
     destroy() {
+      destroyed = true;
       offChange();
-      root.removeEventListener('click', onRootClick);
+      root.removeEventListener('click', onRootClick, true);
+      offUnlock();
+      if (typeof offFx === 'function') offFx();
+      if (typeof offSound === 'function') offSound();
+      if (detachJuice) {
+        try {
+          detachJuice();
+        } catch {
+          detachJuice = null;
+        }
+      }
+      detachJuice = null;
+      juiceMod = null;
       panel.destroy();
       trolls.destroy();
       if (typeof win.removeEventListener === 'function') win.removeEventListener(PROFILES_EVENT, onProfiles);

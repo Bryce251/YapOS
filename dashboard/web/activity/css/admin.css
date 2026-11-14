@@ -881,13 +881,25 @@
 
 .disco-ball {
   position: absolute;
-  top: 6px;
+  top: 8px;
   left: 50%;
-  font-size: 46px;
+  z-index: 1;
+  font-size: 110px;
   line-height: 1;
-  transform-origin: 50% -30px;
-  animation: disco-swing 2.4s ease-in-out infinite alternate;
-  filter: drop-shadow(0 0 14px rgba(255, 255, 255, 0.45));
+  transform: translateX(-50%);
+  transform-origin: 50% -60px;
+  animation: disco-swing 3.2s ease-in-out infinite alternate;
+  filter: drop-shadow(0 0 18px rgba(255, 255, 255, 0.55)) drop-shadow(0 0 42px rgba(190, 160, 255, 0.45));
+}
+
+.disco-ball::before {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  z-index: -1;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.4) 0%, rgba(200, 170, 255, 0.22) 38%, rgba(120, 200, 255, 0) 70%);
+  animation: disco-glow 3.2s ease-in-out infinite alternate;
 }
 
 .taco-drop {
@@ -929,7 +941,8 @@
 
 .troll-taco-layer.is-still .disco-lights,
 .troll-taco-layer.is-still .disco-light,
-.troll-taco-layer.is-still .disco-ball {
+.troll-taco-layer.is-still .disco-ball,
+.troll-taco-layer.is-still .disco-ball::before {
   animation: none;
 }
 
@@ -1112,10 +1125,28 @@
 
 @keyframes disco-swing {
   0% {
-    transform: translateX(-50%) rotate(-10deg);
+    transform: translateX(-50%) rotate(-7deg);
   }
   100% {
-    transform: translateX(-50%) rotate(10deg);
+    transform: translateX(-50%) rotate(7deg);
+  }
+}
+
+@keyframes disco-glow {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.94);
+  }
+  100% {
+    opacity: 0.9;
+    transform: scale(1.04);
+  }
+}
+
+@media (max-width: 400px) {
+  .disco-ball {
+    font-size: 80px;
+    transform-origin: 50% -44px;
   }
 }
 
@@ -1193,7 +1224,8 @@
 
   .disco-lights,
   .disco-light,
-  .disco-ball {
+  .disco-ball,
+  .disco-ball::before {
     animation: none;
   }
 

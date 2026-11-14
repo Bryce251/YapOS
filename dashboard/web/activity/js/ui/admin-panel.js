@@ -1,6 +1,7 @@
 import { h, memo, avatar, button, uidOf } from './dom.js';
 import { fmt } from './board.js';
-import { NEEDS_TARGET } from './trolls.js';
+import { NEEDS_TARGET, TROLL_FX } from './trolls.js';
+import { sfx as defaultSfx } from './sfx.js';
 
 export const TABS = [
   { id: 'game', label: 'Game', icon: '🎛️' },
@@ -106,7 +107,12 @@ function secs(ms) {
   return `${ms > 0 ? '+' : '−'}${Math.abs(ms) / 1000} s`;
 }
 
-export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focusBack = () => null }) {
+export function fireSound(name, ok) {
+  if (!ok) return 'error';
+  return TROLL_FX.includes(name) ? 'whoosh' : 'fx';
+}
+
+export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focusBack = () => null, sfx = defaultSfx }) {
   const doc = win.document;
   const ui = { tab: 'game', emoji: RAIN_EMOJI[0], spot: null, trollTarget: null, trollMs: TROLL_TIMES[1] };
   let draft = '';
@@ -151,6 +157,7 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
     } catch {
       ok = false;
     }
+    if (sfx && typeof sfx.play === 'function') sfx.play(fireSound(name, ok));
     say(ok ? done : "That didn't go through. Try again in a moment.");
     return ok;
   }

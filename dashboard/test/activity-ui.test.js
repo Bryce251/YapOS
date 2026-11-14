@@ -74,7 +74,10 @@ test('the activity page works under the strict activity CSP', () => {
     if (f.endsWith('.js')) {
       assert.equal(/\.style\.(?!setProperty)[a-zA-Z]+\s*=/.test(src), false, `${f} sets inline styles`);
       const fetches = [path.join('ui', 'app.js'), path.join('js', 'dictionary.js'), path.join('js', 'profiles.js'), path.join('js', 'admin.js')].some((x) => f.endsWith(x));
-      assert.equal(/localStorage|sessionStorage|XMLHttpRequest|WebSocket/.test(src), false, f);
+      const remembers = f.endsWith(path.join('ui', 'sfx.js'));
+      assert.equal(/sessionStorage|XMLHttpRequest|WebSocket/.test(src), false, f);
+      if (remembers) assert.deepEqual([...src.matchAll(/setItem\(([^,]+),/g)].map((m) => m[1]), ['SOUND_KEY'], f);
+      else assert.equal(/localStorage/.test(src), false, f);
       assert.equal(/fetch\(\s*['"`](?:https?:)?\/\//.test(src), false, `${f} fetches another site`);
       if (!fetches) assert.equal(/fetch\(/.test(src), false, f);
       assert.equal(/postMessage\([^)]*['"]\*['"]/.test(src), false, `${f} posts to any origin`);

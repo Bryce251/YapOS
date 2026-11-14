@@ -1,6 +1,10 @@
 import { h, memo, button } from './dom.js';
 import { joinButton } from './lobby.js';
 import { board, standings } from './board.js';
+import { burstFrom } from './juice.js';
+
+export const WIN_EMOJI = ['🏆', '⭐', '✨', '🎉', '👑'];
+export const BURST_DELAY_MS = 640;
 
 export const FRESH_MS = 8000;
 
@@ -36,6 +40,16 @@ export function createResults({ engine, fx }) {
   const el = h('section', { class: 'screen results', attrs: { 'aria-label': 'Results' } });
   const paint = memo(render);
   let celebrated = 0;
+  let podium = 0;
+  let pending = 0;
+
+  function cheerWinner(iWon) {
+    const spot = el.querySelector('.board-top .place-1') || el.querySelector('.trophy');
+    if (!spot || !spot.isConnected) return;
+    burstFrom(spot, { count: iWon ? 34 : 22, spread: iWon ? 180 : 130, size: 9, emoji: WIN_EMOJI });
+    const trophy = el.querySelector('.trophy');
+    if (trophy && trophy !== spot) burstFrom(trophy, { count: 12, spread: 90, size: 7, colors: ['var(--amber)', '#ffd76a', 'var(--accent-text)'] });
+  }
 
   function onJoinTap(e) {
     const key = e && e.currentTarget && e.currentTarget.dataset ? e.currentTarget.dataset.key : '';
@@ -44,6 +58,8 @@ export function createResults({ engine, fx }) {
   }
 
   function render(m) {
+    const fresh = Boolean(m.at) && m.at !== podium;
+    podium = m.at;
     const join = m.meJoined ? null : joinButton(m, { size: 'lg', key: 'join' });
     if (join) join.addEventListener('click', onJoinTap);
     const actions = m.isHost
@@ -56,7 +72,7 @@ export function createResults({ engine, fx }) {
       : h('p', { class: 'waiting', attrs: { role: 'status' } }, h('span', { class: 'pulse-dot', attrs: { 'aria-hidden': 'true' } }), `Waiting for ${m.hostName} to pick what's next`);
     return h(
       'div',
-      { class: 'results-wrap' },
+      { class: ['results-wrap', fresh ? 'juice-podium' : null] },
       h(
         'div',
         { class: ['card', 'glass', 'winner-card', m.iWon ? 'is-me' : null] },
@@ -78,9 +94,19 @@ export function createResults({ engine, fx }) {
       paint(el, m);
       if (m.at && m.at !== celebrated) {
         celebrated = m.at;
-        if (m.winners.length && Math.abs(snap.now - m.at) < FRESH_MS) fx.confetti(m.iWon ? 220 : 90);
+        if (m.winners.length && Math.abs(snap.now - m.at) < FRESH_MS) {
+          fx.confetti(m.iWon ? 220 : 90);
+          if (pending) globalThis.clearTimeout(pending);
+          pending = globalThis.setTimeout(() => {
+            pending = 0;
+            cheerWinner(m.iWon);
+          }, BURST_DELAY_MS);
+        }
       }
     },
-    destroy() {},
+    destroy() {
+      if (pending) globalThis.clearTimeout(pending);
+      pending = 0;
+    },
   };
 }

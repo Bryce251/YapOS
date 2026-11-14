@@ -1,5 +1,6 @@
 import { h, markNames } from './dom.js';
 import { reducedMotion } from './fx.js';
+import { sfx as defaultSfx, DEFAULT_VOLUME as SOUND_BASE } from './sfx.js';
 
 export const FX_MIN_MS = 1000;
 export const FX_MAX_MS = 30000;
@@ -9,6 +10,7 @@ export const RAIN_DROPS = 18;
 export const BURST_BITS = 14;
 export const TACO_DROPS = 22;
 export const SONG_SAFETY_MS = 11000;
+export const SONG_VOLUME = 0.25;
 export const TACO_SONG = new URL('../../media/raining-tacos.mp3', import.meta.url).href;
 export const TACO_PICS = [1, 2, 3].map((n) => new URL(`../../media/taco-${n}.png`, import.meta.url).href);
 
@@ -44,9 +46,17 @@ function keyFor(name, target) {
   return name === 'clown' ? `clown:${target || '*'}` : name;
 }
 
-export function createTrolls({ shell, layer, marks: markRoot, win, engine, fx = null, random = Math.random }) {
+export function songVolume(sound) {
+  if (!sound || !sound.enabled) return 0;
+  const v = Number(sound.volume);
+  const level = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : SOUND_BASE;
+  return Math.round(Math.min(1, SONG_VOLUME * (level / SOUND_BASE)) * 1000) / 1000;
+}
+
+export function createTrolls({ shell, layer, marks: markRoot, win, engine, fx = null, random = Math.random, sfx = defaultSfx }) {
   const active = new Map();
   let off = null;
+  let offSound = null;
 
   function me() {
     try {
@@ -198,10 +208,12 @@ export function createTrolls({ shell, layer, marks: markRoot, win, engine, fx = 
   function playSong(entry) {
     const Ctor = win && typeof win.Audio === 'function' ? win.Audio : null;
     if (!Ctor) return false;
+    const vol = songVolume(sfx);
+    if (vol <= 0) return false;
     try {
       const audio = entry.audio || new Ctor(TACO_SONG);
       entry.audio = audio;
-      audio.volume = 0.6;
+      audio.volume = vol;
       audio.currentTime = 0;
       audio.onended = () => stop('tacos');
       const p = audio.play();
@@ -296,7 +308,31 @@ export function createTrolls({ shell, layer, marks: markRoot, win, engine, fx = 
     for (const k of [...active.keys()]) stop(k);
   }
 
+  function onSound() {
+    const e = active.get('tacos');
+    if (!e) return;
+    const vol = songVolume(sfx);
+    if (vol <= 0) {
+      if (e.sound) e.sound.hidden = true;
+      if (e.audio) {
+        try {
+          e.audio.pause();
+        } catch {
+          e.audio = null;
+        }
+      }
+      return;
+    }
+    if (!e.audio) return;
+    try {
+      e.audio.volume = vol;
+    } catch {
+      e.audio = null;
+    }
+  }
+
   if (engine && typeof engine.on === 'function') off = engine.on('fx', apply);
+  if (sfx && typeof sfx.on === 'function') offSound = sfx.on('change', onSound);
 
   return {
     apply,
@@ -309,6 +345,8 @@ export function createTrolls({ shell, layer, marks: markRoot, win, engine, fx = 
     destroy() {
       if (typeof off === 'function') off();
       off = null;
+      if (typeof offSound === 'function') offSound();
+      offSound = null;
       clear();
     },
   };

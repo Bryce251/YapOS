@@ -32,7 +32,30 @@ function hearts(n, max) {
   return h('span', { class: 'hearts', attrs: { 'aria-label': plural(full, 'life', 'lives') } }, out);
 }
 
-export function createChainView({ engine, toast }) {
+const QUIET = { play() {}, burst() {}, float() {} };
+
+export function chainMoments(was, m) {
+  const lives = new Map(m.players.map((p) => [p.slot, p.lives]));
+  const top = m.words.reduce((a, w) => Math.max(a, w.n), was ? was.top : -1);
+  const now = { t: m.t, lives, top };
+  if (!was) return { now, cues: [] };
+  const cues = [];
+  if (top > was.top) cues.push({ name: 'send', word: top });
+  let lost = 0;
+  let out = false;
+  for (const p of m.players) {
+    const before = was.lives.get(p.slot);
+    if (before === undefined || p.lives >= before) continue;
+    lost += 1;
+    if (p.lives <= 0) out = true;
+  }
+  if (m.phase === 'turn' && lost) cues.push({ name: 'lose', opts: { volume: out ? 1 : 0.55 } });
+  if (m.myTurn && m.t !== was.t) cues.push({ name: 'turn', opts: cues.length ? { at: 260 } : undefined });
+  return { now, cues };
+}
+
+export function createChainView({ engine, toast, cues }) {
+  const cue = cues && typeof cues.play === 'function' ? cues : QUIET;
   const el = h('section', { class: 'game game-chain', attrs: { 'aria-label': 'Word Chain' } });
   const head = h('div', { class: 'chain-headwrap' });
   const ring = h('div', { class: 'chain-ring' });
@@ -53,7 +76,29 @@ export function createChainView({ engine, toast }) {
   loadDictionary();
   let snap = null;
   let model = null;
+  let heard = null;
 
+  function refuse() {
+    cue.play('error');
+    input.classList.remove('is-refused');
+    void input.offsetWidth;
+    input.classList.add('is-refused');
+  }
+
+  function hear(m) {
+    const { now, cues: list } = chainMoments(heard, m);
+    heard = now;
+    for (const c of list) {
+      cue.play(c.name, c.opts);
+      if (c.word === undefined) continue;
+      const i = m.words.findIndex((w) => w.n === c.word);
+      const chips = stage.querySelector('.chain-words');
+      const chip = chips && i >= 0 ? chips.children[i] : null;
+      if (chip) cue.burst(chip, { count: 10, spread: 44 });
+    }
+  }
+
+  input.addEventListener('animationend', () => input.classList.remove('is-refused'));
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -62,6 +107,7 @@ export function createChainView({ engine, toast }) {
   });
   input.addEventListener('input', () => {
     hint.textContent = '';
+    input.classList.remove('is-refused');
   });
 
   function submit() {
@@ -71,6 +117,7 @@ export function createChainView({ engine, toast }) {
     const problem = checkWord(input.value, st.letter, usedFrom(snap.state));
     if (problem) {
       hint.textContent = PROBLEMS[problem] || 'That word does not work.';
+      refuse();
       return;
     }
     local.sentT = model.t;
@@ -175,8 +222,10 @@ export function createChainView({ engine, toast }) {
       local.sentT = null;
       if (!input.value) input.value = local.sent;
       hint.textContent = PROBLEMS[m.bad.why] || 'That word does not work.';
+      refuse();
     }
     paintFoot(foot, m);
+    hear(m);
     const open = m.myTurn && local.sentT !== m.t;
     input.disabled = !open;
     sendBtn.disabled = !open;

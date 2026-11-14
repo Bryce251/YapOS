@@ -26,17 +26,29 @@ function faces(list) {
   );
 }
 
-export function createWyrView({ engine, fx }) {
+const QUIET = { play() {}, burst() {}, float() {} };
+
+export function wyrMoment(was, m) {
+  const now = { pid: m.pid, phase: m.phase };
+  if (!was || m.phase !== 'reveal' || (was.pid === m.pid && was.phase === 'reveal')) return { now, cues: [] };
+  const sided = Boolean(m.myVote) && (m.side === m.myVote || m.side === 'tie');
+  return { now, cues: sided ? ['reveal', 'correct'] : ['reveal'] };
+}
+
+export function createWyrView({ engine, fx, cues }) {
+  const cue = cues && typeof cues.play === 'function' ? cues : QUIET;
   const el = h('section', { class: 'game game-wyr', attrs: { 'aria-label': 'Would You Rather' } });
   const local = { pid: null, side: null };
   let snap = null;
   let cheered = null;
+  let heard = null;
   const paint = memo(render);
 
   function vote(m, side) {
     if (!m.canVote || m.myVote) return;
     local.pid = m.pid;
     local.side = side;
+    cue.play('send');
     engine.act({ type: 'vote', side, p: m.pid });
     if (snap) update(snap);
   }
@@ -101,6 +113,16 @@ export function createWyrView({ engine, fx }) {
       return;
     }
     paint(el, m);
+    const { now, cues: list } = wyrMoment(heard, m);
+    heard = now;
+    list.forEach((name, i) => cue.play(name, i ? { at: 320 } : undefined));
+    if (list.length > 1) {
+      const mineBtn = el.querySelector(`.choice-${m.myVote}`);
+      if (mineBtn) {
+        cue.burst(mineBtn, { count: 14, emoji: ['👥', '✨'] });
+        if (m.myGain) cue.float(mineBtn, `+${m.myGain}`);
+      }
+    }
     if (m.phase === 'reveal' && m.myGain >= 100 && cheered !== m.pid) {
       cheered = m.pid;
       fx.confetti(40);

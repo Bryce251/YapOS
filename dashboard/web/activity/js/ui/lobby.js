@@ -1,5 +1,7 @@
 import { h, memo, avatar, button, plural, who, countdown, uidOf } from './dom.js';
 import { board, standings } from './board.js';
+import { sfx as defaultSfx } from './sfx.js';
+import { burstFrom } from './juice.js';
 
 function slim(p) {
   return { id: p.id, name: p.name, username: p.username || null, initials: p.initials, hue: p.hue, avatar: p.avatar || null, isHost: p.isHost, isMe: p.isMe };
@@ -39,10 +41,10 @@ export const RESET_LABEL = 'New game (reset scores)';
 export const RESET_CONFIRM = 'Tap again to reset';
 export const RESET_MS = 3000;
 
-function playerRow(p) {
+function playerRow(p, fresh) {
   return h(
     'li',
-    { class: ['player', p.isMe ? 'is-me' : null] },
+    { class: ['player', p.isMe ? 'is-me' : null, fresh ? 'juice-in' : null] },
     who(p, { size: 'md' }),
     p.isHost ? h('span', { class: 'tag tag-host', text: '👑 Host' }) : null,
   );
@@ -135,11 +137,22 @@ function waiting(text) {
   return h('p', { class: 'waiting', attrs: { role: 'status' } }, h('span', { class: 'pulse-dot', attrs: { 'aria-hidden': 'true' } }), text);
 }
 
-export function createLobby({ engine, toast }) {
+function cue(sound, name, opts) {
+  try {
+    if (sound && typeof sound.play === 'function') sound.play(name, opts);
+  } catch {
+    return;
+  }
+}
+
+export function createLobby({ engine, toast, sfx = defaultSfx }) {
   const el = h('section', { class: 'screen lobby', attrs: { 'aria-label': 'Lobby' } });
   const games = engine.games;
   const paint = memo(render);
   let armed = null;
+  let known = null;
+  let shownPick = null;
+  let popPending = false;
 
   function disarm() {
     if (!armed) return;
@@ -171,6 +184,7 @@ export function createLobby({ engine, toast }) {
 
   function start() {
     const res = engine.lobby.start();
+    if (!res.ok) cue(sfx, 'error');
     if (!res.ok && toast) {
       if (res.reason === 'players') toast(`This game needs at least ${plural(res.need, 'player', 'players')}. Ask people to tap Join game.`);
       else toast('That did not start. Try again in a moment.');
@@ -181,6 +195,20 @@ export function createLobby({ engine, toast }) {
     const key = e && e.currentTarget && e.currentTarget.dataset ? e.currentTarget.dataset.key : '';
     if (key === 'leave-game') engine.leave();
     else engine.join();
+  }
+
+  function freshPlayers(m) {
+    const ids = new Set(m.playing.map((p) => String(p.id)));
+    const fresh = known ? new Set([...ids].filter((id) => !known.has(id))) : new Set();
+    known = ids;
+    return fresh;
+  }
+
+  function pickPop(m) {
+    const changed = shownPick !== null && m.pick !== shownPick;
+    shownPick = m.pick;
+    if (changed) popPending = true;
+    return changed;
   }
 
   function joinBlock(m) {
@@ -205,6 +233,8 @@ export function createLobby({ engine, toast }) {
   }
 
   function render(m) {
+    const fresh = freshPlayers(m);
+    const popped = pickPop(m);
     const game = games.find((g) => g.id === m.pick) || games[0];
     const gameMeta = m.games.find((g) => g.id === game.id);
     const playersCard = h(
@@ -214,7 +244,7 @@ export function createLobby({ engine, toast }) {
       joinBlock(m),
       h('h3', { class: 'group-title', text: 'Playing' }),
       m.playing.length
-        ? h('ul', { class: 'players' }, m.playing.map(playerRow))
+        ? h('ul', { class: 'players' }, m.playing.map((p) => playerRow(p, fresh.has(String(p.id)))))
         : h('p', { class: 'group-empty', text: 'Nobody has joined yet. Tap Join game to play.' }),
       m.watching.length
         ? h('div', { class: 'watchers' }, h('h3', { class: 'group-title', text: `Watching · ${m.watching.length}` }), h('ul', { class: 'watcher-list' }, m.watching.map(watcher)))
@@ -227,7 +257,7 @@ export function createLobby({ engine, toast }) {
         h(
           'button',
           {
-            class: ['game-tile', 'spot', g.id === game.id ? 'is-on' : null],
+            class: ['game-tile', 'spot', g.id === game.id ? 'is-on' : null, popped && g.id === game.id ? 'juice-pick' : null],
             type: 'button',
             disabled: !m.isHost,
             dataset: { key: `pick-${g.id}` },
@@ -274,6 +304,13 @@ export function createLobby({ engine, toast }) {
     el,
     update(snap) {
       paint(el, lobbyModel(snap, games));
+      if (!popPending) return;
+      popPending = false;
+      const tile = el.querySelector('.game-tile.juice-pick');
+      if (!tile || !tile.isConnected) return;
+      const emoji = tile.querySelector('.game-emoji');
+      cue(sfx, 'pop');
+      burstFrom(tile, { count: 10, spread: 70, size: 7, emoji: emoji && emoji.textContent ? [emoji.textContent, '✨'] : null });
     },
     destroy() {},
   };

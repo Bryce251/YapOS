@@ -45,17 +45,29 @@ function gotList(list) {
   );
 }
 
-export function createTriviaView({ engine, fx }) {
+const QUIET = { play() {}, burst() {}, float() {} };
+
+export function triviaMoment(was, m) {
+  const now = { qid: m.qid, phase: m.phase };
+  if (!was || m.phase !== 'reveal' || (was.qid === m.qid && was.phase === 'reveal')) return { now, cue: null };
+  if (m.skipped || m.myPick === null) return { now, cue: null };
+  return { now, cue: m.gotIt ? 'correct' : 'wrong' };
+}
+
+export function createTriviaView({ engine, fx, cues }) {
+  const cue = cues && typeof cues.play === 'function' ? cues : QUIET;
   const el = h('section', { class: 'game game-trivia', attrs: { 'aria-label': 'Trivia' } });
   const local = { qid: null, pick: null };
   let snap = null;
   let cheered = null;
+  let heard = null;
   const paint = memo(render);
 
   function choose(m, i) {
     if (!m.canAnswer || m.iAnswered) return;
     local.qid = m.qid;
     local.pick = i;
+    cue.play('send');
     engine.act({ type: 'answer', i, q: m.qid });
     if (snap) update(snap);
   }
@@ -117,6 +129,16 @@ export function createTriviaView({ engine, fx }) {
       return;
     }
     paint(el, m);
+    const { now, cue: moment } = triviaMoment(heard, m);
+    heard = now;
+    if (moment) {
+      cue.play(moment);
+      const mineBtn = moment === 'correct' ? el.querySelector(`.option-${m.myPick}`) : null;
+      if (mineBtn) {
+        cue.burst(mineBtn, { count: 16, emoji: ['✨', '🎉'] });
+        if (m.myGain) cue.float(mineBtn, `+${m.myGain.toLocaleString('en-US')}`);
+      }
+    }
     if (m.phase === 'reveal' && m.gotIt && cheered !== m.qid) {
       cheered = m.qid;
       fx.confetti(50);
