@@ -101,6 +101,7 @@ function admit(api, st, slot) {
 const wyr = {
   id: 'wyr',
   name: 'Would You Rather',
+  category: 'party',
   emoji: '🤔',
   blurb: 'Pick a side before the timer runs out. Side with the crowd to score.',
   minPlayers: 1,

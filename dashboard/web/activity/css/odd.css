@@ -1,0 +1,416 @@
+.odd-head {
+  min-width: 0;
+}
+
+.odd-rolewrap {
+  margin-top: 14px;
+}
+
+.odd-role {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  animation: pop 420ms var(--pop);
+}
+
+.odd-role.is-crew {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--success) 12%, var(--surface-2)), var(--surface-2));
+}
+
+.odd-role.is-odd {
+  border-color: color-mix(in srgb, var(--violet-deep) 60%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--violet-deep) 22%, var(--surface-2)), color-mix(in srgb, var(--pink-deep) 10%, var(--surface-2)));
+  box-shadow: 0 14px 34px -18px rgba(124, 92, 255, 0.8);
+}
+
+.odd-role.is-hidden {
+  padding: 10px 14px;
+  animation: none;
+}
+
+.odd-role-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: var(--surface-3);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.odd-role.is-hidden .odd-role-icon {
+  width: 36px;
+  height: 36px;
+  font-size: 20px;
+}
+
+.odd-role-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.odd-role-title,
+.odd-role-word,
+.odd-role-line,
+.odd-role-hint {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.odd-role-title {
+  font-size: 15px;
+  font-weight: 750;
+  color: var(--text-2);
+}
+
+.odd-role.is-odd .odd-role-title {
+  font-size: clamp(18px, 3.6vw, 22px);
+  color: var(--text);
+}
+
+.odd-role-word {
+  margin: 2px 0;
+  font-size: clamp(24px, 5.4vw, 34px);
+  font-weight: 850;
+  letter-spacing: -0.01em;
+  color: var(--success);
+}
+
+.odd-role-line {
+  font-weight: 650;
+}
+
+.odd-role.is-hidden .odd-role-line {
+  flex: 1;
+  color: var(--text-2);
+}
+
+.odd-role-hint {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.odd-seats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.odd-seat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 10px 3px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color 200ms var(--ease), box-shadow 220ms var(--ease), opacity 200ms var(--ease);
+}
+
+.odd-seat.is-up {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.odd-seat.is-me {
+  font-weight: 750;
+}
+
+.odd-seat.is-away {
+  opacity: 0.45;
+}
+
+.odd-seat.is-odd {
+  border-color: var(--violet-deep);
+  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.25);
+}
+
+.odd-seat-name {
+  min-width: 0;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.odd-seat-lines {
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.odd-seat-badge {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.odd-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--ink, var(--text-3));
+  box-shadow: 0 0 0 2px var(--surface-3);
+}
+
+.odd-bannerwrap {
+  min-height: 0;
+}
+
+.odd-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.odd-banner.is-mine {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 750;
+  animation: pop 420ms var(--pop);
+}
+
+.odd-act {
+  margin-top: 12px;
+}
+
+.odd-act:empty {
+  margin-top: 0;
+}
+
+.odd-board {
+  margin-top: 12px;
+}
+
+.odd-pen-tag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.odd-pen-tag .odd-dot {
+  width: 18px;
+  height: 18px;
+}
+
+.odd-votes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.odd-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  transition: transform 180ms var(--ease), border-color 180ms var(--ease), background-color 180ms var(--ease), opacity 220ms var(--ease);
+}
+
+.odd-pick:disabled {
+  cursor: default;
+}
+
+.odd-pick:disabled:not(.is-mine) {
+  opacity: 0.6;
+}
+
+.odd-pick.is-mine {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.odd-pick.is-away {
+  opacity: 0.45;
+}
+
+.odd-pick:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.odd-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.odd-pick-tag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.odd-guess {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.odd-reveal {
+  margin: 0;
+}
+
+.odd-reveal.is-caught {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+}
+
+.odd-reveal.is-escaped {
+  border-color: color-mix(in srgb, var(--violet-deep) 55%, var(--border));
+}
+
+.odd-reveal-head {
+  margin: 0;
+  font-size: clamp(18px, 3.8vw, 24px);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.odd-reveal-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.odd-reveal-name {
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.odd-reveal-guess {
+  margin: 0;
+  color: var(--text-2);
+  font-weight: 650;
+}
+
+.odd-tally {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.odd-tally-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 14px;
+}
+
+.odd-tally-row.is-odd {
+  box-shadow: inset 0 0 0 1px var(--violet-deep);
+}
+
+.odd-tally-name {
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.odd-tally-count {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.odd-won {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--accent-text);
+}
+
+.play:has(.game-odd) > .strip > .strip-list,
+.play:has(.game-odd) > .strip > .strip-empty {
+  display: none;
+}
+
+@media (hover: hover) {
+  .odd-pick:hover:not(:disabled) {
+    border-color: var(--ring);
+    transform: translateY(-1px);
+  }
+}
+
+@media (max-width: 520px) {
+  .odd-role {
+    align-items: flex-start;
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .odd-role-icon {
+    width: 40px;
+    height: 40px;
+    font-size: 22px;
+  }
+
+  .odd-guess {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .odd-votes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .odd-role,
+  .odd-banner.is-mine,
+  .odd-pick,
+  .odd-seat {
+    animation: none;
+    transition: none;
+  }
+
+  .odd-pick:hover:not(:disabled) {
+    transform: none;
+  }
+}

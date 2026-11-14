@@ -295,6 +295,7 @@
 .sizes,
 .tool-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -321,6 +322,20 @@
 .size.is-on {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.tool-fill-icon,
+.tool-pen-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.tool-fill.is-on {
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.draw-board.is-drawing.is-filling .ink-canvas {
+  cursor: cell;
 }
 
 .draw-side {

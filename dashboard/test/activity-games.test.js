@@ -66,6 +66,7 @@ test('every game follows the module interface', () => {
     assert.equal(typeof g.blurb, 'string');
     for (const fn of ['start', 'intent', 'deadline', 'resume', 'model']) assert.equal(typeof g[fn], 'function', `${g.id}.${fn}`);
     assert.ok(Array.isArray(g.keys) && g.keys.length);
+    assert.ok(['drawing', 'words', 'quiz', 'party', 'quick'].includes(g.category), `${g.id}.category`);
     for (const s of g.settings) assert.ok(s.options.some((o) => JSON.stringify(o.value) === JSON.stringify(s.default)) || s.type === 'multi');
   }
 });

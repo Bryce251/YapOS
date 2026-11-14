@@ -76,8 +76,10 @@ async function pickWord(r, i = 0) {
   return r.engines[0].snapshot().state.draw;
 }
 
-test('the word list has about 200 fresh, drawable words in three tiers', () => {
-  assert.ok(WORDS.length >= 190 && WORDS.length <= 230, String(WORDS.length));
+test('the word list has over 3000 fresh, drawable words in three tiers', () => {
+  assert.ok(WORDS.length >= 3000, String(WORDS.length));
+  assert.equal(wordById(0).w, 'cat');
+  assert.equal(wordById(199).w, 'garden gnome');
   const seen = new Set();
   for (const w of WORDS) {
     assert.match(w.w, /^[a-z]+( [a-z]+)*$/, w.w);
@@ -87,7 +89,7 @@ test('the word list has about 200 fresh, drawable words in three tiers', () => {
     for (const re of BANNED) assert.equal(re.test(w.w), false, w.w);
     assert.equal(wordById(w.id), w);
   }
-  for (const t of TIERS) assert.ok(WORDS.filter((w) => w.tier === t.id).length >= 55, t.id);
+  for (const t of TIERS) assert.ok(WORDS.filter((w) => w.tier === t.id).length >= 800, t.id);
 });
 
 test('Draw & Guess and Word Chain are in the game picker with views', () => {

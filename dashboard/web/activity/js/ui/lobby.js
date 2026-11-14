@@ -2,6 +2,10 @@ import { h, memo, avatar, button, plural, who, countdown, uidOf } from './dom.js
 import { board, standings } from './board.js';
 import { sfx as defaultSfx } from './sfx.js';
 import { burstFrom } from './juice.js';
+import { CATEGORIES } from '../games/index.js';
+
+export const TAB_KEY = 'yapos.party.tab';
+export const ALL_TAB = 'all';
 
 function slim(p) {
   return { id: p.id, name: p.name, username: p.username || null, initials: p.initials, hue: p.hue, avatar: p.avatar || null, isHost: p.isHost, isMe: p.isMe };
@@ -32,9 +36,47 @@ export function lobbyModel(snap, games) {
     need: spec ? Math.max(0, spec.min - playing.length) : 0,
     countdown: live ? { from: live.from, at: live.at } : null,
     totals: standings(snap.players, 'total').map((p) => ({ id: p.id, name: p.name, username: p.username || null, initials: p.initials, hue: p.hue, avatar: p.avatar || null, pts: p.pts, place: p.place, isMe: p.isMe, present: p.present, slot: p.slot })),
-    games: games.map((g) => ({ id: g.id, name: g.name, emoji: g.emoji, blurb: g.blurb, min: g.minPlayers || 1 })),
+    games: games.map((g) => ({ id: g.id, name: g.name, emoji: g.emoji, blurb: g.blurb, min: g.minPlayers || 1, category: g.category || null })),
     rounds: snap.room.round || 0,
   };
+}
+
+export function pickerTabs(list, categories = CATEGORIES) {
+  const tabs = [{ id: ALL_TAB, name: 'All', emoji: '', count: list.length }];
+  for (const c of categories) {
+    const count = list.filter((g) => g.category === c.id).length;
+    if (count) tabs.push({ id: c.id, name: c.name, emoji: c.emoji, count });
+  }
+  return tabs;
+}
+
+export function gamesInTab(list, tab) {
+  return tab === ALL_TAB ? list.slice() : list.filter((g) => g.category === tab);
+}
+
+function defaultStore() {
+  try {
+    return typeof window !== 'undefined' && window ? window.localStorage || null : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readTab(store) {
+  try {
+    const v = store ? store.getItem(TAB_KEY) : null;
+    return typeof v === 'string' && v ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveTab(store, tab) {
+  try {
+    if (store) store.setItem(TAB_KEY, tab);
+  } catch {
+    return;
+  }
 }
 
 export const RESET_LABEL = 'New game (reset scores)';
@@ -145,7 +187,7 @@ function cue(sound, name, opts) {
   }
 }
 
-export function createLobby({ engine, toast, sfx = defaultSfx }) {
+export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultStore() }) {
   const el = h('section', { class: 'screen lobby', attrs: { 'aria-label': 'Lobby' } });
   const games = engine.games;
   const paint = memo(render);
@@ -153,6 +195,52 @@ export function createLobby({ engine, toast, sfx = defaultSfx }) {
   let known = null;
   let shownPick = null;
   let popPending = false;
+  let tab = readTab(store);
+  let tabPick = null;
+  let last = null;
+
+  function catOf(m, id) {
+    const g = m.games.find((x) => x.id === id);
+    return g && g.category ? g.category : ALL_TAB;
+  }
+
+  function settleTab(m) {
+    const tabs = pickerTabs(m.games);
+    const valid = tabs.some((t) => t.id === tab);
+    const firstLook = tabPick === null;
+    const moved = !firstLook && m.pick !== tabPick;
+    tabPick = m.pick;
+    if (!valid) tab = catOf(m, m.pick);
+    else if (firstLook || moved) {
+      const shows = gamesInTab(m.games, tab).some((g) => g.id === m.pick);
+      if (!shows) tab = catOf(m, m.pick);
+    }
+    return tabs;
+  }
+
+  function chooseTab(id, focus) {
+    if (!last || id === tab) return;
+    tab = id;
+    saveTab(store, id);
+    cue(sfx, 'toggle');
+    paint(el, { ...last, tab });
+    if (focus) {
+      const btn = el.querySelector(`[data-key="tab-${id}"]`);
+      if (btn && typeof btn.focus === 'function') btn.focus();
+    }
+  }
+
+  function tabKey(e, tabs) {
+    const i = tabs.findIndex((t) => t.id === tab);
+    let next = -1;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (i + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (i - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = tabs.length - 1;
+    if (next < 0) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    chooseTab(tabs[next].id, true);
+  }
 
   function disarm() {
     if (!armed) return;
@@ -250,10 +338,32 @@ export function createLobby({ engine, toast, sfx = defaultSfx }) {
         ? h('div', { class: 'watchers' }, h('h3', { class: 'group-title', text: `Watching · ${m.watching.length}` }), h('ul', { class: 'watcher-list' }, m.watching.map(watcher)))
         : null,
     );
+    const tabs = pickerTabs(m.games);
+    const shown = gamesInTab(m.games, m.tab);
+    const tabRow = h(
+      'div',
+      { class: 'picker-tabs', attrs: { role: 'tablist', 'aria-label': 'Game categories' } },
+      tabs.map((t) => {
+        const on = t.id === m.tab;
+        return h(
+          'button',
+          {
+            class: ['picker-tab', on ? 'is-on' : null],
+            type: 'button',
+            dataset: { key: `tab-${t.id}` },
+            attrs: { role: 'tab', id: `picker-tab-${t.id}`, 'aria-selected': on ? 'true' : 'false', 'aria-controls': 'picker-panel', tabindex: on ? '0' : '-1' },
+            on: { click: () => chooseTab(t.id, false), keydown: (e) => tabKey(e, tabs) },
+          },
+          t.emoji ? h('span', { class: 'picker-tab-emoji', text: t.emoji, attrs: { 'aria-hidden': 'true' } }) : null,
+          h('span', { class: 'picker-tab-name', text: t.name }),
+          h('span', { class: 'picker-tab-count', text: String(t.count), attrs: { 'aria-label': plural(t.count, 'game', 'games') } }),
+        );
+      }),
+    );
     const picker = h(
       'div',
       { class: 'game-picker', attrs: { role: 'radiogroup', 'aria-label': 'Pick a game' } },
-      m.games.map((g) =>
+      shown.map((g) =>
         h(
           'button',
           {
@@ -261,14 +371,21 @@ export function createLobby({ engine, toast, sfx = defaultSfx }) {
             type: 'button',
             disabled: !m.isHost,
             dataset: { key: `pick-${g.id}` },
-            attrs: { role: 'radio', 'aria-checked': g.id === game.id ? 'true' : 'false' },
+            attrs: { role: 'radio', 'aria-checked': g.id === game.id ? 'true' : 'false', title: g.blurb },
             on: { click: () => engine.lobby.pick(g.id) },
           },
           h('span', { class: 'game-emoji', text: g.emoji, attrs: { 'aria-hidden': 'true' } }),
-          h('span', { class: 'game-name', text: g.name }),
-          h('span', { class: 'game-blurb', text: g.blurb }),
+          h('span', { class: 'game-text' }, h('span', { class: 'game-name', text: g.name }), h('span', { class: 'game-blurb', text: g.blurb })),
         ),
       ),
+    );
+    const panel = h('div', { class: 'picker-panel', attrs: { role: 'tabpanel', id: 'picker-panel', 'aria-labelledby': `picker-tab-${m.tab}` } }, picker);
+    const pickedHidden = !shown.some((g) => g.id === game.id);
+    const upNext = h(
+      'span',
+      { class: ['picked-pill', pickedHidden ? 'is-away' : null], attrs: { 'aria-label': `Picked: ${gameMeta.name}` } },
+      h('span', { class: 'picked-pill-emoji', text: gameMeta.emoji, attrs: { 'aria-hidden': 'true' } }),
+      h('span', { class: 'picked-pill-name', text: gameMeta.name }),
     );
     const settings = h(
       'div',
@@ -280,8 +397,9 @@ export function createLobby({ engine, toast, sfx = defaultSfx }) {
     const gameCard = h(
       'div',
       { class: 'card glass game-card' },
-      h('div', { class: 'card-head' }, h('h2', { class: 'card-title', text: m.isHost ? 'Pick a game' : 'Up next' })),
-      picker,
+      h('div', { class: 'card-head' }, h('h2', { class: 'card-title', text: m.isHost ? 'Pick a game' : 'Up next' }), upNext),
+      tabRow,
+      panel,
       settings,
       h('div', { class: 'start-row' }, actionRow(m, gameMeta)),
     );
@@ -303,7 +421,9 @@ export function createLobby({ engine, toast, sfx = defaultSfx }) {
   return {
     el,
     update(snap) {
-      paint(el, lobbyModel(snap, games));
+      last = lobbyModel(snap, games);
+      settleTab(last);
+      paint(el, { ...last, tab });
       if (!popPending) return;
       popPending = false;
       const tile = el.querySelector('.game-tile.juice-pick');

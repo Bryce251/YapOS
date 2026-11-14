@@ -1,0 +1,748 @@
+import telephone, { REACTS, REACT_NAMES, NEXT_MIN_MS, TEXT_MAX, INK_CHARS, INK_PARTS, fitText, validInk, inkChars, entryKey } from '../games/telephone.js';
+import { GRID_W, GRID_H, COLORS, COLOR_NAMES, SIZES, SIZE_NAMES, ERASER, LEVELS, FILL, encodeParts, decodeStroke, quantise, strokeOn as inkStroke, fillOn, paintInk, createPainter } from '../games/ink.js';
+import { fillTool, markTool } from './draw.js';
+import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+
+export const SCALE = 2;
+export const WRITE_GAP_MS = 700;
+export const AUTO_SEND_MS = 700;
+export const FLUSH_LEFT_MS = 1000;
+export const TICK_MS = 400;
+
+const QUIET = { play() {}, burst() {}, float() {} };
+
+export const STEP_LABEL = Object.freeze({ write: '✍️ Write', draw: '🎨 Draw', text: '🔎 Describe', reveal: '🎬 The reveal', awards: '🏅 Awards', lost: '📵 Hung up' });
+
+export function headline(m, sent) {
+  if (m.phase === 'write') return sent ? 'Your phrase is on its way!' : 'Start a chain! Write something silly for someone to draw.';
+  if (m.phase === 'draw') return sent ? 'Nice drawing! Hold tight.' : 'Draw this phrase. No letters or numbers!';
+  if (m.phase === 'text') return sent ? 'Description sent!' : 'What is this drawing? Describe it in a few words.';
+  if (m.phase === 'awards') return 'And the awards go to…';
+  if (m.phase === 'lost') return m.note === 'few' ? 'Not enough players to keep the chains going.' : 'The host left, so the chains got lost.';
+  return '';
+}
+
+export function footText(m, sent) {
+  if (m.phase === 'lost') return 'Heading to the results in a moment.';
+  if (m.phase === 'awards') return 'Thanks for playing! Results are up next.';
+  if (m.phase === 'reveal') {
+    const r = m.reveal;
+    if (!r) return '';
+    if (r.canNext) return r.finale ? 'Tap Next to see the awards.' : r.last ? 'Tap Next for the next chain.' : 'Tap Next to see what happened next.';
+    return `${r.owner.name} is stepping through their chain.`;
+  }
+  if (m.pass) return 'Everyone is done! Passing the papers…';
+  if (m.waiting) return "You joined mid-round. You'll get a seat if one opens up, and you can react during the reveal.";
+  if (!m.playing) return "You're watching this round. Join the next one to play.";
+  const left = Math.max(0, m.needCount - m.doneCount);
+  if (sent) return left ? `Waiting for ${plural(left, 'player', 'players')}…` : 'Everyone is done!';
+  if (m.phase === 'write') return 'Type your own or tap a suggestion.';
+  if (m.phase === 'draw') return m.to ? `Your drawing goes to ${m.to.name} next.` : 'This is the last drawing in the chain!';
+  if (m.phase === 'text') return m.to ? `${m.to.name} will draw what you write.` : 'Yours is the last word in the chain!';
+  return '';
+}
+
+export function verbOf(e) {
+  if (e.i === 0) return 'started with';
+  if (e.k === 'd') return 'drew';
+  return 'thought it was';
+}
+
+export function nextLabel(r) {
+  if (r.finale) return 'See the awards';
+  if (r.last) return 'Next chain';
+  return 'Next';
+}
+
+function strokeOn(ctx, s, from = 0) {
+  inkStroke(ctx, s, SCALE, from);
+}
+
+function contextOf(canvas) {
+  try {
+    return typeof canvas.getContext === 'function' ? canvas.getContext('2d', { willReadFrequently: true }) : null;
+  } catch {
+    return null;
+  }
+}
+
+function paintStrokes(ctx, strokes, painter = null) {
+  if (!ctx) return;
+  if (painter) painter.paint(ctx, strokes);
+  else paintInk(ctx, strokes, SCALE);
+}
+
+export function decodeAll(parts) {
+  return (Array.isArray(parts) ? parts : []).map(decodeStroke).filter(Boolean);
+}
+
+export function fitStroke(stroke, used, count) {
+  for (const eps of LEVELS) {
+    const parts = encodeParts(stroke, eps);
+    if (used + inkChars(parts) <= INK_CHARS && count + parts.length <= INK_PARTS) return { parts, cut: false };
+  }
+  let lo = 1;
+  let hi = stroke.pts.length - 1;
+  let found = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const parts = encodeParts({ ...stroke, pts: stroke.pts.slice(0, mid) }, LEVELS[LEVELS.length - 1]);
+    if (used + inkChars(parts) <= INK_CHARS && count + parts.length <= INK_PARTS) {
+      found = parts;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return found && found.length ? { parts: found, cut: true } : null;
+}
+
+function byData(root, selector, name, value) {
+  for (const x of root.querySelectorAll(selector)) if (x.dataset && x.dataset[name] === String(value)) return x;
+  return null;
+}
+
+function faceRow(p, verb, size = 'sm') {
+  return h(
+    'span',
+    { class: 'who' },
+    avatar(p, size),
+    h('span', { class: 'who-text' }, h('span', { class: 'who-line' }, h('strong', { class: 'who-name', text: p.isMe ? 'You' : p.name }), verb ? h('span', { class: 'who-verb', text: ` ${verb}` }) : null)),
+  );
+}
+
+export function telephoneMoments(was, m) {
+  const stepKey = `${m.run}:${m.phase}:${m.step}`;
+  const r = m.reveal;
+  const rx = r ? r.entries.map((e) => e.rx.reduce((a, b) => a + b, 0)) : [];
+  const now = { stepKey, phase: m.phase, c: r ? r.c : null, at: r ? r.at : -1, rx, done: m.doneCount };
+  if (!was) return { now, cues: [] };
+  const cues = [];
+  if (stepKey !== was.stepKey) {
+    if ((m.phase === 'write' || m.phase === 'draw' || m.phase === 'text') && m.playing) cues.push({ name: 'turn' });
+    else if (m.phase === 'reveal') cues.push({ name: 'whoosh' });
+    else if (m.phase === 'awards') cues.push({ name: 'reveal' });
+    else if (m.phase === 'lost') cues.push({ name: 'leave' });
+    return { now, cues };
+  }
+  if (r) {
+    if (r.c !== was.c) cues.push({ name: 'whoosh' });
+    else if (r.at > was.at) cues.push({ name: 'reveal' });
+    else {
+      const grew = rx.findIndex((n, i) => n > (was.rx[i] || 0));
+      if (grew >= 0) cues.push({ name: 'pop', opts: { volume: 0.5 }, entry: grew });
+    }
+  } else if (m.doneCount > was.done && !m.pass) {
+    cues.push({ name: 'tap', opts: { volume: 0.4 } });
+  }
+  return { now, cues };
+}
+
+export function createTelephoneView({ engine, fx, toast, win, cues }) {
+  const cue = cues && typeof cues.play === 'function' ? cues : QUIET;
+  const say = typeof toast === 'function' ? toast : () => {};
+  const w = win || globalThis;
+  const el = h('section', { class: 'game telephone-game', attrs: { 'aria-label': 'Draw Telephone' } });
+  const head = h('div', { class: 'telephone-headwrap' });
+  const track = h('div', { class: 'telephone-track-wrap' });
+  const task = h('div', { class: 'telephone-task', attrs: { 'aria-live': 'polite' } });
+  const canvas = h('canvas', { class: 'ink-canvas', attrs: { width: GRID_W * SCALE, height: GRID_H * SCALE, role: 'img', 'aria-label': 'Drawing' } });
+  const blankNote = h('p', { class: 'telephone-blank telephone-off', text: 'Blank page! Make up what it might be.' });
+  const paper = h('div', { class: 'paper telephone-paper' }, canvas, blankNote);
+  const ctx = contextOf(canvas);
+  const painter = createPainter(SCALE);
+  const pen = { c: 1, z: 1, fill: false };
+  const swatches = COLORS.map((col, i) =>
+    h('button', {
+      class: ['swatch', i === ERASER ? 'is-eraser' : null, i === pen.c ? 'is-on' : null],
+      type: 'button',
+      dataset: { key: i === ERASER ? 'eraser' : `color-${i}` },
+      vars: { '--sw': col },
+      attrs: { 'aria-label': COLOR_NAMES[i], 'aria-pressed': i === pen.c ? 'true' : 'false', title: COLOR_NAMES[i] },
+      on: { click: () => setPen({ c: i }) },
+    }, i === ERASER ? h('span', { class: 'swatch-icon', text: '🧽', attrs: { 'aria-hidden': 'true' } }) : null),
+  );
+  const sizes = SIZES.map((z, i) =>
+    h('button', {
+      class: ['size', i === pen.z ? 'is-on' : null],
+      type: 'button',
+      dataset: { key: `size-${i}` },
+      vars: { '--dot': `${Math.max(4, Math.min(26, z))}px` },
+      attrs: { 'aria-label': `${SIZE_NAMES[i]} pen`, 'aria-pressed': i === pen.z ? 'true' : 'false', title: SIZE_NAMES[i] },
+      on: { click: () => setPen({ z: i, fill: false }) },
+    }, h('span', { class: 'size-dot', attrs: { 'aria-hidden': 'true' } })),
+  );
+  const fillBtn = fillTool(pen.fill, () => setPen({ fill: !pen.fill }));
+  const undoBtn = button('Undo', { variant: 'ghost', size: 'sm', key: 'undo', on: () => undo() });
+  const clearBtn = button('Clear', { variant: 'ghost', size: 'sm', key: 'clear', on: () => clearAll() });
+  const meter = h('div', { class: 'telephone-meter' });
+  const tools = h(
+    'div',
+    { class: 'draw-tools', attrs: { role: 'toolbar', 'aria-label': 'Drawing tools' } },
+    h('div', { class: 'swatches' }, swatches),
+    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes, fillBtn), h('div', { class: 'tool-actions' }, undoBtn, clearBtn)),
+  );
+  const doneBtn = button('Done!', { variant: 'primary', size: 'lg', key: 'draw-done', on: () => finishDrawing() });
+  const editBtn = button('Keep drawing', { variant: 'ghost', key: 'draw-edit', on: () => keepDrawing() });
+  const doneRow = h('div', { class: 'telephone-done-row' }, meter, doneBtn, editBtn);
+  const board = h('div', { class: 'draw-board telephone-board telephone-off' }, paper, tools, doneRow);
+  const input = h('input', {
+    class: 'word-input',
+    dataset: { key: 'tel-input' },
+    attrs: { type: 'text', maxlength: TEXT_MAX, autocomplete: 'off', spellcheck: 'true', enterkeyhint: 'send', 'aria-label': 'Your phrase', placeholder: 'Type something silly' },
+  });
+  const sendBtn = button('Send', { variant: 'primary', key: 'tel-send', on: () => submitText() });
+  const sugBox = h('div', { class: 'telephone-sugs' });
+  const entry = h('div', { class: 'telephone-entry telephone-off' }, h('div', { class: 'entry-row' }, input, sendBtn), sugBox);
+  const waitBox = h('div', { class: 'telephone-wait' });
+  const revealBox = h('div', { class: 'telephone-reveal' });
+  const awardBox = h('div', { class: 'telephone-awards' });
+  const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
+  el.append(head, track, task, board, entry, waitBox, revealBox, awardBox, foot);
+
+  const mine = { key: null, strokes: [], parts: [], used: 0, dirty: false };
+  const local = { stepKey: null, sent: null, reacted: new Set() };
+  let cur = null;
+  let model = null;
+  let snap = null;
+  let writeTimer = null;
+  let lastWrite = 0;
+  let heard = null;
+  let shownSrc = null;
+  let cheered = null;
+  let ticker = null;
+
+  function setPen(p) {
+    Object.assign(pen, p);
+    swatches.forEach((b, i) => {
+      b.classList.toggle('is-on', i === pen.c);
+      b.setAttribute('aria-pressed', i === pen.c ? 'true' : 'false');
+    });
+    sizes.forEach((b, i) => markTool(b, !pen.fill && i === pen.z));
+    markTool(fillBtn, pen.fill);
+    board.classList.toggle('is-filling', pen.fill);
+  }
+
+  function stepKeyOf(m) {
+    return `${m.run}:${m.step}:${m.k}`;
+  }
+
+  function sentNow() {
+    return Boolean(model && (model.mineDone || (local.sent === local.stepKey && model.phase !== 'draw')));
+  }
+
+  function canDraw() {
+    return Boolean(model && model.phase === 'draw' && model.playing && !model.mineDone && !model.pass && mine.key === stepKeyOf(model));
+  }
+
+  function paintMine() {
+    paintStrokes(ctx, cur ? mine.strokes.concat([cur]) : mine.strokes, painter);
+  }
+
+  function pointOf(e) {
+    const r = canvas.getBoundingClientRect();
+    if (!r || !r.width || !r.height) return null;
+    return quantise(((e.clientX - r.left) / r.width) * GRID_W, ((e.clientY - r.top) / r.height) * GRID_H);
+  }
+
+  function fillAt(p) {
+    const parts = encodeParts({ c: pen.c, z: FILL, pts: [p] });
+    if (!parts.length || mine.used + inkChars(parts) > INK_CHARS || mine.parts.flat().length + parts.length > INK_PARTS) {
+      cue.play('error');
+      say('Out of ink! Undo a line or tap Done.');
+      return;
+    }
+    paintMine();
+    const s = decodeStroke(parts[0]);
+    if (!s || fillOn(ctx, s, SCALE) === 0) return;
+    mine.parts.push(parts);
+    mine.strokes.push(s);
+    mine.used += inkChars(parts);
+    mine.dirty = true;
+    paintMeter();
+    queueWrite();
+  }
+
+  function onDown(e) {
+    if (!canDraw() || cur) return;
+    if (mine.used >= INK_CHARS) {
+      cue.play('error');
+      say('Out of ink! Undo a line or tap Done.');
+      return;
+    }
+    const p = pointOf(e);
+    if (!p) return;
+    e.preventDefault();
+    if (pen.fill) {
+      fillAt(p);
+      return;
+    }
+    if (typeof canvas.setPointerCapture === 'function' && e.pointerId !== undefined) {
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch {
+        cur = null;
+      }
+    }
+    cur = { c: pen.c, z: pen.z, pts: [p] };
+    strokeOn(ctx, cur);
+  }
+
+  function onMove(e) {
+    if (!cur) return;
+    e.preventDefault();
+    const before = cur.pts.length;
+    const list = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+    for (const x of list.length ? list : [e]) {
+      const p = pointOf(x);
+      const last = cur.pts[cur.pts.length - 1];
+      if (p && (!last || last[0] !== p[0] || last[1] !== p[1])) cur.pts.push(p);
+    }
+    if (cur.pts.length > before) strokeOn(ctx, cur, before);
+  }
+
+  function onUp() {
+    if (!cur) return;
+    const s = cur;
+    cur = null;
+    if (!canDraw()) {
+      paintMine();
+      return;
+    }
+    const fit = fitStroke(s, mine.used, mine.parts.flat().length);
+    if (!fit) {
+      cue.play('error');
+      say('Out of ink! Undo a line or tap Done.');
+      paintMine();
+      return;
+    }
+    if (fit.cut) {
+      cue.play('error');
+      say('Out of ink! That line got cut short.');
+    }
+    mine.parts.push(fit.parts);
+    mine.strokes.push(...decodeAll(fit.parts));
+    mine.used += inkChars(fit.parts);
+    mine.dirty = true;
+    paintMine();
+    paintMeter();
+    queueWrite();
+  }
+
+  function payload() {
+    return { k: model.k, s: mine.parts.flat() };
+  }
+
+  function queueWrite() {
+    if (writeTimer !== null) return;
+    const wait = Math.max(0, lastWrite + WRITE_GAP_MS - Date.now());
+    writeTimer = w.setTimeout(writeNow, wait);
+  }
+
+  function writeNow() {
+    if (writeTimer !== null) {
+      w.clearTimeout(writeTimer);
+      writeTimer = null;
+    }
+    if (!model || model.phase !== 'draw' || !model.playing || !model.inkKey || mine.key !== stepKeyOf(model)) return;
+    lastWrite = Date.now();
+    mine.dirty = false;
+    engine.direct(model.inkKey, payload());
+  }
+
+  function undo() {
+    if (!canDraw() || cur || !mine.parts.length) return;
+    const gone = mine.parts.pop();
+    mine.used -= inkChars(gone);
+    mine.strokes = decodeAll(mine.parts.flat());
+    mine.dirty = true;
+    paintMine();
+    paintMeter();
+    queueWrite();
+  }
+
+  function clearAll() {
+    if (!canDraw() || cur || !mine.parts.length) return;
+    mine.parts = [];
+    mine.strokes = [];
+    mine.used = 0;
+    mine.dirty = true;
+    paintMine();
+    paintMeter();
+    queueWrite();
+  }
+
+  function finishDrawing() {
+    if (!canDraw()) return;
+    writeNow();
+    local.sent = local.stepKey;
+    cue.play('send');
+    engine.act({ type: 'done', step: model.step });
+    refresh();
+  }
+
+  function keepDrawing() {
+    if (!model || model.phase !== 'draw' || !model.mineDone || model.pass) return;
+    local.sent = null;
+    cue.play('toggle');
+    engine.act({ type: 'edit', step: model.step });
+  }
+
+  function submitText(auto = false) {
+    if (!model || (model.phase !== 'write' && model.phase !== 'text') || !model.playing || sentNow()) return false;
+    const text = fitText(input.value);
+    if (!text) {
+      if (!auto) {
+        cue.play('error');
+        say(model.phase === 'write' ? 'Type a phrase or tap a suggestion first.' : 'Type what you think the drawing is.');
+        input.classList.add('is-refused');
+        w.setTimeout(() => input.classList.remove('is-refused'), 420);
+      }
+      return false;
+    }
+    local.sent = local.stepKey;
+    cue.play('send');
+    engine.act({ type: 'text', step: model.step, text });
+    refresh();
+    return true;
+  }
+
+  function pick(i) {
+    if (!model || model.phase !== 'write' || !model.playing || sentNow()) return;
+    local.sent = local.stepKey;
+    cue.play('send');
+    engine.act({ type: 'pick', step: model.step, i });
+    refresh();
+  }
+
+  function react(e, i) {
+    const r = model && model.reveal;
+    if (!r || !r.canReact) return;
+    const mark = `${model.run}.${r.c}.${i}.${e}`;
+    if (local.reacted.has(mark)) return;
+    local.reacted.add(mark);
+    cue.play('tap', { volume: 0.6 });
+    const btn = byData(revealBox, '.telephone-react', 'key', `react-${i}-${e}`);
+    if (btn) cue.float(btn, REACTS[e]);
+    engine.act({ type: 'react', c: r.c, i, e });
+    refresh();
+  }
+
+  function next() {
+    const r = model && model.reveal;
+    if (!r || !r.canNext) return;
+    if (typeof engine.now === 'function' && engine.now() - model.starts < NEXT_MIN_MS) return;
+    cue.play('tap');
+    engine.act({ type: 'next', c: r.c, at: r.at });
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitText();
+    }
+  });
+  canvas.addEventListener('pointerdown', onDown);
+  canvas.addEventListener('pointermove', onMove);
+  canvas.addEventListener('pointerup', onUp);
+  canvas.addEventListener('pointercancel', onUp);
+  canvas.addEventListener('lostpointercapture', onUp);
+
+  const paintHead = memo((m) =>
+    h(
+      'div',
+      { class: 'game-head' },
+      h('span', { class: 'chip chip-static', text: STEP_LABEL[m.phase] || '☎️' }),
+      m.count ? h('span', { class: 'game-count', text: m.count }) : null,
+      m.pass ? h('span', { class: 'game-count', text: 'Passing…' }) : m.ends ? timer(m.starts, m.ends, m.label) : null,
+    ),
+  );
+
+  const paintTrack = memo((m) => {
+    if (!m.kinds.length || !m.stepping) return null;
+    return h(
+      'ol',
+      { class: 'telephone-track', attrs: { 'aria-label': `Step ${m.step + 1} of ${m.kinds.length}` } },
+      m.kinds.map((k, i) =>
+        h('li', {
+          class: ['telephone-dot', `telephone-kind-${k}`, i < m.step ? 'telephone-past' : null, i === m.step ? 'telephone-now' : null],
+          text: k === 'write' ? '✍️' : k === 'draw' ? '🎨' : '🔎',
+          attrs: { title: STEP_LABEL[k], 'aria-hidden': 'true' },
+        }),
+      ),
+    );
+  });
+
+  const paintTask = memo((m) => {
+    if (!m.text && !m.prompt) return null;
+    return h(
+      'div',
+      { class: ['telephone-task-card', m.prompt ? 'telephone-has-prompt' : null] },
+      h('p', { class: 'telephone-lead', text: m.text }),
+      m.prompt ? h('p', { class: 'telephone-prompt' }, h('span', { class: 'telephone-quote', text: m.prompt })) : null,
+      m.from ? h('p', { class: 'telephone-from muted' }, h('span', { text: m.prompt ? 'Written by ' : 'Drawn by ' }), h('strong', { text: m.from })) : null,
+    );
+  });
+
+  const paintSugs = memo((m) => {
+    if (!m.sugs.length) return null;
+    return h(
+      'div',
+      { class: 'telephone-sug-list' },
+      h('span', { class: 'telephone-sug-label muted', text: 'Or pick one:' }),
+      m.sugs.map((s) => button(s.text, { variant: 'secondary', size: 'sm', key: `sug-${s.i}`, disabled: m.sent, on: () => pick(s.i) })),
+    );
+  });
+
+  const paintMeterBox = memo((m) =>
+    h(
+      'div',
+      { class: ['telephone-ink', m.left < 0.2 ? 'telephone-low' : null], attrs: { role: 'meter', 'aria-label': 'Ink left', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(m.left * 100)) } },
+      h('span', { class: 'telephone-ink-label', text: `🖋️ Ink left ${Math.round(m.left * 100)}%` }),
+      h('span', { class: 'telephone-ink-track' }, h('span', { class: 'telephone-ink-fill', vars: { '--ink': m.left.toFixed(3) } })),
+    ),
+  );
+
+  function paintMeter() {
+    paintMeterBox(meter, { left: Math.max(0, 1 - mine.used / INK_CHARS) });
+  }
+
+  const paintWait = memo((m) => {
+    if (!m.show) return null;
+    return h(
+      'div',
+      { class: 'telephone-waiting' },
+      h('span', { class: 'telephone-sent', text: m.sent ? '📨 Sent!' : '' }),
+      m.working.length
+        ? h(
+            'div',
+            { class: 'telephone-working' },
+            h('span', { class: 'muted', text: 'Still working:' }),
+            h('span', { class: 'faces' }, m.working.slice(0, 10).map((p) => avatar(p, 'xs'))),
+          )
+        : null,
+    );
+  });
+
+  const paintReveal = memo((r) => {
+    if (!r) return null;
+    return h(
+      'div',
+      { class: 'telephone-chain card glass' },
+      h(
+        'div',
+        { class: 'telephone-chain-head' },
+        h('span', { class: 'game-count', text: `Chain ${r.pos + 1} of ${r.total}` }),
+        faceRow(r.owner, r.owner.isMe ? '' : 'started this one', 'sm'),
+      ),
+      h(
+        'ol',
+        { class: 'telephone-entries' },
+        r.entries.map((e) =>
+          h(
+            'li',
+            { class: ['telephone-entry-item', `telephone-kind-${e.k === 'd' ? 'draw' : 'text'}`, e.i === r.at ? 'telephone-new' : null], dataset: { entry: e.i } },
+            h('div', { class: 'telephone-entry-who' }, faceRow(e.by, verbOf(e), 'xs'), e.miss ? h('span', { class: 'telephone-miss muted', text: e.k === 'd' ? '(ran out of time)' : '(no answer, so it carried over)' }) : null),
+            e.k === 'd'
+              ? h('div', { class: 'paper telephone-mini' }, h('canvas', { class: 'ink-canvas', dataset: { draw: e.i }, attrs: { width: GRID_W * SCALE, height: GRID_H * SCALE, role: 'img', 'aria-label': `Drawing by ${e.by.isMe ? 'you' : e.by.name}` } }), e.strokes ? null : h('p', { class: 'telephone-blank', text: 'Blank page!' }))
+              : h('p', { class: 'telephone-bubble', text: e.t }),
+            h(
+              'div',
+              { class: 'telephone-reacts', attrs: { role: 'group', 'aria-label': 'Reactions' } },
+              REACTS.map((emoji, x) => {
+                const did = e.did[x];
+                return h(
+                  'button',
+                  {
+                    class: ['telephone-react', 'spot', did ? 'is-on' : null, e.rx[x] ? 'telephone-has-count' : null],
+                    type: 'button',
+                    dataset: { key: `react-${e.i}-${x}` },
+                    disabled: !r.canReact || e.mine || did,
+                    attrs: { 'aria-label': `${REACT_NAMES[x]}: ${e.rx[x]}`, 'aria-pressed': did ? 'true' : 'false', title: REACT_NAMES[x] },
+                    on: { click: () => react(x, e.i) },
+                  },
+                  h('span', { class: 'telephone-react-emoji', text: emoji, attrs: { 'aria-hidden': 'true' } }),
+                  h('span', { class: 'telephone-react-count', text: e.rx[x] ? String(e.rx[x]) : '' }),
+                );
+              }),
+            ),
+          ),
+        ),
+      ),
+      r.canNext
+        ? h('div', { class: 'telephone-next' }, button(nextLabel(r), { variant: 'primary', size: 'lg', key: 'tel-next', disabled: r.early, on: () => next() }))
+        : null,
+    );
+  });
+
+  const paintAwards = memo((m) => {
+    if (m.phase !== 'awards' && m.phase !== 'lost') return null;
+    if (m.phase === 'lost') return h('div', { class: 'card glass telephone-lost' }, h('span', { class: 'trophy', text: '📵', attrs: { 'aria-hidden': 'true' } }), h('p', { class: 'muted', text: m.note === 'few' ? 'Too many people left, so this game is over. Start a new one from the lobby!' : 'Only the host keeps the hidden chains, and the host left. Start a new game from the lobby to play again!' }));
+    if (!m.awards.length) return h('p', { class: 'muted telephone-no-awards', text: 'No awards this time. Everyone was a winner in spirit!' });
+    return h(
+      'ul',
+      { class: 'telephone-award-grid' },
+      m.awards.map((a, i) =>
+        h(
+          'li',
+          { class: ['telephone-award', 'card', 'glass', a.who.isMe ? 'is-me' : null], dataset: { award: a.id }, vars: { '--i': i } },
+          h('span', { class: 'telephone-award-emoji', text: a.e, attrs: { 'aria-hidden': 'true' } }),
+          h('strong', { class: 'telephone-award-title', text: a.title }),
+          faceRow(a.who, '', 'sm'),
+          h('span', { class: 'telephone-award-why muted', text: a.why }),
+        ),
+      ),
+    );
+  });
+
+  const paintFoot = memo((m) => h('span', { class: 'foot-text', text: m.text }));
+
+  function syncBoard(m) {
+    const drawing = m.phase === 'draw' && m.playing;
+    const viewing = m.phase === 'text' && m.playing && m.src;
+    board.classList.toggle('telephone-off', !drawing && !viewing);
+    board.classList.toggle('is-drawing', canDraw());
+    board.classList.toggle('telephone-viewing', Boolean(viewing));
+    doneRow.classList.toggle('telephone-off', !drawing);
+    if (drawing) {
+      const key = stepKeyOf(m);
+      if (mine.key !== key) {
+        cur = null;
+        mine.key = key;
+        mine.parts = [];
+        mine.strokes = [];
+        mine.used = 0;
+        mine.dirty = false;
+        const back = snap.state[m.inkKey];
+        if (validInk(back, m.k)) {
+          mine.parts = back.s.map((s) => [s]);
+          mine.strokes = decodeAll(back.s);
+          mine.used = inkChars(back.s);
+        }
+        shownSrc = null;
+        paintMine();
+      }
+      blankNote.classList.add('telephone-off');
+      paintMeter();
+      undoBtn.disabled = !canDraw() || !mine.parts.length;
+      clearBtn.disabled = !canDraw() || !mine.parts.length;
+      doneBtn.disabled = !canDraw();
+      doneBtn.classList.toggle('telephone-off', m.mineDone);
+      editBtn.classList.toggle('telephone-off', !m.mineDone || m.pass);
+      return;
+    }
+    if (viewing) {
+      const v = snap.state[m.src.key];
+      const sig = `${m.src.key}:${m.src.k}:${v && Array.isArray(v.s) ? v.s.length : 0}:${v && v.k}`;
+      if (sig !== shownSrc) {
+        shownSrc = sig;
+        mine.key = null;
+        paintStrokes(ctx, validInk(v, m.src.k) ? decodeAll(v.s) : [], painter);
+      }
+      blankNote.classList.toggle('telephone-off', !m.src.blank);
+    }
+  }
+
+  function drawEntries(state) {
+    for (const c of revealBox.querySelectorAll('canvas')) {
+      const i = Number(c.dataset.draw);
+      const e = state[entryKey(i)];
+      paintStrokes(contextOf(c), e && Array.isArray(e.s) ? decodeAll(e.s) : []);
+    }
+  }
+
+  function hear(m) {
+    const first = heard === null;
+    const { now, cues: list } = telephoneMoments(heard, m);
+    heard = now;
+    for (const c of list) {
+      cue.play(c.name, c.opts);
+      if (c.entry !== undefined) {
+        const item = byData(revealBox, '.telephone-entry-item', 'entry', c.entry);
+        const row = item ? item.querySelector('.telephone-reacts') : null;
+        if (row) cue.burst(row, { count: 8, emoji: REACTS });
+      }
+    }
+    if (m.phase === 'awards' && cheered !== m.run) {
+      cheered = m.run;
+      if (first) return;
+      const me = awardBox.querySelector('.telephone-award.is-me');
+      if (me) {
+        cue.play('correct', { at: 360 });
+        cue.burst(me, { count: 18, emoji: ['🏅', '✨', '☎️'] });
+        if (fx && typeof fx.confetti === 'function') fx.confetti(30);
+      }
+    }
+  }
+
+  function autoSend(m) {
+    const now = typeof engine.now === 'function' ? engine.now() : Date.now();
+    if (!m.playing || m.pass || !m.ends) return;
+    if ((m.phase === 'write' || m.phase === 'text') && !sentNow() && now >= m.ends - AUTO_SEND_MS && input.value.trim()) submitText(true);
+    if (m.phase === 'draw' && mine.dirty && now >= m.ends - FLUSH_LEFT_MS) writeNow();
+  }
+
+  function refresh() {
+    if (snap) update(snap);
+  }
+
+  function update(next) {
+    snap = next;
+    const m = telephone.model(next);
+    model = m;
+    if (!m) {
+      paintTask(task, { text: 'Getting the chains ready…', prompt: null, from: null });
+      return;
+    }
+    const key = `${m.run}:${m.phase}:${m.step}:${m.k}`;
+    if (key !== local.stepKey) {
+      local.stepKey = key;
+      if (m.phase === 'write' || m.phase === 'text') {
+        input.value = '';
+        input.setAttribute('placeholder', m.phase === 'write' ? 'Type something silly' : 'Describe the drawing');
+        input.setAttribute('aria-label', m.phase === 'write' ? 'Your phrase' : 'Your description');
+      }
+    }
+    const stepping = m.phase === 'write' || m.phase === 'draw' || m.phase === 'text';
+    const sent = stepping && sentNow();
+    const count = stepping ? `Step ${m.step + 1} of ${m.steps}` : m.reveal ? `Chain ${m.reveal.pos + 1} of ${m.reveal.total}` : '';
+    const label = m.phase === 'draw' ? 'Time left to draw' : m.phase === 'reveal' ? 'Next one in' : m.phase === 'awards' ? 'Results in' : m.phase === 'lost' ? 'Results in' : 'Time left to write';
+    paintHead(head, { phase: m.phase, count, pass: m.pass, starts: m.starts, ends: m.ends, label });
+    paintTrack(track, { kinds: m.kinds, step: m.step, stepping });
+    const fromName = m.from ? (m.from.isMe ? 'you' : m.from.name) : null;
+    paintTask(task, {
+      text: stepping && !m.playing ? (m.waiting ? 'Hang tight! You can jump in if a seat opens up.' : 'Everyone is busy writing and drawing.') : headline(m, sent),
+      prompt: m.phase === 'draw' && m.playing ? m.prompt || '???' : null,
+      from: stepping && m.playing && m.phase !== 'write' ? fromName : null,
+    });
+    const typing = (m.phase === 'write' || m.phase === 'text') && m.playing;
+    entry.classList.toggle('telephone-off', !typing || sent);
+    input.disabled = !typing || sent;
+    sendBtn.disabled = !typing || sent;
+    paintSugs(sugBox, { sugs: m.phase === 'write' && m.playing ? m.sugs : [], sent });
+    syncBoard(m);
+    paintWait(waitBox, { show: stepping && (sent || !m.playing || m.pass), sent, working: m.working.map((p) => ({ id: p.id, name: p.name, initials: p.initials, hue: p.hue, avatar: p.avatar })) });
+    const r = m.reveal
+      ? { ...m.reveal, entries: m.reveal.entries.map((e) => ({ ...e, did: REACTS.map((_, x) => local.reacted.has(`${m.run}.${m.reveal.c}.${e.i}.${x}`)) })) }
+      : null;
+    if (paintReveal(revealBox, r)) drawEntries(next.state);
+    paintAwards(awardBox, { phase: m.phase, note: m.note, awards: m.awards });
+    paintFoot(foot, { text: footText(m, sent) });
+    el.dataset.phase = m.phase;
+    hear(m);
+    autoSend(m);
+  }
+
+  if (typeof w.setInterval === 'function') ticker = w.setInterval(() => snap && update(engine.snapshot()), TICK_MS);
+  paintStrokes(ctx, []);
+
+  return {
+    el,
+    update,
+    destroy() {
+      if (ticker !== null && typeof w.clearInterval === 'function') w.clearInterval(ticker);
+      if (writeTimer !== null) w.clearTimeout(writeTimer);
+      writeTimer = null;
+    },
+  };
+}

@@ -1,5 +1,5 @@
 import draw, { GUESS_CHARS, REVEAL_MS, PICK_MS } from '../games/draw.js';
-import { GRID_W, GRID_H, COLORS, COLOR_NAMES, SIZES, SIZE_NAMES, ERASER, MAX_CHUNKS, inkKey, fitInk, readInk, liveMessage, applyLive, pruneLive, quantise } from '../games/ink.js';
+import { GRID_W, GRID_H, COLORS, COLOR_NAMES, SIZES, SIZE_NAMES, ERASER, MAX_CHUNKS, FILL, inkKey, fitInk, readInk, liveMessage, applyLive, pruneLive, quantise, decodeStroke, strokeOn as inkStroke, fillOn, createPainter } from '../games/ink.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
 import { board as scoreBoard, standings } from '../ui/board.js';
 import { person } from '../players.js';
@@ -105,24 +105,37 @@ function markDrawer(list, rows) {
 }
 
 function strokeOn(ctx, s, from = 0) {
-  if (!ctx || !s || !s.pts.length) return;
-  ctx.strokeStyle = COLORS[s.c] || COLORS[1];
-  ctx.fillStyle = COLORS[s.c] || COLORS[1];
-  ctx.lineWidth = (SIZES[s.z] || SIZES[1]) * SCALE;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  const pts = s.pts;
-  if (pts.length === 1) {
-    ctx.beginPath();
-    ctx.arc(pts[0][0] * SCALE, pts[0][1] * SCALE, ctx.lineWidth / 2, 0, Math.PI * 2);
-    ctx.fill();
-    return;
+  inkStroke(ctx, s, SCALE, from);
+}
+
+export function fillTool(on, toggle) {
+  return h(
+    'button',
+    {
+      class: ['size', 'tool-fill', on ? 'is-on' : null],
+      type: 'button',
+      dataset: { key: 'tool-fill' },
+      attrs: { 'aria-label': 'Bucket fill', 'aria-pressed': on ? 'true' : 'false', title: 'Bucket fill: tap an area to fill it' },
+      on: { click: () => toggle() },
+    },
+    h('span', { class: 'tool-fill-icon', text: '🪣', attrs: { 'aria-hidden': 'true' } }),
+  );
+}
+
+export function markTool(btn, on) {
+  btn.classList.toggle('is-on', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
+export function chunkStrokes(chunks) {
+  const out = [];
+  for (const ch of chunks || []) {
+    for (const s of ch.s || []) {
+      const d = decodeStroke(s);
+      if (d) out.push(d);
+    }
   }
-  const start = Math.max(0, from - 1);
-  ctx.beginPath();
-  ctx.moveTo(pts[start][0] * SCALE, pts[start][1] * SCALE);
-  for (let i = start + 1; i < pts.length; i += 1) ctx.lineTo(pts[i][0] * SCALE, pts[i][1] * SCALE);
-  ctx.stroke();
+  return out;
 }
 
 const QUIET = { play() {}, burst() {}, float() {} };
@@ -162,8 +175,9 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   const gotBox = h('div', { class: 'draw-got' });
   const canvas = h('canvas', { class: 'ink-canvas', attrs: { width: GRID_W * SCALE, height: GRID_H * SCALE, role: 'img', 'aria-label': 'The drawing' } });
   const paper = h('div', { class: 'paper' }, canvas);
-  const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
-  const pen = { c: 1, z: 1 };
+  const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d', { willReadFrequently: true }) : null;
+  const painter = createPainter(SCALE);
+  const pen = { c: 1, z: 1, fill: false };
   const swatches = COLORS.map((col, i) =>
     h('button', {
       class: ['swatch', i === ERASER ? 'is-eraser' : null, i === pen.c ? 'is-on' : null],
@@ -181,16 +195,17 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
       dataset: { key: `size-${i}` },
       vars: { '--dot': `${Math.max(4, Math.min(26, z))}px` },
       attrs: { 'aria-label': `${SIZE_NAMES[i]} pen`, 'aria-pressed': i === pen.z ? 'true' : 'false', title: SIZE_NAMES[i] },
-      on: { click: () => setPen({ z: i }) },
+      on: { click: () => setPen({ z: i, fill: false }) },
     }, h('span', { class: 'size-dot', attrs: { 'aria-hidden': 'true' } })),
   );
+  const fillBtn = fillTool(pen.fill, () => setPen({ fill: !pen.fill }));
   const undoBtn = button('Undo', { variant: 'ghost', size: 'sm', key: 'undo', on: () => undo() });
   const clearBtn = button('Clear', { variant: 'ghost', size: 'sm', key: 'clear', on: () => clearAll() });
   const tools = h(
     'div',
     { class: 'draw-tools', attrs: { role: 'toolbar', 'aria-label': 'Drawing tools' } },
     h('div', { class: 'swatches' }, swatches),
-    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes), h('div', { class: 'tool-actions' }, undoBtn, clearBtn)),
+    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes, fillBtn), h('div', { class: 'tool-actions' }, undoBtn, clearBtn)),
   );
   const board = h('div', { class: 'draw-board' }, paper, tools);
   const feedBox = h('div', { class: 'feed-wrap' });
@@ -207,7 +222,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   const boardBox = h('div', { class: 'draw-scores' });
   el.append(head, wordBar, revealBox, gotBox, pickBox, h('div', { class: 'draw-main' }, board, side), foot, boardBox);
 
-  const mine = { k: null, strokes: [], level: 0, count: 0, chunks: [] };
+  const mine = { k: null, strokes: [], shown: [], level: 0, count: 0, chunks: [] };
   const live = new Map();
   const seen = { k: null, sig: null, strokes: [] };
   let cur = null;
@@ -243,10 +258,9 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
       b.classList.toggle('is-on', i === pen.c);
       b.setAttribute('aria-pressed', i === pen.c ? 'true' : 'false');
     });
-    sizes.forEach((b, i) => {
-      b.classList.toggle('is-on', i === pen.z);
-      b.setAttribute('aria-pressed', i === pen.z ? 'true' : 'false');
-    });
+    sizes.forEach((b, i) => markTool(b, !pen.fill && i === pen.z));
+    markTool(fillBtn, pen.fill);
+    board.classList.toggle('is-filling', pen.fill);
   }
 
   function blank() {
@@ -258,12 +272,10 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   function paint() {
     blank();
     if (shownMode === 'mine') {
-      for (const s of mine.strokes) strokeOn(ctx, s);
-      if (cur) strokeOn(ctx, cur);
+      painter.paint(ctx, cur ? mine.shown.concat([cur]) : mine.shown);
       return;
     }
-    for (const s of seen.strokes) strokeOn(ctx, s);
-    for (const si of [...live.keys()].sort((a, b) => a - b)) strokeOn(ctx, live.get(si));
+    painter.paint(ctx, seen.strokes.concat([...live.keys()].sort((a, b) => a - b).map((si) => live.get(si))));
   }
 
   function stopFrame() {
@@ -302,11 +314,26 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     cur.pts.push(p);
   }
 
+  function fillAt(p) {
+    stopFrame();
+    paint();
+    const s = { c: pen.c, z: FILL, pts: [p] };
+    if (fillOn(ctx, s, SCALE) === 0) return;
+    const msg = liveMessage(mine.k, mine.count, 0, s.pts, s);
+    engine.broadcast(msg);
+    mine.strokes.push(s);
+    commit(true);
+  }
+
   function onDown(e) {
     if (!canDraw() || cur) return;
     const p = pointOf(e);
     if (!p) return;
     e.preventDefault();
+    if (pen.fill) {
+      fillAt(p);
+      return;
+    }
     if (typeof canvas.setPointerCapture === 'function' && e.pointerId !== undefined) {
       try {
         canvas.setPointerCapture(e.pointerId);
@@ -369,6 +396,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     mine.level = fit.level;
     mine.chunks = fit.chunks;
     mine.count = fit.count;
+    mine.shown = chunkStrokes(fit.chunks);
     queueWrite();
   }
 
@@ -562,6 +590,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
         mine.chunks = fit ? fit.chunks : [];
         mine.count = fit ? fit.count : 0;
         mine.level = fit ? fit.level : 0;
+        mine.shown = chunkStrokes(mine.chunks);
         shownMode = 'mine';
         repaint();
       } else if (shownMode !== 'mine') {

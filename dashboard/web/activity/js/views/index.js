@@ -4,6 +4,14 @@ import { createTriviaView } from './trivia.js';
 import { createWyrView } from './wyr.js';
 import { createDrawView } from './draw.js';
 import { createChainView } from './chain.js';
+import { createOddView } from './odd.js';
+import { createTelephoneView } from './telephone.js';
+import { createScrambleView } from './scramble.js';
+import { createHiveView } from './hive.js';
+import { createEmojiView } from './emoji.js';
+import { createHottakesView } from './hottakes.js';
+import { createTruthsView } from './truths.js';
+import { createReflexView } from './reflex.js';
 
 function soundOf(over) {
   if (over && typeof over.play === 'function') return over;
@@ -62,6 +70,14 @@ export const VIEWS = Object.freeze({
   wyr: cued(createWyrView),
   draw: cued(createDrawView),
   chain: cued(createChainView),
+  odd: cued(createOddView),
+  telephone: cued(createTelephoneView),
+  scramble: cued(createScrambleView),
+  hive: cued(createHiveView),
+  emoji: cued(createEmojiView),
+  hottakes: cued(createHottakesView),
+  truths: cued(createTruthsView),
+  reflex: cued(createReflexView),
 });
 
 export function viewFor(id) {

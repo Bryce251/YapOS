@@ -275,6 +275,7 @@ function guess(api, slot, action) {
 const draw = {
   id: 'draw',
   name: 'Draw & Guess',
+  category: 'drawing',
   emoji: '🎨',
   blurb: 'Take turns drawing a secret word. Guess fast to score big.',
   minPlayers: 2,

@@ -681,21 +681,111 @@ img {
   font-size: 13px;
 }
 
+.picked-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 60%;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.picked-pill.is-away {
+  border-color: var(--ring);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.picked-pill-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-tabs {
+  display: flex;
+  gap: 6px;
+  max-width: 100%;
+  margin: 0 0 12px;
+  padding: 2px 2px 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.picker-tab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 160ms var(--ease), background 160ms var(--ease), color 160ms var(--ease);
+}
+
+.picker-tab.is-on {
+  border-color: var(--ring);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.picker-tab-emoji {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.picker-tab-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.picker-tab.is-on .picker-tab-count {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.picker-panel {
+  min-width: 0;
+}
+
 .game-picker {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  gap: 8px;
   margin-bottom: 18px;
 }
 
 .game-tile {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  min-height: 112px;
-  padding: 14px;
-  border-radius: 16px;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 64px;
+  padding: 10px 12px;
+  border-radius: 14px;
   border: 1px solid var(--border-strong);
   background: var(--surface);
   text-align: left;
@@ -718,18 +808,32 @@ img {
 }
 
 .game-emoji {
-  font-size: 26px;
+  flex: none;
+  font-size: 24px;
   line-height: 1.1;
+}
+
+.game-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .game-name {
   font-weight: 700;
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .game-blurb {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 12.5px;
+  line-height: 1.35;
 }
 
 .settings {
@@ -1711,6 +1815,11 @@ img {
     box-shadow: var(--lift);
   }
 
+  .picker-tab:hover:not(.is-on) {
+    border-color: var(--ring);
+    color: var(--text);
+  }
+
   .seg:hover:not(:disabled),
   .chip:hover:not(:disabled) {
     border-color: var(--ring);
@@ -1820,6 +1929,12 @@ img {
 
   .game-tile {
     min-height: 0;
+  }
+
+  .picker-tab {
+    min-height: 34px;
+    padding: 5px 10px;
+    font-size: 13px;
   }
 
   .option {

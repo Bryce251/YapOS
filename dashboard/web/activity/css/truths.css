@@ -1,0 +1,382 @@
+.truths-off {
+  display: none;
+}
+
+.truths-form {
+  margin-top: 6px;
+}
+
+.truths-eyebrow {
+  margin: 4px 2px 10px;
+}
+
+.truths-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 6px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  transition: border-color 180ms var(--ease), background-color 180ms var(--ease);
+}
+
+.truths-row-lie {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  background: var(--danger-soft);
+}
+
+.truths-num {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 800;
+}
+
+.truths-field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.truths-input {
+  width: 100%;
+  padding-right: 40px;
+}
+
+.truths-row-lie .truths-input {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--border-strong));
+}
+
+.truths-left {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.truths-lie-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 160ms var(--ease), background-color 160ms var(--ease), color 160ms var(--ease), transform 160ms var(--ease);
+}
+
+.truths-lie-icon {
+  filter: grayscale(1);
+  opacity: 0.6;
+  transition: filter 160ms var(--ease), opacity 160ms var(--ease);
+}
+
+.truths-lie-btn.truths-lie-on {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 20%, var(--surface));
+  color: var(--text);
+  animation: truths-pop 360ms var(--pop);
+}
+
+.truths-lie-on .truths-lie-icon {
+  filter: none;
+  opacity: 1;
+}
+
+.truths-lie-btn:focus-visible,
+.truths-idea-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.truths-lie-btn:disabled,
+.truths-idea-btn:disabled {
+  cursor: default;
+}
+
+.truths-locked .truths-row {
+  opacity: 0.8;
+}
+
+.truths-locked .truths-row-lie {
+  opacity: 1;
+}
+
+.truths-idea {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 2px 12px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.truths-idea-lead {
+  font-weight: 700;
+}
+
+.truths-idea-text {
+  color: var(--text);
+}
+
+.truths-idea-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.truths-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.truths-actions .btn {
+  min-height: 48px;
+}
+
+.truths-ready,
+.truths-voted {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  margin: 4px 2px 8px;
+}
+
+.truths-wait {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 26px 18px;
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.truths-wait-icon {
+  font-size: 44px;
+  line-height: 1;
+}
+
+.truths-wait-text {
+  margin: 0;
+  max-width: 420px;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.truths-writer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.truths-writer-says {
+  color: var(--text-2);
+  font-weight: 650;
+}
+
+.truths-question {
+  margin: 12px 0 14px;
+}
+
+.truths-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.truths-statement {
+  flex-wrap: wrap;
+  min-height: 60px;
+}
+
+.truths-statement .faces {
+  flex: none;
+}
+
+.truths-statement.truths-is-lie {
+  --tone: var(--danger);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+  box-shadow: 0 0 24px -6px rgba(248, 113, 113, 0.55);
+  animation: truths-pop 420ms var(--pop);
+}
+
+.truths-statement.truths-is-true {
+  --tone: var(--success);
+  opacity: 0.7;
+}
+
+.truths-statement.truths-is-true.is-mine {
+  opacity: 1;
+}
+
+.truths-tag {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.truths-tag-lie {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.truths-tag-true {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.truths-awards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.truths-award {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 14px;
+  border-radius: var(--radius-lg);
+  text-align: center;
+  animation: truths-rise 520ms var(--ease) both;
+}
+
+.truths-award + .truths-award {
+  animation-delay: 160ms;
+}
+
+.truths-award-me {
+  border-color: var(--accent);
+  box-shadow: var(--lift);
+}
+
+.truths-award-icon {
+  font-size: 42px;
+  line-height: 1;
+}
+
+.truths-award-title {
+  margin: 0;
+}
+
+.truths-award-people {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.truths-award-line {
+  margin: 0;
+  color: var(--text-2);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+@keyframes truths-pop {
+  0% {
+    transform: scale(0.96);
+  }
+  60% {
+    transform: scale(1.03);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes truths-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (hover: hover) {
+  .truths-lie-btn:hover:not(:disabled) {
+    border-color: var(--danger);
+    color: var(--text);
+  }
+
+  .truths-idea-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+}
+
+@media (max-width: 520px) {
+  .truths-row {
+    flex-wrap: wrap;
+  }
+
+  .truths-field {
+    flex-basis: calc(100% - 42px);
+  }
+
+  .truths-lie-btn {
+    margin-left: 42px;
+    min-height: 40px;
+  }
+
+  .truths-awards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .truths-actions .btn {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .truths-row,
+  .truths-lie-btn,
+  .truths-lie-icon {
+    transition: none;
+  }
+
+  .truths-lie-btn.truths-lie-on,
+  .truths-statement.truths-is-lie,
+  .truths-award {
+    animation: none;
+  }
+}

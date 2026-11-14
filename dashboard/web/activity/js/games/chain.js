@@ -260,6 +260,7 @@ export function seat(order, slot, cur) {
 const chain = {
   id: 'chain',
   name: 'Word Chain',
+  category: 'words',
   emoji: '🔗',
   blurb: 'Say a word that starts with the last letter of the one before. Run out of time and you lose a life.',
   minPlayers: 2,

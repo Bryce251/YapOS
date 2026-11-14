@@ -1,0 +1,294 @@
+.scramble-board {
+  margin: 14px 0 6px;
+}
+
+.scramble-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.scramble-stage .eyebrow {
+  margin-top: 0;
+}
+
+.scramble-tiles,
+.scramble-answer,
+.scramble-slots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.scramble-tile {
+  --size: clamp(30px, 8.4vw, 54px);
+  display: inline-grid;
+  place-items: center;
+  width: var(--size);
+  height: var(--size);
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 4px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--surface), var(--bg));
+  color: var(--text);
+  font: inherit;
+  font-size: clamp(20px, 5vw, 28px);
+  font-weight: 850;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 140ms var(--ease), opacity 160ms var(--ease), border-color 160ms var(--ease), background 160ms var(--ease);
+}
+
+.scramble-tile:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.scramble-tile:active:not(:disabled) {
+  transform: translateY(2px);
+  border-bottom-width: 2px;
+}
+
+.scramble-tile:disabled {
+  cursor: default;
+}
+
+.scramble-tile.is-used {
+  opacity: 0.28;
+  transform: scale(0.92);
+}
+
+.scramble-tile.is-answer {
+  border-color: var(--success);
+  background: var(--success-soft);
+  color: var(--success);
+  cursor: default;
+}
+
+.scramble-tiles.is-fresh .scramble-tile {
+  animation: scramble-drop 360ms var(--pop) backwards;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+.scramble-answer.is-fresh .scramble-tile {
+  animation: scramble-flip 420ms var(--pop) backwards;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+.scramble-slots {
+  gap: 6px;
+}
+
+.scramble-slot {
+  display: inline-grid;
+  place-items: end center;
+  width: clamp(26px, 6.5vw, 38px);
+  height: clamp(34px, 8vw, 44px);
+  padding-bottom: 4px;
+  border-bottom: 3px solid var(--text-3);
+  color: var(--text);
+  font-size: clamp(20px, 5vw, 26px);
+  font-weight: 800;
+  line-height: 1;
+  transition: border-color 160ms var(--ease), color 160ms var(--ease);
+}
+
+.scramble-slot.is-filled {
+  border-bottom-color: var(--accent);
+}
+
+.scramble-slot.is-off {
+  border-bottom-color: var(--danger);
+  color: var(--danger);
+}
+
+.scramble-slot.is-hint {
+  border-bottom-color: var(--amber);
+  color: var(--amber);
+  opacity: 0.7;
+}
+
+.scramble-slot.is-solved {
+  border-bottom-color: var(--success);
+  color: var(--success);
+}
+
+.scramble-hint {
+  margin: 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.14);
+  color: var(--amber);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.scramble-entry {
+  max-width: 460px;
+  margin: 14px auto 0;
+}
+
+.scramble-entry.is-hidden {
+  display: none;
+}
+
+.scramble-entry.is-open .word-input {
+  border-color: var(--accent);
+}
+
+.scramble-input {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+.scramble-input::placeholder {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.scramble-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.scramble-result {
+  margin-top: 14px;
+}
+
+.scramble-also {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+
+.scramble-alt {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.scramble-alt.is-me {
+  border-color: var(--violet);
+}
+
+.scramble-none {
+  margin: 0;
+  text-align: center;
+}
+
+.scramble-solvers {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scramble-solver {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 10px 4px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.scramble-solver.is-me {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.scramble-medal {
+  min-width: 18px;
+  text-align: center;
+  font-weight: 800;
+}
+
+.scramble-solver-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+}
+
+.scramble-solver-pts {
+  color: var(--success);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes scramble-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes scramble-flip {
+  from {
+    opacity: 0;
+    transform: rotateX(80deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (hover: hover) {
+  .scramble-tile:hover:not(:disabled) {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+  }
+}
+
+@media (max-width: 420px) {
+  .scramble-tiles,
+  .scramble-answer {
+    gap: 6px;
+  }
+
+  .scramble-slots {
+    gap: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scramble-tiles.is-fresh .scramble-tile,
+  .scramble-answer.is-fresh .scramble-tile {
+    animation: none;
+  }
+
+  .scramble-tile,
+  .scramble-slot {
+    transition: none;
+  }
+}

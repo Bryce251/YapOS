@@ -163,6 +163,7 @@ export function face(p, mine) {
 const trivia = {
   id: 'trivia',
   name: 'Trivia',
+  category: 'quiz',
   emoji: '🧠',
   blurb: 'Four choices, one right answer. The faster you are, the more you score.',
   minPlayers: 1,
