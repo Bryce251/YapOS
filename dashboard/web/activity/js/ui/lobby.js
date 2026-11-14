@@ -1,4 +1,4 @@
-import { h, memo, avatar, button, plural, who, countdown } from './dom.js';
+import { h, memo, avatar, button, plural, who, countdown, uidOf } from './dom.js';
 import { board, standings } from './board.js';
 
 function slim(p) {
@@ -53,7 +53,7 @@ function watcher(p) {
     'li',
     { class: ['watcher', p.isMe ? 'is-me' : null], attrs: { title: p.username ? `${p.name} (@${p.username})` : p.name } },
     avatar(p, 'xs'),
-    h('span', { class: 'watcher-name', text: p.isMe ? `${p.name} (you)` : p.name }),
+    h('span', { class: 'watcher-name', text: p.isMe ? `${p.name} (you)` : p.name, attrs: { 'data-uid': uidOf(p) } }),
     p.isHost ? h('span', { class: 'watcher-host', text: '👑', attrs: { title: 'Host', 'aria-label': 'Host' } }) : null,
   );
 }

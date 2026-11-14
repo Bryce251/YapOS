@@ -5,6 +5,7 @@ const APP = '([a-z0-9_-]{1,32})';
 export const ROUTES = [
   { name: 'landing', pattern: new RegExp('^/$'), keys: [], private: false },
   { name: 'servers', pattern: new RegExp('^/servers$'), keys: [], private: true },
+  { name: 'party', pattern: new RegExp('^/party$'), keys: [], private: true },
   { name: 'overview', pattern: new RegExp(`^/servers/${ID}$`), keys: ['sid'], private: true },
   { name: 'apps', pattern: new RegExp(`^/servers/${ID}/apps$`), keys: ['sid'], private: true },
   { name: 'app', pattern: new RegExp(`^/servers/${ID}/apps/${APP}$`), keys: ['sid', 'app'], private: true },

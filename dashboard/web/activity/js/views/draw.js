@@ -17,6 +17,7 @@ export function footText(m) {
     let lead = "Time's up!";
     if (m.note === 'all') lead = 'Everyone got it!';
     if (m.note === 'left') lead = `${m.drawer.name} left, so this turn ended early.`;
+    if (m.note === 'skip') lead = 'An admin skipped this turn.';
     if (m.amDrawer && m.drawerGain) return `${lead} +${m.drawerGain} for your drawing.`;
     if (m.gained) return `${lead} +${m.gained} for you.`;
     return lead;

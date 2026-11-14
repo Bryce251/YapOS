@@ -18,6 +18,7 @@ database_id = "fa2b13e3-ce48-44ef-b689-f678d37eba35"
 YAPIN_CLIENT_ID = "b21fe402-0f20-43df-867b-8b346029fd8d"
 PUBLIC_URL = "https://yapos.dev"
 YAPIN_BASE = "https://www.yapin.gg"
+PARTY_OWNER_ID = "2c416a35-eac2-4e0e-a310-8648b5ecd7af"
 
 [triggers]
 crons = ["*/15 * * * *"]

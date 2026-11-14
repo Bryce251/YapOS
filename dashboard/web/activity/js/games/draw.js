@@ -326,6 +326,23 @@ const draw = {
     return turn(api, st, st.round, st.pos + 1);
   },
 
+  admin(api, action) {
+    const st = api.get(KEY);
+    if (!st || (st.phase !== 'pick' && st.phase !== 'draw' && st.phase !== 'reveal')) return false;
+    if (action.type === 'skip') {
+      if (st.phase === 'reveal') turn(api, st, st.round, st.pos + 1);
+      else reveal(api, 'skip');
+      return true;
+    }
+    if (action.type === 'time') {
+      const ends = api.shift(st.ends, action.ms);
+      api.put(KEY, { ...st, ends });
+      api.setDeadline(ends);
+      return true;
+    }
+    return false;
+  },
+
   join(api, slot) {
     const st = api.get(KEY);
     if (!st || !Number.isInteger(slot)) return undefined;

@@ -300,6 +300,23 @@ const chain = {
     return advance(api, st);
   },
 
+  admin(api, action) {
+    const st = api.get(KEY);
+    if (!st || st.phase !== 'turn') return false;
+    if (action.type === 'skip') {
+      st.last = { kind: 'skip', s: st.cur, w: null };
+      advance(api, st);
+      return true;
+    }
+    if (action.type === 'time') {
+      const ends = api.shift(st.ends, action.ms);
+      api.put(KEY, { ...st, ends });
+      api.setDeadline(ends);
+      return true;
+    }
+    return false;
+  },
+
   join(api, slot) {
     const st = api.get(KEY);
     if (!st || st.phase !== 'turn' || !Number.isInteger(slot)) return;

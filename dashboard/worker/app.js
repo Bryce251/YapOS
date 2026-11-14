@@ -5,7 +5,7 @@ import { handleApi } from './api.js';
 import { handleBot } from './bot.js';
 import { cleanup } from './cron.js';
 
-const SPA_RE = /^\/(servers(\/.*)?|p\/.+)$/;
+const SPA_RE = /^\/(servers(\/.*)?|party|p\/.+)$/;
 
 async function spa(request, env, url) {
   if (!env.ASSETS || typeof env.ASSETS.fetch !== 'function') {

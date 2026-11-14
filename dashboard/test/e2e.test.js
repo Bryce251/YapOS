@@ -567,3 +567,26 @@ test('the activity gets real profiles through the bot, and the test call gets fa
   assert.match(await pic.text(), /^<svg /);
   assert.equal((await fetch(`${dev.url}/activity-dev/avatars/x.svg`)).status, 404);
 });
+
+test('the local test call treats Pip as the party owner and Juno as an extra admin', async () => {
+  const pip = 'de7e0000-0000-4000-8000-000000000001';
+  const juno = 'de7e0000-0000-4000-8000-000000000002';
+  const rex = 'de7e0000-0000-4000-8000-000000000003';
+  const all = await (await fetch(`${dev.url}/api/activity/admins?ids=${pip},${juno},${rex}`)).json();
+  assert.deepEqual(all, { admins: [pip, juno], owner: pip });
+  const noPip = await (await fetch(`${dev.url}/api/activity/admins?ids=${juno},${rex}`)).json();
+  assert.deepEqual(noPip, { admins: [juno], owner: null });
+});
+
+test('Jolli can open Party admins locally and others cannot', async () => {
+  const jolli = await login('jolli');
+  const me = await (await jolli.req('GET', '/api/me')).json();
+  assert.equal(me.partyOwner, true);
+  assert.equal((await jolli.req('GET', '/party')).status, 200);
+  const list = await (await jolli.req('GET', '/api/party/admins')).json();
+  assert.equal(list.owner.id, IDS.owner);
+  assert.deepEqual(list.admins.map((a) => [a.id, a.display_name]), [['de7e0000-0000-4000-8000-000000000002', 'Juno']]);
+  const alex = await login('alex');
+  assert.equal((await (await alex.req('GET', '/api/me')).json()).partyOwner, false);
+  assert.equal((await alex.req('GET', '/api/party/admins')).status, 403);
+});

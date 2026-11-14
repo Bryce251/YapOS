@@ -29,6 +29,8 @@ const FAKE_NAMES = ['Pip', 'Juno', 'Rex', 'Mila', 'Ozzy', 'Tess', 'Bo', 'Kit'];
 const FAKE_HANDLES = ['pipsqueak', 'junebug', 'rexplorer', 'milawaves', 'ozzyosprey', 'tessellate', 'bobaboba', 'kitkatz'];
 const FAKE_COLORS = [['#f2613f', '#ff9a6b'], ['#8b5cf6', '#c4b5fd'], ['#ec4899', '#f9a8d4'], ['#0ea5e9', '#7dd3fc'], ['#22c55e', '#86efac'], ['#eab308', '#fde047'], ['#14b8a6', '#5eead4'], ['#6366f1', '#a5b4fc']];
 const CODE_TTL_MS = 5 * 60_000;
+export const DEV_PARTY_OWNER = 'de7e0000-0000-4000-8000-000000000001';
+export const DEV_PARTY_ADMIN = 'de7e0000-0000-4000-8000-000000000002';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -182,6 +184,30 @@ async function withFakeProfiles(response, url) {
   headers.set('Cache-Control', 'no-store');
   headers.delete('Content-Length');
   return new Response(JSON.stringify({ profiles, pending }), { status: 200, headers });
+}
+
+export async function withDevPartyOwner(response, url) {
+  if (response.status !== 200) return response;
+  const ids = String(url.searchParams.get('ids') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!ids.includes(DEV_PARTY_OWNER)) return response;
+  let body;
+  try {
+    body = await response.clone().json();
+  } catch {
+    return response;
+  }
+  const given = new Set(Array.isArray(body.admins) ? body.admins : []);
+  given.add(DEV_PARTY_OWNER);
+  const headers = new Headers(response.headers);
+  headers.set('Cache-Control', 'no-store');
+  headers.delete('Content-Length');
+  return new Response(JSON.stringify({ admins: ids.filter((id) => given.has(id)), owner: DEV_PARTY_OWNER }), { status: 200, headers });
+}
+
+export function seedPartyAdmins(db, ownerId, t = Date.now()) {
+  const juno = fakeProfile(DEV_PARTY_ADMIN);
+  db.raw.prepare('INSERT INTO party_admins (id, added_by, added_at) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING').run(DEV_PARTY_ADMIN, ownerId, t);
+  db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, ?, NULL, 0, ?) ON CONFLICT (id) DO UPDATE SET username = excluded.username, display_name = excluded.display_name, missing = 0, fetched = excluded.fetched').run(DEV_PARTY_ADMIN, juno.username, juno.display_name, t);
 }
 
 async function activityDev(request) {
@@ -511,7 +537,9 @@ export async function startDev({
     YAPIN_BASE: '',
     YAPIN_CLIENT_SECRET: clientSecret,
     BOT_SECRET: botSecret,
+    PARTY_OWNER_ID: IDS.owner,
   };
+  seedPartyAdmins(db, IDS.owner);
 
   const oauth = createFakeOAuth({
     users: TEST_USERS,
@@ -547,6 +575,7 @@ export async function startDev({
     const response = await worker.fetch(request, env, ctx);
     if (url.pathname === '/activity' || url.pathname.startsWith('/activity/')) return allowDevFraming(response, url);
     if (url.pathname === '/api/activity/profiles' && request.method === 'GET') return withFakeProfiles(response, url);
+    if (url.pathname === '/api/activity/admins' && request.method === 'GET') return withDevPartyOwner(response, url);
     if (url.pathname.startsWith('/api/') && (response.status === 202 || response.status === 403)) poke();
     return response;
   }
@@ -611,6 +640,7 @@ async function main() {
     `Fake Yapin' sign-in is at ${dev.oauthUrl}`,
     `YapOS Party test call is at ${dev.url}/activity-dev/`,
     `Test server: Test Town (${dev.serverId})`,
+    'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party.',
     '',
     'Test users (pick one on the sign-in page):',
     ...dev.users.map((u) => `  ${u.display_name.padEnd(8)} @${u.username.padEnd(8)} ${u.role}`),

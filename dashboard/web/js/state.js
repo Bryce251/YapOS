@@ -2,6 +2,7 @@ const DETAIL_TTL = 60000;
 
 export const state = {
   user: null,
+  partyOwner: false,
   userChecked: false,
   servers: null,
   serversAt: 0,
@@ -56,6 +57,7 @@ export function serverSummary(sid) {
 
 export function forgetAll() {
   state.user = null;
+  state.partyOwner = false;
   state.servers = null;
   state.serversAt = 0;
   state.details.clear();

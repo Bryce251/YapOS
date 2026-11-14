@@ -90,22 +90,20 @@ async function freshAsks(db, ids, t) {
   return new Set(((res && res.results) || []).map((r) => r.id));
 }
 
-export async function getProfiles(request, env, url, t) {
-  const ip = clientIp(request);
-  const limit = await hit(env.DB, await ipKey('profiles', ip), LIMITS.profiles, t);
-  if (!limit.ok) return tooMany(limit.retryAfter);
-  const ids = parseIds(url.searchParams.get('ids'));
+export async function lookupProfiles(env, ids, t, ip) {
+  const rows = new Map();
+  if (!ids.length) return { profiles: new Map(), pending: [] };
   const marks = ids.map(() => '?').join(', ');
   const res = await env.DB
     .prepare(`SELECT id, username, display_name, avatar_url, missing, fetched FROM profiles WHERE id IN (${marks})`)
     .bind(...ids)
     .all();
-  const rows = new Map(((res && res.results) || []).map((r) => [r.id, r]));
-  const profiles = [];
+  for (const r of (res && res.results) || []) rows.set(r.id, r);
+  const profiles = new Map();
   const wanted = [];
   for (const id of ids) {
     const row = rows.get(id);
-    if (row) profiles.push(outProfile(row));
+    if (row) profiles.set(id, outProfile(row));
     if (!row || Number(row.fetched) < t - PROFILE_STALE) wanted.push(id);
   }
   const asked = await freshAsks(env.DB, wanted, t);
@@ -114,7 +112,17 @@ export async function getProfiles(request, env, url, t) {
     const budget = await hit(env.DB, await ipKey('profileAsks', ip), LIMITS.profileAsks, t, fresh.length);
     if (budget.ok) await want(env.DB, fresh, t);
   }
-  const pending = wanted.filter((id) => !rows.has(id));
+  return { profiles, pending: wanted.filter((id) => !rows.has(id)) };
+}
+
+export async function getProfiles(request, env, url, t) {
+  const ip = clientIp(request);
+  const limit = await hit(env.DB, await ipKey('profiles', ip), LIMITS.profiles, t);
+  if (!limit.ok) return tooMany(limit.retryAfter);
+  const ids = parseIds(url.searchParams.get('ids'));
+  const found = await lookupProfiles(env, ids, t, ip);
+  const profiles = ids.filter((id) => found.profiles.has(id)).map((id) => found.profiles.get(id));
+  const pending = found.pending;
   const cache = pending.length ? 'no-store' : 'public, max-age=60';
   return json({ profiles, pending }, 200, { 'Cache-Control': cache });
 }

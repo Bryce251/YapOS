@@ -1,6 +1,7 @@
 import { createCall, LIMITS, formatBytes } from './limits.js';
 
 const NAMES = ['Pip', 'Juno', 'Rex', 'Mila', 'Ozzy', 'Tess', 'Bo', 'Kit'];
+const PARTY_ROLES = { 1: 'Owner', 2: 'Admin' };
 const MAX_PLAYERS = 8;
 const START_PLAYERS = 3;
 const LOG_LIMIT = 200;
@@ -169,6 +170,11 @@ function buildTile(p) {
   const host = el('span', 'host-badge', 'Host');
   host.hidden = true;
   nameLine.append(' ', host);
+  if (PARTY_ROLES[p.n]) {
+    const role = el('span', 'role-badge', PARTY_ROLES[p.n]);
+    role.title = p.n === 1 ? 'Party owner: always has the ADMIN panel' : 'Extra party admin: has the ADMIN panel';
+    nameLine.append(' ', role);
+  }
   const status = el('span', 'who-status', 'Loading');
   label.append(nameLine, status);
   who.append(avatar, label);
@@ -344,4 +350,4 @@ $('clear-log').addEventListener('click', () => {
 setWidth($('width').value);
 setInterval(draw, 500);
 for (let i = 0; i < START_PLAYERS; i += 1) addPlayer();
-log('Each frame is the activity as a different person. The first player is the host.');
+log('Each frame is the activity as a different person. The first player is the host. Pip is the party owner and Juno is an extra admin, so both get the ADMIN panel.');

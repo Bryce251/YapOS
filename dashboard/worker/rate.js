@@ -9,6 +9,7 @@ export const LIMITS = {
   public: 120,
   profiles: 60,
   profileAsks: 200,
+  partyAdmins: 60,
 };
 
 export async function hit(db, key, limit, t, weight = 1) {

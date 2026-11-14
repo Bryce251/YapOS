@@ -12,6 +12,7 @@ export function eventText(m) {
   if (e.kind === 'out') return e.isMe ? "You're out of lives!" : `${e.name} is out of lives!`;
   if (e.kind === 'reject') return `“${e.w}” was voted not a word. ${who} lost a life.`;
   if (e.kind === 'left') return `${e.name} left, so their turn was skipped.`;
+  if (e.kind === 'skip') return `An admin skipped ${e.isMe ? 'your' : `${e.name}'s`} turn. No life lost.`;
   return '';
 }
 

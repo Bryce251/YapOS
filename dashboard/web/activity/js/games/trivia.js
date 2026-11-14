@@ -166,6 +166,23 @@ const trivia = {
     return finishOrNext(api, st.deck, st.i);
   },
 
+  admin(api, action) {
+    const st = api.get(KEY);
+    if (!st || (st.phase !== 'question' && st.phase !== 'reveal')) return false;
+    if (action.type === 'skip') {
+      if (st.phase === 'question') reveal(api, false);
+      else finishOrNext(api, st.deck, st.i);
+      return true;
+    }
+    if (action.type === 'time') {
+      const ends = api.shift(st.ends, action.ms);
+      api.put(KEY, { ...st, ends });
+      api.setDeadline(ends);
+      return true;
+    }
+    return false;
+  },
+
   resume(api) {
     const st = api.get(KEY);
     if (!st) return trivia.start(api);

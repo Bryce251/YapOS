@@ -90,6 +90,13 @@ img {
   min-height: 100dvh;
 }
 
+.shell {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .aurora {
   position: fixed;
   inset: -20%;

@@ -127,6 +127,25 @@ test('scores carry across games and New game resets them', async () => {
   assert.deepEqual(guest.snapshot().scores, { g: {}, t: {}, w: {} });
 });
 
+test('a player whose clock is an hour off still sees the right time left', async () => {
+  const clock = new Clock();
+  const hub = new Hub(clock, {});
+  const random = seeded(11);
+  const host = createEngine({ transport: hub.join(person(1)), games, now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, random });
+  host.join();
+  const behind = () => clock.now() - 3_600_000;
+  const late = createEngine({ transport: hub.join(person(2)), games, now: behind, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, random });
+  late.join();
+  await clock.advance(500);
+  host.lobby.start();
+  await clock.advance(200);
+  const deadline = late.snapshot().room.deadline;
+  const left = deadline - late.now();
+  assert.ok(left > 4000 && left <= 5000, `about 5 s left, saw ${left} ms`);
+  assert.ok(Math.abs(late.now() - host.now()) < 1000);
+  assert.equal(host.now(), clock.now());
+});
+
 test('deadlines are absolute times in state and the host fires them on time', async () => {
   const r = room(2, { games });
   await r.clock.advance(500);

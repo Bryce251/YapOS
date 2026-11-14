@@ -62,8 +62,29 @@ export function button(label, { variant = 'ghost', size, key, on, disabled, attr
   );
 }
 
+export function uidOf(p) {
+  return p && p.id !== undefined && p.id !== null && p.id !== '' ? String(p.id) : null;
+}
+
+export const NAME_MARKS = ['is-clown', 'is-spotlit'];
+
+export function markNames(root, marks = {}) {
+  if (!root || typeof root.querySelectorAll !== 'function') return 0;
+  let n = 0;
+  for (const el of root.querySelectorAll('[data-uid]')) {
+    const id = el.getAttribute('data-uid');
+    for (const cls of NAME_MARKS) {
+      const ids = marks[cls];
+      const on = Boolean(ids && (ids.has('*') || ids.has(id)));
+      if (el.classList.contains(cls) !== on) el.classList.toggle(cls, on);
+      if (on) n += 1;
+    }
+  }
+  return n;
+}
+
 export function avatar(p, size = 'md') {
-  const wrap = h('span', { class: ['avatar', `avatar-${size}`], vars: { '--hue': p.hue ?? 20 }, attrs: { 'aria-hidden': 'true' } });
+  const wrap = h('span', { class: ['avatar', `avatar-${size}`], vars: { '--hue': p.hue ?? 20 }, attrs: { 'aria-hidden': 'true', 'data-uid': uidOf(p) } });
   if (p.avatar) {
     wrap.classList.add('has-img');
     const img = h('img', { alt: '', attrs: { loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', draggable: 'false' } });
@@ -88,7 +109,7 @@ export function who(p, { size = 'md', you = true, extra = null } = {}) {
     h(
       'span',
       { class: 'who-text' },
-      h('span', { class: 'who-line' }, h('strong', { class: 'who-name', text: p.name }), you && p.isMe ? h('span', { class: 'tag', text: 'you' }) : null, extra),
+      h('span', { class: 'who-line' }, h('strong', { class: 'who-name', text: p.name, attrs: { 'data-uid': uidOf(p) } }), you && p.isMe ? h('span', { class: 'tag', text: 'you' }) : null, extra),
       p.username ? h('span', { class: 'who-handle', text: `@${p.username}` }) : null,
     ),
   );

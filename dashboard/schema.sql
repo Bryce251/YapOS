@@ -94,3 +94,9 @@ CREATE TABLE IF NOT EXISTS profile_wanted (
   given INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS profile_wanted_asked ON profile_wanted (asked);
+
+CREATE TABLE IF NOT EXISTS party_admins (
+  id TEXT PRIMARY KEY,
+  added_by TEXT NOT NULL,
+  added_at INTEGER NOT NULL
+);

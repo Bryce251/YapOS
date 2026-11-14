@@ -1,4 +1,4 @@
-import { h, avatar } from './dom.js';
+import { h, avatar, uidOf } from './dom.js';
 
 const MEDALS = ['🥇', '🥈', '🥉'];
 export const COUNT_MS = 650;
@@ -118,7 +118,7 @@ function card(r, opts, scope) {
     h(
       'span',
       { class: 'board-who' },
-      h('span', { class: 'board-name', text: nameOf(r) }),
+      h('span', { class: 'board-name', text: nameOf(r), attrs: { 'data-uid': uidOf(r) } }),
       h('span', { class: 'board-score' }, pts.num, gain ? h('span', { class: 'board-gain', text: `+${fmt(gain)}` }) : null),
     ),
   );
@@ -141,7 +141,7 @@ function row(r, opts, scope) {
     h(
       'span',
       { class: 'board-who' },
-      h('span', { class: 'board-name', text: nameOf(r) }),
+      h('span', { class: 'board-name', text: nameOf(r), attrs: { 'data-uid': uidOf(r) } }),
       r.username ? h('span', { class: 'board-user', text: `@${r.username}` }) : null,
     ),
     gain ? h('span', { class: 'board-gain', text: `+${fmt(gain)}` }) : null,

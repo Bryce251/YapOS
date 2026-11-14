@@ -4,8 +4,27 @@ import { createLobby, joinButton } from './lobby.js';
 import { createResults } from './results.js';
 import { board, standings } from './board.js';
 import { viewFor } from '../views/index.js';
+import { createAdminPanel } from './admin-panel.js';
+import { createTrolls } from './trolls.js';
 
-export function headerModel(snap, { alone = false } = {}) {
+export const ANNOUNCE_MS = 10000;
+export const LEAVE_GRACE_MS = 6000;
+export const KICKED_TEXT = 'An admin moved you to watching.';
+export const BANNED_TEXT = "An admin moved you to watching. You can't rejoin until an admin lets you back in.";
+
+export function isAdminSnap(snap) {
+  return Boolean(snap && snap.ready && snap.admin && snap.admin.me);
+}
+
+export function announceModel(snap, now) {
+  const a = snap && snap.ready ? snap.announce : null;
+  if (!a || typeof a.text !== 'string' || !a.text.trim()) return null;
+  const until = Number(a.until) || 0;
+  if (until <= now) return null;
+  return { text: a.text.slice(0, 140), until, from: until - ANNOUNCE_MS };
+}
+
+export function headerModel(snap, { alone = false, adminOpen = false } = {}) {
   const phase = snap.ready ? snap.room.phase : 'connecting';
   const game = snap.game;
   let status = alone ? 'Not in a call' : 'Connecting';
@@ -19,6 +38,8 @@ export function headerModel(snap, { alone = false } = {}) {
     hostShort: snap.ready ? (snap.isHost ? 'You' : snap.hostName) : null,
     isHost: snap.isHost,
     canEnd: snap.isHost && phase === 'game',
+    admin: isAdminSnap(snap),
+    adminOpen: Boolean(adminOpen) && isAdminSnap(snap),
   };
 }
 
@@ -46,8 +67,22 @@ export function mountApp({ root, engine, bridge, win }) {
   const fx = createFx(win);
   const toastRoot = h('div', { class: 'toasts', attrs: { 'aria-live': 'polite' } });
   const head = h('header', { class: 'top' });
+  const announceSlot = h('div', { class: 'announce-slot' });
   const stage = h('main', { class: 'stage', attrs: { id: 'stage' } });
-  root.replaceChildren(h('div', { class: 'aurora', attrs: { 'aria-hidden': 'true' } }), head, stage, toastRoot);
+  const shell = h('div', { class: 'shell' }, head, announceSlot, stage);
+  const fxLayer = h('div', { class: 'troll-layer' });
+  let adminOpen = false;
+  const panel = createAdminPanel({
+    engine,
+    toast,
+    win,
+    onToggle: (on) => {
+      adminOpen = on;
+      paintHead(head, headerModel(engine.snapshot(), { alone, adminOpen }));
+    },
+    focusBack: () => head.querySelector('.btn-admin'),
+  });
+  root.replaceChildren(h('div', { class: 'aurora', attrs: { 'aria-hidden': 'true' } }), shell, fxLayer, panel.el, toastRoot);
 
   function toast(text) {
     const t = h('div', { class: 'toast', text, attrs: { role: 'status' } });
@@ -56,6 +91,7 @@ export function mountApp({ root, engine, bridge, win }) {
     win.setTimeout(() => t.remove(), 3000);
   }
 
+  const trolls = createTrolls({ shell, layer: fxLayer, marks: root, win, engine, fx });
   const lobby = createLobby({ engine, toast });
   const results = createResults({ engine, fx });
   const gameWrap = h('div', { class: 'screen play' });
@@ -69,6 +105,9 @@ export function mountApp({ root, engine, bridge, win }) {
   let view = null;
   let viewKey = '';
   let screen = '';
+  let wasJoined = null;
+  let selfLeaveAt = -Infinity;
+  let announceLive = null;
 
   const paintHead = memo((m) =>
     h(
@@ -88,6 +127,16 @@ export function mountApp({ root, engine, bridge, win }) {
       h(
         'span',
         { class: 'top-actions' },
+        m.admin
+          ? button('ADMIN', {
+              variant: 'admin',
+              size: 'sm',
+              key: 'admin',
+              on: () => panel.toggle(),
+              attrs: { 'aria-haspopup': 'dialog', 'aria-expanded': m.adminOpen ? 'true' : 'false', 'aria-controls': 'admin-panel', title: 'Open the admin panel' },
+              kids: h('span', { class: 'admin-shield-icon', text: '🛡️', attrs: { 'aria-hidden': 'true' } }),
+            })
+          : null,
         m.canEnd ? button('End game', { variant: 'ghost', size: 'sm', key: 'end', on: () => engine.lobby.end(), attrs: { 'aria-label': 'End game', title: 'End game' }, kids: h('span', { class: 'btn-icon', text: '⏹', attrs: { 'aria-hidden': 'true' } }) }) : null,
         button('Close', { variant: 'ghost', size: 'sm', key: 'leave', on: leave, attrs: { 'aria-label': 'Close YapOS Party', title: 'Close YapOS Party' }, kids: h('span', { class: 'btn-icon', text: '🚪', attrs: { 'aria-hidden': 'true' } }) }),
       ),
@@ -112,6 +161,58 @@ export function mountApp({ root, engine, bridge, win }) {
       btn,
     );
   });
+
+  const paintAnnounce = memo((m) =>
+    m
+      ? h(
+          'div',
+          { class: 'announce', attrs: { role: 'status', 'aria-live': 'polite' } },
+          h('span', { class: 'announce-icon', text: '📣', attrs: { 'aria-hidden': 'true' } }),
+          h('span', { class: 'announce-text', text: m.text }),
+          h('span', { class: 'announce-secs', text: '' }),
+          h('span', { class: 'announce-track', attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'announce-fill' })),
+        )
+      : null,
+  );
+
+  function tickAnnounce(t) {
+    if (!announceLive) return;
+    if (t >= announceLive.until) {
+      announceLive = null;
+      paintAnnounce(announceSlot, null);
+      return;
+    }
+    const box = announceSlot.querySelector('.announce');
+    if (!box) return;
+    const span = Math.max(1, announceLive.until - announceLive.from);
+    box.style.setProperty('--left', Math.min(1, Math.max(0, (announceLive.until - t) / span)).toFixed(4));
+    const secs = box.querySelector('.announce-secs');
+    const text = `${Math.max(0, Math.ceil((announceLive.until - t) / 1000))}s`;
+    if (secs && secs.textContent !== text) secs.textContent = text;
+  }
+
+  function watchKick(snap) {
+    if (!snap.ready) return;
+    const joined = Boolean(snap.meJoined);
+    const mine = snap.players.find((p) => p.isMe);
+    if (wasJoined && !joined && snap.admin && mine && mine.present && snap.joining !== 'out' && now() - selfLeaveAt > LEAVE_GRACE_MS) {
+      const banned = Array.isArray(snap.admin.banned) && snap.admin.banned.includes(snap.me);
+      toast(banned ? BANNED_TEXT : KICKED_TEXT);
+    }
+    if (snap.joining === 'out') selfLeaveAt = now();
+    wasJoined = joined;
+  }
+
+  function onRootClick(e) {
+    let n = e && e.target;
+    while (n && n !== root) {
+      if (n.dataset && n.dataset.key === 'leave-game') {
+        selfLeaveAt = now();
+        return;
+      }
+      n = n.parentNode;
+    }
+  }
 
   function viewBoard(snap) {
     if (!view || typeof view.board !== 'function') return null;
@@ -196,9 +297,19 @@ export function mountApp({ root, engine, bridge, win }) {
 
   function render(snap) {
     renders += 1;
-    const hm = headerModel(snap, { alone });
+    const hm = headerModel(snap, { alone, adminOpen });
     paintHead(head, hm);
     root.dataset.phase = hm.phase;
+    watchKick(snap);
+    announceLive = announceModel(snap, now());
+    paintAnnounce(announceSlot, announceLive ? { text: announceLive.text, until: announceLive.until } : null);
+    tickAnnounce(now());
+    panel.update(snap);
+    paintBody(snap, hm);
+    trolls.paint();
+  }
+
+  function paintBody(snap, hm) {
     if (screen === 'results' && hm.phase !== 'results') fx.clear();
     if (hm.phase === 'connecting') {
       screen = 'connecting';
@@ -236,9 +347,11 @@ export function mountApp({ root, engine, bridge, win }) {
 
   const stopSpot = fx.spotlight(root);
   const offChange = engine.on('change', render);
+  root.addEventListener('click', onRootClick);
   if (typeof win.addEventListener === 'function') win.addEventListener(PROFILES_EVENT, onProfiles);
   const ticker = win.setInterval(() => {
     tickTimers(stage, now());
+    tickAnnounce(now());
     if (screen === 'connecting') render(engine.snapshot());
   }, 200);
   render(engine.snapshot());
@@ -246,11 +359,16 @@ export function mountApp({ root, engine, bridge, win }) {
   return {
     render,
     toast,
+    panel,
+    trolls,
     get renders() {
       return renders;
     },
     destroy() {
       offChange();
+      root.removeEventListener('click', onRootClick);
+      panel.destroy();
+      trolls.destroy();
       if (typeof win.removeEventListener === 'function') win.removeEventListener(PROFILES_EVENT, onProfiles);
       if (profileTimer !== null) win.clearTimeout(profileTimer);
       profileTimer = null;

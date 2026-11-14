@@ -36,13 +36,24 @@ function appAurora() {
     h('span', { class: 'aurora-light aurora-light-c' }));
 }
 
-function userBlock(user, onLogout) {
+export function partyLink(active = false) {
+  return h('a', {
+    href: '/party',
+    class: ['icon-btn', 'party-link', active ? 'is-active' : ''],
+    title: 'Party admins',
+    dataset: { link: '' },
+    attrs: { 'aria-label': 'Party admins', 'aria-current': active ? 'page' : null },
+  }, icon('crown', { size: 16 }));
+}
+
+function userBlock(user, onLogout, { partyOwner = false, section = '' } = {}) {
   const name = user?.display_name || user?.username || 'You';
   return h('div', { class: 'user-block' },
     avatar({ name, url: user?.avatar_url, id: user?.id, size: 'sm' }),
     h('div', { class: 'user-text' },
       h('span', { class: 'user-name', text: name }),
       user?.username && user.username !== name ? h('span', { class: 'user-handle', text: `@${user.username}` }) : null),
+    partyOwner ? partyLink(section === 'party') : null,
     h('button', { type: 'button', class: 'icon-btn', title: 'Log out', attrs: { 'aria-label': 'Log out' }, on: { click: onLogout } }, icon('logout', { size: 16 })));
 }
 
@@ -96,11 +107,12 @@ export function createShell({ onLogout }) {
     root,
     main,
     close: () => setOpen(false),
-    update({ variant, section, server, user, crumbs: trail }) {
+    update({ variant, section, server, user, partyOwner = false, crumbs: trail }) {
+      const who = { partyOwner, section };
       root.classList.toggle('shell-plain', variant === 'plain');
-      replace(topRight, variant === 'plain' ? null : h('span', { class: 'topbar-cta' }, addToServerButton({ compact: true })), themeToggle(), variant === 'plain' ? userBlock(user, onLogout) : null);
+      replace(topRight, variant === 'plain' ? null : h('span', { class: 'topbar-cta' }, addToServerButton({ compact: true })), themeToggle(), variant === 'plain' ? userBlock(user, onLogout, who) : null);
       replace(root.querySelector('.topbar-brand'), ...(variant === 'plain' ? [brand({ href: '/servers' }), addToServerButton()] : []));
-      replace(userSlot, userBlock(user, onLogout));
+      replace(userSlot, userBlock(user, onLogout, who));
       if (server) {
         replace(serverSlot,
           h('a', { href: '/servers', class: 'server-switch', dataset: { link: '' }, attrs: { 'aria-label': `${server.name}. Switch server` } },

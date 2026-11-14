@@ -151,6 +151,23 @@ const wyr = {
     return next(api, st.deck, st.i);
   },
 
+  admin(api, action) {
+    const st = api.get(KEY);
+    if (!st || (st.phase !== 'vote' && st.phase !== 'reveal')) return false;
+    if (action.type === 'skip') {
+      if (st.phase === 'vote') reveal(api);
+      else next(api, st.deck, st.i);
+      return true;
+    }
+    if (action.type === 'time') {
+      const ends = api.shift(st.ends, action.ms);
+      api.put(KEY, { ...st, ends });
+      api.setDeadline(ends);
+      return true;
+    }
+    return false;
+  },
+
   resume(api) {
     const st = api.get(KEY);
     if (!st) return wyr.start(api);
