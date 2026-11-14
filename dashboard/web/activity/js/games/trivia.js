@@ -1,4 +1,4 @@
-import { CATEGORIES, QUESTIONS, questionById } from '../../data/trivia.js';
+import { CATEGORIES, QUESTIONS, TIERS, questionById } from '../../data/trivia.js';
 import { shuffle } from '../engine.js';
 import { person } from '../players.js';
 
@@ -9,18 +9,60 @@ export const MAX_POINTS = 1000;
 export const LATE_MIN_MS = 4000;
 
 const CAT_NAMES = new Map(CATEGORIES.map((c) => [c.id, c]));
+const TIER_BY_ID = new Map(TIERS.map((t) => [t.id, t]));
+const TIER_ORDER = TIERS.map((t) => t.id);
+export const MIX = 'mix';
 
-export function speedPoints(at, starts, ends) {
-  const span = Math.max(1, ends - starts);
-  const left = Math.min(1, Math.max(0, (ends - at) / span));
-  return Math.round((MIN_POINTS + (MAX_POINTS - MIN_POINTS) * left) / 10) * 10;
+export function tierOf(id) {
+  return TIER_BY_ID.get(id) || TIER_BY_ID.get('easy');
 }
 
-export function buildDeck(cats, count, random = Math.random) {
+export function speedPoints(at, starts, ends, tier = 'easy') {
+  const span = Math.max(1, ends - starts);
+  const left = Math.min(1, Math.max(0, (ends - at) / span));
+  const base = MIN_POINTS + (MAX_POINTS - MIN_POINTS) * left;
+  return Math.round((base * tierOf(tier).mult) / 10) * 10;
+}
+
+function nearest(tier) {
+  const at = TIER_ORDER.indexOf(tier);
+  return TIER_ORDER.slice().sort((a, b) => Math.abs(TIER_ORDER.indexOf(a) - at) - Math.abs(TIER_ORDER.indexOf(b) - at) || TIER_ORDER.indexOf(a) - TIER_ORDER.indexOf(b));
+}
+
+function draw(pool, tier, n, used, random) {
+  const out = [];
+  for (const t of nearest(tier)) {
+    if (out.length >= n) break;
+    const fresh = shuffle(pool.filter((q) => q.tier === t && !used.has(q.id)), random);
+    for (const q of fresh.slice(0, n - out.length)) {
+      used.add(q.id);
+      out.push(q);
+    }
+  }
+  return out;
+}
+
+export function rampFor(count) {
+  const n = Math.max(1, count);
+  const easy = Math.ceil(n / 3);
+  const hard = Math.floor(n / 3);
+  return [
+    ['easy', easy],
+    ['medium', n - easy - hard],
+    ['hard', hard],
+  ];
+}
+
+export function buildDeck(cats, count, random = Math.random, level = MIX) {
   const wanted = new Set(Array.isArray(cats) && cats.length ? cats : CATEGORIES.map((c) => c.id));
   let pool = QUESTIONS.filter((q) => wanted.has(q.cat));
   if (!pool.length) pool = QUESTIONS.slice();
-  return shuffle(pool, random).slice(0, Math.max(1, count)).map((q) => q.id);
+  const n = Math.max(1, Math.min(count, pool.length));
+  const used = new Set();
+  if (TIER_BY_ID.has(level)) return shuffle(draw(pool, level, n, used, random), random).map((q) => q.id);
+  const deck = [];
+  for (const [tier, k] of rampFor(n)) deck.push(...shuffle(draw(pool, tier, k, used, random), random));
+  return deck.map((q) => q.id);
 }
 
 function ask(api, deck, i) {
@@ -35,7 +77,7 @@ function ask(api, deck, i) {
     i,
     total: deck.length,
     phase: 'question',
-    q: { id: q.id, cat: q.cat, text: q.q, options },
+    q: { id: q.id, cat: q.cat, tier: q.tier, text: q.q, options },
     in: api.players().map((p) => p.slot),
     wait: [],
     answered: [],
@@ -69,7 +111,7 @@ function reveal(api, skipped) {
     for (const [slot, pick] of Object.entries(cur.picks)) {
       chose[slot] = pick.i;
       if (pick.i === answer) {
-        const pts = speedPoints(pick.at, st.starts, st.ends);
+        const pts = speedPoints(pick.at, st.starts, st.ends, st.q.tier);
         right.push(Number(slot));
         gained[slot] = pts;
         api.addPoints(Number(slot), pts);
@@ -128,11 +170,18 @@ const trivia = {
   settings: [
     { id: 'rounds', label: 'Questions', type: 'choice', options: [5, 10, 15, 20].map((v) => ({ value: v, label: String(v) })), default: 10 },
     { id: 'timer', label: 'Time to answer', type: 'choice', options: [10, 15, 20, 30].map((v) => ({ value: v, label: `${v} s` })), default: 20 },
+    {
+      id: 'level',
+      label: 'Difficulty',
+      type: 'choice',
+      options: [{ value: MIX, label: '🎲 Mixed, gets harder' }].concat(TIERS.map((t) => ({ value: t.id, label: `${t.emoji} ${t.name}` }))),
+      default: MIX,
+    },
     { id: 'cats', label: 'Categories', type: 'multi', options: CATEGORIES.map((c) => ({ value: c.id, label: `${c.emoji} ${c.name}` })), default: CATEGORIES.map((c) => c.id) },
   ],
 
   start(api) {
-    const deck = buildDeck(api.settings.cats, api.settings.rounds, api.random);
+    const deck = buildDeck(api.settings.cats, api.settings.rounds, api.random, api.settings.level);
     ask(api, deck, 0);
   },
 
@@ -216,12 +265,17 @@ const trivia = {
     const myPick = st.phase === 'reveal' && st.chose && st.chose[mine] !== undefined ? st.chose[mine] : local.qid === st.q.id ? local.pick ?? null : null;
     const counts = st.q.options.map((_, i) => Object.values(st.chose || {}).filter((x) => x === i).length);
     const cat = CAT_NAMES.get(st.q.cat) || { name: 'Trivia', emoji: '❓' };
+    const tier = tierOf(st.q.tier);
     return {
       phase: st.phase,
       number: st.i + 1,
       total: st.total,
       category: cat.name,
       emoji: cat.emoji,
+      tier: tier.id,
+      tierName: tier.name,
+      tierEmoji: tier.emoji,
+      tierBonus: tier.mult > 1 ? `×${tier.mult}` : '',
       text: st.q.text,
       qid: st.q.id,
       ends: st.ends,

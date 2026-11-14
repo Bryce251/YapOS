@@ -68,6 +68,13 @@ export function createTriviaView({ engine, fx }) {
         'div',
         { class: 'game-head' },
         h('span', { class: 'chip chip-static', text: `${m.emoji} ${m.category}` }),
+        m.tier
+          ? h('span', {
+              class: ['chip', 'chip-static', 'tier-chip', `tier-${m.tier}`],
+              text: `${m.tierEmoji} ${m.tierName}${m.tierBonus ? ` · ${m.tierBonus} points` : ''}`,
+              attrs: { title: m.tierBonus ? `${m.tierName} questions are worth ${m.tierBonus} points` : `${m.tierName} question` },
+            })
+          : null,
         h('span', { class: 'game-count', text: `Question ${m.number} of ${m.total}` }),
         timer(reveal ? m.ends - REVEAL_MS : m.starts, m.ends, reveal ? 'Next question in' : 'Time left to answer'),
       ),
