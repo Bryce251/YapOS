@@ -2157,3 +2157,52 @@ test('built-in renderer: the worker memory budget refuses GIFs with thousands of
   await h.settle();
   assert.match(h.textOf(h.lastSent(dmOf(IDS.member2))), /Try one under 2880×2880/);
 });
+
+function timeoutError() {
+  const e = new Error('The operation was aborted due to timeout');
+  e.name = 'TimeoutError';
+  return e;
+}
+
+function slowUploads(h, { replies = 0 } = {}) {
+  const real = h.bot.api.bind(h.bot);
+  let replyFails = replies;
+  h.bot.api = async (method, path, body, opts) => {
+    if (typeof FormData !== 'undefined' && body instanceof FormData) throw timeoutError();
+    if (method === 'POST' && /\/messages$/.test(path) && replyFails > 0) {
+      replyFails -= 1;
+      throw timeoutError();
+    }
+    return real(method, path, body, opts);
+  };
+  return () => { h.bot.api = real; };
+}
+
+test('when Yapin is too slow to take the GIF, people are told to try again', async () => {
+  const { h, dm, lastText, filesIn } = await make();
+  const cid = dmOf(IDS.member);
+  const restore = slowUploads(h);
+  await dm('gif', { attachments: [pic()] });
+  assert.match(lastText(cid), /Yapin' is being slow right now/);
+  assert.equal(filesIn(cid).length, 0);
+  restore();
+});
+
+test('a slow Yapin is not logged as an error and the next try works', async (t) => {
+  const { h, svc, dm, lastText, filesIn } = await make();
+  const cid = dmOf(IDS.member);
+  const errors = [];
+  const realError = h.engine.log.error;
+  h.engine.log.error = (...a) => { errors.push(a); };
+  const restore = slowUploads(h);
+  await dm('gif', { attachments: [pic()] });
+  await svc.idle();
+  h.engine.log.error = realError;
+  assert.equal(errors.length, 0);
+  assert.match(lastText(cid), /Try again in a minute/);
+  restore();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 60_000 });
+  await dm('gif', { attachments: [pic()] });
+  t.mock.timers.reset();
+  assert.equal(filesIn(cid).length, 1, 'the next try works once Yapin is back');
+});

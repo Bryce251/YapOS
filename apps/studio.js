@@ -846,12 +846,21 @@ async function deliver(ctx, kind, data, note) {
       await tell(ctx, filesOff());
     } else if (e?.status === 400) {
       await tell(ctx, friendly("Yapin' didn't accept the GIF I made. Try another picture.", { title: "I couldn't send the GIF" }));
+    } else if (tooSlow(e)) {
+      await tell(ctx, slowYapin());
     } else {
       await ctx.fail(e, { action: 'send the GIF', target: 'here', perm: 'attach_files' });
     }
     return false;
   }
 }
+
+function tooSlow(e) {
+  const name = e?.name || '';
+  return name === 'TimeoutError' || name === 'AbortError' || [502, 503, 504].includes(e?.status);
+}
+
+const slowYapin = () => friendly("Yapin' is being slow right now, so your GIF didn't make it. Try again in a minute.", { title: "Yapin' is slow right now" });
 
 async function work(ctx, kind, image, caption) {
   const { engine } = ctx;
@@ -868,6 +877,7 @@ async function work(ctx, kind, image, caption) {
     ok = await deliver(ctx, kind, gif, caption.trimmed ? `I trimmed your caption to ${MAX_CAPTION} characters.` : '');
   } catch (e) {
     if (e?.friendly) await tell(ctx, e);
+    else if (tooSlow(e)) await tell(ctx, slowYapin());
     else await ctx.fail(e);
   } finally {
     st.counts[ok ? 'done' : 'failed']++;
