@@ -7,12 +7,16 @@ export const FX_DEFAULT_MS = 5000;
 export const REVEAL_MS = 2500;
 export const RAIN_DROPS = 18;
 export const BURST_BITS = 14;
+export const TACO_DROPS = 22;
+export const SONG_SAFETY_MS = 11000;
+export const TACO_SONG = new URL('../../media/raining-tacos.mp3', import.meta.url).href;
+export const TACO_PICS = [1, 2, 3].map((n) => new URL(`../../media/taco-${n}.png`, import.meta.url).href);
 
 export const TRANSFORMS = ['flip', 'mirror', 'shake', 'spin', 'tiny'];
 export const STYLES = ['comic', 'blur'];
-export const OVERLAYS = ['confetti', 'emoji-rain', 'hype', 'crash', 'fake-win', 'spotlight'];
+export const OVERLAYS = ['confetti', 'emoji-rain', 'hype', 'crash', 'fake-win', 'spotlight', 'tacos'];
 export const MARKERS = { clown: 'is-clown', spotlight: 'is-spotlit' };
-export const FUN_FX = ['confetti', 'emoji-rain', 'spotlight', 'hype'];
+export const FUN_FX = ['confetti', 'emoji-rain', 'spotlight', 'hype', 'tacos'];
 export const TROLL_FX = ['flip', 'mirror', 'shake', 'spin', 'tiny', 'comic', 'blur', 'crash', 'clown', 'fake-win'];
 export const ALL_FX = [...FUN_FX, ...TROLL_FX];
 export const SHOWN_TO_ALL = ['clown', 'spotlight'];
@@ -86,6 +90,14 @@ export function createTrolls({ shell, layer, marks: markRoot, win, engine, fx = 
     if (!e) return false;
     active.delete(key);
     for (const t of e.timers) win.clearTimeout(t);
+    if (e.audio) {
+      e.audio.onended = null;
+      try {
+        e.audio.pause();
+      } catch {
+        e.audio = null;
+      }
+    }
     if (e.el) e.el.remove();
     if (!stillUsed(e.name)) shell.classList.remove(`troll-${e.name}`);
     if (!active.size) shell.classList.remove('fx-quiet');
@@ -146,6 +158,64 @@ export function createTrolls({ shell, layer, marks: markRoot, win, engine, fx = 
     return h('div', { class: ['troll-overlay', 'troll-rain-layer', quiet ? 'is-still' : null], attrs: { 'aria-hidden': 'true' } }, drops);
   }
 
+  function tacoBox(entry) {
+    const drops = [];
+    for (let i = 0; i < TACO_DROPS; i += 1) {
+      const img = h('img', {
+        class: 'taco-drop',
+        attrs: { src: TACO_PICS[i % TACO_PICS.length], alt: '', draggable: 'false', decoding: 'async' },
+        vars: {
+          '--x': `${Math.round(((i + random()) / TACO_DROPS) * 94)}%`,
+          '--y': `${Math.round(6 + random() * 78)}%`,
+          '--delay': `${Math.round(random() * 2400)}ms`,
+          '--fall': `${Math.round(2400 + random() * 2000)}ms`,
+          '--size': `${Math.round(44 + random() * 40)}px`,
+          '--turn': `${Math.round(random() * 540 - 270)}deg`,
+        },
+      });
+      img.addEventListener('error', () => img.remove());
+      drops.push(img);
+    }
+    const lights = [0, 1, 2, 3].map((i) => h('span', { class: ['disco-light', `tone-${i}`] }));
+    const sound = h('button', { class: 'taco-sound', type: 'button', text: '🔊 Tap for taco music', attrs: { hidden: '' } });
+    sound.addEventListener('click', () => {
+      sound.hidden = true;
+      if (!playSong(entry)) return;
+      for (const t of entry.timers) win.clearTimeout(t);
+      entry.timers = [win.setTimeout(() => stop('tacos'), SONG_SAFETY_MS)];
+    });
+    entry.sound = sound;
+    return h(
+      'div',
+      { class: 'troll-overlay troll-taco-layer', attrs: { 'aria-hidden': 'true' } },
+      h('div', { class: 'disco-lights' }, lights),
+      h('span', { class: 'disco-ball', text: '🪩' }),
+      drops,
+      sound,
+    );
+  }
+
+  function playSong(entry) {
+    const Ctor = win && typeof win.Audio === 'function' ? win.Audio : null;
+    if (!Ctor) return false;
+    try {
+      const audio = entry.audio || new Ctor(TACO_SONG);
+      entry.audio = audio;
+      audio.volume = 0.6;
+      audio.currentTime = 0;
+      audio.onended = () => stop('tacos');
+      const p = audio.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch(() => {
+          if (entry.sound && active.get('tacos') === entry) entry.sound.hidden = false;
+        });
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function burstBox() {
     const bits = [];
     for (let i = 0; i < BURST_BITS; i += 1) {
@@ -172,7 +242,8 @@ export function createTrolls({ shell, layer, marks: markRoot, win, engine, fx = 
     );
   }
 
-  function overlayFor(name, target, extra, quiet) {
+  function overlayFor(name, target, extra, quiet, entry) {
+    if (name === 'tacos') return tacoBox(entry);
     if (name === 'crash') return crashBox();
     if (name === 'fake-win') return winBox();
     if (name === 'emoji-rain') return rainBox(cleanEmoji(extra && extra.emoji), quiet);
@@ -202,8 +273,8 @@ export function createTrolls({ shell, layer, marks: markRoot, win, engine, fx = 
     shell.classList.toggle('fx-quiet', quiet);
     if (TRANSFORMS.includes(name)) shell.style.setProperty('--fx-ms', `${ms}ms`);
     shell.classList.add(`troll-${name}`);
-    const entry = { name, target, ms, timers: [], el: null, by: ev.by || null };
-    const el = OVERLAYS.includes(name) ? overlayFor(name, target, ev.extra, quiet) : null;
+    const entry = { name, target, ms, timers: [], el: null, by: ev.by || null, audio: null, sound: null };
+    const el = OVERLAYS.includes(name) ? overlayFor(name, target, ev.extra, quiet, entry) : null;
     if (el) {
       el.style.setProperty('--fx-ms', `${ms}ms`);
       if (quiet) el.classList.add('is-still');
@@ -216,6 +287,7 @@ export function createTrolls({ shell, layer, marks: markRoot, win, engine, fx = 
     }
     entry.timers.push(win.setTimeout(() => stop(key), ms));
     active.set(key, entry);
+    if (name === 'tacos') playSong(entry);
     paint();
     return true;
   }

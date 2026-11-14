@@ -501,3 +501,112 @@ test('nothing in the admin UI uses inline style attributes', async () => {
   assert.match(html, /href="\/activity\/css\/admin\.css"/);
   s.app.destroy();
 });
+
+function fakeAudio({ blocked = false } = {}) {
+  const made = [];
+  class Audio {
+    constructor(src) {
+      this.src = src;
+      this.volume = 1;
+      this.currentTime = 5;
+      this.paused = true;
+      this.plays = 0;
+      this.onended = null;
+      made.push(this);
+    }
+    play() {
+      this.plays += 1;
+      if (blocked && this.plays === 1) return Promise.reject(new Error('NotAllowedError'));
+      this.paused = false;
+      return Promise.resolve();
+    }
+    pause() {
+      this.paused = true;
+    }
+  }
+  return { Audio, made };
+}
+
+test('Rain Tacos is in the Fun tab and lasts as long as the song', async () => {
+  const s = await setup({ me: ADMIN });
+  adminBtn(s.root).click();
+  byKey(s.app.panel.el, 'admin-tab-fun').click();
+  const btn = byKey(s.app.panel.el, 'fx-tacos');
+  assert.ok(btn);
+  assert.match(text(btn), /Rain Tacos/);
+  assert.match(text(btn), /🌮/);
+  btn.click();
+  assert.deepEqual(s.calls.fx.at(-1), { name: 'tacos', target: null, ms: 9600 });
+  s.app.destroy();
+});
+
+test('Rain Tacos rains the taco pictures, goes disco, plays the song and cleans up', async () => {
+  const s = await setup({ me: GUEST });
+  const { Audio, made } = fakeAudio();
+  s.win.Audio = Audio;
+  assert.equal(s.app.trolls.apply({ fx: 'tacos', target: null, ms: 9600, by: OWNER }), true);
+  const layer = byClass(s.root, 'troll-taco-layer')[0];
+  assert.ok(layer);
+  const tacos = byClass(layer, 'taco-drop');
+  assert.equal(tacos.length, 22);
+  for (const t of tacos) assert.match(t.getAttribute('src'), /\/activity\/media\/taco-[123]\.png$/);
+  assert.equal(byClass(layer, 'disco-light').length, 4);
+  assert.equal(byClass(layer, 'disco-ball').length, 1);
+  assert.equal(made.length, 1);
+  assert.match(made[0].src, /\/activity\/media\/raining-tacos\.mp3$/);
+  assert.equal(made[0].plays, 1);
+  assert.equal(made[0].currentTime, 0);
+  assert.equal(made[0].volume, 0.6);
+  s.clock.advance(9500);
+  assert.equal(byClass(s.root, 'troll-taco-layer').length, 1);
+  s.clock.advance(200);
+  assert.equal(byClass(s.root, 'troll-taco-layer').length, 0);
+  assert.equal(made[0].paused, true);
+  s.app.trolls.apply({ fx: 'tacos', target: null, ms: 9600, by: OWNER });
+  made.at(-1).onended();
+  assert.equal(byClass(s.root, 'troll-taco-layer').length, 0, 'the song ending ends the effect');
+  s.app.destroy();
+});
+
+test('Rain Tacos offers a tap for music when the browser blocks sound', async () => {
+  const s = await setup({ me: GUEST });
+  const { Audio, made } = fakeAudio({ blocked: true });
+  s.win.Audio = Audio;
+  s.app.trolls.apply({ fx: 'tacos', target: null, ms: 9600, by: OWNER });
+  await Promise.resolve();
+  await Promise.resolve();
+  const tap = byClass(s.root, 'taco-sound')[0];
+  assert.ok(tap);
+  assert.equal(tap.hidden, false);
+  s.clock.advance(4000);
+  tap.click();
+  assert.equal(made[0].plays, 2);
+  assert.equal(tap.hidden, true);
+  s.clock.advance(6000);
+  assert.equal(byClass(s.root, 'troll-taco-layer').length, 1, 'the song gets to finish after a late tap');
+  made[0].onended();
+  assert.equal(byClass(s.root, 'troll-taco-layer').length, 0);
+  s.app.destroy();
+});
+
+test('Rain Tacos holds still with reduced motion and works without audio support', async () => {
+  const s = await setup({ me: GUEST, quiet: true });
+  s.win.Audio = undefined;
+  assert.equal(s.app.trolls.apply({ fx: 'tacos', target: null, ms: 9600, by: OWNER }), true);
+  const layer = byClass(s.root, 'troll-taco-layer')[0];
+  assert.ok(layer.classList.contains('is-still'));
+  s.clock.advance(9700);
+  assert.equal(byClass(s.root, 'troll-taco-layer').length, 0);
+  s.app.destroy();
+});
+
+test('the taco pictures and song ship with the activity', () => {
+  for (const n of [1, 2, 3]) {
+    const png = readFileSync(path.join(activity, 'media', `taco-${n}.png`));
+    assert.equal(png.subarray(1, 4).toString('latin1'), 'PNG');
+    assert.ok(png.length < 60_000);
+  }
+  const mp3 = readFileSync(path.join(activity, 'media', 'raining-tacos.mp3'));
+  assert.ok(mp3.subarray(0, 3).toString('latin1') === 'ID3' || (mp3[0] === 0xff && (mp3[1] & 0xe0) === 0xe0));
+  assert.ok(mp3.length < 400_000);
+});

@@ -179,8 +179,11 @@ test('index.html works under the strict CSP', () => {
 
 const ACTIVITY_PARENT_ORIGINS = ['https://www.yapper.website', 'https://yapper.website', 'https://yapin.gg', 'https://www.yapin.gg'];
 
+const BINARY = /\.(png|jpe?g|webp|ico|mp3|woff2)$/i;
+
 test('no external resources and no forbidden wording', () => {
   for (const f of files) {
+    if (BINARY.test(f)) continue;
     const src = readFileSync(f, 'utf8');
     const urls = rel(f) === '_headers' ? [] : src.match(/https?:\/\/[^\s'"`)]+/g) || [];
     for (const u of urls) {

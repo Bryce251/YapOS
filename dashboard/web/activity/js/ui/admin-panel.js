@@ -14,8 +14,9 @@ export const POINTS_STEP = 100;
 export const TROLL_TIMES = [5000, 10000, 20000];
 export const TIME_STEPS = [15000, 30000, -10000];
 export const RAIN_EMOJI = ['🎉', '🔥', '😂', '💖', '⭐', '🍕', '👻', '🦆'];
-export const FUN_MS = { confetti: 4000, 'emoji-rain': 6000, spotlight: 8000, hype: 4000 };
+export const FUN_MS = { confetti: 4000, 'emoji-rain': 6000, spotlight: 8000, hype: 4000, tacos: 9600 };
 export const FUN = [
+  { id: 'tacos', icon: '🌮', label: 'Rain Tacos', blurb: 'Tacos rain, the room turns disco and the taco song plays.' },
   { id: 'confetti', icon: '🎊', label: 'Confetti', blurb: 'A happy burst for everyone.' },
   { id: 'hype', icon: '🔥', label: 'Hype', blurb: "A big LET'S GO moment." },
 ];

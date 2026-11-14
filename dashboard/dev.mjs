@@ -45,6 +45,7 @@ const TYPES = {
   '.ico': 'image/x-icon',
   '.txt': 'text/plain; charset=utf-8',
   '.woff2': 'font/woff2',
+  '.mp3': 'audio/mpeg',
 };
 
 export const OUTSIDER_ID = 'a0000000-0000-4000-8000-0000000000ff';
