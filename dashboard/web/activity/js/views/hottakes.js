@@ -175,7 +175,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
     return h(
       'div',
       { class: 'game-head' },
-      h('span', { class: 'chip chip-static', text: m.phase === 'write' ? '🌶️ Write' : m.phase === 'vote' ? '🗳️ Vote' : '🔥 Results' }),
+      h('span', { class: 'chip chip-static', text: m.phase === 'write' ? 'Write' : m.phase === 'vote' ? 'Vote' : 'Results' }),
       h('span', { class: 'game-count', text: `Round ${m.number} of ${m.total}` }),
       timer(m.starts, m.ends, label),
     );
@@ -299,7 +299,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
     for (const c of m.cards) {
       if (!c.top) continue;
       const card = cardFor(c.id);
-      if (card) cue.burst(card, { count: 16, emoji: ['🌶️', '🔥', '✨'] });
+      if (card) cue.burst(card, { count: 16, emoji: ['🌶️', '🔥'] });
     }
     if (m.myGain) {
       const mine = m.cards.find((c) => c.isMine);

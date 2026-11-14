@@ -57,27 +57,30 @@
   position: absolute;
   left: var(--px, 0);
   top: var(--py, 0);
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--success-soft);
+  padding: 1px var(--space-2, 8px);
+  border-radius: var(--radius-xs, 6px);
+  border: 1px solid var(--success-line, rgba(74, 222, 128, 0.4));
+  background: var(--success-solid);
   color: var(--c, var(--success));
-  font-size: 15px;
-  font-weight: 800;
+  font-size: var(--text-sm, 14px);
+  font-weight: var(--weight-heavy, 800);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.4));
   opacity: 0;
   pointer-events: none;
   animation: juice-float var(--dur, 1100ms) var(--ease) both;
 }
 
 .juice-float.is-gold {
-  background: rgba(251, 191, 36, 0.16);
-  color: var(--amber);
+  border-color: var(--warning-line, rgba(251, 191, 36, 0.4));
+  background: var(--warning-solid);
+  color: var(--warning, #fbbf24);
 }
 
 .juice-float.is-accent {
-  background: var(--accent-soft);
+  border-color: var(--accent-line, rgba(242, 97, 63, 0.5));
+  background: var(--accent-solid);
   color: var(--accent-text);
 }
 
@@ -88,7 +91,7 @@
   }
   18% {
     opacity: 1;
-    transform: translate(-50%, -70%) scale(1.08);
+    transform: translate(-50%, -70%) scale(1.04);
   }
   70% {
     opacity: 1;
@@ -100,7 +103,7 @@
 }
 
 .juice-press {
-  animation: juice-squish 280ms var(--pop);
+  animation: juice-squish 240ms var(--pop);
 }
 
 @keyframes juice-squish {
@@ -108,7 +111,7 @@
     transform: scale(1);
   }
   30% {
-    transform: scale(0.94);
+    transform: scale(0.96);
   }
   100% {
     transform: scale(1);
@@ -117,23 +120,22 @@
 
 .game-tile .game-emoji {
   display: inline-block;
-  transition: transform 260ms var(--pop);
+  transition: transform 220ms var(--pop);
 }
 
 @media (hover: hover) {
   .game-tile:hover:not(:disabled) {
-    transform: translateY(-4px);
-    border-color: var(--ring);
-    box-shadow: 0 0 0 3px var(--accent-soft), 0 18px 36px -14px rgba(242, 97, 63, 0.55), var(--lift);
+    transform: translateY(-2px);
+    border-color: var(--game-line, var(--border-strong));
   }
 
   .game-tile:hover:not(:disabled) .game-emoji {
-    transform: scale(1.18) rotate(-8deg);
+    transform: scale(1.08) rotate(-5deg);
   }
 }
 
 .game-tile.juice-pick {
-  animation: juice-pick 460ms var(--pop);
+  animation: juice-pick 380ms var(--pop);
 }
 
 .game-tile.juice-pick .game-emoji {
@@ -142,10 +144,10 @@
 
 @keyframes juice-pick {
   0% {
-    transform: scale(0.95);
+    transform: scale(0.97);
   }
   45% {
-    transform: scale(1.04);
+    transform: scale(1.02);
   }
   100% {
     transform: none;
@@ -157,10 +159,10 @@
     transform: scale(1);
   }
   30% {
-    transform: scale(1.3) rotate(-12deg);
+    transform: scale(1.18) rotate(-8deg);
   }
   60% {
-    transform: scale(1.1) rotate(8deg);
+    transform: scale(1.06) rotate(5deg);
   }
   100% {
     transform: none;
@@ -188,13 +190,13 @@
 
 @keyframes juice-bounce-in {
   0% {
-    transform: translateY(-14px) scale(0.5);
+    transform: translateY(-8px) scale(0.6);
   }
   55% {
-    transform: translateY(3px) scale(1.12);
+    transform: translateY(2px) scale(1.06);
   }
   80% {
-    transform: translateY(-2px) scale(0.97);
+    transform: translateY(-1px) scale(0.99);
   }
   100% {
     transform: none;
@@ -246,10 +248,10 @@
 
 @keyframes juice-climb-soft {
   0% {
-    transform: translateY(14px) scale(0.96);
+    transform: translateY(10px) scale(0.98);
   }
   60% {
-    transform: translateY(-3px) scale(1.03);
+    transform: translateY(-2px) scale(1.01);
   }
   100% {
     transform: none;
@@ -280,7 +282,7 @@
   right: 10px;
   width: 14px;
   height: 14px;
-  background: var(--amber);
+  background: var(--gold, #f5c542);
   clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
   pointer-events: none;
   opacity: 0;
@@ -307,10 +309,6 @@
   animation-delay: calc(var(--rise, 0) * 160ms + 120ms);
 }
 
-.juice-podium .board-top .board-card.place-1 {
-  box-shadow: 0 0 0 2px rgba(245, 197, 66, 0.28), 0 16px 40px -14px rgba(245, 197, 66, 0.55);
-}
-
 .juice-podium .board-rest .board-row {
   animation: juice-slide-in 420ms var(--ease) both;
   animation-delay: calc(var(--rise, 0) * 50ms + 560ms);
@@ -323,11 +321,11 @@
 @keyframes juice-rise {
   0% {
     opacity: 0;
-    transform: translateY(26px) scale(0.92);
+    transform: translateY(18px) scale(0.96);
   }
   65% {
     opacity: 1;
-    transform: translateY(-4px) scale(1.02);
+    transform: translateY(-2px) scale(1.01);
   }
   100% {
     opacity: 1;

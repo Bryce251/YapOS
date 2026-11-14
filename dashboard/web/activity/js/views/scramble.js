@@ -107,7 +107,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
     attrs: { type: 'text', maxlength: 12, autocomplete: 'off', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': 'Your answer', placeholder: 'Type the word' },
   });
   const sendBtn = button('Go', { variant: 'primary', key: 'scramble-send', on: () => submit() });
-  const shuffleBtn = button('Shuffle', { variant: 'ghost', size: 'sm', key: 'scramble-shuffle', on: () => reshuffle(), kids: h('span', { text: '🔀', attrs: { 'aria-hidden': 'true' } }) });
+  const shuffleBtn = button('Shuffle', { variant: 'ghost', size: 'sm', key: 'scramble-shuffle', on: () => reshuffle(), kids: h('span', { text: '⇄', attrs: { 'aria-hidden': 'true' } }) });
   const backBtn = button('Back', { variant: 'ghost', size: 'sm', key: 'scramble-back', on: () => back(), kids: h('span', { text: '⌫', attrs: { 'aria-hidden': 'true' } }) });
   const clearBtn = button('Clear', { variant: 'ghost', size: 'sm', key: 'scramble-clear', on: () => clear() });
   const hint = h('p', { class: 'entry-hint', attrs: { role: 'status', 'aria-live': 'polite' } });
@@ -217,7 +217,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
     h(
       'div',
       { class: 'game-head' },
-      m.tier ? h('span', { class: 'chip chip-static', text: `${m.tier.emoji} ${m.tier.name}` }) : null,
+      m.tier ? h('span', { class: 'chip chip-static', text: `${m.tier.name} word` }) : null,
       h('span', { class: 'game-count', text: `Word ${m.number} of ${m.total}` }),
       m.phase === 'reveal' ? timer(m.ends - REVEAL_MS, m.ends, 'Next word in') : timer(m.starts, m.ends, 'Time left for this word'),
     ),
@@ -328,7 +328,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
     if (list.includes('correct')) {
       const slots = board.querySelector('.scramble-slots');
       if (slots) {
-        cue.burst(slots, { count: 14, emoji: ['🔀', '✨'] });
+        cue.burst(slots, { count: 14, emoji: ['🔀', '🎉'] });
         if (m.myPts) cue.float(slots, `+${m.myPts}`);
       }
       if (m.place === 1 && m.players > 1 && cheered !== m.i && fx && typeof fx.confetti === 'function') {

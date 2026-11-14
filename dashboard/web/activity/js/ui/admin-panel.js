@@ -188,7 +188,6 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
             attrs: { role: 'tab', 'aria-selected': t.id === m.tab ? 'true' : 'false', 'aria-controls': 'admin-section' },
             on: { click: () => setUi({ tab: t.id }) },
           },
-          h('span', { class: 'admin-tab-icon', text: t.icon, attrs: { 'aria-hidden': 'true' } }),
           h('span', { text: t.label }),
         ),
       ),
@@ -224,15 +223,15 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
     return h(
       'div',
       { class: 'admin-pane' },
-      h('p', { class: 'admin-state' }, h('span', { class: 'admin-dot', attrs: { 'aria-hidden': 'true' } }), h('span', { text: phaseText(m) }), m.locked ? h('span', { class: 'admin-chip-lock', text: '🔒 Joining locked' }) : null),
+      h('p', { class: 'admin-state' }, h('span', { class: 'admin-dot', attrs: { 'aria-hidden': 'true' } }), h('span', { text: phaseText(m) }), m.locked ? h('span', { class: 'admin-chip-lock', text: 'Joining locked' }) : null),
       section(
         'Game',
         h(
           'div',
           { class: 'admin-grid' },
-          button('Start now', { variant: 'primary', size: 'sm', key: 'adm-start', disabled: m.phase !== 'lobby', on: () => run({ type: 'start' }, 'Starting the game now.'), kids: h('span', { class: 'btn-icon-inline', text: '▶️', attrs: { 'aria-hidden': 'true' } }) }),
-          button('End game', { variant: 'secondary', size: 'sm', key: 'adm-end', disabled: m.phase === 'lobby' || m.phase === 'connecting', on: () => run({ type: 'end' }, 'Ending the game.'), kids: h('span', { class: 'btn-icon-inline', text: '⏹', attrs: { 'aria-hidden': 'true' } }) }),
-          button('Skip', { variant: 'secondary', size: 'sm', key: 'adm-skip', disabled: !inGame, on: () => run({ type: 'skip' }, 'Skipped ahead.'), kids: h('span', { class: 'btn-icon-inline', text: '⏭', attrs: { 'aria-hidden': 'true' } }) }),
+          button('Start now', { variant: 'primary', size: 'sm', key: 'adm-start', disabled: m.phase !== 'lobby', on: () => run({ type: 'start' }, 'Starting the game now.') }),
+          button('End game', { variant: 'secondary', size: 'sm', key: 'adm-end', disabled: m.phase === 'lobby' || m.phase === 'connecting', on: () => run({ type: 'end' }, 'Ending the game.') }),
+          button('Skip', { variant: 'secondary', size: 'sm', key: 'adm-skip', disabled: !inGame, on: () => run({ type: 'skip' }, 'Skipped ahead.') }),
         ),
       ),
       section(
@@ -264,7 +263,7 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
         h(
           'div',
           { class: 'admin-row' },
-          button('Send', { variant: 'primary', size: 'sm', key: 'adm-announce-send', on: sendAnnounce, kids: h('span', { class: 'btn-icon-inline', text: '📣', attrs: { 'aria-hidden': 'true' } }) }),
+          button('Send', { variant: 'primary', size: 'sm', key: 'adm-announce-send', on: sendAnnounce }),
           button('Clear', { variant: 'ghost', size: 'sm', key: 'adm-announce-clear', on: clearAnnounce }),
         ),
       ),
@@ -299,8 +298,8 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
   }
 
   function badge(r) {
-    if (r.isOwner) return h('span', { class: 'admin-badge is-owner', text: '👑 Owner' });
-    if (r.isAdmin) return h('span', { class: 'admin-badge', text: '🛡️ Admin' });
+    if (r.isOwner) return h('span', { class: 'admin-badge is-owner', text: 'Owner' });
+    if (r.isAdmin) return h('span', { class: 'admin-badge', text: 'Admin' });
     return null;
   }
 
@@ -342,7 +341,7 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
       },
     });
     input.value = pointDrafts.get(r.id) || '';
-    const state = r.banned ? '🚫 Banned' : r.joined ? '🎮 Playing' : r.present ? '👀 Watching' : 'Away';
+    const state = r.banned ? 'Banned' : r.joined ? 'Playing' : r.present ? 'Watching' : 'Away';
     return h(
       'li',
       { class: ['admin-player', r.isMe ? 'is-me' : null, r.banned ? 'is-banned' : null, off ? 'is-guarded' : null], dataset: { id: r.id } },
@@ -391,7 +390,6 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
         h(
           'button',
           { class: ['chip', 'admin-person', picked === null ? 'is-on' : null, 'spot'], type: 'button', dataset: { key: `${keyBase}-all` }, attrs: { 'aria-pressed': picked === null ? 'true' : 'false' }, on: { click: () => onPick(null) } },
-          h('span', { class: 'admin-person-all', text: '🌍', attrs: { 'aria-hidden': 'true' } }),
           h('span', { text: 'Everyone' }),
         ),
       );
@@ -456,7 +454,7 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
           size: 'sm',
           key: 'fx-spotlight',
           disabled: !m.spot,
-          on: () => fire('spotlight', { target: m.spot, ms: FUN_MS.spotlight }, `✨ Spotlight on ${nameFor(m.spot)}.`),
+          on: () => fire('spotlight', { target: m.spot, ms: FUN_MS.spotlight }, `Spotlight on ${nameFor(m.spot)}.`),
         }),
       ),
     );
@@ -504,7 +502,7 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
       h(
         'header',
         { class: 'admin-head' },
-        h('span', { class: 'admin-shield', text: '🛡️', attrs: { 'aria-hidden': 'true' } }),
+        h('span', { class: 'admin-shield', attrs: { 'aria-hidden': 'true' } }),
         h('h2', { class: 'admin-title', text: 'Admin', attrs: { id: 'admin-title' } }),
         h('span', { class: ['admin-role', m.amOwner ? 'is-owner' : null], text: m.amOwner ? 'Owner' : 'Admin' }),
         button('Close', { variant: 'ghost', size: 'sm', key: 'admin-close', on: () => close(), attrs: { 'aria-label': 'Close the admin panel' } }),

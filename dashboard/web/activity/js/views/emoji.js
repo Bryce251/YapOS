@@ -166,7 +166,7 @@ export function createEmojiView({ engine, fx, cues, win }) {
     h(
       'div',
       { class: 'game-head' },
-      h('span', { class: 'chip chip-static', text: '🧩 Emoji Decode' }),
+      h('span', { class: 'chip chip-static', text: 'Emoji Decode' }),
       h('span', { class: 'game-count', text: `Puzzle ${m.number} of ${m.total}` }),
       timer(m.starts, m.ends, m.phase === 'reveal' ? 'Next puzzle in' : 'Time left to guess'),
     ),
@@ -194,7 +194,7 @@ export function createEmojiView({ engine, fx, cues, win }) {
       { class: 'emoji-hintrow' },
       m.category
         ? h('span', { class: ['chip chip-static emoji-cat', m.level === 1 ? 'is-fresh' : null], text: `${m.category.emoji} ${m.category.name}` })
-        : h('span', { class: 'chip chip-static emoji-cat is-locked', text: '🔒 Category' }),
+        : h('span', { class: 'chip chip-static emoji-cat is-locked', text: 'Category hidden' }),
       m.pattern ? blanks(m.pattern) : null,
       h('span', { class: 'blank-count emoji-hinttext', text: hintText(m) }),
     );
@@ -231,7 +231,7 @@ export function createEmojiView({ engine, fx, cues, win }) {
     if (list.includes('correct')) {
       const card = stage.querySelector('.emoji-card');
       if (card) {
-        cue.burst(card, { count: 16, emoji: ['✨', '🧩'] });
+        cue.burst(card, { count: 16, emoji: ['🧩', '🎉'] });
         if (m.myGain) cue.float(card, `+${m.myGain.toLocaleString('en-US')}`);
       }
     }

@@ -88,7 +88,7 @@ function playerRow(p, fresh) {
     'li',
     { class: ['player', p.isMe ? 'is-me' : null, fresh ? 'juice-in' : null] },
     who(p, { size: 'md' }),
-    p.isHost ? h('span', { class: 'tag tag-host', text: '👑 Host' }) : null,
+    p.isHost ? h('span', { class: 'tag tag-host', text: 'Host' }) : null,
   );
 }
 
@@ -98,7 +98,7 @@ function watcher(p) {
     { class: ['watcher', p.isMe ? 'is-me' : null], attrs: { title: p.username ? `${p.name} (@${p.username})` : p.name } },
     avatar(p, 'xs'),
     h('span', { class: 'watcher-name', text: p.isMe ? `${p.name} (you)` : p.name, attrs: { 'data-uid': uidOf(p) } }),
-    p.isHost ? h('span', { class: 'watcher-host', text: '👑', attrs: { title: 'Host', 'aria-label': 'Host' } }) : null,
+    p.isHost ? h('span', { class: 'watcher-host', text: 'Host' }) : null,
   );
 }
 
@@ -113,7 +113,6 @@ export function joinButton(m, { size = 'xl', key = 'join' } = {}) {
     size,
     key,
     disabled: busy,
-    kids: h('span', { class: 'btn-icon-inline', text: '🎮', attrs: { 'aria-hidden': 'true' } }),
   });
 }
 
@@ -354,7 +353,6 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
             attrs: { role: 'tab', id: `picker-tab-${t.id}`, 'aria-selected': on ? 'true' : 'false', 'aria-controls': 'picker-panel', tabindex: on ? '0' : '-1' },
             on: { click: () => chooseTab(t.id, false), keydown: (e) => tabKey(e, tabs) },
           },
-          t.emoji ? h('span', { class: 'picker-tab-emoji', text: t.emoji, attrs: { 'aria-hidden': 'true' } }) : null,
           h('span', { class: 'picker-tab-name', text: t.name }),
           h('span', { class: 'picker-tab-count', text: String(t.count), attrs: { 'aria-label': plural(t.count, 'game', 'games') } }),
         );
@@ -430,7 +428,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       if (!tile || !tile.isConnected) return;
       const emoji = tile.querySelector('.game-emoji');
       cue(sfx, 'pop');
-      burstFrom(tile, { count: 10, spread: 70, size: 7, emoji: emoji && emoji.textContent ? [emoji.textContent, '✨'] : null });
+      burstFrom(tile, { count: 10, spread: 70, size: 7, emoji: emoji && emoji.textContent ? [emoji.textContent] : null });
     },
     destroy() {},
   };

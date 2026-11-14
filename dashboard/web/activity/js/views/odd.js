@@ -44,9 +44,9 @@ export function headline(m) {
   const was = m.odd && m.odd.isMe ? 'were' : 'was';
   if (m.note === 'left') return `${who} left, so this round ends here.`;
   if (m.note === 'few') return 'Too many people left, so this round ends here.';
-  if (!m.caught) return m.odd && m.odd.isMe ? 'You got away with it! 😎' : `${who} got away with it! 😎`;
-  if (m.stole) return m.odd && m.odd.isMe ? 'Caught, but you guessed the word! Sneaky! 🦹' : `Caught, but ${who} guessed the word! Sneaky! 🦹`;
-  return `Caught! ${who} ${was} the Odd One Out. 🎯`;
+  if (!m.caught) return m.odd && m.odd.isMe ? 'You got away with it!' : `${who} got away with it!`;
+  if (m.stole) return m.odd && m.odd.isMe ? 'Caught, but you guessed the word! Sneaky!' : `Caught, but ${who} guessed the word! Sneaky!`;
+  return `Caught! ${who} ${was} the Odd One Out.`;
 }
 
 export function guessLine(m) {
@@ -476,7 +476,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
             m.gains.map((g) => h('li', { class: ['reveal-guess', g.isMe ? 'is-me' : null] }, avatar(g, 'xs'), h('span', { class: 'reveal-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'reveal-pts', text: `+${g.pts}` }))),
           )
         : null,
-      won ? h('p', { class: 'odd-won', text: m.role === 'odd' ? 'Faker wins! 🦹' : 'Team win! 🎉' }) : null,
+      won ? h('p', { class: 'odd-won', text: m.role === 'odd' ? 'Faker wins!' : 'Team win!' }) : null,
     );
   }
 
@@ -579,7 +579,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
       cue.play(c.name, c.opts);
       if (c.at === 'gain' && m.gained) {
         const card = actBox.querySelector('.odd-reveal');
-        if (card) cue.burst(card, { count: 16, emoji: m.role === 'odd' ? ['🕵️', '✨'] : ['🎯', '✨'] });
+        if (card) cue.burst(card, { count: 16, emoji: m.role === 'odd' ? ['🕵️', '🎉'] : ['🎯', '🎉'] });
       }
     }
     if (wonRound(m) && cheered !== m.r) {

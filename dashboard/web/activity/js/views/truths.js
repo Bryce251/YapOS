@@ -241,13 +241,13 @@ export function createTruthsView({ engine, fx, cues }) {
 
   const paintHead = memo((m) => {
     if (!m) return null;
-    const label = m.phase === 'write' ? '✍️ Writing time' : m.phase === 'end' ? '🏆 Awards' : `Set ${m.number} of ${m.total}`;
+    const label = m.phase === 'write' ? 'Writing time' : m.phase === 'end' ? 'Awards' : `Set ${m.number} of ${m.total}`;
     const showTimer = m.phase !== 'end';
     const timerLabel = m.phase === 'write' ? 'Time left to write' : m.phase === 'vote' ? 'Time left to vote' : 'Next set in';
     return h(
       'div',
       { class: 'game-head' },
-      h('span', { class: 'chip chip-static', text: '🤥 Two Truths and a Lie' }),
+      h('span', { class: 'chip chip-static', text: 'Two Truths and a Lie' }),
       h('span', { class: 'game-count', text: label }),
       showTimer ? timer(m.starts, m.ends, timerLabel) : null,
     );
@@ -276,7 +276,7 @@ export function createTruthsView({ engine, fx, cues }) {
       },
       h('span', { class: 'option-letter', text: String(s.i + 1), attrs: { 'aria-hidden': 'true' } }),
       h('span', { class: 'option-text', text: s.text }),
-      known ? h('span', { class: ['truths-tag', s.isLie ? 'truths-tag-lie' : 'truths-tag-true'], text: s.isLie ? '🤥 Lie' : '✓ True' }) : null,
+      known ? h('span', { class: ['truths-tag', s.isLie ? 'truths-tag-lie' : 'truths-tag-true'], text: s.isLie ? 'Lie' : 'True' }) : null,
       known ? faces(s.voters, 5) : null,
     );
   }
@@ -358,7 +358,7 @@ export function createTruthsView({ engine, fx, cues }) {
     if (m && m.phase === 'reveal' && list.includes('correct')) {
       const target = m.isWriter ? stage.querySelector('.truths-writer') : stage.querySelector('.truths-is-lie');
       if (target) {
-        cue.burst(target, { count: 14, emoji: m.isWriter ? ['🤥', '✨'] : ['🔍', '✨'] });
+        cue.burst(target, { count: 14, emoji: m.isWriter ? ['🤥', '🎭'] : ['🔍', '🎉'] });
         if (m.myGain) cue.float(target, `+${m.myGain}`);
       }
     }

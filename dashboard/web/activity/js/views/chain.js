@@ -138,7 +138,7 @@ export function createChainView({ engine, toast, cues }) {
     h(
       'div',
       { class: 'game-head' },
-      h('span', { class: 'chip chip-static', text: `🔗 ${plural(m.count, 'word', 'words')}` }),
+      h('span', { class: 'chip chip-static', text: plural(m.count, 'word', 'words') }),
       m.phase === 'turn' ? timer(m.starts, m.ends, 'Time left for this turn') : null,
     ),
   );

@@ -11,7 +11,7 @@ export const TICK_MS = 400;
 
 const QUIET = { play() {}, burst() {}, float() {} };
 
-export const STEP_LABEL = Object.freeze({ write: '✍️ Write', draw: '🎨 Draw', text: '🔎 Describe', reveal: '🎬 The reveal', awards: '🏅 Awards', lost: '📵 Hung up' });
+export const STEP_LABEL = Object.freeze({ write: 'Write', draw: 'Draw', text: 'Describe', reveal: 'The reveal', awards: 'Awards', lost: 'Hung up' });
 
 export function headline(m, sent) {
   if (m.phase === 'write') return sent ? 'Your phrase is on its way!' : 'Start a chain! Write something silly for someone to draw.';
@@ -70,6 +70,22 @@ function paintStrokes(ctx, strokes, painter = null) {
   if (!ctx) return;
   if (painter) painter.paint(ctx, strokes);
   else paintInk(ctx, strokes, SCALE);
+}
+
+export function inkSig(parts) {
+  let h = 2166136261;
+  let n = 0;
+  for (const s of Array.isArray(parts) ? parts : []) {
+    if (typeof s !== 'string') continue;
+    n += s.length;
+    for (let i = 0; i < s.length; i += 1) h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0;
+    h = Math.imul(h ^ 124, 16777619) >>> 0;
+  }
+  return `${n}.${h.toString(36)}`;
+}
+
+export function inkLeft(used, count) {
+  return Math.max(0, Math.min(1 - used / INK_CHARS, 1 - count / INK_PARTS));
 }
 
 export function decodeAll(parts) {
@@ -209,8 +225,10 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   let lastWrite = 0;
   let heard = null;
   let shownSrc = null;
+  let shown = 'blank';
   let cheered = null;
   let ticker = null;
+  let warned = null;
 
   function setPen(p) {
     Object.assign(pen, p);
@@ -236,7 +254,69 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   }
 
   function paintMine() {
+    shown = 'mine';
     paintStrokes(ctx, cur ? mine.strokes.concat([cur]) : mine.strokes, painter);
+  }
+
+  function srcStrokes(m) {
+    const v = snap && m && m.src ? snap.state[m.src.key] : null;
+    return validInk(v, m.src.k) ? v.s : [];
+  }
+
+  function paintBoard() {
+    const m = model;
+    if (m && m.phase === 'draw' && m.playing && mine.key === stepKeyOf(m)) {
+      paintMine();
+      return;
+    }
+    if (m && m.phase === 'text' && m.playing && m.src) {
+      const parts = srcStrokes(m);
+      shownSrc = `${m.src.key}:${m.src.k}:${inkSig(parts)}`;
+      shown = 'src';
+      paintStrokes(ctx, decodeAll(parts), painter);
+      return;
+    }
+    shownSrc = null;
+    if (shown === 'blank') return;
+    shown = 'blank';
+    paintStrokes(ctx, [], painter);
+  }
+
+  function release(id) {
+    if (id === undefined || id === null || typeof canvas.releasePointerCapture !== 'function') return;
+    try {
+      canvas.releasePointerCapture(id);
+    } catch {
+      return;
+    }
+  }
+
+  function dropStroke() {
+    if (!cur) return;
+    const id = cur.id;
+    cur = null;
+    release(id);
+    paintBoard();
+  }
+
+  function samePointer(e) {
+    return !cur || cur.id === undefined || !e || e.pointerId === undefined || e.pointerId === cur.id;
+  }
+
+  function pointerGone() {
+    if (!cur || cur.id === undefined || typeof canvas.setPointerCapture !== 'function') return false;
+    if (!cur.held) return true;
+    if (typeof canvas.hasPointerCapture !== 'function') return false;
+    try {
+      return !canvas.hasPointerCapture(cur.id);
+    } catch {
+      return false;
+    }
+  }
+
+  function outOfInk(text) {
+    cue.play('error');
+    say(text);
   }
 
   function pointOf(e) {
@@ -248,8 +328,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   function fillAt(p) {
     const parts = encodeParts({ c: pen.c, z: FILL, pts: [p] });
     if (!parts.length || mine.used + inkChars(parts) > INK_CHARS || mine.parts.flat().length + parts.length > INK_PARTS) {
-      cue.play('error');
-      say('Out of ink! Undo a line or tap Done.');
+      outOfInk('Out of ink! Undo a line or tap Done.');
       return;
     }
     paintMine();
@@ -264,10 +343,11 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   }
 
   function onDown(e) {
-    if (!canDraw() || cur) return;
-    if (mine.used >= INK_CHARS) {
-      cue.play('error');
-      say('Out of ink! Undo a line or tap Done.');
+    if (cur && !samePointer(e) && canDraw() && cur.key === mine.key && !pointerGone()) return;
+    if (cur) commitStroke();
+    if (!canDraw()) return;
+    if (mine.used >= INK_CHARS || mine.parts.flat().length >= INK_PARTS) {
+      outOfInk('Out of ink! Undo a line or tap Done.');
       return;
     }
     const p = pointOf(e);
@@ -277,19 +357,29 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       fillAt(p);
       return;
     }
+    let held = false;
     if (typeof canvas.setPointerCapture === 'function' && e.pointerId !== undefined) {
       try {
         canvas.setPointerCapture(e.pointerId);
+        held = true;
       } catch {
-        cur = null;
+        held = false;
       }
     }
-    cur = { c: pen.c, z: pen.z, pts: [p] };
+    cur = { c: pen.c, z: pen.z, pts: [p], id: e.pointerId, key: mine.key, held };
     strokeOn(ctx, cur);
   }
 
   function onMove(e) {
-    if (!cur) return;
+    if (!cur || !samePointer(e)) return;
+    if (!canDraw() || cur.key !== mine.key) {
+      dropStroke();
+      return;
+    }
+    if (e.pointerType === 'mouse' && e.buttons === 0) {
+      commitStroke();
+      return;
+    }
     e.preventDefault();
     const before = cur.pts.length;
     const list = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
@@ -301,25 +391,31 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     if (cur.pts.length > before) strokeOn(ctx, cur, before);
   }
 
-  function onUp() {
-    if (!cur) return;
-    const s = cur;
+  function onUp(e) {
+    if (!cur || !samePointer(e)) return;
+    commitStroke();
+  }
+
+  function commitStroke(keep = false) {
+    if (!cur) return false;
+    const s = { c: cur.c, z: cur.z, pts: cur.pts };
+    const id = cur.id;
+    const key = cur.key;
+    const held = cur.held;
     cur = null;
-    if (!canDraw()) {
-      paintMine();
-      return;
+    if (!keep) release(id);
+    if (!canDraw() || key !== mine.key) {
+      paintBoard();
+      return false;
     }
     const fit = fitStroke(s, mine.used, mine.parts.flat().length);
     if (!fit) {
-      cue.play('error');
-      say('Out of ink! Undo a line or tap Done.');
+      outOfInk('Out of ink! That line did not fit. Undo a line or tap Done.');
       paintMine();
-      return;
+      return false;
     }
-    if (fit.cut) {
-      cue.play('error');
-      say('Out of ink! That line got cut short.');
-    }
+    if (fit.cut) outOfInk('Out of ink! That line got cut short.');
+    else if (keep) cur = { c: s.c, z: s.z, pts: [s.pts[s.pts.length - 1]], id, key, held };
     mine.parts.push(fit.parts);
     mine.strokes.push(...decodeAll(fit.parts));
     mine.used += inkChars(fit.parts);
@@ -327,6 +423,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     paintMine();
     paintMeter();
     queueWrite();
+    return true;
   }
 
   function payload() {
@@ -347,7 +444,12 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     if (!model || model.phase !== 'draw' || !model.playing || !model.inkKey || mine.key !== stepKeyOf(model)) return;
     lastWrite = Date.now();
     mine.dirty = false;
-    engine.direct(model.inkKey, payload());
+    if (engine.direct(model.inkKey, payload()) !== false) return;
+    mine.dirty = true;
+    if (warned === mine.key) return;
+    warned = mine.key;
+    cue.play('error');
+    say('Your drawing did not save. Keep going, it will try again.');
   }
 
   function undo() {
@@ -374,6 +476,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
 
   function finishDrawing() {
     if (!canDraw()) return;
+    if (cur) commitStroke();
     writeNow();
     local.sent = local.stepKey;
     cue.play('send');
@@ -447,12 +550,17 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   canvas.addEventListener('pointerup', onUp);
   canvas.addEventListener('pointercancel', onUp);
   canvas.addEventListener('lostpointercapture', onUp);
+  const lifted = (e) => onUp(e);
+  if (typeof w.addEventListener === 'function') {
+    w.addEventListener('pointerup', lifted);
+    w.addEventListener('pointercancel', lifted);
+  }
 
   const paintHead = memo((m) =>
     h(
       'div',
       { class: 'game-head' },
-      h('span', { class: 'chip chip-static', text: STEP_LABEL[m.phase] || '☎️' }),
+      h('span', { class: 'chip chip-static', text: STEP_LABEL[m.phase] || 'Draw Telephone' }),
       m.count ? h('span', { class: 'game-count', text: m.count }) : null,
       m.pass ? h('span', { class: 'game-count', text: 'Passing…' }) : m.ends ? timer(m.starts, m.ends, m.label) : null,
     ),
@@ -498,13 +606,13 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     h(
       'div',
       { class: ['telephone-ink', m.left < 0.2 ? 'telephone-low' : null], attrs: { role: 'meter', 'aria-label': 'Ink left', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(m.left * 100)) } },
-      h('span', { class: 'telephone-ink-label', text: `🖋️ Ink left ${Math.round(m.left * 100)}%` }),
+      h('span', { class: 'telephone-ink-label', text: `Ink left ${Math.round(m.left * 100)}%` }),
       h('span', { class: 'telephone-ink-track' }, h('span', { class: 'telephone-ink-fill', vars: { '--ink': m.left.toFixed(3) } })),
     ),
   );
 
   function paintMeter() {
-    paintMeterBox(meter, { left: Math.max(0, 1 - mine.used / INK_CHARS) });
+    paintMeterBox(meter, { left: inkLeft(mine.used, mine.parts.flat().length) });
   }
 
   const paintWait = memo((m) => {
@@ -512,7 +620,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     return h(
       'div',
       { class: 'telephone-waiting' },
-      h('span', { class: 'telephone-sent', text: m.sent ? '📨 Sent!' : '' }),
+      h('span', { class: 'telephone-sent', text: m.sent ? 'Sent!' : '' }),
       m.working.length
         ? h(
             'div',
@@ -600,6 +708,12 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   function syncBoard(m) {
     const drawing = m.phase === 'draw' && m.playing;
     const viewing = m.phase === 'text' && m.playing && m.src;
+    if (cur && (!canDraw() || cur.key !== stepKeyOf(m))) {
+      const id = cur.id;
+      cur = null;
+      release(id);
+      shown = null;
+    }
     board.classList.toggle('telephone-off', !drawing && !viewing);
     board.classList.toggle('is-drawing', canDraw());
     board.classList.toggle('telephone-viewing', Boolean(viewing));
@@ -608,6 +722,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       const key = stepKeyOf(m);
       if (mine.key !== key) {
         cur = null;
+        warned = null;
         mine.key = key;
         mine.parts = [];
         mine.strokes = [];
@@ -621,6 +736,8 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
         }
         shownSrc = null;
         paintMine();
+      } else if (shown !== 'mine') {
+        paintMine();
       }
       blankNote.classList.add('telephone-off');
       paintMeter();
@@ -631,16 +748,15 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       editBtn.classList.toggle('telephone-off', !m.mineDone || m.pass);
       return;
     }
+    mine.key = null;
     if (viewing) {
-      const v = snap.state[m.src.key];
-      const sig = `${m.src.key}:${m.src.k}:${v && Array.isArray(v.s) ? v.s.length : 0}:${v && v.k}`;
-      if (sig !== shownSrc) {
-        shownSrc = sig;
-        mine.key = null;
-        paintStrokes(ctx, validInk(v, m.src.k) ? decodeAll(v.s) : [], painter);
-      }
+      const sig = `${m.src.key}:${m.src.k}:${inkSig(srcStrokes(m))}`;
+      if (sig !== shownSrc || shown !== 'src') paintBoard();
       blankNote.classList.toggle('telephone-off', !m.src.blank);
+      return;
     }
+    blankNote.classList.add('telephone-off');
+    paintBoard();
   }
 
   function drawEntries(state) {
@@ -669,7 +785,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       const me = awardBox.querySelector('.telephone-award.is-me');
       if (me) {
         cue.play('correct', { at: 360 });
-        cue.burst(me, { count: 18, emoji: ['🏅', '✨', '☎️'] });
+        cue.burst(me, { count: 18, emoji: ['🏅', '☎️'] });
         if (fx && typeof fx.confetti === 'function') fx.confetti(30);
       }
     }
@@ -679,7 +795,10 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     const now = typeof engine.now === 'function' ? engine.now() : Date.now();
     if (!m.playing || m.pass || !m.ends) return;
     if ((m.phase === 'write' || m.phase === 'text') && !sentNow() && now >= m.ends - AUTO_SEND_MS && input.value.trim()) submitText(true);
-    if (m.phase === 'draw' && mine.dirty && now >= m.ends - FLUSH_LEFT_MS) writeNow();
+    if (m.phase === 'draw' && now >= m.ends - FLUSH_LEFT_MS) {
+      if (cur && cur.pts.length > 1 && canDraw()) commitStroke(true);
+      if (mine.dirty) writeNow();
+    }
   }
 
   function refresh() {
@@ -734,13 +853,17 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   }
 
   if (typeof w.setInterval === 'function') ticker = w.setInterval(() => snap && update(engine.snapshot()), TICK_MS);
-  paintStrokes(ctx, []);
+  paintStrokes(ctx, [], painter);
 
   return {
     el,
     update,
     destroy() {
       if (ticker !== null && typeof w.clearInterval === 'function') w.clearInterval(ticker);
+      if (typeof w.removeEventListener === 'function') {
+        w.removeEventListener('pointerup', lifted);
+        w.removeEventListener('pointercancel', lifted);
+      }
       if (writeTimer !== null) w.clearTimeout(writeTimer);
       writeTimer = null;
     },

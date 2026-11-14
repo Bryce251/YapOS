@@ -33,9 +33,30 @@ import hive, {
   unveil,
   candidates,
   RANKS,
+  SYNC_MS,
+  SLICE_MS,
+  useTimers,
+  puzzleJob,
+  buildIndex,
+  indexReady,
 } from '../web/activity/js/games/hive.js';
 import * as dictionary from '../web/activity/js/dictionary.js';
-import { createHiveView, footText, hiveMoments, shuffled } from '../web/activity/js/views/hive.js';
+import {
+  createHiveView,
+  footText,
+  hiveMoments,
+  shuffled,
+  createTrace,
+  nearestSpot,
+  toCell,
+  withPending,
+  SPOTS,
+  COMB_W,
+  COMB_H,
+  HOLD_MS,
+  MSG_MS,
+  FADE_MS,
+} from '../web/activity/js/views/hive.js';
 import { SEEDS, WORDS } from '../web/activity/data/hive.js';
 import { shiftEnd } from '../web/activity/js/engine.js';
 import { jsonBytes, MAX_VALUE_BYTES, MAX_KEYS, MAX_STATE_BYTES, stateBytes } from '../web/activity/js/limits.js';
@@ -60,8 +81,14 @@ function bySlot(r, slot) {
   return r.engines.find((e) => e.snapshot().meSlot === slot);
 }
 
+function hiveRoom(n, opts = {}) {
+  const r = room(n, { games: [hive], ...opts });
+  useTimers(r.clock);
+  return r;
+}
+
 async function startHive(n = 3, opts = {}) {
-  const r = room(n, { games: [hive], seed: opts.seed });
+  const r = hiveRoom(n, { seed: opts.seed });
   await r.clock.advance(500);
   const host = r.engines[0];
   assert.equal(host.lobby.pick('hive'), true);
@@ -81,7 +108,7 @@ function word(w, id, q = 1) {
 
 async function say(r, slot, w, q = 1) {
   bySlot(r, slot).act(word(w, st(r).id, q));
-  await r.clock.advance(400);
+  await r.clock.advance(900);
 }
 
 function resOf(r, slot) {
@@ -118,7 +145,32 @@ function noInlineStyles(root) {
 
 function fakeApi(opts = {}) {
   const state = {};
+  let queue = [];
+  let seq = 0;
   const api = {
+    timers: {
+      setTimeout: (fn, ms) => {
+        seq += 1;
+        queue.push({ id: seq, at: api.t + Math.max(0, ms || 0), fn });
+        return seq;
+      },
+      clearTimeout: (id) => {
+        queue = queue.filter((x) => x.id !== id);
+      },
+    },
+    tick(ms) {
+      const end = api.t + ms;
+      for (;;) {
+        queue.sort((a, b) => a.at - b.at || a.id - b.id);
+        const next = queue[0];
+        if (!next || next.at > end) break;
+        queue.shift();
+        api.t = Math.max(api.t, next.at);
+        next.fn();
+      }
+      api.t = end;
+    },
+    pending: () => queue.length,
     t: 1_000_000,
     finished: null,
     points: {},
@@ -154,6 +206,7 @@ function fakeApi(opts = {}) {
     },
     state,
   };
+  useTimers(api.timers);
   return api;
 }
 
@@ -368,12 +421,12 @@ test('the host refuses bad words and tells only the sender why', async () => {
   assert.deepEqual(resOf(r, 1).slice(-2).map((x) => [x[0], x[1]]), [[5, 'ok'], [6, 'found']]);
   assert.equal(st(r).b[1][1], 1);
   bySlot(r, 0).act(word(list[1], 12345));
-  await r.clock.advance(400);
+  await r.clock.advance(900);
   assert.equal(st(r).b[0][1], 0, 'words for an old puzzle are ignored');
   bySlot(r, 0).act({ type: 'word', x: 42, q: 'x', id: s.id });
   bySlot(r, 0).act({ type: 'word', w: list[1], q: 7, id: s.id });
   bySlot(r, 0).act({ type: 'word', x: veil(list[1], s.id), q: 8 });
-  await r.clock.advance(400);
+  await r.clock.advance(900);
   assert.equal(st(r).b[0][1], 0, 'plain, broken or unlabelled words are ignored');
   assert.deepEqual(r.hub.violations, []);
 });
@@ -390,7 +443,7 @@ test('someone who joins late gets a spot on the board and can play', async () =>
   assert.equal(m.canPlay, true);
   const w = answers(st(r))[0];
   late.act(word(w, st(r).id));
-  await r.clock.advance(400);
+  await r.clock.advance(900);
   assert.equal(st(r).b[slot][1], 1);
   assert.deepEqual(r.hub.violations, []);
 });
@@ -409,6 +462,7 @@ test('admins can skip to the reveal, skip the reveal, and add or remove time', (
   assert.equal(hive.admin(api, { type: 'nope' }), false);
   const w = hiveWords(s.l, s.c)[0];
   hive.intent(api, 1, word(w, s.id));
+  api.tick(SYNC_MS);
   assert.equal(api.points[1], wordPoints(w, s.l));
   assert.equal(hive.admin(api, { type: 'skip' }), true);
   s = api.get(KEY);
@@ -530,7 +584,7 @@ test('a solo game: one player can find every word and the reveal comes early', a
 });
 
 test('twelve players and a watcher play a full round to the results', async () => {
-  const r = room(13, { games: [hive], join: false });
+  const r = hiveRoom(13, { join: false });
   for (const e of r.engines.slice(0, 12)) e.join();
   await r.clock.advance(800);
   const host = r.engines[0];
@@ -653,12 +707,12 @@ test('cues fire once per moment and never on the first render', () => {
 
 test('the view: honeycomb typing, instant feedback, scores, reveal, all without inline styles', async () => {
   installDom({ url: 'https://yapos.dev/activity/' });
-  const r = room(2, { games: [hive] });
+  const r = hiveRoom(2);
   await r.clock.advance(500);
   const played = r.engines.map(() => []);
   const views = r.engines.map((engine, i) => {
     const cues = { play: (name) => played[i].push(name), burst() {}, float() {} };
-    const v = createHiveView({ engine, fx: { confetti() {} }, toast() {}, cues });
+    const v = createHiveView({ engine, fx: { confetti() {} }, toast() {}, cues, timers: r.clock });
     engine.on('change', (s) => v.update(s));
     return v;
   });
@@ -723,7 +777,7 @@ test('the view: honeycomb typing, instant feedback, scores, reveal, all without 
   noInlineStyles(views[1].el);
   const pangram = list.find((x) => isPangram(x, s.l));
   bySlot(r, 1).act(word(pangram, s.id));
-  await r.clock.advance(500);
+  await r.clock.advance(900);
   assert.match(text(mine.el), /found a pangram/);
   assert.ok(played[0].includes('pop'));
   await r.clock.advance(s.ends - r.clock.now() + 300);
@@ -746,7 +800,7 @@ test('the view shows loading and failure messages', async () => {
   dictionary.reset();
   try {
     await loadWords(() => Promise.reject(new Error('offline')));
-    const r = room(1, { games: [hive] });
+    const r = hiveRoom(1);
     await r.clock.advance(500);
     const v = createHiveView({ engine: r.engines[0], fx: { confetti() {} }, toast() {}, cues: null });
     r.engines[0].on('change', (s) => v.update(s));
@@ -775,4 +829,524 @@ test('the game definition fits the lobby', () => {
   const timer = hive.settings.find((x) => x.id === 'timer');
   assert.deepEqual(timer.options.map((o) => o.value), [90, 120, 180]);
   for (const t of [hive.name, hive.blurb, ...timer.options.map((o) => o.label)]) for (const re of BANNED) assert.equal(re.test(t), false, t);
+});
+
+function at(x, y) {
+  return { x, y };
+}
+
+function walk(trace, points, t = 0) {
+  const out = [];
+  for (const p of points) {
+    const r = trace.move(p, t);
+    if (r) out.push(r);
+  }
+  return out;
+}
+
+test('dragging: entering a cell adds its letter, and fast moves never skip a cell', () => {
+  const tr = createTrace();
+  assert.equal(tr.begin('0', SPOTS[0], 0), 'add');
+  walk(tr, [SPOTS.c]);
+  assert.deepEqual(tr.path, ['0', 'c']);
+  walk(tr, [SPOTS[3]]);
+  assert.deepEqual(tr.path, ['0', 'c', '3'], 'one big jump still passes through the middle');
+  const side = createTrace();
+  side.begin('5', SPOTS[5], 0);
+  walk(side, [SPOTS[1]]);
+  assert.deepEqual(side.path, ['5', '1'], 'a straight line between two cells that are not in the way adds only those two');
+  assert.equal(nearestSpot(SPOTS[2].x + 0.1, SPOTS[2].y).id, '2');
+  const rect = { left: 10, top: 20, width: 80 * COMB_W, height: 80 * COMB_H };
+  const p = toCell(rect, 10 + rect.width / 2 + SPOTS[4].x * 80, 20 + rect.height / 2 + SPOTS[4].y * 80);
+  assert.ok(Math.abs(p.x - SPOTS[4].x) < 1e-9 && Math.abs(p.y - SPOTS[4].y) < 1e-9);
+  assert.equal(toCell({ width: 0 }, 1, 1), null);
+});
+
+test('dragging: going back to the previous cell undoes the last letter', () => {
+  const tr = createTrace();
+  tr.begin('0', SPOTS[0], 0);
+  walk(tr, [SPOTS.c, SPOTS[2]]);
+  assert.deepEqual(tr.path, ['0', 'c', '2']);
+  assert.deepEqual(walk(tr, [SPOTS.c]), ['undo']);
+  assert.deepEqual(tr.path, ['0', 'c']);
+  walk(tr, [SPOTS[0]]);
+  assert.deepEqual(tr.path, ['0']);
+  walk(tr, [SPOTS.c]);
+  assert.deepEqual(tr.path, ['0', 'c'], 'you can carry on after undoing');
+});
+
+test('dragging: double letters by leaving a cell and coming back, or by holding', () => {
+  const tr = createTrace();
+  tr.begin('1', SPOTS[1], 0);
+  walk(tr, [at(SPOTS[1].x * 1.7, SPOTS[1].y * 1.7), SPOTS[1]]);
+  assert.deepEqual(tr.path, ['1', '1'], 'leave and come back');
+  const mid = createTrace();
+  mid.begin('c', SPOTS.c, 0);
+  walk(mid, [at(0.62, 0), SPOTS.c]);
+  assert.deepEqual(mid.path, ['c', 'c'], 'out into the gap and back');
+  const hold = createTrace();
+  hold.begin('c', SPOTS.c, 0);
+  assert.equal(hold.holdLeft(100), HOLD_MS - 100);
+  assert.equal(hold.tick(HOLD_MS - 1), null);
+  assert.equal(hold.tick(HOLD_MS), 'add');
+  assert.deepEqual(hold.path, ['c', 'c']);
+  assert.equal(hold.tick(HOLD_MS * 5), null, 'holding longer does not keep adding');
+  assert.equal(hold.holdLeft(HOLD_MS * 5), null);
+  walk(hold, [SPOTS[0]], 1000);
+  assert.equal(hold.tick(1000 + HOLD_MS), 'add', 'a new cell can be held again');
+  assert.deepEqual(hold.path, ['c', 'c', '0', '0']);
+  const still = createTrace();
+  still.begin('2', SPOTS[2], 0);
+  walk(still, [at(SPOTS[2].x + 0.05, SPOTS[2].y - 0.04)], 200);
+  assert.equal(still.tick(HOLD_MS), 'add', 'tiny wobbles do not reset the hold');
+  const moved = createTrace();
+  moved.begin('2', SPOTS[2], 0);
+  walk(moved, [at(SPOTS[2].x + 0.2, SPOTS[2].y)], 300);
+  assert.equal(moved.tick(HOLD_MS), null, 'moving across the cell restarts the hold');
+  assert.equal(moved.tick(300 + HOLD_MS), 'add');
+});
+
+test('dragging: back-and-forth words like A-N-A work by going back and holding', () => {
+  const tr = createTrace();
+  tr.begin('0', SPOTS[0], 0);
+  walk(tr, [SPOTS.c], 100);
+  walk(tr, [SPOTS[0]], 200);
+  assert.deepEqual(tr.path, ['0']);
+  assert.equal(tr.tick(200 + HOLD_MS), 'add');
+  assert.deepEqual(tr.path, ['0', 'c', '0']);
+  const cap = createTrace({ max: 3 });
+  cap.begin('0', SPOTS[0], 0);
+  walk(cap, [SPOTS.c, SPOTS[3]]);
+  walk(cap, [at(0.62, 0.9)]);
+  walk(cap, [SPOTS[2]]);
+  assert.equal(cap.size, 3, 'the word never grows past the limit');
+});
+
+test('dragging: pointer jitter never adds or removes letters', () => {
+  const rnd = seeded(31);
+  const wobble = (c, amp) => at(c.x + (rnd() * 2 - 1) * amp, c.y + (rnd() * 2 - 1) * amp);
+  const tr = createTrace();
+  tr.begin('1', SPOTS[1], 0);
+  for (let i = 0; i < 2000; i += 1) tr.move(wobble(SPOTS[1], 0.1), i);
+  assert.deepEqual(tr.path, ['1']);
+  const edge = at(SPOTS[1].x - 0.3, SPOTS[1].y);
+  for (let i = 0; i < 2000; i += 1) tr.move(wobble(edge, 0.08), i);
+  assert.deepEqual(tr.path, ['1'], 'shaking on the edge of the cell core');
+  const between = at((SPOTS[1].x + SPOTS.c.x) / 2, (SPOTS[1].y + SPOTS.c.y) / 2);
+  for (let i = 0; i < 2000; i += 1) tr.move(wobble(between, 0.08), i);
+  assert.deepEqual(tr.path, ['1'], 'shaking on the border between two cells');
+  walk(tr, [SPOTS.c]);
+  for (let i = 0; i < 2000; i += 1) tr.move(wobble(SPOTS.c, 0.12), i);
+  assert.deepEqual(tr.path, ['1', 'c']);
+});
+
+test('the optimistic score adds my unconfirmed words to my row and rank', () => {
+  const m = {
+    playing: true,
+    max: 100,
+    me: { pts: 3, count: 1, pangrams: 0 },
+    board: [
+      { slot: 1, isMe: false, pts: 5, count: 2, pangrams: 0 },
+      { slot: 0, isMe: true, pts: 3, count: 1, pangrams: 0 },
+    ],
+  };
+  const v = withPending(m, { pts: 14, n: 2, pg: 1 });
+  assert.deepEqual(v.me, { pts: 17, count: 3, pangrams: 1 });
+  assert.equal(v.board[0].isMe, true, 'my row moves up right away');
+  assert.equal(v.board[0].pts, 17);
+  assert.equal(v.rank.name, rankOf(17, 100).name);
+  assert.equal(withPending(m, { pts: 0, n: 0, pg: 0 }), m);
+  assert.equal(withPending({ ...m, playing: false }, { pts: 4, n: 1, pg: 0 }).me.pts, 3);
+});
+
+test('puzzles are built in short slices so the page never freezes', () => {
+  let fake = 0;
+  const clock = () => {
+    fake += 2;
+    return fake;
+  };
+  const job = puzzleJob(seeded(4), { clock, min: 400, max: 500, tries: 40 });
+  let slices = 0;
+  while (!job.run(10)) slices += 1;
+  assert.ok(slices >= 3, `the search paused ${slices} times`);
+  assert.equal(job.done, true);
+  assert.deepEqual(job.pick, pickPuzzle(seeded(4), { min: 400, max: 500, tries: 40 }), 'slicing finds the same puzzle');
+  assert.equal(job.run(10), true);
+  assert.ok(SLICE_MS <= 30);
+});
+
+test('picking Letter Hive in the lobby preloads the word list, and a failed load is not retried in a loop', async () => {
+  const real = globalThis.fetch;
+  let calls = 0;
+  let answer = () => Promise.resolve({ ok: true, text: () => Promise.resolve(RAW) });
+  globalThis.fetch = () => {
+    calls += 1;
+    return answer();
+  };
+  dictionary.reset();
+  try {
+    const other = { id: 'other', name: 'Other', emoji: '🎲', category: 'words', blurb: 'x', minPlayers: 1, keys: [], settings: [], start(api) { api.finish(); } };
+    const r = room(2, { games: [other, hive] });
+    useTimers(r.clock);
+    await r.clock.advance(500);
+    assert.equal(calls, 0, 'nothing loads before Letter Hive is picked');
+    assert.equal(r.engines[0].lobby.pick('hive'), true);
+    await r.clock.advance(300);
+    r.engines[1].snapshot();
+    assert.ok(calls >= 1, 'picking it starts the download');
+    await new Promise((ok) => setTimeout(ok, 0));
+    await new Promise((ok) => setTimeout(ok, 0));
+    assert.equal(wordsReady(), true);
+    await buildIndex();
+    assert.equal(indexReady(), true);
+    dictionary.reset();
+    calls = 0;
+    answer = () => Promise.reject(new Error('offline'));
+    void hive.settings;
+    await new Promise((ok) => setTimeout(ok, 0));
+    await new Promise((ok) => setTimeout(ok, 0));
+    assert.equal(calls, 1);
+    for (let i = 0; i < 20; i += 1) void hive.settings;
+    assert.equal(calls, 1, 'a failed download waits before trying again');
+  } finally {
+    globalThis.fetch = real;
+    await restoreWords();
+  }
+});
+
+test('the host coalesces score writes and stays inside the op budget with eight fast players', async () => {
+  const r = await startHive(8, { timer: 180 });
+  const s = st(r);
+  const list = answers(s);
+  const hostId = r.engines[0].snapshot().me;
+  const from = r.clock.now();
+  const sent = new Map();
+  let k = 0;
+  for (let step = 0; step < 60; step += 1) {
+    for (let slot = 0; slot < 8; slot += 1) {
+      if ((step + slot) % 2) continue;
+      const pick = (slot * 7 + step) % (list.length + 4);
+      const w = pick < list.length ? list[pick] : `${s.c}${s.c}${s.c}${s.c}`;
+      k += 1;
+      bySlot(r, slot).act(word(w, s.id, k));
+      if (pick < list.length) {
+        if (!sent.has(slot)) sent.set(slot, new Set());
+        sent.get(slot).add(w);
+      }
+    }
+    await r.clock.advance(150);
+  }
+  await r.clock.advance(2000);
+  const to = r.clock.now();
+  const writes = r.hub.ops.filter((o) => o.id === hostId && o.what === `set:${KEY}` && o.at >= from && o.at < to).map((o) => o.at);
+  const span = to - from;
+  assert.ok(writes.length <= Math.ceil(span / SYNC_MS) + 2, `${writes.length} hive writes in ${span} ms`);
+  for (let i = 1; i < writes.length; i += 1) assert.ok(writes[i] - writes[i - 1] >= SYNC_MS - 150, `writes ${writes[i] - writes[i - 1]} ms apart`);
+  for (let t = from; t < to; t += 1000) assert.ok(r.hub.opsBy(hostId, t, t + 10000) <= 100);
+  const fin = st(r);
+  for (const [slot, words] of sent) assert.equal(fin.b[slot][1], words.size, `slot ${slot} got every word`);
+  const g = r.engines[0].snapshot().scores.g;
+  for (const slot of sent.keys()) assert.equal(g[slot], fin.b[slot][0], 'scores and the board agree');
+  assert.deepEqual(r.hub.violations, []);
+  checkLimits(r.engines[0].snapshot().state);
+});
+
+test('a lone word is written straight away and buffered words are kept when the round ends', () => {
+  const api = fakeApi();
+  hive.start(api);
+  const s = api.get(KEY);
+  const list = hiveWords(s.l, s.c);
+  api.t += SYNC_MS + 1;
+  hive.intent(api, 0, word(list[0], s.id, 1));
+  assert.equal(api.get(KEY).b[0][1], 1, 'no wait when the host has been quiet');
+  assert.equal(api.points[0], wordPoints(list[0], s.l));
+  api.t += 10;
+  hive.intent(api, 0, word(list[1], s.id, 2));
+  hive.intent(api, 1, word(list[1], s.id, 1));
+  assert.equal(api.get(KEY).b[0][1], 1, 'quick follow-ups wait for the next write');
+  assert.equal(api.pending(), 1, 'one timer covers every buffered word');
+  hive.join(api, 3);
+  assert.deepEqual(api.get(KEY).b[3], [0, 0, 0], 'a late joiner shows up right away');
+  assert.equal(api.get(KEY).b[0][1], 2, 'and the buffered words go out with them');
+  hive.intent(api, 1, word(list[2], s.id, 2));
+  assert.equal(hive.admin(api, { type: 'skip' }), true);
+  const end = api.get(KEY);
+  assert.equal(end.phase, 'reveal');
+  assert.equal(end.b[1][1], 2, 'nothing is lost when time runs out');
+  assert.equal(api.points[1], wordPoints(list[1], s.l) + wordPoints(list[2], s.l));
+  assert.equal(api.pending(), 0);
+});
+
+async function hiveViewRoom(n = 2) {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = hiveRoom(n);
+  await r.clock.advance(500);
+  const played = [];
+  const sent = [];
+  const views = r.engines.map((engine, i) => {
+    const cues = { play: (name) => (i === 0 ? played.push(name) : null), burst() {}, float() {} };
+    const v = createHiveView({ engine, fx: { confetti() {} }, toast() {}, cues, timers: r.clock });
+    engine.on('change', (snap) => v.update(snap));
+    return v;
+  });
+  const real = r.engines[0].act;
+  r.engines[0].act = (a) => {
+    if (a && a.type === 'word') sent.push(unveil(a.x, a.id));
+    return real(a);
+  };
+  return { r, views, played, sent };
+}
+
+const SIZE = 80;
+
+function pad(view) {
+  const box = all(view.el).find((el) => el.classList.contains('hive-comb'));
+  const rect = { left: 40, top: 30, width: SIZE * COMB_W, height: SIZE * COMB_H };
+  box.getBoundingClientRect = () => rect;
+  const wrap = box.parentNode;
+  const cellOf = (id) => all(box).find((el) => el.dataset && el.dataset.spot === id);
+  const spotOf = (s, letter) => (letter === s.c ? 'c' : all(box).find((el) => el.dataset && el.dataset.spot !== 'c' && el.dataset.letter === letter).dataset.spot);
+  const fire = (target, type, p, extra = {}) => {
+    const e = new FakeEvent(type, { bubbles: true });
+    Object.assign(e, { pointerId: 5, pointerType: 'touch', button: 0, clientX: rect.left + rect.width / 2 + p.x * SIZE, clientY: rect.top + rect.height / 2 + p.y * SIZE }, extra);
+    target.dispatchEvent(e);
+    return e;
+  };
+  return { box, wrap, cellOf, spotOf, fire };
+}
+
+function angle(id) {
+  return Math.atan2(SPOTS[id].y, SPOTS[id].x);
+}
+
+function route(from, to) {
+  if (from === to) {
+    if (to === 'c') return [at(0.62, 0), SPOTS.c];
+    return [at(SPOTS[to].x * 1.7, SPOTS[to].y * 1.7), SPOTS[to]];
+  }
+  if (from === 'c' || to === 'c') return [SPOTS[to]];
+  const a = angle(from);
+  let d = angle(to) - a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  if (Math.abs(Math.abs(d) - Math.PI / 3) < 0.01) return [SPOTS[to]];
+  const out = [];
+  const steps = Math.ceil(Math.abs(d) / (Math.PI / 18));
+  for (let i = 0; i <= steps; i += 1) {
+    const t = a + (d * i) / steps;
+    out.push(at(Math.cos(t) * 2, Math.sin(t) * 2));
+  }
+  out.push(SPOTS[to]);
+  return out;
+}
+
+async function dragWord(r, p, s, w, opts = {}) {
+  const ids = [...w].map((ch) => p.spotOf(s, ch));
+  p.fire(p.cellOf(ids[0]), 'pointerdown', SPOTS[ids[0]]);
+  const trail = [ids[0]];
+  if (opts.each) opts.each(trail.slice());
+  for (let i = 1; i < ids.length; i += 1) {
+    const from = trail[trail.length - 1];
+    const to = ids[i];
+    const back = trail.length >= 2 && trail[trail.length - 2] === to && from !== to;
+    for (const q of route(from, to)) p.fire(p.wrap, 'pointermove', q);
+    if (back) await r.clock.advance(HOLD_MS + 30);
+    trail.push(to);
+    if (opts.each) opts.each(trail.slice());
+  }
+  const last = trail[trail.length - 1];
+  if (opts.outside) {
+    const away = last === 'c' ? [at(0.62, 0), at(3, 0)] : [at(SPOTS[last].x * 1.7, SPOTS[last].y * 1.7), at(SPOTS[last].x * 3, SPOTS[last].y * 3)];
+    for (const q of away) p.fire(p.wrap, 'pointermove', q);
+    p.fire(p.wrap, 'pointerup', away[1]);
+  } else p.fire(p.wrap, 'pointerup', SPOTS[last]);
+  return trail;
+}
+
+test('the view: drag across the honeycomb to spell every word in the hive, release to send', async () => {
+  const { r, views, played, sent } = await hiveViewRoom(2);
+  r.engines[0].lobby.pick('hive');
+  r.engines[0].lobby.start();
+  await r.clock.advance(400);
+  const s = st(r);
+  const mine = views[0];
+  const p = pad(mine);
+  const input = byKey(mine.el, 'hive-input');
+  const list = answers(s);
+  const first = list[0];
+  await dragWord(r, p, s, first, {
+    each: (trail) => {
+      assert.equal(input.value, trail.map((id) => (id === 'c' ? s.c : p.cellOf(id).dataset.letter)).join(''), 'the word builds as each cell is entered');
+      const line = all(p.box).find((el) => el.getAttribute('class') === 'hive-trail-line');
+      assert.equal(line.getAttribute('points').split(' ').length, trail.length, 'the trail joins every visited cell');
+      assert.ok(p.box.classList.contains('is-tracing'));
+      const lit = all(p.box).filter((el) => el.classList.contains('is-lit')).map((el) => el.dataset.spot);
+      assert.deepEqual(lit.sort(), [...new Set(trail)].sort(), 'the visited cells light up');
+      assert.ok(p.cellOf(trail[trail.length - 1]).classList.contains('is-head'));
+    },
+  });
+  assert.deepEqual(sent, [first], 'letting go sends the word');
+  assert.equal(input.value, '');
+  assert.equal(p.box.classList.contains('is-tracing'), false);
+  assert.equal(all(p.box).filter((el) => el.classList.contains('is-lit')).length, 0, 'the cells go dark again');
+  const pts = wordPoints(first, s.l);
+  const score = () => text(all(mine.el).find((el) => el.classList.contains('hive-rank-score')));
+  assert.match(score(), new RegExp(`^${pts} points? · 1 word$`), 'my score updates before the host answers');
+  assert.match(text(mine.el), new RegExp(`1 word · ${pts}`));
+  await r.clock.advance(900);
+  assert.match(score(), new RegExp(`^${pts} points? · 1 word$`), 'and stays right once the host confirms');
+  assert.equal(st(r).b[0][0], pts);
+  let repeats = 0;
+  for (const w of list.slice(1)) {
+    if (/(.)\1/.test(w) || /(.).\1/.test(w)) repeats += 1;
+    await dragWord(r, p, s, w);
+    assert.equal(input.value, '');
+  }
+  assert.ok(repeats > 0, 'the hive had words with double or back-and-forth letters');
+  assert.deepEqual(sent, list, 'every word in the hive can be dragged, repeats and back-and-forth letters included');
+  assert.ok(played.includes('type') && played.includes('send'));
+  await r.clock.advance(1200);
+  assert.equal(st(r).b[0][1], list.length);
+  noInlineStyles(mine.el);
+  for (const v of views) v.destroy();
+});
+
+test('the view: undo while dragging, taps, jitter, cancel and releasing outside', async () => {
+  const { r, views, sent } = await hiveViewRoom(2);
+  r.engines[0].lobby.pick('hive');
+  r.engines[0].lobby.start();
+  await r.clock.advance(400);
+  const s = st(r);
+  const mine = views[0];
+  const p = pad(mine);
+  const input = byKey(mine.el, 'hive-input');
+  const l0 = p.cellOf('0').dataset.letter;
+  const l2 = p.cellOf('2').dataset.letter;
+  p.fire(p.cellOf('0'), 'pointerdown', SPOTS[0]);
+  p.fire(p.wrap, 'pointermove', SPOTS.c);
+  p.fire(p.wrap, 'pointermove', SPOTS[2]);
+  assert.equal(input.value, `${l0}${s.c}${l2}`);
+  p.fire(p.wrap, 'pointermove', SPOTS.c);
+  assert.equal(input.value, `${l0}${s.c}`, 'dragging back removes the last letter');
+  p.fire(p.wrap, 'pointermove', SPOTS[0]);
+  assert.equal(input.value, l0);
+  p.fire(p.wrap, 'pointerup', SPOTS[0]);
+  assert.deepEqual(sent, [], 'a single letter is a tap, not a word');
+  assert.equal(input.value, l0);
+  const rnd = seeded(9);
+  const down = p.fire(p.cellOf('1'), 'pointerdown', SPOTS[1]);
+  assert.equal(down.defaultPrevented, true, 'the page does not scroll or select text');
+  for (let i = 0; i < 300; i += 1) p.fire(p.wrap, 'pointermove', at(SPOTS[1].x + (rnd() * 2 - 1) * 0.1, SPOTS[1].y + (rnd() * 2 - 1) * 0.1));
+  const mid = at(SPOTS[1].x / 2, SPOTS[1].y / 2);
+  for (let i = 0; i < 300; i += 1) p.fire(p.wrap, 'pointermove', at(mid.x + (rnd() * 2 - 1) * 0.08, mid.y + (rnd() * 2 - 1) * 0.08));
+  assert.equal(input.value, `${l0}${p.cellOf('1').dataset.letter}`, 'shaky fingers add nothing extra');
+  p.fire(p.wrap, 'pointercancel', mid);
+  assert.equal(input.value, l0, 'a cancelled drag puts the word back');
+  p.cellOf('2').dispatchEvent(Object.assign(new FakeEvent('click', { bubbles: true }), { detail: 0 }));
+  assert.equal(input.value, `${l0}${l2}`, 'keyboard and plain taps still add letters');
+  p.fire(p.cellOf('3'), 'pointerdown', SPOTS[3]);
+  p.fire(p.wrap, 'pointerup', SPOTS[3]);
+  p.cellOf('3').dispatchEvent(Object.assign(new FakeEvent('click', { bubbles: true }), { detail: 1 }));
+  assert.equal(input.value, `${l0}${l2}${p.cellOf('3').dataset.letter}`, 'a tap adds its letter once, not twice');
+  byKey(mine.el, 'hive-delete').click();
+  byKey(mine.el, 'hive-delete').click();
+  byKey(mine.el, 'hive-delete').click();
+  assert.equal(input.value, '');
+  const w = answers(s).find((x) => x.length >= 5) || answers(s)[0];
+  await dragWord(r, p, s, w, { outside: true });
+  assert.deepEqual(sent, [w], 'letting go outside the hive still sends a started word');
+  assert.equal(input.value, '');
+  p.fire(p.cellOf('0'), 'pointerdown', SPOTS[0]);
+  p.fire(p.wrap, 'pointermove', SPOTS.c);
+  p.fire(p.wrap, 'pointerup', SPOTS.c);
+  assert.match(text(mine.el), /Too short/);
+  assert.equal(input.value, '', 'a refused drag clears so the next drag starts fresh');
+  assert.equal(sent.length, 1);
+  p.fire(p.cellOf('c'), 'pointerdown', SPOTS.c, { pointerType: 'mouse', button: 2 });
+  assert.equal(input.value, '', 'right clicks do nothing');
+  noInlineStyles(mine.el);
+  for (const v of views) v.destroy();
+});
+
+test('the view: messages replace each other and fade, and pangram news never sticks', async () => {
+  const { r, views } = await hiveViewRoom(2);
+  r.engines[0].lobby.pick('hive');
+  r.engines[0].lobby.start();
+  await r.clock.advance(400);
+  const s = st(r);
+  const mine = views[0];
+  const input = byKey(mine.el, 'hive-input');
+  const hint = all(mine.el).find((el) => el.classList.contains('hive-hint'));
+  input.value = 'ab';
+  byKey(mine.el, 'hive-enter').click();
+  assert.match(text(hint), /Too short/);
+  input.value = s.l.replace(s.c, '').slice(0, 4);
+  byKey(mine.el, 'hive-enter').click();
+  assert.match(text(hint), /Missing the middle letter/);
+  assert.doesNotMatch(text(hint), /Too short/, 'the new message replaces the old one');
+  await r.clock.advance(MSG_MS - 100);
+  assert.equal(hint.classList.contains('is-fading'), false);
+  await r.clock.advance(150);
+  assert.equal(hint.classList.contains('is-fading'), true);
+  await r.clock.advance(FADE_MS + 10);
+  assert.equal(text(hint).trim(), '', 'messages fade away after a couple of seconds');
+  const list = answers(s);
+  const pangram = list.find((x) => isPangram(x, s.l));
+  input.value = pangram;
+  byKey(mine.el, 'hive-enter').click();
+  assert.match(text(hint), /Pangram!/);
+  await r.clock.advance(900);
+  assert.doesNotMatch(text(mine.el), /You found a pangram/);
+  const other = list.find((x) => !isPangram(x, s.l));
+  input.value = other;
+  byKey(mine.el, 'hive-enter').click();
+  assert.doesNotMatch(text(hint), /Pangram/, 'the next message replaces the pangram one');
+  await r.clock.advance(MSG_MS + FADE_MS + 50);
+  assert.doesNotMatch(text(mine.el), /pangram!/i);
+  bySlot(r, 1).act(word(pangram, s.id, 3));
+  await r.clock.advance(900);
+  assert.match(text(hint), /found a pangram/);
+  await r.clock.advance(MSG_MS + FADE_MS + 50);
+  assert.doesNotMatch(text(mine.el), /found a pangram/, 'news about others fades too');
+  assert.match(text(mine.el), /Drag across the letters/);
+  for (const v of views) v.destroy();
+});
+
+test('the view: touch capture hand-off, multi-touch, Enter mid-drag, curved moves and a missed release', async () => {
+  const { r, views, sent } = await hiveViewRoom(2);
+  r.engines[0].lobby.pick('hive');
+  r.engines[0].lobby.start();
+  await r.clock.advance(400);
+  const s = st(r);
+  const mine = views[0];
+  const p = pad(mine);
+  const input = byKey(mine.el, 'hive-input');
+  const letter = (id) => (id === 'c' ? s.c : p.cellOf(id).dataset.letter);
+  p.fire(p.cellOf('0'), 'pointerdown', SPOTS[0]);
+  p.fire(p.cellOf('0'), 'lostpointercapture', SPOTS[0]);
+  p.fire(p.wrap, 'pointermove', SPOTS.c);
+  assert.equal(input.value, `${letter('0')}${s.c}`, 'losing the implicit touch capture on a cell does not end the drag');
+  p.fire(p.cellOf('3'), 'pointerdown', SPOTS[3], { pointerId: 9 });
+  p.fire(p.wrap, 'pointermove', SPOTS[3], { pointerId: 9 });
+  p.fire(p.wrap, 'pointerup', SPOTS[3], { pointerId: 9 });
+  assert.equal(input.value, `${letter('0')}${s.c}`, 'a second finger is ignored');
+  byKey(mine.el, 'hive-enter').click();
+  assert.deepEqual(sent, [], 'Enter does nothing while a drag is in progress');
+  assert.equal(input.value, `${letter('0')}${s.c}`);
+  p.fire(p.wrap, 'lostpointercapture', SPOTS.c);
+  assert.equal(input.value, '', 'losing capture on the honeycomb itself cancels the drag');
+  p.fire(p.cellOf('1'), 'pointerdown', SPOTS[1], { pointerType: 'mouse' });
+  const rect = p.box.getBoundingClientRect();
+  const coalesced = [SPOTS[0], SPOTS[5]].map((q) => ({ clientX: rect.left + rect.width / 2 + q.x * SIZE, clientY: rect.top + rect.height / 2 + q.y * SIZE }));
+  p.fire(p.wrap, 'pointermove', SPOTS[5], { pointerType: 'mouse', buttons: 1, getCoalescedEvents: () => coalesced });
+  assert.equal(input.value, `${letter('1')}${letter('0')}${letter('5')}`, 'every coalesced sample counts, so a fast curve through a cell is not cut short');
+  p.fire(p.cellOf('c'), 'pointerdown', SPOTS.c, { pointerType: 'mouse' });
+  assert.equal(input.value, s.c, 'a mouse press after a missed release starts a fresh drag');
+  p.fire(p.wrap, 'pointermove', SPOTS[2], { pointerType: 'mouse', buttons: 1 });
+  p.fire(p.wrap, 'pointermove', at(3, 3), { pointerType: 'mouse', buttons: 0 });
+  assert.equal(p.box.classList.contains('is-tracing'), false, 'a mouse move with no button held ends the drag');
+  assert.equal(input.value, '');
+  assert.match(text(mine.el), /Too short/, 'and sends what was traced');
+  noInlineStyles(mine.el);
+  for (const v of views) v.destroy();
 });

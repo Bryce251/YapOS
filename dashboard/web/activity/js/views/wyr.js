@@ -81,7 +81,7 @@ export function createWyrView({ engine, fx, cues }) {
       h(
         'div',
         { class: 'game-head' },
-        h('span', { class: 'chip chip-static', text: m.mode === 'minority' ? '🦄 Rebels score' : '👥 Crowd scores' }),
+        h('span', { class: 'chip chip-static', text: m.mode === 'minority' ? 'Rebels score' : 'Crowd scores' }),
         h('span', { class: 'game-count', text: `Prompt ${m.number} of ${m.total}` }),
         timer(reveal ? m.ends - REVEAL_MS : m.starts, m.ends, reveal ? 'Next prompt in' : 'Time left to vote'),
       ),
@@ -119,7 +119,7 @@ export function createWyrView({ engine, fx, cues }) {
     if (list.length > 1) {
       const mineBtn = el.querySelector(`.choice-${m.myVote}`);
       if (mineBtn) {
-        cue.burst(mineBtn, { count: 14, emoji: ['👥', '✨'] });
+        cue.burst(mineBtn, { count: 14, emoji: ['👥', '🎉'] });
         if (m.myGain) cue.float(mineBtn, `+${m.myGain}`);
       }
     }

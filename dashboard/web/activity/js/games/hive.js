@@ -20,11 +20,35 @@ export const REVEAL_WORDS = 40;
 export const REVEAL_CHUNK_BYTES = 3800;
 export const REVEAL_CHUNKS = 8;
 export const MISS_SHOW = 18;
+export const SYNC_MS = 400;
+export const SLICE_MS = 30;
+export const WARM_RETRY_MS = 15000;
 
 const A = 97;
 
 let indexed = null;
+let indexing = null;
+let warmedAt = -Infinity;
+let timers = null;
 const pools = new Map();
+
+function later(fn, ms) {
+  return timers ? timers.setTimeout(fn, ms) : setTimeout(fn, ms);
+}
+
+function cancel(handle) {
+  if (handle === null || handle === undefined) return;
+  if (timers) timers.clearTimeout(handle);
+  else clearTimeout(handle);
+}
+
+function clockNow() {
+  return typeof performance !== 'undefined' && performance && typeof performance.now === 'function' ? performance.now() : Date.now();
+}
+
+export function useTimers(t) {
+  timers = t && typeof t.setTimeout === 'function' && typeof t.clearTimeout === 'function' ? t : null;
+}
 
 export function maskOf(word) {
   const w = String(word ?? '');
@@ -72,6 +96,51 @@ export function wordsReady() {
 
 export function wordsFailed() {
   return dictFailed && !dictReady && !dictLoading();
+}
+
+export function indexReady() {
+  return indexed !== null;
+}
+
+export function buildIndex(slice = SLICE_MS) {
+  if (indexed) return Promise.resolve(true);
+  if (indexing) return indexing;
+  const out = [];
+  let i = 0;
+  indexing = new Promise((resolve) => {
+    const step = () => {
+      if (indexed) {
+        indexing = null;
+        resolve(true);
+        return;
+      }
+      const until = clockNow() + slice;
+      while (i < WORDS.length) {
+        const w = WORDS[i];
+        i += 1;
+        if (w.length >= MIN_LETTERS) out.push([w, maskOf(w)]);
+        if ((i & 255) === 0 && clockNow() >= until) break;
+      }
+      if (i < WORDS.length) {
+        later(step, 0);
+        return;
+      }
+      indexed = out;
+      indexing = null;
+      resolve(true);
+    };
+    step();
+  });
+  return indexing;
+}
+
+export function warm() {
+  buildIndex();
+  if (dictReady || dictLoading()) return;
+  const at = clockNow();
+  if (dictFailed && at - warmedAt < WARM_RETRY_MS) return;
+  warmedAt = at;
+  loadDictionary();
 }
 
 function pool(letters) {
@@ -129,7 +198,7 @@ export function byValue(letters) {
   return (a, b) => wordPoints(b, letters) - wordPoints(a, letters) || (a < b ? -1 : a > b ? 1 : 0);
 }
 
-export function pickPuzzle(random = Math.random, opts = {}) {
+function* search(random, opts = {}) {
   const seeds = opts.seeds || SEEDS;
   const min = opts.min ?? MIN_WORDS;
   const max = opts.max ?? MAX_WORDS;
@@ -158,8 +227,46 @@ export function pickPuzzle(random = Math.random, opts = {}) {
         bestGap = gap;
       }
     }
+    yield t;
   }
   return best;
+}
+
+export function pickPuzzle(random = Math.random, opts = {}) {
+  const it = search(random, opts);
+  for (;;) {
+    const r = it.next();
+    if (r.done) return r.value;
+  }
+}
+
+export function puzzleJob(random = Math.random, opts = {}) {
+  const it = search(random, opts);
+  const clock = opts.clock || clockNow;
+  let result = null;
+  let done = false;
+  return {
+    bg: false,
+    get done() {
+      return done;
+    },
+    get pick() {
+      return result;
+    },
+    run(ms = SLICE_MS) {
+      if (done) return true;
+      const until = clock() + ms;
+      for (;;) {
+        const r = it.next();
+        if (r.done) {
+          done = true;
+          result = r.value;
+          return true;
+        }
+        if (clock() >= until) return false;
+      }
+    },
+  };
 }
 
 export function cleanWord(text) {
@@ -276,6 +383,66 @@ function boardWith(st, slots) {
   return added ? b : null;
 }
 
+function current(api) {
+  const shared = api.get(KEY);
+  const cur = api.memory.cur;
+  if (cur && cur.st && shared && shared.phase === 'play' && shared.id === cur.id && cur.st.phase === 'play') return cur.st;
+  return shared;
+}
+
+function pay(api, cur) {
+  if (!cur || !cur.owed) return;
+  const owed = cur.owed;
+  cur.owed = {};
+  for (const [slot, pts] of Object.entries(owed)) if (pts) api.addPoints(Number(slot), pts);
+}
+
+function settle(api) {
+  const cur = api.memory.cur;
+  if (!cur) return;
+  cancel(cur.timer);
+  cur.timer = null;
+  pay(api, cur);
+  cur.dirty = false;
+}
+
+function commit(api, st) {
+  const cur = api.memory.cur;
+  if (cur && st && st.phase === 'play' && st.id === cur.id) {
+    cur.st = st;
+    cur.at = api.now();
+  }
+  settle(api);
+  api.put(KEY, st);
+}
+
+function flushSoon(api, cur) {
+  cur.timer = null;
+  if (api.memory.cur !== cur || !cur.dirty) return;
+  const shared = api.get(KEY);
+  if (!shared || shared.phase !== 'play' || shared.id !== cur.id) {
+    cur.dirty = false;
+    return;
+  }
+  commit(api, cur.st);
+}
+
+function soon(api, st) {
+  const cur = api.memory.cur;
+  if (!cur || cur.id !== st.id) {
+    api.put(KEY, st);
+    return;
+  }
+  cur.st = st;
+  cur.dirty = true;
+  const wait = SYNC_MS - (api.now() - cur.at);
+  if (wait <= 0) {
+    commit(api, st);
+    return;
+  }
+  if (cur.timer === null || cur.timer === undefined) cur.timer = later(() => flushSoon(api, cur), wait);
+}
+
 function begin(api, puzzle, note) {
   const starts = api.now();
   const ends = starts + api.settings.timer * 1000;
@@ -283,26 +450,50 @@ function begin(api, puzzle, note) {
   const words = puzzle.words.slice();
   const max = words.reduce((a, w) => a + wordPoints(w, puzzle.letters), 0);
   const pg = words.filter((w) => isPangram(w, puzzle.letters)).length;
-  api.memory.cur = { id, answers: new Set(words), all: words, found: {} };
   const b = {};
   for (const s of present(api)) b[s] = [0, 0, 0];
-  api.put(KEY, { v: 1, phase: 'play', id, l: puzzle.letters, c: puzzle.centre, total: words.length, max, pg, b, r: {}, last: null, note: note || null, starts, ends });
+  const st = { v: 1, phase: 'play', id, l: puzzle.letters, c: puzzle.centre, total: words.length, max, pg, b, r: {}, last: null, note: note || null, starts, ends };
+  api.memory.job = null;
+  api.memory.cur = { id, answers: new Set(words), all: words, found: {}, st, at: -Infinity, dirty: false, timer: null, owed: {} };
+  commit(api, st);
   api.setDeadline(ends);
 }
 
 function failNow(api, st) {
   const ends = api.now() + FAIL_MS;
+  api.memory.job = null;
   api.put(KEY, { ...(st || { v: 1, b: {} }), phase: 'fail', starts: api.now(), ends });
   api.setDeadline(ends);
 }
 
+function background(api, job) {
+  if (job.bg) return;
+  job.bg = true;
+  const mem = api.memory;
+  const step = () => {
+    if (mem.job !== job || job.done) return;
+    if (!job.run(SLICE_MS)) later(step, 0);
+  };
+  later(step, 0);
+}
+
 function tryBuild(api, st) {
-  const puzzle = wordsReady() ? pickPuzzle(api.random) : null;
-  if (puzzle) {
-    begin(api, puzzle, st && st.note);
+  if (wordsReady()) {
+    let job = api.memory.job;
+    if (!job) {
+      job = puzzleJob(api.random);
+      api.memory.job = job;
+    }
+    if (!job.run(SLICE_MS)) {
+      background(api, job);
+      return false;
+    }
+    api.memory.job = null;
+    if (job.pick) begin(api, job.pick, st && st.note);
+    else failNow(api, st);
     return true;
   }
-  if (wordsReady() || wordsFailed()) {
+  if (wordsFailed()) {
     failNow(api, st);
     return true;
   }
@@ -324,14 +515,14 @@ function sortedFound(list, letters) {
 }
 
 function reveal(api, note) {
-  const st = api.get(KEY);
+  const st = current(api);
   if (!st || st.phase !== 'play') return;
   let cur = api.memory.cur;
   const lost = !cur || cur.id !== st.id;
   if (lost) {
     const all = wordsReady() ? hiveWords(st.l, st.c) : [];
     cur = { id: st.id, answers: new Set(all), all, found: {} };
-  }
+  } else settle(api);
   const entries = Object.keys(st.b || {})
     .map(Number)
     .sort((a, b) => (st.b[b][0] || 0) - (st.b[a][0] || 0) || a - b)
@@ -357,15 +548,15 @@ function tell(st, slot, entry) {
 }
 
 function play(api, slot, action) {
-  const st = api.get(KEY);
-  if (!st || st.phase !== 'play' || action.id !== st.id) return;
   const cur = api.memory.cur;
+  const st = current(api);
+  if (!st || st.phase !== 'play' || action.id !== st.id) return;
   if (!cur || cur.id !== st.id) return;
   const q = Number.isInteger(action.q) && action.q >= 0 && action.q < 1e9 ? action.q : 0;
   const word = cleanWord(typeof action.x === 'string' ? unveil(action.x.slice(0, MAX_LETTERS + 4), st.id) : '');
   if (api.now() > st.ends) {
     tell(st, slot, [q, 'late', 0]);
-    api.put(KEY, st);
+    soon(api, st);
     return;
   }
   const mine = cur.found[slot] || (cur.found[slot] = []);
@@ -373,7 +564,7 @@ function play(api, slot, action) {
   if (problem) {
     if (problem === 'empty') return;
     tell(st, slot, [q, problem, 0]);
-    api.put(KEY, st);
+    soon(api, st);
     return;
   }
   const pts = wordPoints(word, st.l);
@@ -383,11 +574,15 @@ function play(api, slot, action) {
   st.b = { ...(st.b || {}), [slot]: [row[0] + pts, row[1] + 1, row[2] + (pangram ? 1 : 0)] };
   if (pangram) st.last = { s: slot, n: ((st.last && st.last.n) || 0) + 1 };
   tell(st, slot, [q, 'ok', pts]);
-  api.addPoints(slot, pts);
-  api.put(KEY, st);
+  cur.owed[slot] = (cur.owed[slot] || 0) + pts;
+  soon(api, st);
   const live = present(api);
   if (live.length && live.every((s) => (cur.found[s] || []).length >= cur.all.length)) reveal(api, 'all');
 }
+
+const SETTINGS = Object.freeze([
+  Object.freeze({ id: 'timer', label: 'Time', type: 'choice', options: [90, 120, 180].map((v) => ({ value: v, label: v % 60 ? `${v} s` : `${v / 60} min` })), default: 120 }),
+]);
 
 const hive = {
   id: 'hive',
@@ -398,13 +593,18 @@ const hive = {
   minPlayers: 1,
   keys: [KEY, MISS_KEY],
   prefixes: [REVEAL_PREFIX],
-  settings: [{ id: 'timer', label: 'Time', type: 'choice', options: [90, 120, 180].map((v) => ({ value: v, label: v % 60 ? `${v} s` : `${v / 60} min` })), default: 120 }],
+
+  get settings() {
+    warm();
+    return SETTINGS;
+  },
 
   prepare() {
-    loadWords();
+    warm();
   },
 
   start(api) {
+    buildIndex();
     loadWords();
     if (!tryBuild(api, null)) waitForWords(api, null);
   },
@@ -425,7 +625,7 @@ const hive = {
   },
 
   admin(api, action) {
-    const st = api.get(KEY);
+    const st = current(api);
     if (!st) return false;
     if (action.type === 'skip') {
       if (st.phase === 'play') reveal(api, 'skip');
@@ -435,7 +635,8 @@ const hive = {
     if (action.type === 'time') {
       if (st.phase !== 'play' && st.phase !== 'reveal') return false;
       const ends = api.shift(st.ends, action.ms);
-      api.put(KEY, { ...st, ends });
+      if (st.phase === 'play') commit(api, { ...st, ends });
+      else api.put(KEY, { ...st, ends });
       api.setDeadline(ends);
       return true;
     }
@@ -443,6 +644,7 @@ const hive = {
   },
 
   resume(api) {
+    buildIndex();
     loadWords();
     const st = api.get(KEY);
     if (!st) return hive.start(api);
@@ -456,17 +658,19 @@ const hive = {
   },
 
   join(api, slot) {
-    const st = api.get(KEY);
+    const st = current(api);
     if (!st || (st.phase !== 'play' && st.phase !== 'load')) return;
     const b = boardWith(st, [slot]);
-    if (b) api.put(KEY, { ...st, b });
+    if (!b) return;
+    if (st.phase === 'play') commit(api, { ...st, b });
+    else api.put(KEY, { ...st, b });
   },
 
   roster(api) {
-    const st = api.get(KEY);
+    const st = current(api);
     if (!st || st.phase !== 'play') return;
     const b = boardWith(st, present(api));
-    if (b) api.put(KEY, { ...st, b });
+    if (b) commit(api, { ...st, b });
   },
 
   model(snap) {

@@ -9,6 +9,7 @@ import telephone, {
   INK_PREFIX,
   ENTRY_PREFIX,
   INK_CHARS,
+  INK_PARTS,
   TEXT_MAX,
   TEXT_BYTES,
   GRACE_MS,
@@ -35,6 +36,7 @@ import telephone, {
   pickAwards,
 } from '../web/activity/js/games/telephone.js';
 import { createTelephoneView, fitStroke, footText, telephoneMoments } from '../web/activity/js/views/telephone.js';
+import { GRID_W, GRID_H, paintInk, decodeStroke, encodeParts } from '../web/activity/js/games/ink.js';
 import { STARTERS, starterById } from '../web/activity/data/telephone.js';
 import { jsonBytes, MAX_VALUE_BYTES } from '../web/activity/js/limits.js';
 import { readFileSync } from 'node:fs';
@@ -762,4 +764,510 @@ test('opening the page during the awards plays no sound', async () => {
   });
   assert.deepEqual(played, []);
   for (const v of views) v.destroy();
+});
+
+class InkCtx {
+  constructor() {
+    this.scene = [];
+    this.path = [];
+    this.fillStyle = '#000000';
+    this.strokeStyle = '#000000';
+    this.lineWidth = 1;
+  }
+
+  fillRect(x, y, w, h) {
+    if (x <= 0 && y <= 0 && w >= GRID_W * 2 && h >= GRID_H * 2) this.scene = [];
+    else this.scene.push(`rect ${this.fillStyle} ${x},${y},${w},${h}`);
+  }
+
+  beginPath() {
+    this.path = [];
+  }
+
+  moveTo(x, y) {
+    this.path.push(`${x},${y}`);
+  }
+
+  lineTo(x, y) {
+    this.path.push(`${x},${y}`);
+  }
+
+  arc(x, y) {
+    this.path.push(`dot ${x},${y}`);
+  }
+
+  stroke() {
+    this.scene.push(`${this.strokeStyle} ${this.lineWidth} ${this.path.join(' ')}`);
+  }
+
+  fill() {
+    this.scene.push(`${this.fillStyle} ${this.lineWidth} ${this.path.join(' ')}`);
+  }
+
+  getImageData(x, y, w, h) {
+    return { width: w, height: h, data: new Uint8ClampedArray(0), scene: this.scene.slice() };
+  }
+
+  putImageData(img) {
+    if (img && Array.isArray(img.scene)) this.scene = img.scene.slice();
+  }
+}
+
+function sceneOf(strokes) {
+  const c = new InkCtx();
+  paintInk(c, strokes, 2);
+  return c.scene;
+}
+
+function inkCanvases() {
+  const made = new Map();
+  const make = document.createElement.bind(document);
+  document.createElement = (tag) => {
+    const el = make(tag);
+    if (tag === 'canvas') {
+      const c = new InkCtx();
+      made.set(el, c);
+      el.getContext = () => c;
+      el.getBoundingClientRect = () => ({ left: 0, top: 0, width: GRID_W, height: GRID_H });
+    }
+    return el;
+  };
+  return made;
+}
+
+function clockWin(r) {
+  return {
+    setTimeout: r.clock.setTimeout,
+    clearTimeout: r.clock.clearTimeout,
+    setInterval(fn, ms) {
+      const box = { id: 0, on: true };
+      const tick = () => {
+        if (!box.on) return;
+        box.id = r.clock.setTimeout(tick, ms);
+        fn();
+      };
+      box.id = r.clock.setTimeout(tick, ms);
+      return box;
+    },
+    clearInterval(box) {
+      if (box && typeof box === 'object') {
+        box.on = false;
+        r.clock.clearTimeout(box.id);
+      }
+    },
+  };
+}
+
+function pen(type, x, y, id = 1, extra = {}) {
+  const e = new FakeEvent(type, { bubbles: true });
+  e.clientX = x;
+  e.clientY = y;
+  e.pointerId = id;
+  Object.assign(e, extra);
+  return e;
+}
+
+function lineFor(step, seat) {
+  const y = 20 + seat * 36;
+  const x0 = 16 + step * 6;
+  return { c: 1 + ((step + seat) % 11), z: 1, pts: [[x0, y], [x0 + 260, y]] };
+}
+
+function heldFor(step, seat) {
+  const x = 420 - step * 4;
+  return { c: lineFor(step, seat).c, z: 1, pts: [[x, 40], [x, 220]] };
+}
+
+function mainCanvas(v) {
+  return all(v.el).find((x) => x.localName === 'canvas' && !x.dataset.draw);
+}
+
+function boardOn(v) {
+  const b = all(v.el).find((x) => x.classList && x.classList.contains('telephone-board'));
+  return !b.classList.contains('telephone-off');
+}
+
+function drawLine(v, s, id = 1) {
+  byKey(v.el, `color-${s.c}`).click();
+  const cv = mainCanvas(v);
+  const [a, b] = s.pts;
+  cv.dispatchEvent(pen('pointerdown', a[0], a[1], id));
+  for (let i = 1; i <= 4; i += 1) cv.dispatchEvent(pen('pointermove', a[0] + ((b[0] - a[0]) * i) / 4, a[1] + ((b[1] - a[1]) * i) / 4, id));
+  cv.dispatchEvent(pen('pointerup', b[0], b[1], id));
+}
+
+function partsOf(ink) {
+  return (ink && Array.isArray(ink.s) ? ink.s : []).map(decodeStroke);
+}
+
+function plain(s) {
+  return { c: s.c, z: s.z, pts: s.pts.map((p) => [p[0], p[1]]) };
+}
+
+async function telephoneTable(r, players) {
+  const canvases = inkCanvases();
+  const toasts = [];
+  const win = clockWin(r);
+  const views = players.map((engine) => {
+    const v = createTelephoneView({ engine, toast: (t) => toasts.push(t), win, cues: { play() {}, burst() {}, float() {} } });
+    engine.on('change', (s) => v.update(s));
+    v.update(engine.snapshot());
+    return v;
+  });
+  return { canvases, views, toasts };
+}
+
+async function playChecked(r, players, views, canvases) {
+  const host = players.find((e) => e.isHost());
+  const now = () => host.snapshot().state[KEY];
+  const seatOf = (i) => now().seats.indexOf(players[i].snapshot().meSlot);
+  const drawn = new Map();
+  const screenOf = (i) => canvases.get(mainCanvas(views[i])).scene;
+  let checks = 0;
+  const n = now().seats.length;
+  players.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Start phrase ${i}` }));
+  await r.clock.advance(600);
+  for (let step = 1; step < now().steps; step += 1) {
+    const s = now();
+    assert.equal(s.step, step);
+    if (s.phase === 'draw') {
+      players.forEach((_, i) => {
+        const seat = seatOf(i);
+        drawLine(views[i], lineFor(step, seat));
+      });
+      await r.clock.advance(800);
+      players.forEach((_, i) => {
+        const seat = seatOf(i);
+        assert.equal(boardOn(views[i]), true);
+        assert.deepEqual(screenOf(i), sceneOf([lineFor(step, seat)]), `n=${n} step ${step} drawer seat ${seat} sees only their own drawing`);
+        checks += 1;
+      });
+      const holder = players.findIndex((_, i) => seatOf(i) === step % n);
+      const held = heldFor(step, step % n);
+      const hc = mainCanvas(views[holder]);
+      hc.dispatchEvent(pen('pointerdown', held.pts[0][0], held.pts[0][1], 7));
+      hc.dispatchEvent(pen('pointermove', held.pts[0][0], 130, 7));
+      hc.dispatchEvent(pen('pointermove', held.pts[1][0], held.pts[1][1], 7));
+      players.forEach((_, i) => {
+        if (i !== holder) byKey(views[i].el, 'draw-done').click();
+      });
+      await r.clock.advance(now().ends - r.clock.now() + 500);
+      players.forEach((_, i) => {
+        const seat = seatOf(i);
+        const want = [lineFor(step, seat)].concat(seat === step % n ? [held] : []);
+        assert.deepEqual(partsOf(r.hub.state[inkKey(seat)]).map(plain), want, `n=${n} step ${step} seat ${seat} ink was saved, held line included`);
+        drawn.set(`${step}:${seat}`, want);
+      });
+      await r.clock.advance(GRACE_MS + 400);
+      hc.dispatchEvent(pen('pointermove', 470, 350, 7));
+      hc.dispatchEvent(pen('pointerup', 470, 350, 7));
+      await r.clock.advance(100);
+    } else {
+      assert.equal(s.phase, 'text');
+      players.forEach((_, i) => {
+        const seat = seatOf(i);
+        const from = (seat - 1 + n) % n;
+        assert.equal(boardOn(views[i]), true);
+        assert.deepEqual(screenOf(i), sceneOf(drawn.get(`${step - 1}:${from}`)), `n=${n} step ${step} describer seat ${seat} sees seat ${from}'s drawing`);
+        assert.notDeepEqual(screenOf(i), sceneOf(drawn.get(`${step - 1}:${seat}`)));
+        checks += 1;
+      });
+      const send = (i) => {
+        byKey(views[i].el, 'tel-input').value = `Guess ${step} ${i}`;
+        byKey(views[i].el, 'tel-send').click();
+      };
+      players.forEach((_, i) => i && send(i));
+      await r.clock.advance(600);
+      assert.equal(now().step, step);
+      players.forEach((_, i) => {
+        const seat = seatOf(i);
+        const from = (seat - 1 + n) % n;
+        assert.deepEqual(screenOf(i), sceneOf(drawn.get(`${step - 1}:${from}`)), 'waiting after sending keeps the right drawing');
+      });
+      send(0);
+      await r.clock.advance(600);
+    }
+  }
+  if (now().phase !== 'reveal') await r.clock.advance(SETTLE_MS + 400);
+  assert.equal(now().phase, 'reveal');
+  players.forEach((_, i) => assert.equal(boardOn(views[i]), false));
+  for (let guard = 0; guard < 200 && now().phase === 'reveal'; guard += 1) {
+    const rv = now().rv;
+    for (const [i, v] of views.entries()) {
+      const shown = all(v.el).filter((x) => x.localName === 'canvas' && x.dataset.draw !== undefined);
+      const want = [];
+      for (let at = 1; at <= rv.at; at += 2) want.push(at);
+      assert.deepEqual(shown.map((x) => Number(x.dataset.draw)), want, `player ${i} shows one canvas per drawing so far`);
+      for (const cv of shown) {
+        const at = Number(cv.dataset.draw);
+        const seat = (rv.c + at) % n;
+        assert.deepEqual(canvases.get(cv).scene, sceneOf(drawn.get(`${at}:${seat}`)), `n=${n} reveal chain ${rv.c} entry ${at} on player ${i}`);
+        checks += 1;
+      }
+    }
+    await r.clock.advance(NEXT_MIN_MS + 50);
+    const owner = players.find((e) => e.snapshot().meSlot === now().seats[rv.c]);
+    owner.act({ type: 'next', c: rv.c, at: rv.at });
+    await r.clock.advance(600);
+  }
+  assert.equal(now().phase, 'awards');
+  assert.deepEqual(r.hub.violations, []);
+  return checks;
+}
+
+for (const n of [3, 5, 8]) {
+  test(`every screen shows exactly the right chain's drawing at every step with ${n} players`, async () => {
+    installDom({ url: 'https://yapos.dev/activity/' });
+    const r = await start(n, { draw: 50 });
+    const { canvases, views, toasts } = await telephoneTable(r, r.engines);
+    const checks = await playChecked(r, r.engines, views, canvases);
+    assert.ok(checks >= n * 3, `${checks}`);
+    assert.equal(toasts.some((t) => /did not save/.test(t)), false);
+    for (const v of views) v.destroy();
+  });
+}
+
+test('after a host change the new host and everyone else still see the right drawings', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = room(6, { games: GAMES });
+  await r.clock.advance(500);
+  r.hub.leave(r.engines[0].snapshot().me);
+  r.engines[0].destroy();
+  await r.clock.advance(600);
+  const players = r.engines.slice(1);
+  const host = players[0];
+  assert.equal(host.isHost(), true);
+  assert.equal(host.lobby.pick('telephone'), true);
+  assert.equal(host.lobby.setting('draw', 50), true);
+  assert.equal(host.lobby.start().ok, true);
+  await r.clock.advance(400);
+  const { canvases, views } = await telephoneTable(r, players);
+  const checks = await playChecked(r, players, views, canvases);
+  assert.ok(checks >= 15);
+  for (const v of views) v.destroy();
+});
+
+test('when the host leaves mid-drawing nobody is left looking at a drawing', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await start(4, { draw: 50 });
+  const { canvases, views } = await telephoneTable(r, r.engines);
+  r.engines.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Phrase ${i}` }));
+  await r.clock.advance(600);
+  views.forEach((v, i) => drawLine(v, lineFor(1, i)));
+  const cv = mainCanvas(views[2]);
+  cv.dispatchEvent(pen('pointerdown', 300, 300, 3));
+  cv.dispatchEvent(pen('pointermove', 340, 300, 3));
+  await r.clock.advance(800);
+  r.hub.leave(r.engines[0].snapshot().me);
+  r.engines[0].destroy();
+  await r.clock.advance(800);
+  cv.dispatchEvent(pen('pointermove', 400, 300, 3));
+  cv.dispatchEvent(pen('pointerup', 400, 300, 3));
+  for (const v of views.slice(1)) {
+    assert.equal(v.el.dataset.phase, 'lost');
+    assert.equal(boardOn(v), false);
+    assert.deepEqual(canvases.get(mainCanvas(v)).scene, []);
+  }
+  for (const v of views) v.destroy();
+});
+
+test('a player who reloads mid-drawing or joins late gets their own saved drawing, not a stale one', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await start(3, { draw: 50 });
+  const { canvases, views } = await telephoneTable(r, r.engines);
+  r.engines.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Phrase ${i}` }));
+  await r.clock.advance(600);
+  const seatOf = (e) => st(r).seats.indexOf(e.snapshot().meSlot);
+  views.forEach((v, i) => drawLine(v, lineFor(1, seatOf(r.engines[i]))));
+  await r.clock.advance(900);
+  views[1].destroy();
+  const again = createTelephoneView({ engine: r.engines[1], toast() {}, win: clockWin(r), cues: { play() {}, burst() {}, float() {} } });
+  again.update(r.engines[1].snapshot());
+  const seat = seatOf(r.engines[1]);
+  assert.deepEqual(canvases.get(mainCanvas(again)).scene, sceneOf([lineFor(1, seat)]));
+  const more = { c: 4, z: 1, pts: [[30, 330], [300, 330]] };
+  drawLine(again, more);
+  await r.clock.advance(900);
+  assert.deepEqual(partsOf(r.hub.state[inkKey(seat)]).map(plain), [lineFor(1, seat), more], 'the reloaded drawing keeps the earlier lines');
+  for (const e of [r.engines[0], r.engines[2]]) byKey(views[r.engines.indexOf(e)].el, 'draw-done').click();
+  byKey(again.el, 'draw-done').click();
+  await r.clock.advance(SETTLE_MS + 600);
+  assert.equal(st(r).phase, 'text');
+  const late = createTelephoneView({ engine: r.engines[0], toast() {}, win: clockWin(r), cues: { play() {}, burst() {}, float() {} } });
+  late.update(r.engines[0].snapshot());
+  const from = (seatOf(r.engines[0]) + 2) % 3;
+  const want = from === seat ? [lineFor(1, seat), more] : [lineFor(1, from)];
+  assert.deepEqual(canvases.get(mainCanvas(late)).scene, sceneOf(want));
+  for (const v of [views[0], views[2], again, late]) v.destroy();
+});
+
+test('the describer repaints when a drawing changes without changing its stroke count', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await start(3, { draw: 50 });
+  const { canvases, views } = await telephoneTable(r, r.engines);
+  r.engines.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Phrase ${i}` }));
+  await r.clock.advance(600);
+  const k = st(r).k;
+  const a = encodeParts(lineFor(1, 0));
+  const b = encodeParts(lineFor(1, 2));
+  r.engines.forEach((e) => {
+    const seat = st(r).seats.indexOf(e.snapshot().meSlot);
+    e.direct(inkKey(seat), { k, s: seat === 0 ? a : encodeParts(lineFor(1, seat)) });
+  });
+  await r.clock.advance(400);
+  r.engines.forEach((e) => e.act({ type: 'done', step: 1 }));
+  await r.clock.advance(SETTLE_MS + 600);
+  assert.equal(st(r).phase, 'text');
+  const viewer = r.engines.findIndex((e) => st(r).seats.indexOf(e.snapshot().meSlot) === 1);
+  assert.deepEqual(canvases.get(mainCanvas(views[viewer])).scene, sceneOf([lineFor(1, 0)]));
+  const fake = { ...r.engines[viewer].snapshot() };
+  fake.state = { ...fake.state, [inkKey(0)]: { k, s: b } };
+  views[viewer].update(fake);
+  assert.deepEqual(canvases.get(mainCanvas(views[viewer])).scene, sceneOf([lineFor(1, 2)]));
+  for (const v of views) v.destroy();
+});
+
+test('a stroke never leaks across pointers, released buttons or the Done button', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await start(3, { draw: 50 });
+  const { canvases, views, toasts } = await telephoneTable(r, r.engines);
+  r.engines.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Phrase ${i}` }));
+  await r.clock.advance(600);
+  const v = views[0];
+  const seat = st(r).seats.indexOf(r.engines[0].snapshot().meSlot);
+  const cv = mainCanvas(v);
+  byKey(v.el, 'color-1').click();
+  cv.dispatchEvent(pen('pointerdown', 20, 20, 1));
+  cv.dispatchEvent(pen('pointerdown', 200, 200, 2));
+  cv.dispatchEvent(pen('pointermove', 200, 300, 2));
+  cv.dispatchEvent(pen('pointermove', 120, 20, 1));
+  cv.dispatchEvent(pen('pointerup', 200, 300, 2));
+  cv.dispatchEvent(pen('pointermove', 220, 20, 1));
+  cv.dispatchEvent(pen('pointerup', 220, 20, 1));
+  cv.dispatchEvent(pen('pointerdown', 20, 100, 1, { pointerType: 'mouse', buttons: 1 }));
+  cv.dispatchEvent(pen('pointermove', 220, 100, 1, { pointerType: 'mouse', buttons: 1 }));
+  cv.dispatchEvent(pen('pointermove', 400, 300, 1, { pointerType: 'mouse', buttons: 0 }));
+  cv.dispatchEvent(pen('pointermove', 400, 350, 1, { pointerType: 'mouse', buttons: 0 }));
+  cv.dispatchEvent(pen('pointerdown', 20, 160, 1));
+  cv.dispatchEvent(pen('pointermove', 220, 160, 1));
+  byKey(v.el, 'draw-done').click();
+  await r.clock.advance(900);
+  const want = [
+    { c: 1, z: 1, pts: [[20, 20], [220, 20]] },
+    { c: 1, z: 1, pts: [[20, 100], [220, 100]] },
+    { c: 1, z: 1, pts: [[20, 160], [220, 160]] },
+  ];
+  assert.deepEqual(partsOf(r.hub.state[inkKey(seat)]).map(plain), want);
+  assert.deepEqual(canvases.get(cv).scene, sceneOf(want));
+  cv.dispatchEvent(pen('pointermove', 300, 300, 1));
+  cv.dispatchEvent(pen('pointerup', 300, 300, 1));
+  assert.deepEqual(canvases.get(cv).scene, sceneOf(want), 'moves after Done never paint');
+  assert.deepEqual(toasts, []);
+  for (const x of views) x.destroy();
+});
+
+test('running out of ink or failing to save always tells the drawer', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await start(3, { draw: 50 });
+  const { views, toasts } = await telephoneTable(r, r.engines);
+  r.engines.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Phrase ${i}` }));
+  await r.clock.advance(600);
+  const v = views[0];
+  const cv = mainCanvas(v);
+  for (let i = 0; i < INK_PARTS + 5; i += 1) {
+    cv.dispatchEvent(pen('pointerdown', 10 + (i % 40) * 11, 10 + Math.floor(i / 40) * 40, 1));
+    cv.dispatchEvent(pen('pointerup', 10 + (i % 40) * 11, 10 + Math.floor(i / 40) * 40, 1));
+  }
+  assert.ok(toasts.some((t) => /Out of ink/.test(t)), 'hitting the stroke cap says so');
+  assert.match(text(v.el), /Ink left 0%/, 'the meter shows the real limit');
+  const before = toasts.length;
+  const real = r.engines[0].direct;
+  r.engines[0].direct = () => false;
+  byKey(v.el, 'undo').click();
+  await r.clock.advance(900);
+  r.engines[0].direct = real;
+  assert.ok(toasts.slice(before).some((t) => /did not save/.test(t)), 'a refused save is reported');
+  for (const x of views) x.destroy();
+});
+
+test('six to eight players scribbling nonstop stay inside the op budget and every drawing lands', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  for (const n of [6, 8]) {
+    const r = await start(n, { draw: 50 });
+    const { canvases, views } = await telephoneTable(r, r.engines);
+    r.engines.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Phrase ${i}` }));
+    await r.clock.advance(600);
+    const s = st(r);
+    const t0 = r.clock.now();
+    const count = new Array(n).fill(0);
+    for (let tick = 0; r.clock.now() < s.ends - 2000; tick += 1) {
+      views.forEach((v, i) => {
+        const y = 10 + ((tick * 7 + i * 13) % 340);
+        const x = 10 + ((tick * 3) % 200);
+        const cv = mainCanvas(v);
+        cv.dispatchEvent(pen('pointerdown', x, y, 1));
+        cv.dispatchEvent(pen('pointermove', x + 60, y, 1));
+        cv.dispatchEvent(pen('pointerup', x + 60, y, 1));
+        count[i] += 1;
+      });
+      await r.clock.advance(250);
+    }
+    await r.clock.advance(s.ends - r.clock.now() + 300);
+    for (const e of r.engines) {
+      const id = e.snapshot().me;
+      for (let at = t0; at < r.clock.now(); at += 1000) assert.ok(r.hub.opsBy(id, at, at + 10000) <= 100);
+    }
+    assert.deepEqual(r.hub.violations, []);
+    r.engines.forEach((e, i) => {
+      const seat = s.seats.indexOf(e.snapshot().meSlot);
+      const ink = r.hub.state[inkKey(seat)];
+      assert.equal(validInk(ink, s.k), true, `seat ${seat}`);
+      assert.ok(ink.s.length > 0);
+      assert.deepEqual(canvases.get(mainCanvas(views[i])).scene, sceneOf(partsOf(ink)), `seat ${seat} saved exactly what is on their screen`);
+    });
+    for (const v of views) v.destroy();
+  }
+});
+
+test('a touch whose lift never reached the canvas does not freeze the next touch', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await start(3, { draw: 50 });
+  const { canvases, views, toasts } = await telephoneTable(r, r.engines);
+  r.engines.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Phrase ${i}` }));
+  await r.clock.advance(600);
+  const v = views[0];
+  const seat = st(r).seats.indexOf(r.engines[0].snapshot().meSlot);
+  const cv = mainCanvas(v);
+  const held = new Set();
+  cv.setPointerCapture = (id) => held.add(id);
+  cv.releasePointerCapture = (id) => held.delete(id);
+  cv.hasPointerCapture = (id) => held.has(id);
+  byKey(v.el, 'color-1').click();
+  cv.dispatchEvent(pen('pointerdown', 20, 20, 5, { pointerType: 'touch' }));
+  cv.dispatchEvent(pen('pointermove', 220, 20, 5, { pointerType: 'touch' }));
+  held.delete(5);
+  cv.dispatchEvent(pen('pointerdown', 20, 100, 6, { pointerType: 'touch' }));
+  cv.dispatchEvent(pen('pointermove', 220, 100, 6, { pointerType: 'touch' }));
+  cv.dispatchEvent(pen('pointerdown', 300, 300, 7, { pointerType: 'touch' }));
+  cv.dispatchEvent(pen('pointermove', 400, 300, 7, { pointerType: 'touch' }));
+  cv.dispatchEvent(pen('pointerup', 220, 100, 6, { pointerType: 'touch' }));
+  cv.setPointerCapture = () => {
+    throw new Error('no capture');
+  };
+  cv.dispatchEvent(pen('pointerdown', 20, 160, 8, { pointerType: 'touch' }));
+  cv.dispatchEvent(pen('pointermove', 220, 160, 8, { pointerType: 'touch' }));
+  cv.dispatchEvent(pen('pointerdown', 20, 220, 9, { pointerType: 'touch' }));
+  cv.dispatchEvent(pen('pointermove', 220, 220, 9, { pointerType: 'touch' }));
+  cv.dispatchEvent(pen('pointerup', 220, 220, 9, { pointerType: 'touch' }));
+  await r.clock.advance(900);
+  const want = [
+    { c: 1, z: 1, pts: [[20, 20], [220, 20]] },
+    { c: 1, z: 1, pts: [[20, 100], [220, 100]] },
+    { c: 1, z: 1, pts: [[20, 160], [220, 160]] },
+    { c: 1, z: 1, pts: [[20, 220], [220, 220]] },
+  ];
+  assert.deepEqual(partsOf(r.hub.state[inkKey(seat)]).map(plain), want);
+  assert.deepEqual(canvases.get(cv).scene, sceneOf(want));
+  assert.deepEqual(toasts, []);
+  for (const x of views) x.destroy();
 });

@@ -83,7 +83,7 @@ export function createTriviaView({ engine, fx, cues }) {
         m.tier
           ? h('span', {
               class: ['chip', 'chip-static', 'tier-chip', `tier-${m.tier}`],
-              text: `${m.tierEmoji} ${m.tierName}${m.tierBonus ? ` · ${m.tierBonus} points` : ''}`,
+              text: `${m.tierName}${m.tierBonus ? ` · ${m.tierBonus} points` : ''}`,
               attrs: { title: m.tierBonus ? `${m.tierName} questions are worth ${m.tierBonus} points` : `${m.tierName} question` },
             })
           : null,
@@ -135,7 +135,7 @@ export function createTriviaView({ engine, fx, cues }) {
       cue.play(moment);
       const mineBtn = moment === 'correct' ? el.querySelector(`.option-${m.myPick}`) : null;
       if (mineBtn) {
-        cue.burst(mineBtn, { count: 16, emoji: ['✨', '🎉'] });
+        cue.burst(mineBtn, { count: 16, emoji: ['🎉'] });
         if (m.myGain) cue.float(mineBtn, `+${m.myGain.toLocaleString('en-US')}`);
       }
     }

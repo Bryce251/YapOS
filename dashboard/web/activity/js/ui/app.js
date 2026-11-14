@@ -98,6 +98,15 @@ export function stripModel(snap, extra = null) {
   return { rows, badge: opts.badge || null, gains: opts.gains || null };
 }
 
+export function gameTint(snap, phase) {
+  if (!snap || !snap.ready || !snap.room) return null;
+  let id = null;
+  if (phase === 'game') id = snap.room.game;
+  else if (phase === 'lobby') id = snap.pick ? snap.pick.id : null;
+  else if (phase === 'results') id = snap.room.last ? snap.room.last.game : null;
+  return typeof id === 'string' && /^[a-z0-9-]{1,32}$/.test(id) ? id : null;
+}
+
 export function spectateModel(snap) {
   if (!snap.ready || snap.room.phase !== 'game' || snap.meJoined) return null;
   return { meJoined: false, joining: snap.joining || null };
@@ -163,13 +172,12 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     h(
       'div',
       { class: 'top-inner' },
-      h('span', { class: 'brand' }, h('span', { class: 'brand-mark', text: '🎉', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'brand-name', text: 'YapOS Party' })),
+      h('span', { class: 'brand' }, h('span', { class: 'brand-mark', text: 'Y', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'brand-name', text: 'YapOS Party' })),
       h('span', { class: 'status-pill', text: m.status }),
       m.host
         ? h(
             'span',
             { class: ['host-pill', m.isHost ? 'is-me' : null], attrs: { title: m.host } },
-            h('span', { text: '👑 ', attrs: { 'aria-hidden': 'true' } }),
             h('span', { class: 'host-long', text: m.host }),
             h('span', { class: 'host-short', text: m.hostShort, attrs: { 'aria-hidden': 'true' } }),
           )
@@ -185,11 +193,10 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
               key: 'admin',
               on: () => panel.toggle(),
               attrs: { 'aria-haspopup': 'dialog', 'aria-expanded': m.adminOpen ? 'true' : 'false', 'aria-controls': 'admin-panel', title: 'Open the admin panel' },
-              kids: h('span', { class: 'admin-shield-icon', text: '🛡️', attrs: { 'aria-hidden': 'true' } }),
             })
           : null,
-        m.canEnd ? button('End game', { variant: 'ghost', size: 'sm', key: 'end', on: () => engine.lobby.end(), attrs: { 'aria-label': 'End game', title: 'End game' }, kids: h('span', { class: 'btn-icon', text: '⏹', attrs: { 'aria-hidden': 'true' } }) }) : null,
-        button('Close', { variant: 'ghost', size: 'sm', key: 'leave', on: leave, attrs: { 'aria-label': 'Close YapOS Party', title: 'Close YapOS Party' }, kids: h('span', { class: 'btn-icon', text: '🚪', attrs: { 'aria-hidden': 'true' } }) }),
+        m.canEnd ? button('End game', { variant: 'ghost', size: 'sm', key: 'end', on: () => engine.lobby.end(), attrs: { 'aria-label': 'End game', title: 'End game' }, kids: h('span', { class: 'btn-icon', text: '■', attrs: { 'aria-hidden': 'true' } }) }) : null,
+        button('Close', { variant: 'ghost', size: 'sm', key: 'leave', on: leave, attrs: { 'aria-label': 'Close YapOS Party', title: 'Close YapOS Party' }, kids: h('span', { class: 'btn-icon', text: '✕', attrs: { 'aria-hidden': 'true' } }) }),
       ),
     ),
   );
@@ -285,7 +292,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     cue(cues[0].sound);
     for (const c of cues) {
       if (c.mine && c.sound === 'join' && joinTap && stamp() - joinTap.at < JOIN_TAP_MS) {
-        juiceCall('burst', joinTap.x, joinTap.y, { count: 18, emoji: ['🎮', '✨', '🎉'] });
+        juiceCall('burst', joinTap.x, joinTap.y, { count: 18, emoji: ['🎮', '🎉'] });
         joinTap = null;
       }
       if (c.sound === 'coin') {
@@ -350,7 +357,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     return h(
       'div',
       { class: 'spectate', attrs: { role: 'status' } },
-      h('span', { class: 'spectate-label' }, h('span', { class: 'spectate-eye', text: '👀', attrs: { 'aria-hidden': 'true' } }), h('span', { text: 'Watching' })),
+      h('span', { class: 'spectate-label' }, h('span', { text: 'Watching' })),
       h('span', { class: 'spectate-hint', text: 'Hop in any time.' }),
       btn,
     );
@@ -361,7 +368,6 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       ? h(
           'div',
           { class: 'announce', attrs: { role: 'status', 'aria-live': 'polite' } },
-          h('span', { class: 'announce-icon', text: '📣', attrs: { 'aria-hidden': 'true' } }),
           h('span', { class: 'announce-text', text: m.text }),
           h('span', { class: 'announce-secs', text: '' }),
           h('span', { class: 'announce-track', attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'announce-fill' })),
@@ -441,7 +447,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       return h(
         'div',
         { class: 'card glass hello-card' },
-        h('span', { class: 'trophy', text: '🎉', attrs: { 'aria-hidden': 'true' } }),
+        h('span', { class: 'trophy', text: 'Y', attrs: { 'aria-hidden': 'true' } }),
         h('h1', { class: 'winner-title', text: 'YapOS Party' }),
         h('p', { class: 'muted', text: "Start it from a voice call in Yapin' to play with everyone in the call." }),
         accountBlock(m.account),
@@ -501,6 +507,9 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     const hm = headerModel(snap, { alone, adminOpen, sound: soundOn() });
     paintHead(head, hm);
     root.dataset.phase = hm.phase;
+    const tint = gameTint(snap, hm.phase);
+    if (tint) root.dataset.game = tint;
+    else delete root.dataset.game;
     watchKick(snap);
     announceLive = announceModel(snap, now());
     paintAnnounce(announceSlot, announceLive ? { text: announceLive.text, until: announceLive.until } : null);

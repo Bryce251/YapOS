@@ -127,7 +127,7 @@ function bestList(m) {
   return h(
     'div',
     { class: 'reflex-best' },
-    h('h3', { class: 'reflex-best-title', text: '⚡ Best times this game' }),
+    h('h3', { class: 'reflex-best-title', text: 'Best times this game' }),
     h(
       'ol',
       { class: 'reflex-best-list' },
@@ -192,7 +192,7 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
       h(
         'div',
         { class: 'game-head' },
-        h('span', { class: 'chip chip-static', text: t.fakeouts ? '🟡 Fake-outs on' : '🟢 No fake-outs' }),
+        h('span', { class: 'chip chip-static', text: t.fakeouts ? 'Fake-outs on' : 'No fake-outs' }),
         h('span', { class: 'game-count', text: `Round ${t.number} of ${t.total}` }),
         show ? timer(t.starts, t.ends, t.last ? 'Final results in' : 'Next round in') : h('span', { class: 'reflex-hint', text: 'Tap or press Space' }),
       ),
@@ -208,7 +208,7 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
     }
     const m = { phase: 'show', results: b.results };
     return [
-      h('div', { class: ['game-foot', b.results.some((x) => x.isMe && x.pts) ? 'is-good' : null] }, h('span', { class: 'foot-text', text: footText(m) }), b.wasFake ? h('span', { class: 'chip chip-static reflex-fake', text: '🟡 That was a fake-out round' }) : null),
+      h('div', { class: ['game-foot', b.results.some((x) => x.isMe && x.pts) ? 'is-good' : null] }, h('span', { class: 'foot-text', text: footText(m) }), b.wasFake ? h('span', { class: 'chip chip-static reflex-fake', text: 'That was a fake-out round' }) : null),
       b.results.length ? h('ol', { class: 'reflex-results', attrs: { 'aria-label': 'This round' } }, b.results.map(resultRow)) : null,
       bestList(b),
     ];
@@ -347,7 +347,7 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
     list.forEach((name, i) => cue.play(name, i ? { at: 300 } : undefined));
     if (burst) {
       const row = bottom.querySelector('.reflex-row.is-fast');
-      if (row) cue.burst(row, { count: 14, emoji: ['⚡', '✨'] });
+      if (row) cue.burst(row, { count: 14, emoji: ['⚡', '🎉'] });
       if (m.mine && m.mine.fastest && fx && typeof fx.confetti === 'function' && m.results.filter((x) => x.kind === 'ok').length > 1) fx.confetti(30);
     }
   }

@@ -8,20 +8,21 @@
   min-width: 4.5em;
   margin: 0 0.15em;
   padding: 0 0.3em;
-  border-bottom: 3px solid var(--accent);
-  color: var(--accent-text);
+  border-bottom: 3px solid var(--game);
+  color: var(--game);
   line-height: 1.15;
 }
 
 .hottakes-blank.is-filled {
   min-width: 0;
-  border-radius: 10px 10px 4px 4px;
-  background: var(--accent-soft);
-  animation: hottakes-fill 520ms var(--pop);
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  background: var(--game-soft);
+  color: var(--text);
+  animation: hottakes-fill 400ms var(--pop);
 }
 
 .hottakes-entry {
-  margin: 4px 0 6px;
+  margin: var(--space-1) 0 var(--space-2);
 }
 
 .hottakes-entry.is-hidden {
@@ -29,22 +30,22 @@
 }
 
 .hottakes-entry.is-open .word-input {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  border-color: var(--game-line);
 }
 
 .hottakes-entry-foot {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .hottakes-left {
   flex: none;
-  margin-top: 8px;
+  margin-top: var(--space-2);
   color: var(--text-3);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
 }
 
@@ -54,31 +55,31 @@
 
 .hottakes-sent {
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
   justify-items: center;
-  padding: 18px;
-  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  border-radius: var(--radius);
   border: 1px dashed var(--border-strong);
-  background: var(--surface);
+  background: var(--surface-2);
   text-align: center;
 }
 
 .hottakes-sent-text {
   margin: 0;
-  font-size: clamp(17px, 2.6vw, 20px);
-  font-weight: 700;
+  font-size: clamp(17px, 2.6vw, var(--text-lg));
+  font-weight: var(--weight-bold);
   overflow-wrap: anywhere;
 }
 
 .hottakes-wait {
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   text-align: center;
 }
 
 .hottakes-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
-  gap: 10px;
+  gap: var(--space-3);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -94,35 +95,29 @@
 }
 
 .hottakes-card {
-  --tone: var(--accent);
+  --tone: var(--game);
   position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-3);
   min-width: 0;
   min-height: 92px;
-  padding: 14px 16px;
+  padding: var(--space-4);
   border-radius: var(--radius);
   border: 1px solid var(--border-strong);
-  background: linear-gradient(160deg, color-mix(in srgb, var(--tone) 14%, transparent), transparent 70%), var(--surface);
+  background: var(--surface-2);
   color: var(--text);
   text-align: left;
   font: inherit;
-  transition: transform 180ms var(--ease), border-color 180ms var(--ease), box-shadow 220ms var(--ease), opacity 260ms var(--ease);
+  transition: transform var(--dur) var(--ease), border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), opacity var(--dur-slow) var(--ease);
 }
 
-.hottakes-tone-1 {
-  --tone: var(--pink);
-}
-
-.hottakes-tone-2 {
-  --tone: var(--violet);
-}
-
+.hottakes-tone-1,
+.hottakes-tone-2,
 .hottakes-tone-3 {
-  --tone: var(--amber);
+  --tone: var(--game);
 }
 
 .hottakes-pick {
@@ -139,9 +134,10 @@
 }
 
 .hottakes-pick.is-picked {
-  border-color: var(--tone);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 30%, transparent);
-  animation: pop 420ms var(--pop);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+  box-shadow: inset 0 0 0 1px var(--accent);
+  animation: pop 360ms var(--pop);
 }
 
 .hottakes-pick.is-dim {
@@ -149,57 +145,55 @@
 }
 
 .hottakes-text {
-  font-size: clamp(16px, 2.4vw, 19px);
-  font-weight: 700;
+  font-size: clamp(var(--text-md), 2.4vw, 19px);
+  font-weight: var(--weight-bold);
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
 
 .hottakes-tag {
   margin-top: auto;
-  padding: 2px 10px;
-  border-radius: 999px;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-xs);
   background: var(--surface-3);
   color: var(--text-2);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
 }
 
 .hottakes-tag.is-vote {
-  background: color-mix(in srgb, var(--tone) 22%, transparent);
-  color: var(--tone);
+  background: var(--accent-soft);
+  color: var(--accent-text);
 }
 
 .hottakes-result {
-  animation: hottakes-rise 420ms var(--ease) both;
-  animation-delay: calc(var(--hottakes-order, 0) * 90ms);
+  animation: hottakes-rise 360ms var(--ease) both;
+  animation-delay: calc(var(--hottakes-order, 0) * 80ms);
 }
 
 .hottakes-result.is-own {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 45%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 .hottakes-result.is-top {
-  --tone: var(--accent);
-  border-color: var(--accent);
-  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 26%, transparent), color-mix(in srgb, var(--pink-deep) 12%, transparent) 70%), var(--surface);
-  box-shadow: 0 0 30px -6px color-mix(in srgb, var(--accent) 70%, transparent);
+  border-color: var(--game);
+  background: color-mix(in srgb, var(--game) 10%, var(--surface-2));
+  box-shadow: inset 0 3px 0 var(--game);
 }
 
 .hottakes-badge {
-  padding: 3px 10px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.02em;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--game);
+  color: var(--on-game);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-heavy);
 }
 
 .hottakes-by {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
   margin-top: auto;
 }
@@ -208,20 +202,20 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-2);
-  font-size: 14px;
-  font-weight: 650;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .hottakes-gain {
   flex: none;
-  padding: 1px 8px;
-  border-radius: 999px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-xs);
   background: var(--success-soft);
   color: var(--success);
-  font-size: 13px;
-  font-weight: 800;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-heavy);
   font-variant-numeric: tabular-nums;
 }
 
@@ -229,14 +223,14 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 10px;
+  gap: var(--space-2) var(--space-3);
   width: 100%;
 }
 
 .hottakes-meter {
   flex: 1 1 100%;
-  height: 8px;
-  border-radius: 999px;
+  height: 6px;
+  border-radius: var(--radius-full);
   background: var(--surface-3);
   overflow: hidden;
 }
@@ -246,22 +240,22 @@
   width: calc(var(--hottakes-share, 0) * 100%);
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--tone), var(--pink-deep));
+  background: var(--tone);
   transform-origin: left center;
-  animation: hottakes-grow 700ms var(--ease) both;
-  animation-delay: calc(var(--hottakes-order, 0) * 90ms + 200ms);
+  animation: hottakes-grow 600ms var(--ease) both;
+  animation-delay: calc(var(--hottakes-order, 0) * 80ms + 160ms);
 }
 
 .hottakes-count {
   color: var(--text-2);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
 }
 
 @keyframes hottakes-fill {
   0% {
-    transform: scale(0.9);
+    transform: scale(0.92);
     opacity: 0;
   }
   100% {
@@ -272,7 +266,7 @@
 
 @keyframes hottakes-rise {
   0% {
-    transform: translateY(8px);
+    transform: translateY(6px);
     opacity: 0;
   }
   100% {
@@ -292,16 +286,15 @@
 
 @media (hover: hover) {
   .hottakes-pick:hover:not(:disabled) {
-    transform: translateY(-2px);
-    border-color: var(--tone);
-    box-shadow: var(--lift);
+    transform: translateY(-1px);
+    border-color: var(--text-3);
   }
 }
 
 @media (max-width: 520px) {
   .hottakes-card {
     min-height: 0;
-    padding: 12px 14px;
+    padding: var(--space-3) var(--space-4);
   }
 }
 
@@ -315,5 +308,9 @@
 
   .hottakes-card {
     transition: none;
+  }
+
+  .hottakes-pick:hover:not(:disabled) {
+    transform: none;
   }
 }

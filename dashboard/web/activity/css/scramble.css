@@ -1,12 +1,12 @@
 .scramble-board {
-  margin: 14px 0 6px;
+  margin: var(--space-4) 0 var(--space-2);
 }
 
 .scramble-stage {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-4);
 }
 
 .scramble-stage .eyebrow {
@@ -19,7 +19,7 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-2);
   max-width: 100%;
 }
 
@@ -31,28 +31,28 @@
   height: var(--size);
   padding: 0;
   border: 1px solid var(--border-strong);
-  border-bottom-width: 4px;
-  border-radius: 12px;
-  background: linear-gradient(180deg, var(--surface), var(--bg));
+  border-bottom-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
   color: var(--text);
   font: inherit;
-  font-size: clamp(20px, 5vw, 28px);
-  font-weight: 850;
+  font-size: clamp(20px, 5vw, var(--text-xl));
+  font-weight: var(--weight-heavy);
   line-height: 1;
+  text-transform: uppercase;
   cursor: pointer;
   touch-action: manipulation;
-  transition: transform 140ms var(--ease), opacity 160ms var(--ease), border-color 160ms var(--ease), background 160ms var(--ease);
+  transition: transform var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
 }
 
 .scramble-tile:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .scramble-tile:active:not(:disabled) {
   transform: translateY(2px);
-  border-bottom-width: 2px;
+  border-bottom-width: 1px;
 }
 
 .scramble-tile:disabled {
@@ -65,24 +65,25 @@
 }
 
 .scramble-tile.is-answer {
-  border-color: var(--success);
+  border-color: var(--success-line);
+  border-bottom-color: var(--success);
   background: var(--success-soft);
   color: var(--success);
   cursor: default;
 }
 
 .scramble-tiles.is-fresh .scramble-tile {
-  animation: scramble-drop 360ms var(--pop) backwards;
-  animation-delay: calc(var(--i, 0) * 40ms);
+  animation: scramble-drop 300ms var(--pop) backwards;
+  animation-delay: calc(var(--i, 0) * 35ms);
 }
 
 .scramble-answer.is-fresh .scramble-tile {
-  animation: scramble-flip 420ms var(--pop) backwards;
-  animation-delay: calc(var(--i, 0) * 60ms);
+  animation: scramble-flip 360ms var(--pop) backwards;
+  animation-delay: calc(var(--i, 0) * 50ms);
 }
 
 .scramble-slots {
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .scramble-slot {
@@ -90,17 +91,18 @@
   place-items: end center;
   width: clamp(26px, 6.5vw, 38px);
   height: clamp(34px, 8vw, 44px);
-  padding-bottom: 4px;
-  border-bottom: 3px solid var(--text-3);
+  padding-bottom: var(--space-1);
+  border-bottom: 2px solid var(--border-strong);
   color: var(--text);
   font-size: clamp(20px, 5vw, 26px);
-  font-weight: 800;
+  font-weight: var(--weight-heavy);
   line-height: 1;
-  transition: border-color 160ms var(--ease), color 160ms var(--ease);
+  text-transform: uppercase;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .scramble-slot.is-filled {
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--game);
 }
 
 .scramble-slot.is-off {
@@ -109,9 +111,8 @@
 }
 
 .scramble-slot.is-hint {
-  border-bottom-color: var(--amber);
-  color: var(--amber);
-  opacity: 0.7;
+  border-bottom-color: var(--warning);
+  color: var(--warning);
 }
 
 .scramble-slot.is-solved {
@@ -121,17 +122,18 @@
 
 .scramble-hint {
   margin: 0;
-  padding: 4px 12px;
-  border-radius: 999px;
-  background: rgba(251, 191, 36, 0.14);
-  color: var(--amber);
-  font-size: 14px;
-  font-weight: 700;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--warning-line);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
 }
 
 .scramble-entry {
   max-width: 460px;
-  margin: 14px auto 0;
+  margin: var(--space-4) auto 0;
 }
 
 .scramble-entry.is-hidden {
@@ -139,7 +141,7 @@
 }
 
 .scramble-entry.is-open .word-input {
-  border-color: var(--accent);
+  border-color: var(--game-line);
 }
 
 .scramble-input {
@@ -157,12 +159,12 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px;
-  margin-top: 10px;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 .scramble-result {
-  margin-top: 14px;
+  margin-top: var(--space-4);
 }
 
 .scramble-also {
@@ -170,22 +172,23 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  margin: 0 0 12px;
-  font-size: 14px;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
 }
 
 .scramble-alt {
-  padding: 3px 10px;
-  border-radius: 999px;
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-xs);
   border: 1px solid var(--border);
-  background: var(--surface);
-  font-weight: 700;
+  background: var(--surface-2);
+  font-weight: var(--weight-bold);
   overflow-wrap: anywhere;
 }
 
 .scramble-alt.is-me {
-  border-color: var(--violet);
+  border-color: var(--game-line);
+  background: var(--game-soft);
 }
 
 .scramble-none {
@@ -197,7 +200,7 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 6px 8px;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -206,25 +209,25 @@
 .scramble-solver {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   min-width: 0;
   max-width: 100%;
-  padding: 4px 10px 4px 6px;
-  border-radius: 999px;
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
-  background: var(--surface);
-  font-size: 13px;
+  background: var(--surface-2);
+  font-size: var(--text-xs);
 }
 
 .scramble-solver.is-me {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  border-color: var(--game);
+  box-shadow: inset 0 0 0 1px var(--game);
 }
 
 .scramble-medal {
   min-width: 18px;
   text-align: center;
-  font-weight: 800;
+  font-weight: var(--weight-heavy);
 }
 
 .scramble-solver-name {
@@ -232,19 +235,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
 }
 
 .scramble-solver-pts {
   color: var(--success);
-  font-weight: 800;
+  font-weight: var(--weight-heavy);
   font-variant-numeric: tabular-nums;
 }
 
 @keyframes scramble-drop {
   from {
     opacity: 0;
-    transform: translateY(-10px) scale(0.9);
+    transform: translateY(-8px) scale(0.92);
   }
   to {
     opacity: 1;
@@ -265,7 +268,7 @@
 
 @media (hover: hover) {
   .scramble-tile:hover:not(:disabled) {
-    border-color: var(--accent);
+    border-color: var(--game);
     transform: translateY(-2px);
   }
 }
@@ -273,11 +276,11 @@
 @media (max-width: 420px) {
   .scramble-tiles,
   .scramble-answer {
-    gap: 6px;
+    gap: var(--space-1);
   }
 
   .scramble-slots {
-    gap: 4px;
+    gap: var(--space-1);
   }
 }
 
@@ -290,5 +293,9 @@
   .scramble-tile,
   .scramble-slot {
     transition: none;
+  }
+
+  .scramble-tile:hover:not(:disabled) {
+    transform: none;
   }
 }

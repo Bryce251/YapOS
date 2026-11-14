@@ -3,26 +3,26 @@
 }
 
 .truths-form {
-  margin-top: 6px;
+  margin-top: var(--space-2);
 }
 
 .truths-eyebrow {
-  margin: 4px 2px 10px;
+  margin: var(--space-1) var(--space-1) var(--space-3);
 }
 
 .truths-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-  padding: 6px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2);
   border-radius: var(--radius);
   border: 1px solid transparent;
-  transition: border-color 180ms var(--ease), background-color 180ms var(--ease);
+  transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
 }
 
 .truths-row-lie {
-  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  border-color: var(--danger-line);
   background: var(--danger-soft);
 }
 
@@ -32,10 +32,11 @@
   place-items: center;
   width: 32px;
   height: 32px;
-  border-radius: 10px;
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  font-weight: 800;
+  border-radius: var(--radius-sm);
+  background: var(--game-soft);
+  color: var(--game);
+  font-weight: var(--weight-heavy);
+  font-variant-numeric: tabular-nums;
 }
 
 .truths-field {
@@ -47,21 +48,21 @@
 
 .truths-input {
   width: 100%;
-  padding-right: 40px;
+  padding-right: 44px;
 }
 
 .truths-row-lie .truths-input {
-  border-color: color-mix(in srgb, var(--danger) 60%, var(--border-strong));
+  border-color: var(--danger-line);
 }
 
 .truths-left {
   position: absolute;
   top: 50%;
-  right: 12px;
+  right: var(--space-3);
   transform: translateY(-50%);
   color: var(--text-3);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
@@ -70,30 +71,31 @@
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 6px;
-  min-height: 48px;
-  padding: 0 14px;
-  border-radius: 12px;
+  gap: var(--space-2);
+  min-height: var(--control-lg);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
-  background: var(--surface);
+  background: var(--surface-2);
   color: var(--text-2);
   font: inherit;
-  font-weight: 700;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   cursor: pointer;
-  transition: border-color 160ms var(--ease), background-color 160ms var(--ease), color 160ms var(--ease), transform 160ms var(--ease);
+  transition: border-color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .truths-lie-icon {
   filter: grayscale(1);
   opacity: 0.6;
-  transition: filter 160ms var(--ease), opacity 160ms var(--ease);
+  transition: filter var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
 }
 
 .truths-lie-btn.truths-lie-on {
   border-color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 20%, var(--surface));
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface-2));
   color: var(--text);
-  animation: truths-pop 360ms var(--pop);
+  animation: truths-pop 300ms var(--pop);
 }
 
 .truths-lie-on .truths-lie-icon {
@@ -103,7 +105,7 @@
 
 .truths-lie-btn:focus-visible,
 .truths-idea-btn:focus-visible {
-  outline: 2px solid var(--ring);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -124,14 +126,14 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin: 4px 2px 12px;
+  gap: var(--space-2);
+  margin: var(--space-1) var(--space-1) var(--space-3);
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--text-sm);
 }
 
 .truths-idea-lead {
-  font-weight: 700;
+  font-weight: var(--weight-semibold);
 }
 
 .truths-idea-text {
@@ -141,47 +143,55 @@
 .truths-idea-btn {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
-  background: var(--surface);
-  font-size: 16px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--text-md);
   cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease);
 }
 
 .truths-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .truths-actions .btn {
-  min-height: 48px;
+  min-height: var(--control-lg);
 }
 
 .truths-ready,
 .truths-voted {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 28px;
-  margin: 4px 2px 8px;
+  margin: var(--space-1) var(--space-1) var(--space-2);
 }
 
 .truths-wait {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  margin: 12px 0;
-  padding: 26px 18px;
-  border-radius: var(--radius-lg);
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+  padding: var(--space-6) var(--space-5);
+  border-radius: var(--radius);
   text-align: center;
 }
 
 .truths-wait-icon {
-  font-size: 44px;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-full);
+  background: var(--game-soft);
+  font-size: 32px;
   line-height: 1;
 }
 
@@ -189,30 +199,30 @@
   margin: 0;
   max-width: 420px;
   color: var(--text-2);
-  font-weight: 600;
+  font-weight: var(--weight-medium);
 }
 
 .truths-writer {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin-top: 12px;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
 }
 
 .truths-writer-says {
   color: var(--text-2);
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
 }
 
 .truths-question {
-  margin: 12px 0 14px;
+  margin: var(--space-3) 0 var(--space-4);
 }
 
 .truths-options {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 .truths-statement {
@@ -227,9 +237,9 @@
 .truths-statement.truths-is-lie {
   --tone: var(--danger);
   border-color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
-  box-shadow: 0 0 24px -6px rgba(248, 113, 113, 0.55);
-  animation: truths-pop 420ms var(--pop);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface-2));
+  box-shadow: inset 0 0 0 1px var(--danger);
+  animation: truths-pop 360ms var(--pop);
 }
 
 .truths-statement.truths-is-true {
@@ -243,10 +253,10 @@
 
 .truths-tag {
   flex: none;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 800;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-heavy);
 }
 
 .truths-tag-lie {
@@ -262,32 +272,38 @@
 .truths-awards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 14px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 .truths-award {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 20px 14px;
-  border-radius: var(--radius-lg);
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-4);
+  border-radius: var(--radius);
   text-align: center;
-  animation: truths-rise 520ms var(--ease) both;
+  animation: truths-rise 420ms var(--ease) both;
 }
 
 .truths-award + .truths-award {
-  animation-delay: 160ms;
+  animation-delay: 140ms;
 }
 
 .truths-award-me {
-  border-color: var(--accent);
-  box-shadow: var(--lift);
+  border-color: var(--game);
+  box-shadow: inset 0 3px 0 var(--game);
 }
 
 .truths-award-icon {
-  font-size: 42px;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  font-size: 34px;
   line-height: 1;
 }
 
@@ -299,23 +315,23 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   max-width: 100%;
 }
 
 .truths-award-line {
   margin: 0;
   color: var(--text-2);
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
   overflow-wrap: anywhere;
 }
 
 @keyframes truths-pop {
   0% {
-    transform: scale(0.96);
+    transform: scale(0.97);
   }
   60% {
-    transform: scale(1.03);
+    transform: scale(1.02);
   }
   100% {
     transform: scale(1);
@@ -325,7 +341,7 @@
 @keyframes truths-rise {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -335,12 +351,12 @@
 
 @media (hover: hover) {
   .truths-lie-btn:hover:not(:disabled) {
-    border-color: var(--danger);
+    border-color: var(--danger-line);
     color: var(--text);
   }
 
   .truths-idea-btn:hover:not(:disabled) {
-    border-color: var(--accent);
+    border-color: var(--text-3);
   }
 }
 
@@ -350,11 +366,11 @@
   }
 
   .truths-field {
-    flex-basis: calc(100% - 42px);
+    flex-basis: calc(100% - 44px);
   }
 
   .truths-lie-btn {
-    margin-left: 42px;
+    margin-left: 44px;
     min-height: 40px;
   }
 
@@ -370,7 +386,8 @@
 @media (prefers-reduced-motion: reduce) {
   .truths-row,
   .truths-lie-btn,
-  .truths-lie-icon {
+  .truths-lie-icon,
+  .truths-idea-btn {
     transition: none;
   }
 

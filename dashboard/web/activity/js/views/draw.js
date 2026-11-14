@@ -9,7 +9,7 @@ export const LIVE_MS = 250;
 export const WRITE_GAP_MS = 900;
 export const LIVE_CHARS = 3000;
 
-const TIER_LABEL = { easy: '🟢 Easy', medium: '🟡 Medium', hard: '🔴 Hard' };
+const TIER_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 
 export function footText(m) {
   if (m.phase === 'pick') return m.amDrawer ? 'Pick the word you want to draw.' : 'Get ready to guess! The drawing starts in a moment.';
@@ -34,7 +34,7 @@ export function countText(m) {
 }
 
 export function feedLine(f) {
-  if (f.kind === 'ok') return 'guessed the word! 🎉';
+  if (f.kind === 'ok') return 'guessed the word!';
   if (f.kind === 'close') return f.mine ? `${f.text} · so close!` : 'is so close!';
   return f.text;
 }
@@ -244,7 +244,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     heard = now;
     for (const c of list) {
       cue.play(c.name, c.opts);
-      if (c.at === 'guess') cue.burst(wordBar, { count: 18, emoji: ['🎉', '✨', '✏️'] });
+      if (c.at === 'guess') cue.burst(wordBar, { count: 18, emoji: ['🎉', '✏️'] });
       if (c.at === 'gain') {
         const gain = revealBox.querySelector('.reveal-gain');
         if (gain) cue.float(gain, `+${m.drawerGain}`);

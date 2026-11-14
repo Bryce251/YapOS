@@ -1,28 +1,29 @@
 .emoji-stage {
-  margin: 18px 0 12px;
+  margin: var(--space-5) 0 var(--space-3);
 }
 
 .emoji-card {
   display: grid;
   justify-items: center;
-  gap: 14px;
-  padding: 22px 16px;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-4);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-strong);
-  background: linear-gradient(160deg, rgba(242, 97, 63, 0.12), rgba(124, 92, 255, 0.08) 70%), var(--surface);
-  transition: border-color 220ms var(--ease), box-shadow 260ms var(--ease);
+  background: var(--surface-2);
+  box-shadow: inset 0 3px 0 var(--game-line);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 
 .emoji-card.is-solved {
   border-color: var(--success);
-  box-shadow: 0 0 28px -10px rgba(74, 222, 128, 0.6);
+  box-shadow: inset 0 3px 0 var(--success), inset 0 0 0 1px var(--success);
 }
 
 .emoji-row {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 6px 10px;
+  gap: var(--space-2) var(--space-3);
   margin: 0;
   font-size: clamp(40px, 11vw, 64px);
   line-height: 1.15;
@@ -30,8 +31,8 @@
 
 .emoji-tile {
   display: inline-block;
-  animation: emoji-in 460ms var(--pop) both;
-  animation-delay: calc(var(--i, 0) * 110ms);
+  animation: emoji-in 400ms var(--pop) both;
+  animation-delay: calc(var(--i, 0) * 100ms);
 }
 
 .emoji-card.is-reveal .emoji-tile,
@@ -42,7 +43,7 @@
 .emoji-answer {
   display: grid;
   justify-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   text-align: center;
 }
 
@@ -51,8 +52,8 @@
 }
 
 .emoji-hints {
-  min-height: 44px;
-  margin: 0 0 12px;
+  min-height: var(--control-md);
+  margin: 0 0 var(--space-3);
 }
 
 .emoji-hintrow {
@@ -60,25 +61,26 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 10px 14px;
+  gap: var(--space-3) var(--space-4);
 }
 
 .emoji-cat.is-fresh {
-  animation: pop 420ms var(--pop);
+  animation: pop 360ms var(--pop);
 }
 
 .emoji-cat.is-locked {
-  opacity: 0.6;
+  color: var(--text-3);
+  border-style: dashed;
 }
 
 .emoji-blanks {
-  animation: pop 420ms var(--pop);
+  animation: pop 360ms var(--pop);
 }
 
 .emoji-blanks .blank {
   width: 16px;
   height: 26px;
-  font-size: 18px;
+  font-size: var(--text-md);
 }
 
 .emoji-blanks .blank.is-gap {
@@ -104,8 +106,8 @@
 .emoji-tries {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin: 4px 0 0;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
   padding: 0;
   list-style: none;
 }
@@ -113,13 +115,13 @@
 .emoji-try {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   max-width: 100%;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: var(--surface-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  font-size: 14px;
+  background: var(--surface-2);
+  font-size: var(--text-sm);
 }
 
 .emoji-try-text {
@@ -135,14 +137,14 @@
 .emoji-try-tag {
   flex: none;
   color: var(--text-3);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
 }
 
 .emoji-try.is-close,
 .emoji-try.is-part {
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: var(--accent-soft);
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
 }
 
 .emoji-try.is-close .emoji-try-text,
@@ -153,30 +155,30 @@
 
 .emoji-try.is-close .emoji-try-tag,
 .emoji-try.is-part .emoji-try-tag {
-  color: var(--accent-text);
+  color: var(--warning);
 }
 
 .emoji-solvers {
-  margin: 14px 0 0;
+  margin: var(--space-4) 0 0;
 }
 
 .emoji-none {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-sm);
 }
 
 .emoji-medal {
-  font-size: 14px;
+  font-size: var(--text-sm);
 }
 
 .got-item.emoji-first {
-  border-color: var(--amber, var(--accent));
+  border-color: var(--gold);
 }
 
 @keyframes emoji-in {
   0% {
     opacity: 0;
-    transform: translateY(10px) scale(0.6);
+    transform: translateY(8px) scale(0.7);
   }
 
   100% {
@@ -187,12 +189,12 @@
 
 @media (max-width: 480px) {
   .emoji-card {
-    padding: 18px 12px;
+    padding: var(--space-5) var(--space-3);
   }
 
   .emoji-blanks .blank {
     width: 13px;
-    font-size: 16px;
+    font-size: var(--text-md);
   }
 }
 
