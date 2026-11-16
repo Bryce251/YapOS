@@ -23,7 +23,7 @@ async function startReflex(n = 3, settings = {}, opts = {}) {
   await r.clock.advance(500);
   const host = r.engines[0];
   assert.equal(host.lobby.pick('reflex'), true);
-  for (const [k, v] of Object.entries(settings)) assert.equal(host.lobby.setting(k, v), true, k);
+  for (const [k, v] of Object.entries({ knockout: false, ...settings })) assert.equal(host.lobby.setting(k, v), true, k);
   assert.equal(host.lobby.start().ok, true);
   await r.clock.advance(300);
   return r;
@@ -121,9 +121,10 @@ test('a full game of Reflex from start to finish with three players', async () =
     await tap(r, 0, 200 + round);
     s = st(r);
     assert.equal(s.phase, 'show', 'everyone is done so the round ends right away');
+    const x2 = round === 4 ? 2 : 1;
     assert.deepEqual(s.res.map((x) => [x.s, x.k, x.p]), [
-      [0, 'ok', 100],
-      [1, 'ok', 70],
+      [0, 'ok', 100 * x2],
+      [1, 'ok', 70 * x2],
       [2, 'early', 0],
     ]);
     assert.equal(s.best[0], 200);
@@ -138,7 +139,7 @@ test('a full game of Reflex from start to finish with three players', async () =
   const snap = r.engines[0].snapshot();
   assert.equal(snap.room.phase, 'results');
   assert.deepEqual(snap.room.last.winners, [0]);
-  assert.deepEqual(snap.scores.t, { 0: 500, 1: 350 });
+  assert.deepEqual(snap.scores.t, { 0: 600, 1: 420 }, 'the final round counts double');
   assert.deepEqual(r.hub.violations, []);
 });
 
@@ -471,6 +472,7 @@ test('the view shows red, then green, measures the tap locally and shows the res
   assert.match(text(views[0].el), /Getting the first round ready/);
   r.engines[0].lobby.pick('reflex');
   r.engines[0].lobby.setting('fakeouts', 'off');
+  r.engines[0].lobby.setting('knockout', false);
   r.engines[0].lobby.start();
   await r.clock.advance(400);
   for (const v of views) {
@@ -658,7 +660,7 @@ test('twelve players play a whole game with taps, false starts, a leaver and a f
     const shown = st(r);
     assert.equal(shown.phase, 'show');
     assert.equal(shown.res[0].s, 0);
-    assert.equal(shown.res[0].p, 100);
+    assert.equal(shown.res[0].p, round === 4 ? 200 : 100);
     for (const x of shown.res) if (x.p) totals[x.s] = (totals[x.s] || 0) + x.p;
     assert.ok(jsonBytes(shown) <= MAX_VALUE_BYTES);
     const m = reflex.model(bySlot(r, 3).snapshot());

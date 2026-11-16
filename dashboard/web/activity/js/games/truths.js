@@ -1,6 +1,7 @@
 import { shuffle } from '../engine.js';
 import { cleanShared, plainKey } from '../text.js';
 import { face } from './trivia.js';
+import { award, roundAt, say, streak, bump as tick, prize, bestStreak, keep, reel, list, nameOf, funMem, isFrozen, thaw } from './funkit.js';
 
 export const KEY = 'truths';
 export const STATEMENT_MAX = 70;
@@ -98,11 +99,15 @@ function liveSlots(api) {
 }
 
 function voteMs(api) {
-  return (Number(api.settings.vote) || 20) * 1000;
+  return (Number(api.settings.vote) || 15) * 1000;
 }
 
 function writeMs(api) {
-  return (Number(api.settings.write) || 90) * 1000;
+  return (Number(api.settings.write) || 60) * 1000;
+}
+
+function iced(st) {
+  return Array.isArray(st && st.ice) ? st.ice : [];
 }
 
 function startWrite(api) {
@@ -154,6 +159,8 @@ function beginSet(api, base, from, note = null) {
   const perm = shuffle([0, 1, 2], api.random);
   const v = (base.v || 0) + 1;
   api.memory.cur = { v, writer, lieAt: perm.indexOf(set.lie), votes: {} };
+  roundAt(api, i + 1, base.order.length);
+  const ice = liveSlots(api).filter((s) => s !== writer && isFrozen(api, s));
   const starts = api.now();
   const ends = starts + voteMs(api);
   api.put(KEY, {
@@ -170,6 +177,7 @@ function beginSet(api, base, from, note = null) {
     writer,
     s: perm.map((k) => set.s[k]),
     voted: [],
+    ice,
     lie: null,
     votes: null,
     gained: null,
@@ -184,8 +192,9 @@ function beginSet(api, base, from, note = null) {
 }
 
 function everyoneVoted(api, st) {
+  const ice = iced(st);
   return liveSlots(api)
-    .filter((s) => s !== st.writer)
+    .filter((s) => s !== st.writer && !ice.includes(s))
     .every((s) => st.voted.includes(s));
 }
 
@@ -203,7 +212,8 @@ function reveal(api) {
   let next = { ...st, phase: 'reveal', lie: null, votes: {}, gained: {}, note: 'lost' };
   if (known) {
     const result = score(cur.votes, cur.lieAt, st.writer);
-    for (const [slot, pts] of Object.entries(result.gained)) api.addPoints(Number(slot), pts);
+    for (const [slot, pts] of Object.entries(result.gained)) result.gained[slot] = award(api, slot, pts);
+    noteReveal(api, st, cur, result);
     let fooled = st.fooled || {};
     let spotted = st.spotted || {};
     if (result.fooled.length) fooled = bump(fooled, st.writer, result.fooled.length);
@@ -211,9 +221,10 @@ function reveal(api) {
     next = { ...st, phase: 'reveal', lie: cur.lieAt, votes: { ...cur.votes }, gained: result.gained, fooled, spotted, note: null };
   }
   api.memory.cur = null;
+  for (const s of iced(st)) thaw(api, s);
   const starts = api.now();
   const ends = starts + REVEAL_MS;
-  api.put(KEY, { ...next, starts, ends });
+  api.put(KEY, { ...next, ice: [], starts, ends });
   api.setDeadline(ends);
 }
 
@@ -297,11 +308,35 @@ function takeVote(api, slot, action) {
   const cur = api.memory.cur;
   if (!st || st.phase !== 'vote' || !cur || cur.v !== st.v || action.v !== st.v) return;
   if (slot === st.writer || !Number.isInteger(action.pick) || action.pick < 0 || action.pick > 2) return;
+  if (iced(st).includes(slot)) return;
   if (cur.votes[slot] !== undefined || !liveSlots(api).includes(slot)) return;
   cur.votes[slot] = action.pick;
   if (!st.voted.includes(slot)) st.voted.push(slot);
   api.put(KEY, st);
   if (everyoneVoted(api, st) && answerReady(api, st)) reveal(api);
+}
+
+function noteReveal(api, st, cur, result) {
+  const voters = Object.keys(cur.votes).length;
+  if (result.fooled.length) tick(api, 'fooled', st.writer, result.fooled.length);
+  for (const s of result.spotted) {
+    tick(api, 'spotted', s);
+    streak(api, s, true);
+  }
+  for (const s of result.fooled) streak(api, s, false);
+  if (voters >= 2 && result.fooled.length === voters) say(api, 'custom', { text: `🤥 ${nameOf(api, st.writer)} fooled EVERYONE!` });
+  else if (voters >= 2 && !result.fooled.length) say(api, 'custom', { text: `🔍 Nobody fell for ${nameOf(api, st.writer)}'s lie.` });
+  const lie = Array.isArray(st.s) ? st.s[cur.lieAt] : null;
+  if (lie && result.fooled.length) keep(api, `${nameOf(api, st.writer)}'s lie "${lie}" fooled ${result.fooled.length === 1 ? '1 person' : `${result.fooled.length} people`}`, st.writer, result.fooled.length + 1);
+  else if (lie && voters) keep(api, `${nameOf(api, st.writer)}'s lie "${lie}" fooled nobody`, st.writer, 0.5);
+}
+
+export function truthsHint(st, cur, slot) {
+  if (!st || st.phase !== 'vote' || !cur || cur.v !== st.v || !Number.isInteger(cur.lieAt)) return null;
+  if (slot === st.writer || cur.votes[slot] !== undefined) return null;
+  const truth = [0, 1, 2].filter((i) => i !== cur.lieAt);
+  const at = truth[(st.v + slot) % truth.length];
+  return `Statement ${at + 1} is true. Trust me.`;
 }
 
 const truths = {
@@ -312,9 +347,10 @@ const truths = {
   blurb: 'Write two truths and one fib about yourself. Spot everyone else’s lie.',
   minPlayers: 3,
   keys: [KEY],
+  cards: ['swap', 'double', 'freeze', 'peek'],
   settings: [
-    { id: 'write', label: 'Time to write', type: 'choice', options: [60, 90, 120].map((v) => ({ value: v, label: `${v} s` })), default: 90 },
-    { id: 'vote', label: 'Time to vote', type: 'choice', options: [15, 20, 30].map((v) => ({ value: v, label: `${v} s` })), default: 20 },
+    { id: 'write', label: 'Time to write', type: 'choice', options: [45, 60, 90, 120].map((v) => ({ value: v, label: `${v} s` })), default: 60 },
+    { id: 'vote', label: 'Time to vote', type: 'choice', options: [10, 15, 20, 30].map((v) => ({ value: v, label: `${v} s` })), default: 15 },
   ],
 
   start(api) {
@@ -338,6 +374,24 @@ const truths = {
 
   deadline(api) {
     return advance(api);
+  },
+
+  hint(api, slot) {
+    return truthsHint(api.get(KEY), api.memory.cur, slot);
+  },
+
+  awards(api) {
+    funMem(api);
+    const sharp = bestStreak(api, 2);
+    return list(
+      prize(api, 'fooled', 'Best poker face', '😐', (n) => (n === 1 ? 'Fooled 1 person' : `Fooled ${n} people`)),
+      prize(api, 'spotted', 'Human lie detector', '🔍', (n) => (n === 1 ? 'Spotted 1 lie' : `Spotted ${n} lies`), 2),
+      sharp ? { title: 'Mind reader', emoji: '🔮', who: sharp.slots, why: `Spotted ${sharp.n} lies in a row` } : null,
+    );
+  },
+
+  highlights(api) {
+    return reel(api);
   },
 
   texts(api) {
@@ -455,7 +509,8 @@ const truths = {
     }
     const revealed = st.phase === 'reveal';
     const isWriter = mine !== null && mine === st.writer;
-    const canVote = st.phase === 'vote' && mine !== null && !isWriter;
+    const frozen = st.phase === 'vote' && mine !== null && iced(st).includes(mine);
+    const canVote = st.phase === 'vote' && mine !== null && !isWriter && !frozen;
     const sent = local.v === st.v && Number.isInteger(local.pick) ? local.pick : null;
     const theirs = revealed && st.votes && mine !== null && st.votes[mine] !== undefined ? st.votes[mine] : null;
     const myPick = revealed ? theirs : sent;
@@ -473,7 +528,7 @@ const truths = {
           )
         : [],
     }));
-    const voters = present.filter((s) => s !== st.writer);
+    const voters = present.filter((s) => s !== st.writer && !iced(st).includes(s));
     const gained = st.gained || {};
     const fooled = revealed && !lost ? Object.values(st.votes || {}).filter((p) => p !== st.lie).length : 0;
     return {
@@ -482,6 +537,7 @@ const truths = {
       isWriter,
       canVote: canVote && myPick === null,
       watching: mine === null,
+      frozen,
       myPick,
       statements,
       voted: st.voted.length,

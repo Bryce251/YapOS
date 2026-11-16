@@ -5,6 +5,7 @@ import { reportIpHash } from './reports.js';
 import { PARTY_BADGES, COUNTER_GAMES, COUNTER_KEYS, badgesFor } from './party-badges.js';
 import { MAX_PREDICTIONS, REASON_DAILY_LIMIT, loadRates, shardWants, shardStatement, shardTotals, shardReasonCounts, shardsPoll, ackShards, shardsCleanupStatements } from './party-shards.js';
 import { ackSettings } from './public-profiles.js';
+import { pointsStatements, pointsCleanupStatements } from './party-leaderboard.js';
 
 export const PARTY_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel']);
 export const MAX_PLAYERS = 16;
@@ -206,6 +207,7 @@ export async function postResults(request, env, t) {
         .bind(randomToken(12), p.id, xp, DAILY_XP_CAP, result.game, p.won ? 1 : 0, day, t, p.id, day, DAILY_XP_CAP),
     );
   }
+  stmts.push(...pointsStatements(db, result, banned, day, t));
   const shards = [];
   for (const want of shardWants(result, rates, banned)) {
     const room = Math.max(0, rates.cap - (shardSums.get(want.id) || 0));
@@ -324,5 +326,6 @@ export function resultsCleanupStatements(db, t) {
     db.prepare('DELETE FROM party_results WHERE created < ?').bind(t - 10 * MINUTE),
     db.prepare('DELETE FROM party_xp WHERE (claimed > 0 AND at < ?) OR at < ?').bind(t - XP_KEEP_CLAIMED, t - XP_KEEP_UNCLAIMED),
     ...shardsCleanupStatements(db, t),
+    ...pointsCleanupStatements(db, t),
   ];
 }

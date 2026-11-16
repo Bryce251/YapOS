@@ -74,7 +74,7 @@ const GAME_ALLOW = [
   'wcbthi', 'zvhjvd', 'zvhjaaq', 'vfrhlhtv', 'skcylo', 'zmhdmd',
 ];
 
-const SAFE = new Set(['woops', 'rapped', 'rapping', 'rapper', 'rappers', 'rappe', 'rappee', 'rappees', 'rappist', 'moiest', 'jaap', 'pollack', 'pollacks', 'darkle', 'darkles', 'darkled', 'dike', 'dikes', 'diked', 'diking', ...EXACT.map((x) => decodeTerm(x))]);
+const SAFE = new Set(['woops', 'woop', 'rapped', 'rapping', 'rapper', 'rappers', 'rappe', 'rappes', 'rappee', 'rappees', 'rappist', 'moiest', 'jaap', 'jaaps','pollack', 'pollacks', 'darkle', 'darkles', 'darkled', 'dike', 'dikes', 'diked', 'diking', ...EXACT.map((x) => decodeTerm(x))]);
 
 const TIGHT = new Set(['rif']);
 

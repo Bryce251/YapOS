@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { room, person } from './activity-kit.test.js';
 import { installDom } from './dom-shim.js';
 import { configureAdmins, resetAdmins, refreshAdmins } from '../web/activity/js/admin.js';
-import hottakes, { KEY, ANSWER_PREFIX, ANSWER_MAX, VOTE_MS, VOTE_POINTS, TOP_BONUS, LATE_MIN_MS, seal, unseal, tally, chunk, revealMs, promptParts, buildDeck } from '../web/activity/js/games/hottakes.js';
+import hottakes, { KEY, ANSWER_PREFIX, ANSWER_MAX, RECAP_MS, VOTE_MS, VOTE_POINTS, TOP_BONUS, LATE_MIN_MS, seal, unseal, tally, chunk, revealMs, promptParts, buildDeck } from '../web/activity/js/games/hottakes.js';
 import { createHottakesView, footText, hottakesMoment } from '../web/activity/js/views/hottakes.js';
 import { cueKit } from '../web/activity/js/views/index.js';
 import { PROMPTS, BLANK } from '../web/activity/data/hottakes.js';
@@ -73,8 +73,14 @@ test('the game is a party game for 3 or more with rounds and time settings', () 
   assert.equal(hottakes.minPlayers, 3);
   assert.equal(hottakes.emoji, '🌶️');
   const rounds = hottakes.settings.find((s) => s.id === 'rounds');
-  assert.deepEqual(rounds.options.map((o) => o.value), [3, 5, 7]);
-  assert.ok(hottakes.settings.find((s) => s.id === 'timer').options.some((o) => o.value === 60));
+  assert.deepEqual(rounds.options.map((o) => o.value), [3, 4, 5, 7]);
+  assert.equal(rounds.default, 4);
+  const timer = hottakes.settings.find((s) => s.id === 'timer');
+  assert.ok(timer.options.some((o) => o.value === 90));
+  assert.equal(timer.default, 45);
+  const recap = hottakes.settings.find((s) => s.id === 'recap');
+  assert.equal(recap.type, 'toggle');
+  assert.equal(recap.default, true);
   for (const re of BANNED) assert.doesNotMatch(`${hottakes.name} ${hottakes.blurb}`, re);
 });
 
@@ -135,13 +141,23 @@ test('a full game with 3 players: write, vote, reveal, score and finish', async 
     assert.equal(top[1], slots[2]);
     assert.equal(top[2], 2);
     assert.deepEqual(s.top, [top[0]]);
-    assert.equal(s.gained[slots[2]], 2 * VOTE_POINTS + TOP_BONUS);
-    assert.equal(s.gained[slots[1]], VOTE_POINTS);
+    const mult = round === 3 ? 2 : 1;
+    assert.equal(s.gained[slots[2]], (2 * VOTE_POINTS + TOP_BONUS) * mult, 'the final round counts double');
+    assert.equal(s.gained[slots[1]], VOTE_POINTS * mult);
     assert.equal(s.gained[slots[0]], undefined);
     for (const [slot, pts] of Object.entries(s.gained)) totals[slot] = (totals[slot] || 0) + pts;
     assert.deepEqual(r.engines[1].snapshot().scores.g, totals);
     await r.clock.advance(revealMs(s.count) + 300);
   }
+  assert.equal(st(r).phase, 'recap');
+  const recap = hottakes.model(r.engines[1].snapshot());
+  assert.equal(recap.rounds.length, 3);
+  for (const row of recap.rounds) {
+    assert.match(row.text, new RegExp(`^answer [0-9] from ${slots[2]}$`));
+    assert.equal(row.votes, 2);
+    assert.equal(row.voters.length, 2);
+  }
+  await r.clock.advance(RECAP_MS + 300);
   const roomState = r.engines[0].snapshot().room;
   assert.equal(roomState.phase, 'results');
   assert.deepEqual(roomState.last.winners, [slots[2]]);
@@ -549,6 +565,8 @@ test('a full 12 player game plays every round and stays inside the message budge
     assert.equal(s.res.reduce((a, row) => a + row[2], 0), 12);
     await r.clock.advance(revealMs(s.count) + 300);
   }
+  assert.equal(st(r).phase, 'recap');
+  await r.clock.advance(RECAP_MS + 300);
   assert.equal(r.engines[0].snapshot().room.phase, 'results');
   assert.deepEqual(r.hub.violations, []);
 });

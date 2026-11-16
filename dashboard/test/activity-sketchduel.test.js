@@ -63,7 +63,7 @@ test('the game is a drawing game for 3 or more with rounds, a draw timer and wor
   assert.equal(sketchduel.category, 'drawing');
   assert.equal(sketchduel.emoji, '⚔️');
   assert.equal(sketchduel.minPlayers, 3);
-  assert.deepEqual(sketchduel.settings.find((s) => s.id === 'draw').options.map((o) => o.value), [60, 75, 90]);
+  assert.deepEqual(sketchduel.settings.find((s) => s.id === 'draw').options.map((o) => o.value), [60, 75, 90, 120, 150, 180]);
   assert.ok(sketchduel.open.includes(INK_PREFIX));
   for (const re of BANNED) assert.doesNotMatch(`${sketchduel.name} ${sketchduel.blurb}`, re);
   assert.ok(wordPool('mix').length > 100);

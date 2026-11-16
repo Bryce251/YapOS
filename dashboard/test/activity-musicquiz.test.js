@@ -92,7 +92,8 @@ test('the game is a quiz with tunes, a timer and a source setting', () => {
   assert.equal(musicquiz.id, 'musicquiz');
   assert.equal(musicquiz.category, 'quiz');
   assert.equal(musicquiz.emoji, '🎵');
-  assert.equal(musicquiz.settings.find((s) => s.id === 'rounds').default, 10);
+  assert.equal(musicquiz.settings.find((s) => s.id === 'rounds').default, 8);
+  assert.equal(musicquiz.settings.find((s) => s.id === 'timer').default, 15);
   assert.ok(musicquiz.settings.find((s) => s.id === 'kind').options.some((o) => o.value === 'classical'));
   for (const re of BANNED) assert.doesNotMatch(`${musicquiz.name} ${musicquiz.blurb}`, re);
 });
@@ -146,7 +147,7 @@ test('a round plays one tune, faster right answers score more, then it reveals t
 });
 
 test('ten tunes play through to the results when nobody answers', async () => {
-  const r = await startGame(2, { timer: 15 });
+  const r = await startGame(2, { timer: 15, rounds: 10 });
   assert.equal(st(r).total, 10);
   for (let i = 0; i < 10; i += 1) {
     await r.clock.advance(15000 + LEAD_MS + 200);

@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { room } from './activity-kit.test.js';
+import { room, Clock, Hub, person, seeded } from './activity-kit.test.js';
+import { createEngine } from '../web/activity/js/engine.js';
+import { resultsModel } from '../web/activity/js/ui/results.js';
+import { GAMES } from '../web/activity/js/games/index.js';
 import { installDom } from './dom-shim.js';
-import chain, { checkWord, cleanWord, wordPoints, votesNeeded, nextUp, standing, lastLetter, usedFrom, wordHash, hashesIn, lateLives, seat, PROBLEMS, WIN_BONUS, MIN_LETTERS, MAX_LETTERS, USED_PREFIX, HASH_LEN } from '../web/activity/js/games/chain.js';
+import chain, { checkWord, cleanWord, wordPoints, votesNeeded, nextUp, standing, lastLetter, usedFrom, wordHash, hashesIn, lateLives, seat, speedLap, timeWinners, timeNote, PROBLEMS, WIN_BONUS, MIN_LETTERS, MAX_LETTERS, MIN_TURN, USED_PREFIX, HASH_LEN } from '../web/activity/js/games/chain.js';
 import * as dictionary from '../web/activity/js/dictionary.js';
 import { VIEWS } from '../web/activity/js/views/index.js';
 import { eventText, turnText } from '../web/activity/js/views/chain.js';
@@ -21,7 +24,7 @@ async function startChain(n = 3, settings = {}) {
   await r.clock.advance(500);
   const host = r.engines[0];
   assert.equal(host.lobby.pick('chain'), true);
-  for (const [k, v] of Object.entries(settings)) assert.equal(host.lobby.setting(k, v), true, k);
+  for (const [k, v] of Object.entries({ bonus: false, cats: false, ...settings })) assert.equal(host.lobby.setting(k, v), true, k);
   assert.equal(host.lobby.start().ok, true);
   await r.clock.advance(300);
   return r;
@@ -48,10 +51,10 @@ test('words are checked for letters, length, start letter and repeats', () => {
   assert.equal(checkWord('', 'a', []), 'empty');
   assert.equal(checkWord('ab', 'a', []), 'short');
   assert.equal(checkWord('a'.repeat(25), 'a', []), null);
-  assert.equal(checkWord('a'.repeat(45), 'a', []), null);
-  assert.equal(checkWord('a'.repeat(46), 'a', []), 'long');
-  assert.equal(MAX_LETTERS, 45);
-  assert.match(PROBLEMS.long, /45 letters/);
+  assert.equal(checkWord('a'.repeat(60), 'a', []), null);
+  assert.equal(checkWord('a'.repeat(61), 'a', []), 'long');
+  assert.equal(MAX_LETTERS, 60);
+  assert.match(PROBLEMS.long, /60 letters/);
   assert.equal(checkWord('ice cream', 'i', []), 'letters');
   assert.equal(checkWord('abc1', 'a', []), 'letters');
   assert.equal(checkWord('café', 'c', []), 'letters');
@@ -274,7 +277,7 @@ test('the game ends with a winner when everyone else leaves', async () => {
 });
 
 test('no word can be played twice, even after hundreds of words', async () => {
-  const r = await startChain(2, { timer: 20 });
+  const r = await startChain(2, { timer: 20, length: 0 });
   let s = st(r);
   const played = [];
   for (let i = 0; i < 620; i += 1) {
@@ -500,4 +503,299 @@ test('the chain view lets the others vote and tells the next player their clock 
   assert.match(turnText(chain.model(bySlot(r, author).snapshot())), /needs a word/);
   for (const v of views) v.destroy();
   assert.equal(toasts.length, 0);
+});
+
+function uniqueWord(letter, i) {
+  const c = 'bcdfghjklmnpqrstvwxyz';
+  return `${letter}${c[i % 21]}${c[Math.floor(i / 21) % 21]}${'aeiou'[i % 5]}ster${i % 2 ? 'x' : 'n'}`;
+}
+
+function lap(st, cur, left, base = 15) {
+  st.cur = cur;
+  return speedLap(st, left, base);
+}
+
+test('a lap ends once everyone still in has had a turn, with 2, 3 and 5 players', () => {
+  const two = { fast: 1, span: 15, lap: [], t: 4 };
+  assert.equal(lap(two, 0, [0, 1]), false);
+  assert.deepEqual(two.lap, [0]);
+  assert.equal(lap(two, 1, [0, 1]), true);
+  assert.equal(two.span, 14);
+  assert.equal(two.up, 5);
+  assert.deepEqual(two.lap, []);
+  assert.equal(two.laps, 1);
+  const three = { fast: 1, span: 15, lap: [], t: 0 };
+  assert.equal(lap(three, 2, [0, 1, 2]), false);
+  assert.equal(lap(three, 0, [0, 1, 2]), false);
+  assert.equal(lap(three, 1, [0, 1, 2]), true);
+  assert.equal(three.span, 14);
+  const five = { fast: 1, span: 15, lap: [], t: 0 };
+  assert.equal(lap(five, 0, [0, 1, 2, 3, 4]), false);
+  assert.equal(lap(five, 1, [0, 2, 3, 4]), false, 'player 1 went out on their turn');
+  assert.deepEqual(five.lap, [0]);
+  assert.equal(lap(five, 2, [0, 2, 3, 4]), false);
+  assert.equal(lap(five, 3, [0, 2, 4]), false, 'player 4 left the call');
+  assert.equal(lap(five, 0, [0, 2, 4, 7]), false, 'a late joiner has to get their turn first');
+  assert.equal(lap(five, 7, [0, 2, 4, 7]), false);
+  assert.equal(lap(five, 4, [0, 2, 4, 7]), true);
+  assert.equal(five.span, 14);
+  const gone = { fast: 1, span: 15, lap: [0, 1], t: 0 };
+  assert.equal(lap(gone, 2, [2]), true, 'only the last player left still closes a lap');
+});
+
+test('turns never get shorter than 5 seconds, and the setting can turn speeding up off', () => {
+  const st = { fast: 1, span: 6, lap: [], t: 0 };
+  assert.equal(lap(st, 0, [0]), true);
+  assert.equal(st.span, MIN_TURN);
+  assert.equal(lap(st, 0, [0]), false);
+  assert.equal(st.span, 5);
+  const off = { fast: 0, span: 15, lap: [], t: 0 };
+  assert.equal(lap(off, 0, [0, 1]), false);
+  assert.equal(lap(off, 1, [0, 1]), false);
+  assert.equal(off.span, 15);
+  assert.equal(off.laps, 1);
+  const old = { fast: 1, lap: [], t: 0 };
+  assert.equal(lap(old, 0, [0], 10), true);
+  assert.equal(old.span, 9);
+});
+
+test('the turn clock drops a second every lap down to 5 seconds in a real game', async () => {
+  const r = await startChain(2, { timer: 10, lives: 3 });
+  let s = st(r);
+  assert.equal(s.span, 10);
+  assert.equal(s.ends - s.starts, 10000);
+  const spans = [];
+  for (let i = 0; i < 14; i += 1) {
+    s = await play(r, uniqueWord(s.letter, i));
+    spans.push(s.ends - s.starts);
+  }
+  assert.deepEqual(spans, [10000, 9000, 9000, 8000, 8000, 7000, 7000, 6000, 6000, 5000, 5000, 5000, 5000, 5000]);
+  assert.equal(s.span, 5);
+  const m = chain.model(r.engines[1].snapshot());
+  assert.equal(m.span, 5);
+  assert.equal(m.fast, true);
+  const slow = s.cur;
+  await r.clock.advance(5000 + 200);
+  assert.equal(st(r).lives[slow], 2, 'the 5 second turn really runs out');
+  assert.deepEqual(r.hub.violations, []);
+});
+
+test('with speeding up off the turn clock stays the same', async () => {
+  const r = await startChain(3, { timer: 15, speedup: false });
+  let s = st(r);
+  for (let i = 0; i < 9; i += 1) {
+    s = await play(r, uniqueWord(s.letter, i));
+    assert.equal(s.ends - s.starts, 15000);
+  }
+  assert.equal(s.span, 15);
+  assert.equal(s.laps, 3);
+  assert.equal(chain.model(r.engines[0].snapshot()).sped, false);
+});
+
+test('when time runs out the most lives win, then points, then words', () => {
+  assert.deepEqual(timeWinners([0, 1, 2], { 0: 1, 1: 3, 2: 2 }, { 0: 900 }, {}), { w: [1], why: 'lives' });
+  assert.deepEqual(timeWinners([0, 1, 2], { 0: 2, 1: 2, 2: 1 }, { 0: 100, 1: 140, 2: 900 }, {}), { w: [1], why: 'points' });
+  assert.deepEqual(timeWinners([0, 1], { 0: 2, 1: 2 }, { 0: 100, 1: 100 }, { 0: 3, 1: 4 }), { w: [1], why: 'words' });
+  assert.deepEqual(timeWinners([0, 1, 2], { 0: 2, 1: 2, 2: 1 }, { 0: 100, 1: 100, 2: 5 }, { 0: 3, 1: 3 }), { w: [0, 1], why: 'tie' });
+  assert.deepEqual(timeWinners([4], { 4: 1 }, {}, {}), { w: [4], why: 'lives' });
+  assert.deepEqual(timeWinners([], {}, {}, {}), { w: [], why: 'none' });
+  const name = (s) => `P${s}`;
+  assert.equal(timeNote({ w: [1], why: 'lives' }, name), "Time's up! P1 had the most lives left.");
+  assert.match(timeNote({ w: [1], why: 'points' }, name), /Lives were tied, so P1 won with the most points/);
+  assert.match(timeNote({ w: [1], why: 'words' }, name), /most words/);
+  assert.equal(timeNote({ w: [0, 1, 2], why: 'tie' }, name), "Time's up! P0, P1 and P2 tied on lives, points and words.");
+  for (const why of ['lives', 'points', 'words', 'tie', 'none']) for (const re of BANNED) assert.equal(re.test(timeNote({ w: [0, 1], why }, name)), false);
+});
+
+function clockApi(st, { now, points = {}, slots = [0, 1, 2] }) {
+  const api = fakeApi(st, slots);
+  api.added = {};
+  api.done = null;
+  api.deadlines = [];
+  api.now = () => now;
+  api.random = () => 0;
+  api.settings = { timer: 15, lives: 3, speedup: true, length: 5 };
+  api.points = () => ({ ...points });
+  api.addPoints = (s, n) => {
+    api.added[s] = (api.added[s] || 0) + n;
+  };
+  api.finish = (w) => {
+    api.done = w;
+  };
+  api.nameOf = (s) => `P${s}`;
+  api.setDeadline = (at) => api.deadlines.push(at);
+  return api;
+}
+
+test('time running out ends the turn without costing a life and picks the right winners', () => {
+  const base = { phase: 'turn', order: [0, 1, 2], lives: { 0: 2, 1: 2, 2: 1 }, max: 3, out: [], cur: 0, t: 9, starts: 1000, ends: 16000, until: 9000, span: 15, fast: 1, lap: [], words: [], wc: { 0: 4, 1: 4, 2: 9 }, vote: null, bad: null };
+  const copy = (over = {}) => JSON.parse(JSON.stringify({ ...base, ...over }));
+  const tie = clockApi(copy(), { now: 9000, points: { 0: 300, 1: 300, 2: 900 } });
+  chain.deadline(tie);
+  assert.deepEqual(tie.done, [0, 1]);
+  assert.equal(tie.store.chain.lives[0], 2, 'nobody loses a life when the game clock ends');
+  assert.equal(tie.store.chain.phase, 'over');
+  assert.deepEqual(tie.store.chain.fin, { w: [0, 1], why: 'tie' });
+  assert.deepEqual(tie.added, { 0: WIN_BONUS, 1: WIN_BONUS });
+  assert.equal(chain.results(tie).note, "Time's up! P0 and P1 tied on lives, points and words.");
+  const pts = clockApi(copy(), { now: 9100, points: { 0: 300, 1: 310, 2: 900 } });
+  chain.deadline(pts);
+  assert.deepEqual(pts.done, [1]);
+  assert.match(chain.results(pts).note, /P1 won with the most points/);
+  const away = clockApi(copy(), { now: 9100, points: { 0: 300, 1: 310 }, slots: [0, 2] });
+  chain.deadline(away);
+  assert.deepEqual(away.done, [0], 'people who left the call cannot win on time');
+  const early = clockApi(copy({ ends: 5000 }), { now: 5000 });
+  chain.deadline(early);
+  assert.equal(early.done, null, 'a normal turn timeout before the game clock still costs a life');
+  assert.equal(early.store.chain.lives[0], 1);
+  assert.equal(early.store.chain.cur, 1);
+  assert.deepEqual(early.deadlines, [9000], 'the next turn is cut short by the game clock');
+  const late = clockApi(copy(), { now: 9200, points: { 0: 300, 1: 310 } });
+  chain.intent(late, 0, { type: 'word', text: 'kiwi', t: 9 });
+  assert.deepEqual(late.done, [1], 'a word sent after the game clock ran out does not count');
+  const close = clockApi(copy(), { now: 8700, points: { 0: 300, 1: 310 } });
+  chain.intent(close, 0, { type: 'word', text: 'kiwi', t: 9 });
+  assert.equal(close.done, null, 'a word in the last half second still counts');
+  assert.equal(close.store.chain.count, 1);
+  assert.equal(close.store.chain.cur, 1);
+  assert.deepEqual(close.deadlines, [9000]);
+  assert.equal(chain.results(fakeApi(copy({ phase: 'over' }), [0])).note, undefined);
+});
+
+function chainParty(players, watchers, posts) {
+  const clock = new Clock();
+  const hub = new Hub(clock);
+  const random = seeded(11);
+  const engines = [];
+  for (let i = 1; i <= players + watchers; i += 1) {
+    const e = createEngine({ transport: hub.join(person(i)), games: GAMES, now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, random, postResults: (b) => posts.push(b) });
+    if (i <= players) e.join();
+    engines.push(e);
+  }
+  return { clock, hub, engines };
+}
+
+test('a timed game finishes on the game clock with results, Party XP and watcher picks', async () => {
+  const posts = [];
+  const r = chainParty(2, 1, posts);
+  await r.clock.advance(500);
+  const [host, , watcher] = r.engines;
+  assert.equal(host.lobby.pick('chain'), true);
+  assert.equal(host.lobby.setting('length', 3), true);
+  for (const [k, v] of Object.entries({ timer: 15, bonus: false, cats: false })) assert.equal(host.lobby.setting(k, v), true, k);
+  assert.equal(host.lobby.start().ok, true);
+  await r.clock.advance(300);
+  let s = st(r);
+  assert.ok(Math.abs(s.until - (s.starts + 180000)) < 1000);
+  assert.equal(host.snapshot().room.deadline, s.ends);
+  const slow = s.cur;
+  const fast = 1 - slow;
+  assert.equal(watcher.predict(fast), true);
+  await r.clock.advance(15000 + 200);
+  assert.equal(st(r).lives[slow], 2);
+  let i = 0;
+  while (host.snapshot().room.phase === 'game' && i < 1000) {
+    s = st(r);
+    bySlot(r, s.cur).act({ type: 'word', text: uniqueWord(s.letter, i), t: s.t });
+    await r.clock.advance(400);
+    i += 1;
+  }
+  const snap = host.snapshot();
+  assert.equal(snap.room.phase, 'results');
+  assert.deepEqual(snap.room.last.winners, [fast]);
+  assert.equal(snap.state.chain.lives[slow], 2, 'the last turn did not cost a life');
+  assert.equal(snap.state.chain.fin.why, 'lives');
+  assert.match(snap.room.last.note, /^Time's up! .+ had the most lives left\.$/);
+  assert.deepEqual(snap.room.last.ps.slice().sort(), [0, 1]);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].game, 'chain');
+  assert.deepEqual(posts[0].predictions.map((p) => p.right), [true]);
+  assert.equal(posts[0].players.find((p) => p.won).id, person(fast + 1).id);
+  await r.clock.advance(400);
+  const m = resultsModel(watcher.snapshot(), GAMES);
+  assert.match(m.note, /Time's up!/);
+  assert.equal(m.winners.length, 1);
+  assert.ok(snap.state.chain.span >= MIN_TURN);
+  assert.deepEqual(r.hub.violations, []);
+});
+
+test('a new host keeps the game clock and the current turn speed, and late joiners see the same clock', async () => {
+  const r = await startChain(3, { timer: 15, length: 8 });
+  let s = st(r);
+  const until = s.until;
+  assert.ok(until > s.starts + 470000);
+  for (let i = 0; i < 6; i += 1) s = await play(r, uniqueWord(s.letter, i));
+  assert.equal(s.span, 13);
+  const host = r.engines[0];
+  r.hub.leave(host.snapshot().me);
+  host.destroy();
+  await r.clock.advance(600);
+  const a = r.engines[1];
+  assert.equal(a.isHost(), true);
+  s = a.snapshot().state.chain;
+  assert.equal(s.until, until);
+  assert.equal(s.span, 13);
+  assert.equal(s.ends - s.starts, 13000);
+  const late = r.add(4);
+  await r.clock.advance(800);
+  const lm = chain.model(late.snapshot());
+  assert.equal(lm.until, until);
+  assert.equal(lm.span, 13);
+  const rest = { engines: r.engines.slice(1) };
+  s = a.snapshot().state.chain;
+  bySlot(rest, s.cur).act({ type: 'word', text: uniqueWord(s.letter, 50), t: s.t });
+  await r.clock.advance(400);
+  s = a.snapshot().state.chain;
+  assert.equal(s.ends - s.starts, 13000);
+  assert.equal(a.snapshot().room.deadline, s.ends);
+  assert.deepEqual(r.hub.violations, []);
+});
+
+test('the chain view shows the game clock, the turn length and says when turns speed up', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = room(2);
+  await r.clock.advance(500);
+  const toasts = [];
+  const views = r.engines.map((engine) => {
+    const v = VIEWS.chain({ engine, fx: { confetti() {} }, toast: (t) => toasts.push(t), win: {} });
+    engine.on('change', (snap) => v.update(snap));
+    return v;
+  });
+  r.engines[0].lobby.pick('chain');
+  r.engines[0].lobby.setting('timer', 10);
+  r.engines[0].lobby.start();
+  await r.clock.advance(400);
+  const page = text(views[0].el);
+  assert.match(page, /Game ends in/);
+  assert.match(page, /5:00/);
+  assert.match(page, /10 s turns/);
+  let s = st(r);
+  s = await play(r, uniqueWord(s.letter, 1));
+  assert.equal(toasts.length, 0);
+  s = await play(r, uniqueWord(s.letter, 2));
+  assert.deepEqual(toasts, ['Speeding up! Turns are now 9 s', 'Speeding up! Turns are now 9 s']);
+  assert.match(text(views[1].el), /9 s turns/);
+  assert.match(text(views[1].el), /Speeding up! Turns are now 9 s\./);
+  s = await play(r, uniqueWord(s.letter, 3));
+  assert.doesNotMatch(text(views[1].el), /Speeding up!/);
+  assert.equal(toasts.length, 2);
+  for (const v of views) v.destroy();
+});
+
+test('Word Chain lists the new lobby settings with friendly defaults', () => {
+  const ids = chain.settings.map((x) => x.id);
+  assert.deepEqual(ids, ['timer', 'lives', 'speedup', 'length', 'bonus', 'cats']);
+  assert.equal(chain.settings.find((x) => x.id === 'timer').default, 12);
+  for (const id of ['bonus', 'cats']) {
+    const t = chain.settings.find((x) => x.id === id);
+    assert.equal(t.type, 'toggle');
+    assert.equal(t.default, true);
+  }
+  const speed = chain.settings.find((x) => x.id === 'speedup');
+  assert.equal(speed.type, 'toggle');
+  assert.equal(speed.default, true);
+  const length = chain.settings.find((x) => x.id === 'length');
+  assert.deepEqual(length.options.map((o) => o.label), ['No limit', '3 min', '5 min', '8 min']);
+  assert.equal(length.default, 5);
 });

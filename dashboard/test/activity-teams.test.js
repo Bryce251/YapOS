@@ -228,7 +228,7 @@ test('Trivia and Draw & Guess have Teams, Word pack code and Pack words only set
 test('team Trivia: balanced teams, a final team screen, team winners and results posted with teams', async (t) => {
   const net = fakeNet();
   t.after(cleanNet);
-  const r = await startGame('trivia', 4, { teams: 'two', rounds: 5, timer: 10 });
+  const r = await startGame('trivia', 4, { teams: 'two', rounds: 5, timer: 10, wager: false, lightning: false });
   const host = r.engines[0];
   let st = host.snapshot().state.trivia;
   assert.ok(st.tm);
@@ -273,7 +273,7 @@ test('team Trivia: balanced teams, a final team screen, team winners and results
 test('Trivia without teams finishes straight to results as before', async (t) => {
   fakeNet();
   t.after(cleanNet);
-  const r = await startGame('trivia', 2, { rounds: 5, timer: 10 });
+  const r = await startGame('trivia', 2, { rounds: 5, timer: 10, wager: false, lightning: false });
   const host = r.engines[0];
   assert.equal(host.snapshot().state.trivia.tm, null);
   await r.clock.advance(5 * 15500);
@@ -480,7 +480,7 @@ test('the trivia and draw views show the team bar, the pack note and the final t
   fakeNet();
   t.after(cleanNet);
   installDom({ url: 'https://yapos.dev/activity/' });
-  const r = await startGame('trivia', 2, { teams: 'two', rounds: 5, timer: 10, pack: 'MISS2345' });
+  const r = await startGame('trivia', 2, { teams: 'two', rounds: 5, timer: 10, pack: 'MISS2345', wager: false, lightning: false });
   await settle(r, 1000);
   const guest = r.engines[1];
   const v = VIEWS.trivia({ engine: guest, fx: { confetti() {} }, toast() {}, win: { setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {} } });

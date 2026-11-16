@@ -3,6 +3,7 @@ import { ready as dictReady, failed as dictFailed, loading as dictLoading, isWor
 import { face } from './trivia.js';
 import { isBlockedWord, BLOCKED_NOTE } from '../filter.js';
 import { cachedDaily, loadDaily, dailyFailedFor, utcDay } from '../admin.js';
+import { award, say, bump, prize, keep, reel, list, nameOf, funMem } from './funkit.js';
 
 export const KEY = 'hive';
 export const MISS_KEY = 'hive.miss';
@@ -400,7 +401,15 @@ function pay(api, cur) {
   if (!cur || !cur.owed) return;
   const owed = cur.owed;
   cur.owed = {};
-  for (const [slot, pts] of Object.entries(owed)) if (pts) api.addPoints(Number(slot), pts);
+  for (const [slot, pts] of Object.entries(owed)) {
+    if (!pts) continue;
+    const got = award(api, slot, pts);
+    const st = cur.st;
+    if (got !== pts && st && st.b && Array.isArray(st.b[slot])) {
+      const row = st.b[slot];
+      st.b = { ...st.b, [slot]: [row[0] + got - pts, row[1], row[2]] };
+    }
+  }
 }
 
 function settle(api) {
@@ -616,6 +625,7 @@ function play(api, slot, action) {
   const pts = wordPoints(word, st.l);
   const pangram = isPangram(word, st.l);
   mine.push(word);
+  noteWord(api, slot, word, pangram, mine.length);
   const row = (st.b && st.b[slot]) || [0, 0, 0];
   st.b = { ...(st.b || {}), [slot]: [row[0] + pts, row[1] + 1, row[2] + (pangram ? 1 : 0)] };
   if (pangram) st.last = { s: slot, n: ((st.last && st.last.n) || 0) + 1 };
@@ -626,8 +636,30 @@ function play(api, slot, action) {
   if (live.length && live.every((s) => (cur.found[s] || []).length >= cur.all.length)) reveal(api, 'all');
 }
 
+function noteWord(api, slot, word, pangram, count) {
+  const fx = funMem(api);
+  bump(api, 'words', slot);
+  if (pangram) {
+    bump(api, 'pangrams', slot);
+    say(api, 'custom', { text: `🌟 ${nameOf(api, slot)} found a pangram!` });
+    keep(api, `${nameOf(api, slot)} found the pangram ${word.toUpperCase()}`, slot, 5 + word.length);
+  }
+  const long = fx.long || (fx.long = {});
+  if (!long[slot] || word.length > long[slot].length) long[slot] = word;
+  if (count === 10 || count === 20 || count === 30) say(api, 'custom', { text: `🐝 ${nameOf(api, slot)} has found ${count} words!` });
+}
+
+export function hiveHint(st, cur, slot) {
+  if (!st || st.phase !== 'play' || !cur || cur.id !== st.id) return null;
+  const mine = new Set(cur.found[slot] || []);
+  const left = (cur.all || []).filter((w) => !mine.has(w));
+  if (!left.length) return null;
+  const pick = left.find((w) => isPangram(w, st.l)) || left.slice().sort((a, b) => b.length - a.length)[0];
+  return `Try a ${pick.length}-letter word starting with "${pick.slice(0, 2).toUpperCase()}".`;
+}
+
 const SETTINGS = Object.freeze([
-  Object.freeze({ id: 'timer', label: 'Time', type: 'choice', options: [90, 120, 180].map((v) => ({ value: v, label: v % 60 ? `${v} s` : `${v / 60} min` })), default: 120 }),
+  Object.freeze({ id: 'timer', label: 'Time', type: 'choice', options: [60, 90, 120, 180].map((v) => ({ value: v, label: v % 60 ? `${v} s` : `${v / 60} min` })), default: 90 }),
   Object.freeze({ id: 'daily', label: 'Daily puzzle', type: 'toggle', default: false, daily: 'hive' }),
 ]);
 
@@ -651,6 +683,7 @@ const hive = {
   minPlayers: 1,
   keys: [KEY, MISS_KEY],
   prefixes: [REVEAL_PREFIX],
+  cards: ['swap', 'double', 'peek'],
 
   get settings() {
     warm();
@@ -670,6 +703,28 @@ const hive = {
 
   results(api) {
     return hiveResults(current(api));
+  },
+
+  hint(api, slot) {
+    return hiveHint(current(api), api.memory.cur, slot);
+  },
+
+  awards(api) {
+    const fx = api.memory.fx;
+    let longest = null;
+    for (const [k, w] of Object.entries((fx && fx.long) || {})) if (!longest || w.length > longest.w.length) longest = { slot: Number(k), w };
+    return list(
+      prize(api, 'pangrams', 'Pangram hunter', '🌟', (n) => (n === 1 ? 'Found a pangram' : `Found ${n} pangrams`)),
+      prize(api, 'words', 'Busy bee', '🐝', (n) => `Found ${n} words`, 5),
+      longest && longest.w.length >= 7 ? { title: 'Longest word', emoji: '📏', who: longest.slot, why: `${longest.w.toUpperCase()}, ${longest.w.length} letters` } : null,
+    );
+  },
+
+  highlights(api) {
+    const fx = api.memory.fx;
+    const st = current(api);
+    for (const [k, w] of Object.entries((fx && fx.long) || {})) if (w.length >= 7 && !(st && st.l && isPangram(w, st.l))) keep(api, `${nameOf(api, Number(k))} found ${w.toUpperCase()} (${w.length} letters)`, Number(k), w.length);
+    return reel(api);
   },
 
   intent(api, slot, action) {

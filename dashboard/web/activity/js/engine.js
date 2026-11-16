@@ -2,6 +2,49 @@ import { OpBudget, OPS_WINDOW_MS, MAX_VALUE_BYTES, checkSet, jsonBytes, validKey
 import { idOf, people, person, cleanName, initials, hueOf } from './players.js';
 import { censor } from './filter.js';
 import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins, sendTextReport, sendResults, allowResultGames } from './admin.js';
+import { cleanShared } from './text.js';
+import {
+  FUN,
+  REACTIONS,
+  REACT_WINDOW_MS,
+  REACT_GAP_MS,
+  REACT_MAX,
+  LINE_GAP_MS,
+  LINE_STALE_MS,
+  LINE_MAX,
+  DRAMA_MS,
+  HINT_MAX,
+  UPSET_MAX,
+  HIGHLIGHTS_MAX,
+  STREAK_MIN,
+  QUIET_ROUND,
+  ROAST_ROUND,
+  ROAST_MAX,
+  HL_RE,
+  SAY_KINDS,
+  PRIORITY,
+  BANNER_KINDS,
+  PARTY_IDS,
+  cardByCode,
+  cardsFor,
+  dealOne,
+  dealCards,
+  partyOf,
+  partyPatch,
+  ranked,
+  slotAbove,
+  leaderOf,
+  placeOf,
+  pickLine,
+  cleanAward,
+  cleanHighlight,
+  genericAwards,
+  upsetLine,
+  fitAwards,
+  teamCodes,
+} from './fun.js';
+
+export { FUN, REACTIONS, CARDS, PARTY_SETTINGS, LINES, SAY_KINDS } from './fun.js';
 
 export const FLUSH_MS = 120;
 export const SOFT_OPS = 60;
@@ -53,6 +96,7 @@ export const PLACE_POINTS = Object.freeze([10, 7, 5, 3, 2, 1]);
 export const OUT_MAX = 36;
 const EXTRA_KEY_RE = /^[A-Za-z][A-Za-z0-9]{0,23}$/;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const NOTE_MAX = 160;
 const USER_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const STRIP_RE = /[\u0000-\u001f\u007f​-‏‪-‮⁦-⁩]/g;
 const EMOJI_RE = /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u;
@@ -197,7 +241,7 @@ export function cleanSetting(spec, value) {
   if (!spec) return undefined;
   if (spec.type === 'code') return cleanCode(value, spec.max);
   const values = (spec.options || []).map((o) => o.value);
-  if (spec.type === 'toggle') return Boolean(value);
+  if (spec.type === 'toggle') return value === undefined || value === null ? undefined : Boolean(value);
   if (spec.type === 'multi') {
     if (!Array.isArray(value)) return undefined;
     const picked = values.filter((v) => value.includes(v));
@@ -362,6 +406,15 @@ export function createEngine(opts) {
   let destroyed = false;
   let readySeen = false;
   let myPick = null;
+  const funRandom = typeof opts.funRandom === 'function' ? opts.funRandom : Math.random;
+  const reactSeen = new Map();
+  const lineMemo = {};
+  let myReacts = [];
+  let fm = freshFunMem();
+  let dramaTimer = null;
+  let lineTimer = null;
+  let queued = null;
+  let lastLineAt = -Infinity;
 
   const meId = () => idOf(t.me);
   const hostId = () => idOf(t.host);
@@ -807,7 +860,9 @@ export function createEngine(opts) {
     if (!room || room.phase !== 'game') return;
     const game = games.get(room.game);
     const slot = slotOf(id);
-    if (!game || slot === null || typeof game.join !== 'function') return;
+    if (!game || slot === null) return;
+    dealLate(slot);
+    if (typeof game.join !== 'function') return;
     try {
       game.join(gameApi(game), slot);
     } catch (e) {
@@ -876,12 +931,44 @@ export function createEngine(opts) {
       shift(ends, ms) {
         return shiftEnd(ends, ms, sharedNow());
       },
-      addPoints(slot, n) {
-        if (!Number.isInteger(slot) || !Number.isFinite(n) || n === 0) return;
+      addPoints(slot, n, o) {
+        if (!Number.isInteger(slot) || !Number.isFinite(n) || n === 0) return 0;
+        let pts = Math.round(n);
+        if (pts > 0 && !(o && o.raw)) pts *= multOf(slot, true);
         const s = clone(read(SCORES)) || newScores();
-        s.g[slot] = (s.g[slot] || 0) + Math.round(n);
+        s.g[slot] = (s.g[slot] || 0) + pts;
         write(SCORES, s);
+        noteScore(slot, pts);
+        return pts;
       },
+      mult(slot) {
+        return Number.isInteger(slot) ? multOf(slot, false) : 1;
+      },
+      round(n, total) {
+        roundReport(n, total);
+      },
+      get final() {
+        const f = funState();
+        return Boolean(f && f.f);
+      },
+      say(kind, data) {
+        return gameSay(kind, data);
+      },
+      frozen(slot) {
+        const f = funState();
+        return Boolean(f && Array.isArray(f.z) && f.z.includes(slot));
+      },
+      thaw(slot) {
+        const f = funState();
+        if (!f || !Array.isArray(f.z) || !f.z.includes(slot)) return false;
+        patchFun({ z: f.z.filter((x) => x !== slot) });
+        return true;
+      },
+      sameTeams() {
+        const f = funState();
+        return f && f.tm && typeof f.tm === 'object' ? { ...f.tm } : null;
+      },
+      party: partyOf(room),
       points() {
         return clone((read(SCORES) || newScores()).g);
       },
@@ -1038,6 +1125,13 @@ export function createEngine(opts) {
     if (counted) last.ps = players.map((p) => p.slot);
     if (counted && trn && trn.done && Number.isInteger(trn.champ) && last.ps.includes(trn.champ)) last.champ = trn.champ;
     if (typeof info.daily === 'string' && DAY_RE.test(info.daily)) last.daily = info.daily;
+    const note = clip(info.note, NOTE_MAX);
+    if (note) last.note = note;
+    try {
+      endFun(game, s.g, win, info);
+    } catch (e) {
+      fail(e);
+    }
     const patch = { phase: 'results', deadline: null, flags: null, last };
     if (trn) patch.trn = trn;
     patchRoom(patch);
@@ -1064,6 +1158,8 @@ export function createEngine(opts) {
         reportText(from, data);
       } else if (data.t === 'pick') {
         predictPick(from, data);
+      } else if (data.t === 'card') {
+        playCard(from, data);
       } else if (data.t === 'in') {
         if (!presentIds().has(from) || isBanned(from) || partyBanned(from)) return;
         const room = read(ROOM);
@@ -1230,12 +1326,15 @@ export function createEngine(opts) {
 
   function reportText(from, data) {
     const room = read(ROOM);
-    if (!room || room.phase !== 'game' || data.g !== room.game || !validTextRef(data.r)) return false;
+    if (!room || data.g !== room.game || !validTextRef(data.r)) return false;
+    const fromReel = HL_RE.test(data.r);
+    if (room.phase !== (fromReel ? 'results' : 'game')) return false;
     if (!presentIds().has(from) || partyBanned(from)) return false;
     const slot = slotOf(from);
     if (slot === null || slot === undefined) return false;
     const game = games.get(room.game);
-    const item = textsOf(game).find((x) => x.r === data.r);
+    if (!game) return false;
+    const item = fromReel ? reelItem(data.r) : textsOf(game).find((x) => x.r === data.r);
     if (!item || item.author === slot || (item.viewers && !item.viewers.has(slot))) return false;
     const authorId = idOfSlot(item.author);
     if (!authorId || authorId === from) return false;
@@ -1399,6 +1498,7 @@ export function createEngine(opts) {
       const s = clone(read(SCORES)) || newScores();
       s.g[slot] = (s.g[slot] || 0) + a.n;
       write(SCORES, s);
+      dramaSoon();
       return true;
     }
     return false;
@@ -1443,6 +1543,7 @@ export function createEngine(opts) {
   function becomeHost() {
     hosting = true;
     memory = {};
+    resetFunMem();
     try {
       ensureCore();
       syncPlayers();
@@ -1464,6 +1565,7 @@ export function createEngine(opts) {
   function loseHost() {
     hosting = false;
     memory = {};
+    stopFunTimers();
     for (const k of [...pending.keys()]) pending.delete(k);
     scheduleDeadline();
     emit('host', { me: false });
@@ -1638,7 +1740,12 @@ export function createEngine(opts) {
     emit('message', { data, by: from });
     if (data && typeof data === 'object') {
       const list = data.t === 'many' && Array.isArray(data.m) ? data.m.slice(0, MAX_BATCH) : [data];
-      for (const x of list) if (x && typeof x === 'object' && x.t === 'fx') receiveFx(x, from);
+      for (const x of list) {
+        if (!x || typeof x !== 'object') continue;
+        if (x.t === 'fx') receiveFx(x, from);
+        else if (x.t === 're') receiveReact(x, from);
+        else if (x.t === 'pm') receivePm(x, from);
+      }
     }
     if (isHost()) handleIntent(from, data);
   }
@@ -1647,7 +1754,7 @@ export function createEngine(opts) {
     return isHost() && !destroyed;
   }
 
-  function startGame(game, patch = {}) {
+  function startGame(game, patch = {}, extra = {}) {
     const room = read(ROOM);
     if (!game) return { ok: false, reason: 'no_game' };
     const min = game.minPlayers || 1;
@@ -1659,7 +1766,10 @@ export function createEngine(opts) {
       write(SCORES, s);
       memory[game.id] = {};
       const round = (room.round || 0) + 1;
+      const before = read(FUN);
+      const keep = extra && extra.sameTeams && before && before.lt && typeof before.lt === 'object' ? before.lt : null;
       patchRoom({ phase: 'game', game: game.id, pick: game.id, deadline: null, round, last: null, auto: null, flags: null, out: null, ...patch });
+      startFun(game, round, keep);
       openPicks(round, game);
       game.start(gameApi(game));
     } catch (e) {
@@ -1715,7 +1825,7 @@ export function createEngine(opts) {
       patchRoom({ opts: opts2 });
       return true;
     },
-    start() {
+    start(o = {}) {
       if (!hostOnly()) return { ok: false, reason: 'not_host' };
       const room = read(ROOM);
       if (!room || room.phase === 'game') return { ok: false, reason: 'busy' };
@@ -1730,7 +1840,14 @@ export function createEngine(opts) {
       }
       const game = games.get(room.pick);
       if (!game) return { ok: false, reason: 'no_game' };
-      return startGame(game, { trn: null });
+      return startGame(game, { trn: null }, { sameTeams: Boolean(o && o.sameTeams) });
+    },
+    party(id, on) {
+      if (!hostOnly() || !PARTY_IDS.includes(id)) return false;
+      const room = read(ROOM);
+      if (!room || room.phase === 'game') return false;
+      patchRoom({ px: partyPatch(room, id, Boolean(on)) });
+      return true;
     },
     next() {
       if (!hostOnly()) return { ok: false, reason: 'not_host' };
@@ -1793,6 +1910,7 @@ export function createEngine(opts) {
       if (!hostOnly()) return false;
       for (const g of gameList) clearGameKeys(g);
       clearPicks();
+      clearFun();
       patchRoom({ phase: 'lobby', game: null, deadline: null, auto: null, flags: null, trn: null, out: null });
       checkAuto();
       return true;
@@ -1801,6 +1919,7 @@ export function createEngine(opts) {
       if (!hostOnly()) return false;
       for (const g of gameList) clearGameKeys(g);
       clearPicks();
+      clearFun();
       write(SCORES, newScores());
       patchRoom({ phase: 'lobby', game: null, deadline: null, last: null, auto: null, flags: null, trn: null, out: null });
       checkAuto();
@@ -1867,7 +1986,8 @@ export function createEngine(opts) {
   function report(r) {
     const room = read(ROOM);
     const id = meId();
-    if (destroyed || !room || room.phase !== 'game' || !validTextRef(r) || !id || slotOf(id) === null) return 'no';
+    if (destroyed || !room || !validTextRef(r) || !id || slotOf(id) === null) return 'no';
+    if (room.phase !== (HL_RE.test(r) ? 'results' : 'game')) return 'no';
     const mark = textMark(room, r);
     if (myReports.has(mark)) return 'done';
     const at = now();
@@ -1885,7 +2005,7 @@ export function createEngine(opts) {
   function canReport() {
     const room = read(ROOM);
     const id = meId();
-    return Boolean(!destroyed && room && room.phase === 'game' && id && slotOf(id) !== null);
+    return Boolean(!destroyed && room && (room.phase === 'game' || room.phase === 'results') && id && slotOf(id) !== null);
   }
 
   function reported(r) {
@@ -2047,8 +2167,487 @@ export function createEngine(opts) {
       settings: pick ? settingsFor(pick, room) : {},
       admin: { me: adminOk(me), owner, locked: Boolean(room.lock), banned: Array.isArray(room.ban) ? room.ban.filter((x) => typeof x === 'string') : [], partyBanned: partyBanned(me) },
       announce: announceOf(room),
+      party: partyOf(room),
+      fun: funView(room),
       state,
       now: sharedNow(),
+    };
+  }
+
+  function freshFunMem() {
+    return { hits: {}, worst: {}, behind: {}, fast: {}, re: {}, streak: {}, bestStreak: {}, frozen: {}, scored: new Set(), lead: null, changes: 0, quiet: new Set(), roasts: 0, lastRoast: null, round: null, events: 0 };
+  }
+
+  function stopFunTimers() {
+    if (dramaTimer !== null) clearT(dramaTimer);
+    if (lineTimer !== null) clearT(lineTimer);
+    dramaTimer = null;
+    lineTimer = null;
+    queued = null;
+  }
+
+  function resetFunMem() {
+    stopFunTimers();
+    fm = freshFunMem();
+    lastLineAt = -Infinity;
+    const pts = (read(SCORES) || newScores()).g;
+    const lead = leaderOf(pts, liveSlots(pts));
+    fm.lead = lead === -1 ? null : lead;
+  }
+
+  function blankFun(room) {
+    return { r: room.round, g: room.game, c: {}, u: {}, o: [], x: [], z: [], f: 0, l: null };
+  }
+
+  function funState() {
+    const room = read(ROOM);
+    if (!room || (room.phase !== 'game' && room.phase !== 'results') || !room.game) return null;
+    const f = read(FUN);
+    if (!f || typeof f !== 'object' || f.r !== room.round || f.g !== room.game) return blankFun(room);
+    return f;
+  }
+
+  function fitFun(f) {
+    while (jsonBytes(f) > MAX_VALUE_BYTES && Array.isArray(f.hl) && f.hl.length) f.hl = f.hl.slice(0, -1);
+    while (jsonBytes(f) > MAX_VALUE_BYTES && Array.isArray(f.aw) && f.aw.length) f.aw = f.aw.slice(0, -1);
+    if (jsonBytes(f) > MAX_VALUE_BYTES) f.o = [];
+    return f;
+  }
+
+  function patchFun(p) {
+    const f = funState();
+    if (!f) return false;
+    write(FUN, fitFun({ ...clone(f), ...p }));
+    return true;
+  }
+
+  function clearFun() {
+    stopFunTimers();
+  }
+
+  function liveSlots(pts) {
+    const room = read(ROOM);
+    const out = new Set(outSlots(room));
+    const list = new Set(activePlayers().map((p) => p.slot));
+    for (const [slot, n] of Object.entries(pts || {})) if (Number(n)) list.add(Number(slot));
+    return [...list].filter((s) => Number.isInteger(s) && !out.has(s));
+  }
+
+  function nameAt(slot) {
+    const id = Number.isInteger(slot) ? idOfSlot(slot) : null;
+    const e = id ? playersState().p[id] : null;
+    return e && e.n ? e.n : 'Player';
+  }
+
+  function startFun(game, round, keep) {
+    stopFunTimers();
+    fm = freshFunMem();
+    lastLineAt = -Infinity;
+    const px = partyOf(read(ROOM));
+    const allowed = px.cards ? cardsFor(game) : [];
+    const f = { r: round, g: game.id, c: dealCards(activePlayers().map((p) => p.slot), allowed, funRandom), u: {}, o: [], x: [], z: [], f: 0, l: null };
+    if (keep) f.tm = { ...keep };
+    if (keep || Object.keys(f.c).length) write(FUN, fitFun(f));
+  }
+
+  function dealLate(slot) {
+    const f = funState();
+    const room = read(ROOM);
+    if (!f || !room || room.phase !== 'game' || !partyOf(room).cards) return;
+    if (f.c && f.c[slot] !== undefined) return;
+    const code = dealOne(cardsFor(games.get(room.game)), funRandom);
+    if (code) patchFun({ c: { ...(f.c || {}), [slot]: code } });
+  }
+
+  function multOf(slot, consume) {
+    const f = funState();
+    if (!f) return 1;
+    let m = f.f ? 2 : 1;
+    if (Array.isArray(f.x) && f.x.includes(slot)) {
+      m *= 2;
+      if (consume) patchFun({ x: f.x.filter((s) => s !== slot) });
+    }
+    return m;
+  }
+
+  function noteScore(slot, pts) {
+    if (!hostOnly() || !(pts > 0)) {
+      dramaSoon();
+      return;
+    }
+    fm.hits[slot] = Math.max(fm.hits[slot] || 0, pts);
+    fm.scored.add(slot);
+    fm.events += 1;
+    dramaSoon();
+  }
+
+  function dramaSoon() {
+    if (!hostOnly() || dramaTimer !== null) return;
+    dramaTimer = setT(dramaCheck, DRAMA_MS);
+  }
+
+  function dramaCheck() {
+    if (dramaTimer !== null) clearT(dramaTimer);
+    dramaTimer = null;
+    if (!hostOnly()) return;
+    const room = read(ROOM);
+    if (!room || room.phase !== 'game' || !funState()) return;
+    const pts = (read(SCORES) || newScores()).g;
+    const slots = liveSlots(pts);
+    const list = ranked(pts, slots);
+    if (list.length >= 2) {
+      const top = list[0].pts;
+      for (const x of list) {
+        const place = list.filter((y) => y.pts > x.pts).length;
+        if (fm.events > 0) fm.worst[x.slot] = Math.max(Number.isInteger(fm.worst[x.slot]) ? fm.worst[x.slot] : place, place);
+        fm.behind[x.slot] = Math.max(fm.behind[x.slot] || 0, top - x.pts);
+      }
+    }
+    const lead = leaderOf(pts, slots);
+    if (lead === null || lead === -1 || lead === fm.lead) return;
+    const prev = fm.lead;
+    fm.lead = lead;
+    if (prev === null || list.length < 2) return;
+    fm.changes += 1;
+    queueLine('lead', { a: nameAt(lead), b: nameAt(prev) });
+  }
+
+  function lineAllowed(kind) {
+    const px = partyOf(read(ROOM));
+    if (kind === 'final') return px.final;
+    if (kind === 'swap' || kind === 'freeze' || kind === 'double' || kind === 'peek') return px.cards;
+    return px.drama;
+  }
+
+  function queueLine(kind, vars = {}, text = null) {
+    if (!hostOnly() || !lineAllowed(kind) || !funState()) return false;
+    const prio = PRIORITY[kind] || 1;
+    const at = now();
+    const item = { kind, vars, text, prio, at };
+    const gap = at - lastLineAt;
+    if (gap >= LINE_GAP_MS || (prio >= 7 && gap >= LINE_GAP_MS / 3)) {
+      postLine(item);
+      return true;
+    }
+    if (!queued || prio >= queued.prio) queued = item;
+    if (lineTimer === null) lineTimer = setT(flushLine, Math.max(0, lastLineAt + LINE_GAP_MS - at));
+    return true;
+  }
+
+  function flushLine() {
+    lineTimer = null;
+    const item = queued;
+    if (!item || !hostOnly()) {
+      queued = null;
+      return;
+    }
+    const at = now();
+    if (at - lastLineAt < LINE_GAP_MS) {
+      lineTimer = setT(flushLine, lastLineAt + LINE_GAP_MS - at);
+      return;
+    }
+    queued = null;
+    if (at - item.at > LINE_STALE_MS && item.prio < PRIORITY.lead) return;
+    postLine(item);
+  }
+
+  function postLine(item) {
+    const f = funState();
+    if (!f) return;
+    const raw = item.text || pickLine(item.kind, item.vars, lineMemo, funRandom);
+    const text = cleanShared(raw, LINE_MAX);
+    if (!text) return;
+    lastLineAt = now();
+    const i = ((f.l && Number(f.l.i)) || 0) + 1;
+    patchFun({ l: { i, k: item.kind, t: text, at: lastLineAt, b: BANNER_KINDS.includes(item.kind) ? 1 : 0 } });
+  }
+
+  function closeRound() {
+    let hot = null;
+    for (const p of activePlayers()) {
+      const s = p.slot;
+      if (fm.scored.has(s)) {
+        fm.streak[s] = (fm.streak[s] || 0) + 1;
+        fm.bestStreak[s] = Math.max(fm.bestStreak[s] || 0, fm.streak[s]);
+        if (fm.streak[s] >= STREAK_MIN && (!hot || fm.streak[s] > hot.n)) hot = { slot: s, n: fm.streak[s] };
+      } else {
+        fm.streak[s] = 0;
+      }
+    }
+    fm.scored.clear();
+    if (hot) queueLine('streak', { a: nameAt(hot.slot), n: hot.n });
+  }
+
+  function callouts(n) {
+    const pts = (read(SCORES) || newScores()).g;
+    const slots = activePlayers().map((p) => p.slot);
+    if (slots.length < 2) return;
+    const quiet = slots.filter((s) => !((pts[s] || 0) > 0) && !fm.quiet.has(s));
+    if (quiet.length && funRandom() < 0.5) {
+      const s = quiet[Math.floor(funRandom() * quiet.length) % quiet.length];
+      fm.quiet.add(s);
+      queueLine('quiet', { a: nameAt(s) });
+      return;
+    }
+    if (n < ROAST_ROUND || slots.length < 3 || fm.roasts >= ROAST_MAX || funRandom() >= 0.35) return;
+    const list = ranked(pts, slots);
+    const last = list[list.length - 1];
+    if (!last || last.pts >= list[list.length - 2].pts || last.slot === fm.lastRoast) return;
+    fm.roasts += 1;
+    fm.lastRoast = last.slot;
+    queueLine('roast', { a: nameAt(last.slot) });
+  }
+
+  function roundReport(n, total) {
+    if (!hostOnly()) return;
+    const at = Math.floor(Number(n));
+    const of = Math.floor(Number(total));
+    if (!Number.isFinite(at) || at < 1) return;
+    const f = funState();
+    if (!f || fm.round === at) return;
+    if (fm.round !== null && at > fm.round) closeRound();
+    else fm.scored.clear();
+    fm.round = at;
+    const fin = Number.isFinite(of) && of >= 2 && at >= of && partyOf(read(ROOM)).final ? 1 : 0;
+    const was = f.f ? 1 : 0;
+    if (fin !== was) patchFun({ f: fin });
+    if (fin) {
+      if (!was) queueLine('final');
+      return;
+    }
+    if (at >= QUIET_ROUND) callouts(at);
+  }
+
+  function gameSay(kind, data) {
+    if (!hostOnly() || !SAY_KINDS.includes(kind)) return false;
+    const d = data && typeof data === 'object' ? data : {};
+    const slot = Number.isInteger(d.slot) ? d.slot : null;
+    if (kind === 'custom') {
+      const text = cleanShared(typeof d.text === 'string' ? d.text : '', LINE_MAX);
+      return text ? queueLine('custom', {}, text) : false;
+    }
+    if (slot === null) return false;
+    if (kind === 'fast') {
+      fm.fast[slot] = (fm.fast[slot] || 0) + 1;
+      if (funRandom() >= 0.3) return true;
+    }
+    const n = Number.isFinite(Number(d.n)) ? Math.round(Number(d.n)) : null;
+    if (kind === 'streak') {
+      if (n === null) return false;
+      fm.bestStreak[slot] = Math.max(fm.bestStreak[slot] || 0, n);
+      if (n < STREAK_MIN) return true;
+    }
+    return queueLine(kind, { a: nameAt(slot), b: Number.isInteger(d.other) ? nameAt(d.other) : '', n });
+  }
+
+  function pm(id, k, x) {
+    if (id === meId()) {
+      emit(k === 'hint' ? 'hint' : 'cardno', { text: x });
+      return;
+    }
+    try {
+      queueSend({ t: 'pm', to: id, k, x });
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  function receivePm(x, by) {
+    if (!by || by !== hostId() || by === meId() || x.to !== meId()) return;
+    const text = cleanShared(typeof x.x === 'string' ? x.x : '', HINT_MAX);
+    if (!text) return;
+    emit(x.k === 'hint' ? 'hint' : 'cardno', { text });
+  }
+
+  function cardNo(id, text) {
+    pm(id, 'no', text);
+    return false;
+  }
+
+  function playCard(from, data) {
+    const room = read(ROOM);
+    if (!room || room.phase !== 'game' || data.g !== room.game) return false;
+    if (!isJoined(from) || !presentIds().has(from)) return false;
+    const f = funState();
+    if (!f || !partyOf(room).cards) return false;
+    const slot = slotOf(from);
+    if (slot === null || (f.u && f.u[slot])) return false;
+    const card = cardByCode(f.c ? f.c[slot] : null);
+    if (!card || data.c !== card.id) return false;
+    const game = games.get(room.game);
+    if (!game) return false;
+    const patch = {};
+    const vars = { a: nameAt(slot) };
+    if (card.id === 'swap') {
+      const s = clone(read(SCORES)) || newScores();
+      const gone = new Set(outSlots(room));
+      const above = slotAbove(s.g, activePlayers().map((p) => p.slot).filter((x) => !gone.has(x)), slot);
+      if (above === null) return cardNo(from, 'Nobody is above you right now. Save it for later!');
+      const mine = s.g[slot] || 0;
+      s.g[slot] = s.g[above] || 0;
+      s.g[above] = mine;
+      write(SCORES, s);
+      vars.b = nameAt(above);
+      dramaSoon();
+    } else if (card.id === 'double') {
+      patch.x = (f.x || []).filter((x) => x !== slot).concat([slot]);
+    } else if (card.id === 'freeze') {
+      const to = data.to;
+      if (!Number.isInteger(to) || to === slot || !activePlayers().some((p) => p.slot === to)) return cardNo(from, 'Pick someone who is playing to freeze.');
+      if ((f.z || []).includes(to)) return cardNo(from, "They're already frozen. Pick someone else.");
+      if (typeof game.canFreeze === 'function' && !game.canFreeze(gameApi(game), to, slot)) return cardNo(from, "They can't be frozen right now. Try again in a bit.");
+      if (typeof game.freeze === 'function' && !game.freeze(gameApi(game), to, slot)) return cardNo(from, "They can't be frozen right now. Try again in a bit.");
+      fm.frozen[to] = (fm.frozen[to] || 0) + 1;
+      vars.b = nameAt(to);
+      patch.z = ((funState() || f).z || []).filter((x) => x !== to).concat([to]);
+    } else if (card.id === 'peek') {
+      const hint = typeof game.hint === 'function' ? game.hint(gameApi(game), slot) : null;
+      const text = cleanShared(typeof hint === 'string' ? hint : '', HINT_MAX);
+      if (!text) return cardNo(from, 'Nothing to peek at right now. Try again in a bit.');
+      pm(from, 'hint', text);
+    }
+    const cur = funState() || f;
+    write(FUN, fitFun({ ...clone(cur), ...patch, u: { ...(cur.u || {}), [slot]: card.code }, o: (cur.o || []).filter((x) => x !== slot).concat([slot]).slice(-OUT_MAX) }));
+    queueLine(card.id, vars);
+    return true;
+  }
+
+  function play(card, target = null) {
+    const room = read(ROOM);
+    const f = funState();
+    const slot = slotOf(meId());
+    if (destroyed || !room || room.phase !== 'game' || !f || slot === null || !isJoined(meId())) return false;
+    const mine = cardByCode(f.c ? f.c[slot] : null);
+    if (!mine || mine.id !== card || (f.u && f.u[slot])) return false;
+    const msg = { t: 'card', g: room.game, c: card };
+    if (Number.isInteger(target)) msg.to = target;
+    if (isHost()) return playCard(meId(), msg);
+    return broadcast(msg);
+  }
+
+  function countReact(id) {
+    const room = read(ROOM);
+    const slot = slotOf(id);
+    if (!isHost() || !room || room.phase !== 'game' || slot === null) return;
+    fm.re[slot] = (fm.re[slot] || 0) + 1;
+  }
+
+  function reactEvent(id, i) {
+    const entry = playersState().p[id];
+    const name = entry && entry.n ? entry.n : nameFor(id) || 'Someone';
+    return { e: i, emoji: REACTIONS[i], by: id, name, mine: id === meId() };
+  }
+
+  function reactOk(id) {
+    const room = read(ROOM);
+    return Boolean(room && partyOf(room).reactions && id && !partyBanned(id) && !isBanned(id));
+  }
+
+  function react(i) {
+    const id = meId();
+    if (destroyed || !Number.isInteger(i) || i < 0 || i >= REACTIONS.length || !reactOk(id)) return false;
+    const at = now();
+    myReacts = myReacts.filter((x) => at - x < REACT_WINDOW_MS && x <= at);
+    if (myReacts.length >= REACT_MAX) return false;
+    if (myReacts.length && at - myReacts[myReacts.length - 1] < REACT_GAP_MS) return false;
+    if (!broadcast({ t: 're', e: i })) return false;
+    myReacts.push(at);
+    countReact(id);
+    emit('react', reactEvent(id, i));
+    return true;
+  }
+
+  function receiveReact(x, by) {
+    if (!by || by === meId() || !Number.isInteger(x.e) || x.e < 0 || x.e >= REACTIONS.length) return;
+    if (!reactOk(by) || !presentIds().has(by)) return;
+    const at = now();
+    const list = (reactSeen.get(by) || []).filter((t) => at - t < REACT_WINDOW_MS && t <= at);
+    reactSeen.delete(by);
+    if (list.length >= REACT_MAX + 2) {
+      reactSeen.set(by, list);
+      return;
+    }
+    reactSeen.set(by, list.concat([at]));
+    while (reactSeen.size > 100) reactSeen.delete(reactSeen.keys().next().value);
+    countReact(by);
+    emit('react', reactEvent(by, x.e));
+  }
+
+  function reelItem(r) {
+    const f = funState();
+    const i = Number(String(r).slice(3));
+    const item = f && Array.isArray(f.hl) ? f.hl[i] : null;
+    if (!item || !Number.isInteger(item.s) || typeof item.x !== 'string') return null;
+    return { r, author: item.s, text: clip(item.x, TEXT_REPORT_CHARS), context: 'Highlight reel', viewers: null };
+  }
+
+  function endFun(game, pts, win, info) {
+    const f = funState();
+    if (!f || !hostOnly()) return;
+    if (dramaTimer !== null) dramaCheck();
+    stopFunTimers();
+    const slots = liveSlots(pts);
+    const live = new Set(slots);
+    const finalPlace = {};
+    for (const s of slots) finalPlace[s] = placeOf(pts, slots, s);
+    const stats = { ...fm, played: (f.o || []).map((slot) => ({ slot, code: f.u ? f.u[slot] : null })) };
+    let mine = [];
+    if (typeof game.awards === 'function') {
+      try {
+        const list = game.awards(gameApi(game));
+        mine = (Array.isArray(list) ? list : []).map((a) => cleanAward(a, live)).filter(Boolean);
+      } catch (e) {
+        fail(e);
+      }
+    }
+    let hl = [];
+    if (typeof game.highlights === 'function') {
+      try {
+        const list = game.highlights(gameApi(game));
+        hl = (Array.isArray(list) ? list : []).map((x) => cleanHighlight(x, live)).filter(Boolean).slice(0, HIGHLIGHTS_MAX);
+      } catch (e) {
+        fail(e);
+      }
+    }
+    const next = { ...clone(f), l: null, x: [], z: [], f: 0, aw: fitAwards(mine.concat(genericAwards(stats, { finalPlace }))), hl };
+    const up = upsetLine(stats, { winners: win, players: slots.length, points: pts, nameOf: nameAt });
+    if (up) next.up = clip(up, UPSET_MAX);
+    const lt = teamCodes(info);
+    if (lt) next.lt = lt;
+    else delete next.lt;
+    const stored = read(FUN);
+    const ours = stored && stored.r === f.r && stored.g === f.g;
+    if (!ours && !next.aw.length && !hl.length && !next.up && !lt) return;
+    write(FUN, fitFun(next));
+  }
+
+  function funView(room) {
+    if (!room || room !== read(ROOM)) return null;
+    const f = funState();
+    if (!f) return null;
+    const mine = slotOf(meId());
+    const card = mine !== null && f.c ? cardByCode(f.c[mine]) : null;
+    const used = mine !== null && f.u ? cardByCode(f.u[mine]) : null;
+    const line = f.l && typeof f.l === 'object' && typeof f.l.t === 'string' ? cleanShared(f.l.t, LINE_MAX) : '';
+    const ints = (list) => (Array.isArray(list) ? list.filter(Number.isInteger) : []);
+    return {
+      round: f.r,
+      card: card ? { id: card.id, emoji: card.emoji, name: card.name, text: card.text, target: Boolean(card.target) } : null,
+      used: Boolean(used),
+      double: mine !== null && ints(f.x).includes(mine),
+      frozen: ints(f.z),
+      final: Boolean(f.f),
+      played: Object.keys(f.u || {}).length,
+      line: line ? { i: Number(f.l.i) || 0, kind: typeof f.l.k === 'string' ? f.l.k : 'custom', text: line, at: Number(f.l.at) || 0, banner: Boolean(f.l.b) } : null,
+      awards: (Array.isArray(f.aw) ? f.aw : [])
+        .filter((a) => a && typeof a.t === 'string')
+        .map((a) => ({ emoji: typeof a.e === 'string' ? a.e : '🏅', title: cleanShared(a.t, 32), slots: ints(a.s), why: typeof a.y === 'string' ? cleanShared(a.y, 80) : '' }))
+        .filter((a) => a.title && a.slots.length),
+      highlights: (Array.isArray(f.hl) ? f.hl : [])
+        .map((x, i) => ({ r: `hl.${i}`, text: x && typeof x.x === 'string' ? cleanShared(x.x, 120) : '', slot: x && Number.isInteger(x.s) ? x.s : null }))
+        .filter((x) => x.text),
+      upset: typeof f.up === 'string' ? cleanShared(f.up, UPSET_MAX) || null : null,
+      sameTeams: Boolean(f.lt && typeof f.lt === 'object'),
     };
   }
 
@@ -2092,6 +2691,7 @@ export function createEngine(opts) {
     if (lateTimer !== null) clearT(lateTimer);
     if (wantTimer !== null) clearT(wantTimer);
     if (annTimer !== null) clearT(annTimer);
+    stopFunTimers();
     if (typeof stopAdmins === 'function') stopAdmins();
   }
 
@@ -2106,6 +2706,8 @@ export function createEngine(opts) {
     leave,
     predict,
     act,
+    react,
+    play,
     flag,
     report,
     reported,

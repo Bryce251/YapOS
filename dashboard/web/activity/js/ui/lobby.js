@@ -7,6 +7,7 @@ import { createDailyBox } from './daily.js';
 import { cleanCode, CODE_MAX } from '../engine.js';
 import { tourSetupModel, tourSetup, togglePick } from './tournament.js';
 import { readPresets, savePreset, deletePreset, presetsBlock, lateLockChip } from './hosttools.js';
+import { partyBlock, boardButton } from './party.js';
 
 export const TAB_KEY = 'yapos.party.tab';
 export const DAILY_INTRO = 'Everyone everywhere gets the same puzzle today. Your best score goes on the daily board and keeps your streak going.';
@@ -45,6 +46,7 @@ export function lobbyModel(snap, games) {
     rounds: snap.room.round || 0,
     tour: tourSetupModel(snap, games),
     lateLocked: Boolean(snap.hostTools && snap.hostTools.lateLocked),
+    party: { ...(snap.party || {}) },
   };
 }
 
@@ -176,6 +178,39 @@ function codeControl(spec, value, isHost, onSet, drafts) {
   });
 }
 
+function isTwist(spec) {
+  return Boolean(spec && spec.fun === true && spec.type === 'toggle');
+}
+
+function twistBlock(specs, values, isHost, onSet) {
+  if (!specs.length) return null;
+  return h(
+    'div',
+    { class: 'party-extras game-twists' },
+    h('h3', { class: 'group-title', text: 'Game twists' }),
+    h(
+      'div',
+      { class: 'party-extras-list', attrs: { role: 'group', 'aria-label': 'Game twists' } },
+      specs.map((spec) => {
+        const on = Boolean(values && values[spec.id]);
+        return h(
+          'button',
+          {
+            class: ['chip', 'party-chip', on ? 'is-on' : null, 'spot'],
+            type: 'button',
+            disabled: !isHost,
+            dataset: { key: `set-${spec.id}` },
+            attrs: { 'aria-pressed': on ? 'true' : 'false' },
+            on: { click: () => onSet(spec.id, !on) },
+          },
+          h('span', { class: 'party-chip-label', text: spec.label }),
+          h('span', { class: 'party-chip-state', text: on ? 'On' : 'Off' }),
+        );
+      }),
+    ),
+  );
+}
+
 function settingControl(spec, value, isHost, onSet, drafts) {
   const opts = spec.options || [];
   if (spec.type === 'code') return codeControl(spec, value, isHost, onSet, drafts);
@@ -247,7 +282,7 @@ function cue(sound, name, opts) {
   }
 }
 
-export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultStore() }) {
+export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultStore(), boardLink = null }) {
   const el = h('section', { class: 'screen lobby', attrs: { 'aria-label': 'Lobby' } });
   const games = engine.games;
   const paint = memo(render);
@@ -369,6 +404,11 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     const label = btn.querySelector('.btn-label');
     if (label) label.textContent = RESET_CONFIRM;
     armed = { btn, timer: globalThis.setTimeout(disarm, RESET_MS) };
+  }
+
+  function setParty(id, on) {
+    if (!engine.lobby || typeof engine.lobby.party !== 'function' || !engine.lobby.party(id, on)) return;
+    cue(sfx, 'toggle');
   }
 
   function setSetting(id, value) {
@@ -495,9 +535,10 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     const settings = h(
       'div',
       { class: 'settings' },
-      (game.settings || []).map((spec) =>
+      (game.settings || []).filter((spec) => !isTwist(spec)).map((spec) =>
         h('div', { class: ['setting', spec.type === 'code' ? 'is-code' : null] }, h('span', { class: 'setting-label', text: spec.label }), settingControl(spec, m.settings[spec.id], m.isHost, setSetting, drafts)),
       ),
+      twistBlock((game.settings || []).filter(isTwist), m.settings, m.isHost, setSetting),
     );
     const dailyKind = dailyOf(game, m.settings);
     daily.show(dailyKind, { intro: DAILY_INTRO, compact: true });
@@ -508,6 +549,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       tabRow,
       panel,
       settings,
+      partyBlock(m.party, { isHost: m.isHost, onToggle: setParty }),
       dailyKind ? daily.el : null,
       tourSetup(m.tour, { isHost: m.isHost, games: m.games, onToggle: setTour, onPick: pickTour, onRandom: () => engine.lobby.tournament({ g: [] }) }),
       m.isHost ? h('div', { class: 'host-lobby-tools' }, lateLockChip(m.lateLocked, (on) => engine.lobby.lateLock(on)), presetsBlock(m.presets || [], { games: m.games, onSave: onSavePreset, onLoad: onLoadPreset, onDelete: onDeletePreset, draft: presetDraft, onDraft: (v) => { presetDraft = v; } })) : null,
@@ -521,6 +563,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
         { class: 'card-head' },
         h('h2', { class: 'card-title', text: 'Scoreboard' }),
         m.rounds ? h('span', { class: 'count-pill', text: plural(m.rounds, 'game', 'games') }) : null,
+        m.lb ? boardButton(boardLink, 'leaderboard') : null,
       ),
       board(m.totals, { empty: 'Play a game to get on the board.', label: 'Session scores' }),
       m.isHost && m.totals.some((t) => t.pts > 0) ? button(RESET_LABEL, { variant: 'ghost', size: 'sm', key: 'reset', on: resetTap }) : null,
@@ -532,6 +575,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     el,
     update(snap) {
       last = lobbyModel(snap, games);
+      last.lb = Boolean(boardLink && typeof boardLink.ready === 'function' && boardLink.ready());
       if (draftPick !== last.pick || !last.isHost) drafts.clear();
       draftPick = last.pick;
       settleTab(last);

@@ -5,9 +5,11 @@ import { ready as dictReady, isWord, load as loadDictionary } from '../dictionar
 import { isBlockedWord } from '../filter.js';
 import { cachedDaily, loadDaily, dailyFailedFor, utcDay } from '../admin.js';
 import { answerHash } from '../daily.js';
+import { award, roundAt, say, streak, missRest, bump, prize, bestStreak, keep, reel, list, nameOf } from './funkit.js';
 
 export const KEY = 'scramble';
-export const ROUND_MS = 30000;
+export const ROUND_MS = 25000;
+export const FAST_MS = 5000;
 export const REVEAL_MS = 5000;
 export const PLACE_POINTS = Object.freeze([100, 70, 50, 30]);
 export const LATE_POINTS = 20;
@@ -144,6 +146,7 @@ function ask(api, st, i, note) {
   const starts = api.now();
   const ends = starts + ROUND_MS;
   api.memory.cur = { i, words: {} };
+  roundAt(api, i + 1, st.deck.length);
   api.put(KEY, {
     v: 1,
     k: st.k,
@@ -176,6 +179,7 @@ function askDaily(api, st, i, note) {
   const starts = api.now();
   const ends = starts + ROUND_MS;
   api.memory.cur = { i, words: {} };
+  roundAt(api, i + 1, st.dl.length);
   api.put(KEY, {
     v: 1,
     k: st.k,
@@ -247,6 +251,7 @@ function reveal(api, note) {
     if (found.length >= FOUND_MAX) break;
   }
   api.memory.cur = null;
+  missRest(api, st.got.map((g) => g[0]));
   const starts = api.now();
   const ends = starts + REVEAL_MS;
   const shown = target || (found.length ? found[0][1] : null);
@@ -279,15 +284,36 @@ function guess(api, slot, action) {
     api.put(KEY, st);
     return;
   }
-  const pts = placePoints(st.got.length);
+  const place = st.got.length;
+  const pts = award(api, slot, placePoints(place));
   st.got = st.got.concat([[slot, pts]]);
+  const word = cleanGuess(action.text);
   if (verdict === 'other' || (verdict === 'right' && !target)) {
     const cur = api.memory.cur && api.memory.cur.i === st.i ? api.memory.cur : (api.memory.cur = { i: st.i, words: {} });
-    cur.words[slot] = cleanGuess(action.text);
+    cur.words[slot] = word;
+    if (verdict === 'other' && target) keep(api, `${nameOf(api, slot)} found "${word.toUpperCase()}" when the word was ${target.toUpperCase()}`, slot, 3);
   }
-  api.addPoints(slot, pts);
+  noteSolve(api, st, slot, place, at, word);
   api.put(KEY, st);
   if (everyoneGot(api, st)) reveal(api, 'all');
+}
+
+function noteSolve(api, st, slot, place, at, word) {
+  const took = Math.max(0, at - st.starts);
+  if (place === 0) {
+    bump(api, 'first', slot);
+    if (took <= FAST_MS) say(api, 'fast', { slot });
+  }
+  bump(api, 'solved', slot);
+  const fx = api.memory.fx;
+  if (place === 0 && word && (!fx.quick || took < fx.quick.ms)) fx.quick = { slot, ms: took, word };
+  streak(api, slot, true);
+}
+
+export function scrambleHint(st, target, slot) {
+  if (!st || st.phase !== 'play' || !target || target.length < 3) return null;
+  if (st.got.some((g) => g[0] === slot)) return null;
+  return `It starts with "${target.slice(0, 2).toUpperCase()}" and has ${target.length} letters.`;
 }
 
 const scramble = {
@@ -298,8 +324,9 @@ const scramble = {
   blurb: 'Unscramble the letters before everyone else. The fastest fingers score the most.',
   minPlayers: 1,
   keys: [KEY],
+  cards: ['swap', 'double', 'peek'],
   settings: [
-    { id: 'rounds', label: 'Words', type: 'choice', options: [5, 10, 15].map((v) => ({ value: v, label: String(v) })), default: 10 },
+    { id: 'rounds', label: 'Words', type: 'choice', options: [5, 8, 10, 15].map((v) => ({ value: v, label: String(v) })), default: 8 },
     {
       id: 'length',
       label: 'Word length',
@@ -324,6 +351,29 @@ const scramble = {
 
   intent(api, slot, action) {
     if (action.type === 'guess') guess(api, slot, action);
+  },
+
+  hint(api, slot) {
+    const st = api.get(KEY);
+    return scrambleHint(st, targetOf(st), slot);
+  },
+
+  awards(api) {
+    const fx = api.memory.fx;
+    const q = fx && fx.quick;
+    const hot = bestStreak(api);
+    return list(
+      prize(api, 'first', 'Word wizard', '🧙', (n) => (n === 1 ? 'Solved one word first' : `Solved ${n} words first`), 2),
+      hot ? { title: 'Unstoppable', emoji: '🔥', who: hot.slots, why: `${hot.n} words in a row` } : null,
+      q && q.ms <= 4000 ? { title: 'Blink and miss it', emoji: '⚡', who: q.slot, why: `Unscrambled ${q.word.toUpperCase()} in ${(q.ms / 1000).toFixed(1)} s` } : null,
+    );
+  },
+
+  highlights(api) {
+    const fx = api.memory.fx;
+    const q = fx && fx.quick;
+    if (q) keep(api, `${nameOf(api, q.slot)} unscrambled ${q.word.toUpperCase()} in ${(q.ms / 1000).toFixed(1)} s`, q.slot, 2);
+    return reel(api);
   },
 
   results(api) {

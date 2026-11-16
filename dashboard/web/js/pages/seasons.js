@@ -1,6 +1,6 @@
 import { h, replace } from '../dom.js';
 import { icon } from '../icons.js';
-import { emptyState, errorState, loadingRegion, skeleton } from '../ui.js';
+import { emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
 import { formatNumber } from '../format.js';
 import { isAbort } from '../api.js';
 import { profilePath } from '../router.js';
@@ -58,7 +58,8 @@ export function renderSeasons(root, ctx) {
       h('div', { class: 'public-hero-text' },
         h('p', { class: 'public-eyebrow', text: 'Hall of fame' }),
         h('h1', { class: 'public-title', text: 'Past seasons' }),
-        h('p', { class: 'public-lead', text: 'Every month is a new season. When one ends, its top 10 for XP and for 💎 Shards earned stay here for good.' }))),
+        h('p', { class: 'public-lead', text: 'Every month is a new season. When one ends, its top 10 for XP and for 💎 Shards earned stay here for good.' })),
+      h('div', { class: 'public-hero-actions' }, linkButton({ label: 'Party leaderboard', href: '/party/leaderboard', size: 'sm', icon: 'trophy' }))),
     list);
 
   const load = async () => {

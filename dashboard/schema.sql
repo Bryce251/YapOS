@@ -335,3 +335,50 @@ CREATE TABLE IF NOT EXISTS owner_known (
   xp INTEGER,
   updated INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS party_points (
+  user_id TEXT PRIMARY KEY,
+  name TEXT,
+  username TEXT,
+  points INTEGER NOT NULL DEFAULT 0,
+  games INTEGER NOT NULL DEFAULT 0,
+  wins INTEGER NOT NULL DEFAULT 0,
+  best INTEGER NOT NULL DEFAULT 0,
+  best_game TEXT,
+  updated INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_points_points ON party_points (points DESC, updated, user_id);
+CREATE INDEX IF NOT EXISTS party_points_wins ON party_points (wins DESC, updated, user_id);
+CREATE INDEX IF NOT EXISTS party_points_games ON party_points (games DESC, updated, user_id);
+CREATE INDEX IF NOT EXISTS party_points_best ON party_points (best DESC, updated, user_id);
+
+CREATE TABLE IF NOT EXISTS party_points_game (
+  user_id TEXT NOT NULL,
+  game TEXT NOT NULL,
+  points INTEGER NOT NULL DEFAULT 0,
+  games INTEGER NOT NULL DEFAULT 0,
+  wins INTEGER NOT NULL DEFAULT 0,
+  best INTEGER NOT NULL DEFAULT 0,
+  updated INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, game)
+);
+CREATE INDEX IF NOT EXISTS party_points_game_points ON party_points_game (game, points DESC);
+CREATE INDEX IF NOT EXISTS party_points_game_wins ON party_points_game (game, wins DESC);
+CREATE INDEX IF NOT EXISTS party_points_game_games ON party_points_game (game, games DESC);
+CREATE INDEX IF NOT EXISTS party_points_game_best ON party_points_game (game, best DESC);
+
+CREATE TABLE IF NOT EXISTS party_points_day (
+  user_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  points INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+);
+CREATE INDEX IF NOT EXISTS party_points_day_day ON party_points_day (day);
+
+CREATE TABLE IF NOT EXISTS party_games_day (
+  user_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  games INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+);
+CREATE INDEX IF NOT EXISTS party_games_day_day ON party_games_day (day);

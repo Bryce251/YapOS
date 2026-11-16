@@ -356,7 +356,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
       h('span', { class: 'chip chip-static', text: `Round ${m.r} of ${m.rounds}` }),
       h('span', { class: 'chip chip-static odd-topic', text: `${m.topic.emoji} ${m.topic.name}` }),
       m.phase === 'draw' || m.phase === 'intro' ? h('span', { class: 'game-count', text: `Lap ${Math.max(1, m.lap)} of ${m.laps}` }) : null,
-      timer(m.ends - (SPANS[m.phase] || REVEAL_MS), m.ends, m.label),
+      timer(m.ends - (m.phase === 'draw' && m.turnMs ? m.turnMs : SPANS[m.phase] || REVEAL_MS), m.ends, m.label),
     ),
   );
 
@@ -562,7 +562,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
     }
     syncInk(m, next.state);
     const people = new Map(m.seats.map((s) => [s.slot, s]));
-    paintHead(head, { r: m.r, rounds: m.rounds, topic: m.topic, phase: m.phase, lap: m.lap, laps: m.laps, ends: m.ends, label: timerLabel(m) });
+    paintHead(head, { r: m.r, rounds: m.rounds, topic: m.topic, phase: m.phase, lap: m.lap, laps: m.laps, ends: m.ends, turnMs: m.turnMs, label: timerLabel(m) });
     paintRole(roleBox, { phase: m.phase, role: m.role, word: m.word, topic: m.topic, waiting: m.waiting, hidden: local.hidden && m.role !== 'watch' });
     paintSeats(seatsBox, { seats: m.seats.map((s) => ({ slot: s.slot, id: s.id, name: s.name, initials: s.initials, hue: s.hue, avatar: s.avatar, isMe: s.isMe, present: s.present, color: s.color, up: s.up, lines: s.lines, voted: s.voted, isOdd: s.isOdd, hidden: s.hidden })) });
     paintFlag(flagBox, flagFor(next, m));

@@ -183,8 +183,9 @@ test('the game is registered as a drawing game for 3 to 10 players with fair set
   assert.equal(telephone.maxPlayers, 10);
   const write = telephone.settings.find((s) => s.id === 'write');
   const draw = telephone.settings.find((s) => s.id === 'draw');
-  assert.equal(write.default, 40);
-  assert.equal(draw.default, 70);
+  assert.equal(write.default, 30);
+  assert.equal(draw.default, 80);
+  assert.ok(draw.options.some((o) => o.value >= 180), 'there is a long drawing option');
   for (const re of BANNED) assert.equal(re.test(telephone.blurb), false);
 });
 

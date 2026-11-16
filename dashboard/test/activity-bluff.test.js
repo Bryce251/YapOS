@@ -83,13 +83,13 @@ test('about 150 original facts, each with one blank and a short answer', () => {
   assert.equal(buildDeck(7, seeded(3)).length, 7);
 });
 
-test('the game is a quiz game for 3 or more with 5, 7 or 10 rounds', () => {
+test('the game is a quiz game for 3 or more with 3, 5, 7 or 10 rounds', () => {
   assert.equal(bluff.id, 'bluff');
   assert.equal(bluff.category, 'quiz');
   assert.equal(bluff.emoji, '🃏');
   assert.equal(bluff.minPlayers, 3);
-  assert.deepEqual(bluff.settings.find((s) => s.id === 'rounds').options.map((o) => o.value), [5, 7, 10]);
-  assert.equal(bluff.settings.find((s) => s.id === 'timer').default, 60);
+  assert.deepEqual(bluff.settings.find((s) => s.id === 'rounds').options.map((o) => o.value), [3, 5, 7, 10]);
+  assert.equal(bluff.settings.find((s) => s.id === 'timer').default, 45);
   for (const re of BANNED) assert.doesNotMatch(`${bluff.name} ${bluff.blurb}`, re);
 });
 
@@ -139,8 +139,9 @@ test('a full game: write fakes, spot the truth, score and finish', async () => {
     assert.equal(s.phase, 'reveal');
     assert.equal(s.answer, f.a);
     assert.equal(s.truth, truth.id);
-    assert.equal(s.gained[slots[0]], TRUTH_POINTS);
-    assert.equal(s.gained[slots[2]], TRUTH_POINTS + FOOL_POINTS);
+    const mult = round === 5 ? 2 : 1;
+    assert.equal(s.gained[slots[0]], TRUTH_POINTS * mult, 'the final round counts double');
+    assert.equal(s.gained[slots[2]], (TRUTH_POINTS + FOOL_POINTS) * mult);
     assert.equal(s.gained[slots[1]], undefined);
     for (const [slot, pts] of Object.entries(s.gained)) totals[slot] = (totals[slot] || 0) + pts;
     assert.deepEqual(r.engines[1].snapshot().scores.g, totals);

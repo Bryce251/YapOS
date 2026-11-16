@@ -36,6 +36,7 @@ export function verdict(m) {
     const count = `${m.voted} of ${plural(m.voterCount, 'vote', 'votes')} in`;
     if (m.isWriter) return `Everyone is hunting for your lie. Keep a straight face! ${count}.`;
     if (m.watching) return `You're watching. ${count}.`;
+    if (m.frozen) return `❄️ You're frozen, so you sit this one out. ${count}.`;
     if (m.myPick !== null) return `Vote in! ${count}.`;
     return `Which one is the lie? ${count}.`;
   }

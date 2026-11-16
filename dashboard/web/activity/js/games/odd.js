@@ -3,13 +3,15 @@ import { shuffle } from '../engine.js';
 import { INK_PREFIX, MAX_CHUNKS, PIECE_CHARS, LEVELS, COLORS, GRID_W, GRID_H, FILL, inkKey, encodeParts, encodeStroke, decodeStroke, isFill, pack, inkBytes, dedupe, simplify } from './ink.js';
 import { mask, unmask, nextSeat } from './draw.js';
 import { person } from '../players.js';
+import { timeSetting, addPts, roundOf, say, frozen, thaw, nameOf, bump, topOf, times } from './drawfun.js';
 
 export const KEY = 'odd';
-export const INTRO_MS = 7000;
-export const TURN_MS = 20000;
-export const VOTE_MS = 30000;
-export const GUESS_MS = 20000;
-export const REVEAL_MS = 9000;
+export const INTRO_MS = 5000;
+export const TURN_MS = 25000;
+export const VOTE_MS = 20000;
+export const GUESS_MS = 15000;
+export const REVEAL_MS = 7000;
+export const TURN_TIMES = Object.freeze([15, 20, 25, 30, 45, 60]);
 export const VOTE_POINTS = 100;
 export const CREW_BONUS = 50;
 export const ESCAPE_POINTS = 300;
@@ -260,11 +262,14 @@ function newRound(api, prev) {
   const starts = api.now();
   const ends = starts + INTRO_MS;
   api.memory.round = { r, odd, word: word.id, votes: {} };
+  roundOf(api, r, rounds);
   api.put(KEY, {
     v: 1,
     r,
     rounds,
     laps,
+    tms: prev && Number.isInteger(prev.tms) ? prev.tms : turnMs(api),
+    sx: prev && prev.sx ? prev.sx : null,
     k,
     t: word.topic,
     w: mask(word.id, wordKey(k)),
@@ -301,13 +306,24 @@ function newRound(api, prev) {
   return undefined;
 }
 
+function turnMs(api) {
+  const secs = Number(api.settings.turn);
+  return Number.isFinite(secs) && secs > 0 ? Math.round(secs * 1000) : TURN_MS;
+}
+
 function advance(api, st) {
   const hid = new Set(hiddenOf(st));
   const live = present(api).filter((s) => !hid.has(s));
-  const seat = st.turn === null ? nextSeat(st.order, live, 1, 0, st.laps) : nextSeat(st.order, live, st.lap, st.pos + 1, st.laps);
+  let seat = st.turn === null ? nextSeat(st.order, live, 1, 0, st.laps) : nextSeat(st.order, live, st.lap, st.pos + 1, st.laps);
+  for (let guard = 0; seat && frozen(api, seat.slot) && guard <= st.order.length * (st.laps + 1); guard += 1) {
+    thaw(api, seat.slot);
+    say(api, 'custom', { text: `❄️ ${nameOf(api, seat.slot)} is frozen and skips a line!` });
+    st = { ...miss(st), lap: seat.round, pos: seat.pos };
+    seat = nextSeat(st.order, live, seat.round, seat.pos + 1, st.laps);
+  }
   if (!seat) return startVote(api, st);
   const starts = api.now();
-  const ends = starts + TURN_MS;
+  const ends = starts + (Number.isInteger(st.tms) && st.tms > 0 ? st.tms : TURN_MS);
   api.put(KEY, { ...st, phase: 'draw', lap: seat.round, pos: seat.pos, turn: seat.slot, n: st.n + 1, note: null, starts, ends });
   api.setDeadline(ends);
   return undefined;
@@ -356,7 +372,20 @@ function settle(api, st, { caught, guess, note = null }) {
   const stole = Boolean(caught && word && guess === word.id);
   const gained = note ? {} : award({ order: st.order, odd, votes: Object.fromEntries(Object.entries(votes).map(([a, b]) => [Number(a), b])), caught, stole });
   if (!note && caught) noteCatchers(api, votes, odd);
-  for (const [slot, pts] of Object.entries(gained)) api.addPoints(Number(slot), pts);
+  for (const [slot, pts] of Object.entries(gained)) gained[slot] = addPts(api, Number(slot), pts);
+  const sx = oddStats(st);
+  if (!note && Number.isInteger(odd)) {
+    if (!caught) {
+      sx.e = bump(sx.e, odd);
+      say(api, 'custom', { text: `🕵️ ${nameOf(api, odd)} got away with it!` });
+    } else if (stole) {
+      sx.s = bump(sx.s, odd);
+      say(api, 'steal', { slot: odd });
+    } else {
+      say(api, 'custom', { text: `🎯 Caught! ${nameOf(api, odd)} was faking it.` });
+    }
+    for (const s of catchersOf(votes, odd)) sx.c = bump(sx.c, s);
+  }
   const g = guess === null || guess === undefined ? null : wordById(guess);
   const starts = api.now();
   const ends = starts + REVEAL_MS;
@@ -373,6 +402,7 @@ function settle(api, st, { caught, guess, note = null }) {
     caught: Boolean(caught),
     stole,
     gained,
+    sx,
     note,
     opts: [],
     used: (st.used || []).concat(word ? [word.id] : []).slice(-USED_MAX),
@@ -381,6 +411,36 @@ function settle(api, st, { caught, guess, note = null }) {
     ends,
   });
   api.setDeadline(ends);
+}
+
+function oddStats(st) {
+  const sx = st && st.sx && typeof st.sx === 'object' ? st.sx : {};
+  return { e: sx.e || {}, s: sx.s || {}, c: sx.c || {} };
+}
+
+export function oddAwards(st) {
+  const sx = oddStats(st);
+  const out = [];
+  const sneak = topOf(sx.e, 1);
+  if (sneak) out.push({ emoji: '🎭', title: 'Master of disguise', who: sneak.slot, why: `Faked it and got away ${times(sneak.n, 'time', 'times')}` });
+  const thief = topOf(sx.s, 1);
+  if (thief) out.push({ emoji: '😈', title: 'Word thief', who: thief.slot, why: 'Got caught but guessed the word anyway' });
+  const eye = topOf(sx.c, 2);
+  if (eye) out.push({ emoji: '🔍', title: 'Sharp eye', who: eye.slot, why: `Spotted the faker ${times(eye.n, 'time', 'times')}` });
+  return out;
+}
+
+export function oddHint(st, slot, random = Math.random) {
+  if (!st || !['intro', 'draw', 'vote'].includes(st.phase) || !Array.isArray(st.order) || !st.order.includes(slot)) return null;
+  const odd = secretOdd(st);
+  if (slot === odd) {
+    const w = secretWord(st);
+    const first = w ? Array.from(w.w).find((ch) => /[a-z]/i.test(ch)) : null;
+    return first ? `👀 The word starts with "${first.toUpperCase()}"` : null;
+  }
+  const safe = st.order.filter((s) => s !== slot && s !== odd);
+  if (!safe.length) return null;
+  return { slot: safe[Math.floor(random() * safe.length) % safe.length] };
 }
 
 export function catchersOf(votes, odd) {
@@ -539,6 +599,7 @@ const odd = {
   settings: [
     { id: 'rounds', label: 'Rounds', type: 'choice', options: [1, 2, 3, 4].map((v) => ({ value: v, label: String(v) })), default: 2 },
     { id: 'laps', label: 'Lines each', type: 'choice', options: [1, 2, 3].map((v) => ({ value: v, label: String(v) })), default: 2 },
+    timeSetting('turn', TURN_TIMES, 25, 'Drawing time'),
     {
       id: 'topic',
       label: 'Topics',
@@ -547,6 +608,25 @@ const odd = {
       default: 'mix',
     },
   ],
+
+  cards: ['swap', 'double', 'freeze', 'peek'],
+
+  canFreeze(api, target) {
+    const st = api.get(KEY);
+    if (!st || (st.phase !== 'intro' && st.phase !== 'draw') || !st.order.includes(target)) return false;
+    if (st.phase === 'intro') return true;
+    return st.lap < st.laps || st.order.indexOf(target) > st.pos;
+  },
+
+  hint(api, slot) {
+    const h = oddHint(api.get(KEY), slot, api.random);
+    if (!h) return null;
+    return typeof h === 'string' ? h : `👀 ${nameOf(api, h.slot)} is NOT the odd one out`;
+  },
+
+  awards(api) {
+    return oddAwards(api.get(KEY));
+  },
 
   start(api) {
     newRound(api, null);
@@ -703,6 +783,8 @@ const odd = {
       myColorIndex: myPos >= 0 ? st.cols[myPos] : null,
       turnNo: Math.max(0, st.marks.length + (st.phase === 'draw' ? 1 : 0)),
       turns: st.order.length * st.laps,
+      turnMs: Number.isInteger(st.tms) && st.tms > 0 ? st.tms : TURN_MS,
+
       starts: st.starts,
       ends: st.ends,
       voteAt: st.phase === 'vote' ? st.starts : null,

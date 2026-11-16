@@ -3,13 +3,14 @@ import { shuffle } from '../engine.js';
 import { cleanShared, closeEnough, plainKey } from '../text.js';
 import { seal, unseal, chunk } from './hottakes.js';
 import { face } from './trivia.js';
+import { award, roundAt, say, streak, bump, prize, bestStreak, keep, reel, list, nameOf, funMem } from './funkit.js';
 
 export { seal, unseal };
 
 export const KEY = 'bluff';
 export const OPTION_PREFIX = 'bluff.';
 export const FAKE_MAX = 40;
-export const PICK_MS = 30000;
+export const PICK_MS = 20000;
 export const REVEAL_BASE_MS = 7000;
 export const REVEAL_STEP_MS = 700;
 export const REVEAL_MAX_MS = 15000;
@@ -106,6 +107,7 @@ function ask(api, deck, i, note) {
   const starts = api.now();
   const ends = starts + api.settings.timer * 1000;
   api.memory.cur = { n, fakes: {}, owners: null, truth: null, picks: {} };
+  roundAt(api, i + 1, deck.length);
   api.put(KEY, {
     v: 1,
     deck,
@@ -226,7 +228,8 @@ function reveal(api) {
     return toReveal(api, st, { truth: t ? t.id : null, res: null, gained: {}, lost: true, note: 'host' });
   }
   const { res, gained } = tally(cur.owners, cur.truth, cur.picks);
-  for (const [slot, pts] of Object.entries(gained)) api.addPoints(Number(slot), pts);
+  for (const [slot, pts] of Object.entries(gained)) gained[slot] = award(api, slot, pts);
+  noteReveal(api, st, cur);
   api.memory.cur = null;
   return toReveal(api, st, { truth: cur.truth, res, gained, note: null });
 }
@@ -282,6 +285,45 @@ function onPick(api, slot, action) {
   if (allPicked(api, st)) reveal(api);
 }
 
+function noteReveal(api, st, cur) {
+  const picks = cur.picks || {};
+  const opts = optionsFrom((k) => api.get(k), st);
+  const textOf = new Map(opts.map((o) => [o.id, o.text]));
+  const by = {};
+  for (const [slot, id] of Object.entries(picks)) (by[id] = by[id] || []).push(Number(slot));
+  for (const [slot, id] of Object.entries(picks)) {
+    const s = Number(slot);
+    if (id === cur.truth) bump(api, 'truth', s);
+    streak(api, s, id === cur.truth);
+  }
+  let star = null;
+  for (const [id, owners] of Object.entries(cur.owners || {})) {
+    const fooled = (by[id] || []).length;
+    if (!fooled) continue;
+    for (const o of owners) bump(api, 'fooled', o, fooled);
+    const text = textOf.get(Number(id));
+    if (text && owners.length) keep(api, `${nameOf(api, owners[0])}'s fake "${text}" fooled ${fooled === 1 ? '1 person' : `${fooled} people`}`, owners[0], fooled + 1);
+    if (!star || fooled > star.n) star = { slot: owners[0], n: fooled };
+  }
+  if (star && star.n >= 2) say(api, 'custom', { text: `🃏 ${nameOf(api, star.slot)}'s fake fooled ${star.n} people!` });
+}
+
+export function bluffHint(st, cur, slot, read) {
+  if (!st || !cur || cur.n !== st.n) return null;
+  if (st.phase === 'write') {
+    const f = factById(st.f.id);
+    if (!f || !f.a) return null;
+    const words = String(f.a).trim().split(/\s+/).filter(Boolean);
+    return `The real answer is ${words.length === 1 ? 'one word' : `${words.length} words`} and starts with "${Array.from(String(f.a))[0].toUpperCase()}".`;
+  }
+  if (st.phase !== 'pick' || !cur.owners || cur.picks[slot] !== undefined) return null;
+  const opts = optionsFrom(read, st);
+  const fakes = opts.filter((o) => o.id !== cur.truth && !(cur.owners[o.id] || []).includes(slot));
+  if (!fakes.length) return null;
+  const pick = fakes[(st.n + slot) % fakes.length];
+  return `"${pick.text}" is a fake.`;
+}
+
 export function optionsFrom(read, st) {
   const out = [];
   for (let i = 0; i < (st.chunks || 0); i += 1) {
@@ -304,9 +346,10 @@ const bluff = {
   minPlayers: 3,
   keys: [KEY],
   prefixes: [OPTION_PREFIX],
+  cards: ['swap', 'double', 'peek'],
   settings: [
-    { id: 'rounds', label: 'Rounds', type: 'choice', options: [5, 7, 10].map((v) => ({ value: v, label: String(v) })), default: 5 },
-    { id: 'timer', label: 'Time to write', type: 'choice', options: [45, 60, 90].map((v) => ({ value: v, label: `${v} s` })), default: 60 },
+    { id: 'rounds', label: 'Rounds', type: 'choice', options: [3, 5, 7, 10].map((v) => ({ value: v, label: String(v) })), default: 5 },
+    { id: 'timer', label: 'Time to write', type: 'choice', options: [30, 45, 60, 90].map((v) => ({ value: v, label: `${v} s` })), default: 45 },
   ],
 
   start(api) {
@@ -316,6 +359,25 @@ const bluff = {
   intent(api, slot, action) {
     if (action.type === 'fake') onFake(api, slot, action);
     else if (action.type === 'pick') onPick(api, slot, action);
+  },
+
+  hint(api, slot) {
+    const st = api.get(KEY);
+    return bluffHint(st, st ? fresh(api, st) : null, slot, (k) => api.get(k));
+  },
+
+  awards(api) {
+    funMem(api);
+    const hot = bestStreak(api);
+    return list(
+      prize(api, 'fooled', 'Master bluffer', '🃏', (n) => (n === 1 ? 'Fooled 1 person' : `Fooled ${n} people`), 2),
+      prize(api, 'truth', 'Truth seeker', '🔍', (n) => `Found the real answer ${n} times`, 2),
+      hot ? { title: 'Cannot be fooled', emoji: '🛡️', who: hot.slots, why: `${hot.n} real answers in a row` } : null,
+    );
+  },
+
+  highlights(api) {
+    return reel(api);
   },
 
   deadline(api) {

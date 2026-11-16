@@ -7,6 +7,11 @@ import { partyXp, PARTY_XP_DAY, partyShards, PARTY_SHARDS_PREDICTION, PARTY_SHAR
 import { tourModel, tourCard } from './tournament.js';
 import { predictResultsModel, predictResults } from './predict.js';
 import { createReplayStrip, REPLAY_GAMES } from './replay.js';
+import { awardsModel, awardsCard, reelCard, upsetLine } from './awards.js';
+import { boardButton } from './party.js';
+
+export const SAME_TEAMS_LABEL = 'Same teams again';
+export const SAME_TEAMS_TITLE = 'Play again with the same teams';
 
 export const WIN_EMOJI = ['🏆', '⭐', '✨', '🎉', '👑'];
 export const BURST_DELAY_MS = 640;
@@ -65,6 +70,7 @@ export function resultsModel(snap, games) {
     shards: shardsEarned(last, snap.players, snap.predict),
     tour: tourModel(snap, games),
     picks: predictResultsModel(snap),
+    note: last && typeof last.note === 'string' && last.note ? last.note : null,
     daily: last && typeof last.daily === 'string' && (last.game === 'hive' || last.game === 'scramble') ? { kind: last.game, date: last.daily } : null,
   };
 }
@@ -77,7 +83,7 @@ export function headline(m) {
   return `${m.winners.length}-way tie!`;
 }
 
-export function createResults({ engine, fx, replays = null, win = globalThis }) {
+export function createResults({ engine, fx, replays = null, win = globalThis, toast = null, boardLink = null }) {
   const el = h('section', { class: 'screen results', attrs: { 'aria-label': 'Results' } });
   const paint = memo(render);
   let celebrated = 0;
@@ -115,6 +121,7 @@ export function createResults({ engine, fx, replays = null, win = globalThis }) 
     } else if (m.isHost) {
       hostButtons = [
         button(m.tour ? 'New tournament' : 'Play again', { variant: 'primary', size: 'xl', key: 'again', on: () => engine.lobby.start() }),
+        m.sameTeams && !m.tour ? button(SAME_TEAMS_LABEL, { variant: 'secondary', size: 'lg', key: 'again-teams', attrs: { title: SAME_TEAMS_TITLE }, on: () => engine.lobby.start({ sameTeams: true }) }) : null,
         button('Back to lobby', { variant: 'secondary', size: 'lg', key: 'lobby', on: () => engine.lobby.toLobby() }),
       ];
     }
@@ -130,6 +137,8 @@ export function createResults({ engine, fx, replays = null, win = globalThis }) 
         h('span', { class: 'trophy', text: m.winners.length ? '🏆' : '🤝', attrs: { 'aria-hidden': 'true' } }),
         m.game ? h('span', { class: 'eyebrow', text: `${m.game.emoji} ${m.game.name}` }) : null,
         h('h2', { class: 'winner-title', text: headline(m) }),
+        m.note ? h('p', { class: 'results-note', text: m.note }) : null,
+        upsetLine(m.upset),
         m.xp || m.shards
           ? h(
               'div',
@@ -140,7 +149,10 @@ export function createResults({ engine, fx, replays = null, win = globalThis }) 
           : null,
         actions,
         join ? h('div', { class: 'join-row is-results' }, join, h('p', { class: 'join-hint', text: 'Join to play in the next game.' })) : null,
+        m.lb ? h('div', { class: 'board-link-row' }, boardButton(boardLink, 'leaderboard-results')) : null,
       ),
+      awardsCard(m.awards),
+      reelCard(m.reel, { engine, toast }),
       m.tour && m.tour.done ? tourCard(m.tour) : null,
       m.daily ? h('div', { class: 'card glass daily-card' }, daily.el) : null,
       m.tour && !m.tour.done ? tourCard(m.tour) : null,
@@ -155,6 +167,12 @@ export function createResults({ engine, fx, replays = null, win = globalThis }) 
     el,
     update(snap) {
       const m = resultsModel(snap, engine.games);
+      const fun = awardsModel(snap);
+      m.awards = fun.awards;
+      m.reel = fun.highlights;
+      m.upset = fun.upset;
+      m.sameTeams = fun.sameTeams;
+      m.lb = Boolean(boardLink && typeof boardLink.ready === 'function' && boardLink.ready());
       const last = snap.room.last;
       const list = replays && last && REPLAY_GAMES.includes(last.game) ? replays.list(snap.room.round, last.game) : [];
       strip.show(list);

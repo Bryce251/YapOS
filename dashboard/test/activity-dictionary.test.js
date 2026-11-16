@@ -103,15 +103,15 @@ test('real words pass and typos do not', () => {
   for (const t of Object.values(PROBLEMS)) for (const re of BANNED) assert.equal(re.test(t), false, t);
 });
 
-test('long words up to 45 letters are fine and longer ones are refused', () => {
-  assert.equal(MAX_LETTERS, 45);
+test('long words up to 60 letters are fine and longer ones are refused', () => {
+  assert.equal(MAX_LETTERS, 60);
   assert.equal(checkWord('hippopotomonstrosesquippedaliophobia', 'h', []), null);
   assert.equal(checkWord('supercalifragilisticexpialidocious', 's', []), null);
   assert.equal(checkWord('floccinaucinihilipilification', 'f', []), null);
   assert.equal(checkWord('pneumonoultramicroscopicsilicovolcanoconiosis', 'p', []), null);
   assert.equal(checkWord('pneumonoultramicroscopicsilicovolcanoconioses', 'p', []), null);
-  assert.equal(checkWord(`a${'b'.repeat(44)}`, 'a', []), 'unknown');
-  assert.equal(checkWord(`a${'b'.repeat(45)}`, 'a', []), 'long');
+  assert.equal(checkWord(`a${'b'.repeat(59)}`, 'a', []), 'unknown');
+  assert.equal(checkWord(`a${'b'.repeat(60)}`, 'a', []), 'long');
 });
 
 test('an unsorted list still works', async () => {
@@ -163,7 +163,7 @@ test('no repeats across hundreds of real words', async () => {
     const list = pool.get(w[0]);
     if (list.length < 400) list.push(w);
   }
-  const r = await startChain(2, { timer: 20 });
+  const r = await startChain(2, { timer: 20, cats: false });
   let s = st(r);
   const played = [];
   const taken = new Set();

@@ -9,6 +9,7 @@ export const ROUTES = [
   { name: 'servers', pattern: new RegExp('^/servers$'), keys: [], private: true },
   { name: 'party', pattern: new RegExp('^/party$'), keys: [], private: true },
   { name: 'party-reports', pattern: new RegExp('^/party/reports$'), keys: [], private: true },
+  { name: 'party-leaderboard', pattern: new RegExp('^/party/leaderboard$'), keys: [], private: false },
   { name: 'owner', pattern: new RegExp('^/owner$'), keys: [], private: true },
   { name: 'owner-user', pattern: new RegExp(`^/owner/${UUID}$`), keys: ['id'], private: true },
   { name: 'packs', pattern: new RegExp('^/packs$'), keys: [], private: true },

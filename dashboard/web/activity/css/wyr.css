@@ -1,0 +1,99 @@
+.wyr-twin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0 auto var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  max-width: 520px;
+  border: 1px solid var(--game-line);
+  border-radius: var(--radius-full);
+  background: var(--game-soft);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  text-align: center;
+}
+
+.wyr-recap {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 52vh;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.wyr-recap-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  gap: var(--space-2);
+  animation: wyr-recap-in 360ms var(--ease) both;
+  animation-delay: calc(var(--wyr-order, 0) * 70ms);
+}
+
+.wyr-recap-side {
+  display: grid;
+  align-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.wyr-recap-side.is-big {
+  border-color: var(--game-line);
+}
+
+.wyr-recap-side.is-mine {
+  background: var(--game-soft);
+  box-shadow: inset 0 0 0 1px var(--game-line);
+}
+
+.wyr-recap-text {
+  font-size: var(--text-sm);
+  line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
+}
+
+.wyr-recap-none {
+  font-size: var(--text-xs);
+}
+
+.wyr-recap-or {
+  align-self: center;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  text-transform: uppercase;
+}
+
+@keyframes wyr-recap-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .wyr-recap-row {
+    grid-template-columns: 1fr;
+  }
+
+  .wyr-recap-or {
+    justify-self: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wyr-recap-row {
+    animation: none;
+  }
+}

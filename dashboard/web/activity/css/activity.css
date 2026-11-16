@@ -1972,6 +1972,16 @@ img {
   overflow-wrap: anywhere;
 }
 
+.results-note {
+  margin: 0;
+  max-width: 36ch;
+  color: var(--text-2);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
 .winner-card.is-me .winner-title {
   color: var(--gold);
 }

@@ -149,15 +149,16 @@ test('a full game: write, vote on each set, reveal, awards and results', async (
     await r.clock.advance(300);
     assert.equal(st(r).voted.length, 0, 'the writer cannot vote on their own set');
     const voters = slots.filter((x) => x !== writer);
+    const mult = k === 3 ? 2 : 1;
     voters.forEach((slot, j) => {
       const pick = j === 0 ? lie : (lie + 1) % 3;
       bySlot(r, slot).act({ type: 'vote', v: s.v, pick });
       bySlot(r, slot).act({ type: 'vote', v: s.v, pick: lie });
       if (pick === lie) {
-        add(slot, SPOT_POINTS);
+        add(slot, SPOT_POINTS * mult);
         tally.spotted[slot] = (tally.spotted[slot] || 0) + 1;
       } else {
-        add(writer, FOOL_POINTS);
+        add(writer, FOOL_POINTS * mult);
         tally.fooled[writer] = (tally.fooled[writer] || 0) + 1;
       }
     });
@@ -167,10 +168,10 @@ test('a full game: write, vote on each set, reveal, awards and results', async (
     assert.equal(s.lie, lie);
     assert.equal(s.votes[voters[0]], lie);
     assert.equal(s.votes[voters[1]], (lie + 1) % 3, 'only the first vote counts');
-    assert.equal(s.gained[writer], FOOL_POINTS * 2);
+    assert.equal(s.gained[writer], FOOL_POINTS * 2 * mult, 'the last set counts double');
     const m = truths.model(bySlot(r, voters[0]).snapshot());
     assert.equal(m.spotted, true);
-    assert.equal(m.myGain, SPOT_POINTS);
+    assert.equal(m.myGain, SPOT_POINTS * mult);
     assert.match(verdict(m), /You spotted/);
     const wm = truths.model(bySlot(r, writer).snapshot());
     assert.equal(wm.fooled, 2);
@@ -447,7 +448,7 @@ test('a host change without anyone to resend ends each lost set gracefully', () 
 });
 
 test('secrets stay out of shared state until each reveal', async () => {
-  const r = await startTruths(3);
+  const r = await startTruths(3, { vote: 20 });
   let s = st(r);
   const slots = slotsOf(r);
   const sent = [];
@@ -644,13 +645,14 @@ async function playAll(n) {
     assert.equal(s.i, k);
     const lie = lieShown(s);
     const voters = slots.filter((x) => x !== s.writer);
+    const mult = k === n - 1 ? 2 : 1;
     voters.forEach((slot, j) => {
       const pick = j % 2 === 0 ? lie : (lie + 1) % 3;
       if (pick === lie) {
-        add(slot, SPOT_POINTS);
+        add(slot, SPOT_POINTS * mult);
         spotted[slot] = (spotted[slot] || 0) + 1;
       } else {
-        add(s.writer, FOOL_POINTS);
+        add(s.writer, FOOL_POINTS * mult);
         fooled[s.writer] = (fooled[s.writer] || 0) + 1;
       }
       bySlot(r, slot).act({ type: 'vote', v: s.v, pick });

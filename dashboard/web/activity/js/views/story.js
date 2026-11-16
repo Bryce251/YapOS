@@ -160,6 +160,7 @@ export function createStoryView({ engine, fx, toast, win, cues }) {
       'div',
       { class: ['story-book', 'card', 'glass', `story-${m.phase}`] },
       m.note === 'host' ? h('p', { class: 'notice', text: 'The host changed, so voting starts again. Vote again!' }) : null,
+      m.note === 'frozen' && m.iced ? h('p', { class: 'notice story-iced', text: `❄️ ${m.iced.isMe ? 'You were' : `${m.iced.name} was`} frozen, so that turn got skipped.` }) : null,
       h('p', { class: 'story-starter', text: m.starter }),
       m.lines.length
         ? h('ol', { class: 'story-lines' }, m.lines.map((l) => lineItem(m, l)))

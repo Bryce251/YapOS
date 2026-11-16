@@ -458,7 +458,7 @@ test('the drawer auto-picks when time runs out and the turn ends on time', async
 });
 
 test('strokes sync through ink chunks so late joiners see the drawing, inside the op limits', async () => {
-  const r = await startDraw(3, { rounds: 2 });
+  const r = await startDraw(3, { rounds: 2, time: 80 });
   const host = r.engines[0];
   await pickWord(r, 0);
   await r.clock.advance(80000 + REVEAL_MS + 600);
@@ -535,7 +535,7 @@ test('the game carries on when the host leaves mid-turn', async () => {
 });
 
 test('if the drawer leaves, the turn ends and the word is shown', async () => {
-  const r = await startDraw(3, { rounds: 2 });
+  const r = await startDraw(3, { rounds: 2, time: 80 });
   const [host] = r.engines;
   await pickWord(r, 0);
   await r.clock.advance(80000 + REVEAL_MS + 600);

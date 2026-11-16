@@ -1,5 +1,6 @@
 import { mask, unmask } from './draw.js';
 import { face } from './trivia.js';
+import { KO_ROUND_CAP, SURVIVOR_POINTS, koSetting, koOn, koOut, koTotal, koModel } from './knockout.js';
 
 export const KEY = 'reflex';
 export const MIN_DELAY = 1500;
@@ -11,7 +12,10 @@ export const AMBER_GAP_MAX = 2200;
 export const FAKE_CHANCE = 0.45;
 export const TAP_WINDOW = 3000;
 export const MIN_WINDOW = 1500;
-export const SHOW_MS = 5500;
+export const SHOW_MS = 4500;
+export const CLOSE_MS = 12;
+export const FAST_TAP = 260;
+export const HL_KEEP = 3;
 export const MIN_MS = 80;
 export const MAX_MS = 1500;
 export const SLOW_CAP = 9999;
@@ -89,15 +93,31 @@ function nonceOf(random) {
   return 1 + Math.floor(random() * 65534);
 }
 
+function say(api, kind, data) {
+  if (api && typeof api.say === 'function') api.say(kind, data);
+}
+
+function give(api, slot, n) {
+  const got = api.addPoints(slot, n);
+  return Number.isFinite(got) ? got : n;
+}
+
 function round(api, prev, i, note) {
   const nonce = nonceOf(api.random);
   const times = plan(api.random, api.settings.fakeouts === 'on');
   const at = api.now();
   const green = at + times.green;
   const ends = green + TAP_WINDOW;
-  api.memory.cur = { r: (prev.r || 0) + 1, taps: {} };
-  api.put(KEY, {
-    r: (prev.r || 0) + 1,
+  const r = (prev.r || 0) + 1;
+  const here = api.players().map((p) => p.slot);
+  const al = prev.ko && Array.isArray(prev.al) ? prev.al : null;
+  if (typeof api.round === 'function') {
+    if (al) api.round(r, koTotal(r, al));
+    else api.round(i + 1, prev.total);
+  }
+  api.memory.cur = { r, taps: {} };
+  const st = {
+    r,
     i,
     total: prev.total,
     fake: api.settings.fakeouts === 'on' ? 1 : 0,
@@ -106,7 +126,7 @@ function round(api, prev, i, note) {
     at,
     g: mask(times.green, nonce),
     a: mask(times.amber, nonce),
-    in: api.players().map((p) => p.slot),
+    in: al ? al.filter((s) => here.includes(s)) : here,
     wait: [],
     done: [],
     res: null,
@@ -115,13 +135,44 @@ function round(api, prev, i, note) {
     note: note || null,
     starts: at,
     ends,
-  });
+  };
+  if (al) {
+    st.ko = 1;
+    st.al = al;
+    st.ot = Array.isArray(prev.ot) ? prev.ot : [];
+    st.kx = [];
+  }
+  if (prev.ju) st.ju = prev.ju;
+  if (Array.isArray(prev.hl)) st.hl = prev.hl;
+  api.put(KEY, st);
   api.setDeadline(ends);
 }
 
+function topOf(slots, pts) {
+  const list = (slots || []).filter(Number.isInteger);
+  if (!list.length) return undefined;
+  const hi = Math.max(...list.map((s) => Number(pts[s]) || 0));
+  return list.filter((s) => (Number(pts[s]) || 0) === hi);
+}
+
 function next(api, st) {
+  if (st.ko) {
+    const al = Array.isArray(st.al) ? st.al : [];
+    if (al.length <= 1) return api.finish(al.slice());
+    if ((st.r || 0) >= KO_ROUND_CAP) return api.finish(topOf(al, api.points()));
+    return round(api, st, st.i + 1);
+  }
   if (st.i + 1 < st.total) return round(api, st, st.i + 1);
   return api.finish();
+}
+
+function hlPush(list, x, w) {
+  const text = x.length > 118 ? `${x.slice(0, 117)}…` : x;
+  return (Array.isArray(list) ? list : [])
+    .filter((h) => h.x !== text)
+    .concat([{ x: text, w }])
+    .sort((a, b) => b.w - a.w)
+    .slice(0, HL_KEEP);
 }
 
 function reveal(api) {
@@ -130,12 +181,45 @@ function reveal(api) {
   const cur = api.memory.cur;
   const taps = cur && cur.r === st.r ? cur.taps : {};
   const { res, gained } = rankRound(taps, st.in);
-  for (const [slot, pts] of Object.entries(gained)) api.addPoints(Number(slot), pts);
+  for (const [slot, pts] of Object.entries(gained)) {
+    const got = give(api, Number(slot), pts);
+    const row = res.find((x) => x.s === Number(slot));
+    if (row) row.p = got;
+  }
   api.memory.cur = null;
+  const patch = {};
+  const oks = res.filter((x) => x.k === 'ok');
+  const prevBest = Object.values(st.best || {}).filter(Number.isFinite);
+  const record = oks.length && (!prevBest.length || oks[0].ms < Math.min(...prevBest)) ? oks[0] : null;
+  if (oks.length >= 2 && oks[1].ms - oks[0].ms <= CLOSE_MS) say(api, 'close', { slot: oks[1].s });
+  else if (oks.length && oks[0].ms <= FAST_TAP) say(api, 'fast', { slot: oks[0].s });
+  const jumped = res.filter((x) => x.k === 'early' || x.k === 'fooled');
+  if (jumped.length) {
+    const ju = { ...(st.ju || {}) };
+    for (const x of jumped) ju[x.s] = (ju[x.s] || 0) + 1;
+    patch.ju = ju;
+  }
+  let hl = st.hl;
+  const fooled = res.filter((x) => x.k === 'fooled').length;
+  if (fooled >= 2) hl = hlPush(hl, `🟡 ${fooled} people fell for the same fake-out in round ${st.i + 1}`, 2 + fooled);
+  if (record && api.players().length > 1) hl = hlPush(hl, `⚡ ${api.nameOf(record.s)} set the record with a ${record.ms} ms tap`, 3);
+  if (hl !== st.hl) patch.hl = hl;
+  if (st.ko) {
+    const al = (Array.isArray(st.al) ? st.al : []).filter(Number.isInteger);
+    const order = rankRound(taps, al).res.map((x) => ({ s: x.s, ok: x.k === 'ok' }));
+    const out = koOut(al, order);
+    const left = al.filter((s) => !out.includes(s));
+    patch.al = left;
+    patch.kx = out;
+    patch.ot = (Array.isArray(st.ot) ? st.ot : []).concat(out);
+    for (const s of out) say(api, 'out', { slot: s });
+    if (left.length === 1 && al.length > 1) patch.sv = give(api, left[0], SURVIVOR_POINTS);
+  }
   const now = api.now();
   const ends = now + SHOW_MS;
   api.put(KEY, {
     ...st,
+    ...patch,
     phase: 'show',
     res,
     fk: amberOf(st) !== null ? 1 : 0,
@@ -153,7 +237,7 @@ function everyoneDone(api, st) {
 }
 
 function admit(api, st, slot) {
-  if (!Number.isInteger(slot) || st.phase !== 'wait') return false;
+  if (!Number.isInteger(slot) || st.phase !== 'wait' || st.ko) return false;
   if (st.in.includes(slot) || st.wait.includes(slot)) return false;
   if (greenOf(st) - api.now() >= LATE_GAP) st.in.push(slot);
   else st.wait.push(slot);
@@ -175,7 +259,20 @@ function record(api, st, action) {
 }
 
 export function startState(api) {
-  return { r: 0, total: Math.max(1, Number(api.settings.rounds) || 10), best: {} };
+  const here = typeof api.players === 'function' ? api.players().map((p) => p.slot) : [];
+  const total = Math.max(1, Number(api.settings.rounds) || 10);
+  if (!koOn(api.settings, here.length)) return { r: 0, total, best: {} };
+  return { r: 0, total: KO_ROUND_CAP, best: {}, ko: 1, al: here.slice(), ot: [] };
+}
+
+function bestOf(map, min, low) {
+  let top = null;
+  for (const [slot, n] of Object.entries(map || {})) {
+    const s = Number(slot);
+    if (!Number.isInteger(s) || !Number.isFinite(n) || !(low ? n >= 0 : n >= min)) continue;
+    if (!top || (low ? n < top.n : n > top.n) || (n === top.n && s < top.slot)) top = { slot: s, n };
+  }
+  return top;
 }
 
 const reflex = {
@@ -183,11 +280,13 @@ const reflex = {
   name: 'Reflex',
   emoji: '⚡',
   category: 'quick',
-  blurb: 'Wait for green, then tap faster than everyone else. Jump early and you score nothing.',
+  blurb: 'Wait for green, then tap faster than everyone else. In a knockout, the slowest tapper each round is out.',
   minPlayers: 1,
   keys: [KEY],
+  cards: ['swap', 'double'],
   settings: [
     { id: 'rounds', label: 'Rounds', type: 'choice', options: [5, 10, 15].map((v) => ({ value: v, label: String(v) })), default: 10 },
+    koSetting(),
     {
       id: 'fakeouts',
       label: 'Fake-outs',
@@ -207,7 +306,26 @@ const reflex = {
   results(api) {
     const st = api.get(KEY);
     const fastest = st ? fastestOf(st.best) : [];
-    return { extra: fastest.length ? { fastest } : {} };
+    const out = { extra: fastest.length ? { fastest } : {} };
+    if (st && st.ko && Array.isArray(st.al) && st.al.length === 1) out.note = `🥊 ${api.nameOf(st.al[0])} won the knockout`;
+    return out;
+  },
+
+  awards(api) {
+    const st = api.get(KEY);
+    if (!st) return [];
+    const out = [];
+    if (st.ko && Array.isArray(st.al) && st.al.length === 1) out.push({ emoji: '🥊', title: 'Last one standing', who: st.al[0], why: 'Outlasted everyone in the knockout' });
+    const quick = bestOf(st.best, 0, true);
+    if (quick) out.push({ emoji: '🐆', title: 'Fastest hands', who: quick.slot, why: `Best tap: ${quick.n} ms` });
+    const eager = bestOf(st.ju, 2, false);
+    if (eager) out.push({ emoji: '🐇', title: 'Too eager', who: eager.slot, why: `Jumped the gun ${eager.n} times` });
+    return out;
+  },
+
+  highlights(api) {
+    const st = api.get(KEY);
+    return st && Array.isArray(st.hl) ? st.hl.map((x) => ({ text: x.x })) : [];
   },
 
   intent(api, slot, action) {
@@ -305,7 +423,10 @@ const reflex = {
       })
       .filter(Boolean);
     const mineRes = results.find((x) => x.slot === mine) || null;
+    const ko = koModel(st, mine, bySlot, face);
     return {
+      ko: ko ? { ...ko, out: show ? ko.out : [] } : null,
+      survivor: show && st.sv ? st.sv : 0,
       key: `${st.r}`,
       r: st.r,
       phase: st.phase,
@@ -329,7 +450,7 @@ const reflex = {
       best,
       mine: mineRes,
       myBest: mine !== null && st.best && st.best[mine] !== undefined ? st.best[mine] : null,
-      last: st.i + 1 >= st.total,
+      last: ko ? Boolean(ko.champ) || st.r >= KO_ROUND_CAP : st.i + 1 >= st.total,
     };
   },
 };

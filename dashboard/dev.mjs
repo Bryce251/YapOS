@@ -359,6 +359,49 @@ export function seedSeason(db, t = Date.now()) {
   db.raw.prepare('INSERT INTO season_history (month, boards, updated) VALUES (?, ?, ?) ON CONFLICT (month) DO NOTHING').run(month, JSON.stringify({ xp, shards }), t);
 }
 
+export const DEV_LEADERBOARD_GAMES = ['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel'];
+
+export function seedPartyLeaderboard(db, t = Date.now()) {
+  const rand = devRandom(4242);
+  const people = [
+    [IDS.owner, 'Jolli', 'jolli'],
+    [IDS.member, 'Sam', 'sam'],
+    [IDS.member2, 'Riley', 'riley'],
+    [IDS.admin, 'Alex', 'alex'],
+    ...Array.from({ length: 30 }, (_, i) => {
+      const id = `de7e0000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`;
+      const f = fakeProfile(id);
+      return [id, f.display_name, f.username];
+    }),
+  ];
+  const total = db.raw.prepare('INSERT INTO party_points (user_id, name, username, points, games, wins, best, best_game, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING');
+  const per = db.raw.prepare('INSERT INTO party_points_game (user_id, game, points, games, wins, best, updated) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id, game) DO NOTHING');
+  people.forEach(([id, name, username], i) => {
+    const picks = DEV_LEADERBOARD_GAMES.filter(() => rand() < 0.45);
+    if (!picks.length) picks.push(DEV_LEADERBOARD_GAMES[i % DEV_LEADERBOARD_GAMES.length]);
+    let points = 0;
+    let games = 0;
+    let wins = 0;
+    let best = 0;
+    let bestGame = null;
+    for (const game of picks) {
+      const g = 1 + Math.floor(rand() * (40 - i));
+      const w = Math.floor(g * rand() * 0.5);
+      const top = 300 + Math.floor(rand() * 8000);
+      const pts = Math.floor(g * top * (0.3 + rand() * 0.4));
+      per.run(id, game, pts, g, w, top, t - i * 60_000);
+      points += pts;
+      games += g;
+      wins += w;
+      if (top > best) {
+        best = top;
+        bestGame = game;
+      }
+    }
+    total.run(id, name, username, points, games, wins, best, bestGame, t - i * 60_000);
+  });
+}
+
 export function seedServerStats(db, serverId, t = Date.now()) {
   const HOUR = 3_600_000;
   const end = Math.floor(t / HOUR) * HOUR;
@@ -715,6 +758,7 @@ export async function startDev({
   seedPublicProfile(db);
   seedPublicPacks(db);
   seedSeason(db);
+  seedPartyLeaderboard(db);
   seedServerStats(db, IDS.server);
   seedOwnerPanel(db);
 

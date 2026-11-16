@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { room } from './activity-kit.test.js';
 import trivia, { speedPoints, buildDeck as triviaDeck, MIN_POINTS, MAX_POINTS, REVEAL_MS } from '../web/activity/js/games/trivia.js';
-import wyr, { award, buildDeck as wyrDeck, WIN_POINTS, TIE_POINTS } from '../web/activity/js/games/wyr.js';
+import wyr, { award, buildDeck as wyrDeck, WIN_POINTS, TIE_POINTS, RECAP_MS } from '../web/activity/js/games/wyr.js';
 import { QUESTIONS, CATEGORIES, questionById } from '../web/activity/data/trivia.js';
 import { PROMPTS } from '../web/activity/data/wyr.js';
 import { GAMES } from '../web/activity/js/games/index.js';
@@ -191,7 +191,7 @@ test('a host change during the reveal keeps the same deadline', async () => {
 });
 
 test('a full trivia game ends on results with winners and totals', async () => {
-  const r = await startGame(2, 'trivia', { rounds: 5, timer: 10 });
+  const r = await startGame(2, 'trivia', { rounds: 5, timer: 10, wager: false, lightning: false });
   const [host, a] = r.engines;
   for (let i = 0; i < 5; i += 1) {
     const st = a.snapshot().state.trivia;
@@ -306,9 +306,11 @@ test('would you rather asks again when the host leaves mid-vote, then finishes',
     assert.equal(b.snapshot().state.wyr.phase, 'reveal');
     await r.clock.advance(7000);
   }
+  assert.equal(b.snapshot().state.wyr.phase, 'recap');
+  await r.clock.advance(RECAP_MS + 300);
   const s = a.snapshot();
   assert.equal(s.room.phase, 'results');
-  assert.equal(s.scores.t[1], 5 * TIE_POINTS);
+  assert.equal(s.scores.t[1], 6 * TIE_POINTS, 'the final prompt counts double');
   assert.deepEqual(s.room.last.winners.sort(), [1, 2]);
   assert.deepEqual(r.hub.violations, []);
 });

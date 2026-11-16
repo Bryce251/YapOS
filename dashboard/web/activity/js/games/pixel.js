@@ -1,4 +1,5 @@
 import { shuffle } from '../engine.js';
+import { timeSetting, addPts, roundOf, say, bump } from './drawfun.js';
 
 export const KEY = 'pixel';
 export const PREFIX = 'pixel.';
@@ -9,8 +10,9 @@ export const BANDS = 4;
 export const BAND_ROWS = SIZE / BANDS;
 export const BAND_CELLS = BAND_ROWS * SIZE;
 export const MAX_BATCH = 64;
-export const CHEER_MS = 15000;
-export const SHOW_MS = 6000;
+export const CHEER_MS = 10000;
+export const SHOW_MS = 5000;
+export const PAINT_TIMES = Object.freeze([90, 120, 150, 180, 240, 300]);
 export const PAINT_POINT = 2;
 export const PAINT_CAP = 200;
 export const CHEER_POINTS = 25;
@@ -158,10 +160,12 @@ function begin(api, deck, i, note) {
   if (theme === undefined) return next(api, deck, i);
   clearGrid(api);
   const prev = api.get(KEY);
+  roundOf(api, i + 1, deck.length);
   const starts = api.now();
   const ends = starts + api.settings.timer * 1000;
   api.put(KEY, {
     v: 1,
+    sx: prev && prev.sx ? prev.sx : null,
     deck,
     i,
     total: deck.length,
@@ -195,10 +199,14 @@ function toCheer(api, st) {
 function toShow(api, st) {
   const counts = api.get(COUNTS) || {};
   const gained = award(counts, st.cheers.length);
-  for (const [slot, pts] of Object.entries(gained)) api.addPoints(Number(slot), pts);
+  for (const [slot, pts] of Object.entries(gained)) gained[slot] = addPts(api, Number(slot), pts);
+  let cells = st.sx && st.sx.p ? st.sx.p : {};
+  for (const [slot, n] of Object.entries(counts)) if (Number.isInteger(n) && n > 0) cells = bump(cells, slot, n);
+  const here = api.players().length;
+  if (here >= 2 && st.cheers.length >= here) say(api, 'custom', { text: '🎉 Standing ovation! Everyone cheered for this one.' });
   const starts = api.now();
   const ends = starts + SHOW_MS;
-  api.put(KEY, { ...st, phase: 'show', gained, starts, ends });
+  api.put(KEY, { ...st, phase: 'show', gained, sx: { p: cells }, starts, ends });
   api.setDeadline(ends);
 }
 
@@ -244,6 +252,21 @@ function onCheer(api, slot, action) {
   api.put(KEY, { ...st, cheers: st.cheers.concat([slot]) });
 }
 
+export function pixelAwards(st) {
+  const cells = st && st.sx && st.sx.p ? st.sx.p : {};
+  const rows = Object.entries(cells)
+    .map(([slot, n]) => ({ slot: Number(slot), n: Number(n) || 0 }))
+    .filter((r) => Number.isInteger(r.slot) && r.n >= MIN_CELLS)
+    .sort((a, b) => b.n - a.n || a.slot - b.slot);
+  const out = [];
+  if (rows.length >= 2) out.push({ emoji: '🖌️', title: 'Busiest brush', who: rows[0].slot, why: `Painted ${rows[0].n} pixels` });
+  if (rows.length >= 3) {
+    const last = rows[rows.length - 1];
+    out.push({ emoji: '🤏', title: 'Less is more', who: last.slot, why: `Made every one of their ${last.n} pixels count` });
+  }
+  return out;
+}
+
 const pixel = {
   id: 'pixel',
   name: 'Pixel Art',
@@ -255,8 +278,14 @@ const pixel = {
   prefixes: [PREFIX],
   settings: [
     { id: 'rounds', label: 'Pictures', type: 'choice', options: [1, 2, 3].map((v) => ({ value: v, label: String(v) })), default: 1 },
-    { id: 'timer', label: 'Time to paint', type: 'choice', options: [120, 150, 180].map((v) => ({ value: v, label: minutes(v) })), default: 150 },
+    timeSetting('timer', PAINT_TIMES, 150),
   ],
+
+  cards: ['swap', 'double'],
+
+  awards(api) {
+    return pixelAwards(api.get(KEY));
+  },
 
   start(api) {
     begin(api, buildDeck(api.settings.rounds, api.random), 0);

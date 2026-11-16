@@ -310,8 +310,8 @@ test('a full game: roles, one line each per lap, voting, a caught faker stealing
   assert.equal(s.phase, 'reveal');
   assert.equal(s.caught, false);
   pts = hostOf(r).snapshot().scores.g;
-  assert.equal(pts[o2], (o2 === o ? STEAL_POINTS : VOTE_POINTS) + ESCAPE_POINTS);
-  assert.match(footText(odd.model(bySlot(r, o2).snapshot())), /\+300/);
+  assert.equal(pts[o2], (o2 === o ? STEAL_POINTS : VOTE_POINTS) + ESCAPE_POINTS * 2, 'the final round counts double');
+  assert.match(footText(odd.model(bySlot(r, o2).snapshot())), /\+600/);
   await r.clock.advance(REVEAL_MS + 200);
   assert.equal(hostOf(r).snapshot().room.phase, 'results');
   checkLimits(r);
@@ -408,7 +408,7 @@ test('admins can skip each phase and add or take away time', async () => {
   s = st(r);
   assert.notEqual(s.turn, first);
   assert.deepEqual(s.marks, [-1]);
-  owner.admin.run({ type: 'time', ms: -15000 });
+  owner.admin.run({ type: 'time', ms: -20000 });
   await r.clock.advance(300);
   assert.ok(st(r).ends - r.clock.now() < 6000);
   for (let i = 0; i < 3; i += 1) {
@@ -781,13 +781,13 @@ test('a full 12 player game plays every round to the results with fair roles, sc
       assert.equal(s.phase, 'reveal');
       assert.equal(s.stole, false);
       const after = hostOf(r).snapshot().scores.g;
-      for (const c of crew) assert.equal((after[c] || 0) - (before[c] || 0), VOTE_POINTS + CREW_BONUS);
+      for (const c of crew) assert.equal((after[c] || 0) - (before[c] || 0), (VOTE_POINTS + CREW_BONUS) * (round === 3 ? 2 : 1));
       assert.equal((after[o] || 0) - (before[o] || 0), 0);
     } else {
       assert.equal(s.phase, 'reveal');
       assert.equal(s.caught, false);
       const after = hostOf(r).snapshot().scores.g;
-      assert.equal((after[o] || 0) - (before[o] || 0), ESCAPE_POINTS);
+      assert.equal((after[o] || 0) - (before[o] || 0), ESCAPE_POINTS * (round === 3 ? 2 : 1));
     }
     checkLimits(r);
     await r.clock.advance(REVEAL_MS + 200);

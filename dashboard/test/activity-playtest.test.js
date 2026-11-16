@@ -314,7 +314,7 @@ test('Higher or Lower plays full games with 1, 3 and 8 players', async (t) => {
   quietNet();
   t.after(resetAdmins);
   for (const n of [1, 3, 8]) {
-    const { r } = await startGame(higherlower, n, { rounds: 5, timer: 10 });
+    const { r } = await startGame(higherlower, n, { rounds: 5, timer: 10, knockout: false });
     for (let round = 0; round < 5; round += 1) {
       const s = stH(r);
       assert.equal(s.phase, 'guess');
@@ -333,7 +333,7 @@ test('Higher or Lower plays full games with 1, 3 and 8 players', async (t) => {
 test('Higher or Lower re-asks the round after a host change and admits late joiners', async (t) => {
   quietNet();
   t.after(resetAdmins);
-  const { r } = await startGame(higherlower, 3, { rounds: 5, timer: 15 });
+  const { r } = await startGame(higherlower, 3, { rounds: 5, timer: 15, knockout: false });
   const s0 = stH(r);
   bySlot(r, slotsOf(r)[1]).act({ type: 'pick', side: 'a', r: s0.r });
   await r.clock.advance(300);
@@ -381,7 +381,7 @@ test('team Trivia with 3 and 8 players: balanced teams and fair team winners', a
   const posts = quietNet();
   t.after(resetAdmins);
   for (const n of [3, 8]) {
-    const { r } = await startGame(trivia, n, { teams: 'two', rounds: 5, timer: 10 });
+    const { r } = await startGame(trivia, n, { teams: 'two', rounds: 5, timer: 10, wager: false, lightning: false });
     const host = r.engines[0];
     const tm = host.snapshot().state.trivia.tm;
     const sizes = ['r', 'b'].map((id) => Object.values(tm).filter((x) => x === id).length);

@@ -731,6 +731,48 @@
   margin-top: var(--space-3);
 }
 
+.chain-clock.countdown {
+  flex: none;
+  flex-direction: row;
+  gap: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.chain-clock .countdown-num {
+  color: var(--text);
+  font-size: inherit;
+}
+
+.chain-clock.is-low {
+  border-color: var(--accent);
+}
+
+.chain-clock.is-low .countdown-num {
+  color: var(--accent-text);
+}
+
+.chain-speed {
+  font-variant-numeric: tabular-nums;
+}
+
+.chain-speed.is-faster {
+  border-color: var(--amber);
+  color: var(--text);
+  animation: chain-faster 900ms ease-out 2;
+}
+
+@keyframes chain-faster {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 .vote-card {
   display: flex;
   flex-wrap: wrap;
@@ -826,6 +868,7 @@
   .feed-item,
   .chain-word,
   .chain-letter,
+  .chain-speed,
   .word-reveal {
     animation: none;
   }

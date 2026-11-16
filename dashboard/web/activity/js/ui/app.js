@@ -12,6 +12,7 @@ import { predictModel, predictBox, predictWaitModel, predictWait } from './predi
 import { hostBarModel, hostBar, REMOVED_TEXT, LATE_LOCKED_TEXT } from './hosttools.js';
 import { tourStatus } from './tournament.js';
 import { createFullscreen } from './fullscreen.js';
+import { createParty, createBoardLink } from './party.js';
 
 export const ANNOUNCE_MS = 10000;
 export const LEAVE_GRACE_MS = 6000;
@@ -129,7 +130,7 @@ export function spectateModel(snap) {
   return out;
 }
 
-export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, juice = null }) {
+export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, juice = null, leaderboard = null }) {
   const alone = !win.parent || win.parent === win;
   let account = alone ? { state: 'loading', name: '' } : null;
   const fx = createFx(win);
@@ -159,7 +160,10 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     focusBack: () => head.querySelector('.btn-admin'),
     sfx: sound,
   });
-  root.replaceChildren(h('div', { class: 'aurora', attrs: { 'aria-hidden': 'true' } }), shell, fxLayer, panel.el, toastRoot);
+  const party = createParty({ engine, win, sfx: sound, toast });
+  const boardHost = h('div', { class: 'leaderboard-host' });
+  const boardLink = createBoardLink({ engine, host: boardHost, loader: leaderboard });
+  root.replaceChildren(h('div', { class: 'aurora', attrs: { 'aria-hidden': 'true' } }), shell, fxLayer, party.el, panel.el, boardHost, toastRoot);
 
   function toast(text) {
     const t = h('div', { class: 'toast', text, attrs: { role: 'status' } });
@@ -171,9 +175,9 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const fullscreen = createFullscreen({ root, win, doc: win.document || (typeof document !== 'undefined' ? document : null), toast, onChange: () => repaintHead() });
 
   const trolls = createTrolls({ shell, layer: fxLayer, marks: root, win, engine, fx, sfx: sound });
-  const lobby = createLobby({ engine, toast });
+  const lobby = createLobby({ engine, toast, boardLink });
   const replays = createRecorder();
-  const results = createResults({ engine, fx, replays, win });
+  const results = createResults({ engine, fx, replays, win, toast, boardLink });
   const gameWrap = h('div', { class: 'screen play' });
   const hostSlot = h('div', { class: 'host-slot' });
   const spectate = h('div', { class: 'spectate-slot' });
@@ -586,6 +590,8 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     tickAnnounce(now());
     panel.update(snap);
     paintBody(snap, hm);
+    if (party.update(snap)) root.dataset.dock = 'on';
+    else delete root.dataset.dock;
     trolls.paint();
     direct(snap);
   }
@@ -634,6 +640,11 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   const stopSpot = fx.spotlight(root);
   const offChange = engine.on('change', render);
+  const offBoard = boardLink.onReady(() => {
+    if (destroyed) return;
+    if (screen === 'lobby') lobby.update(engine.snapshot());
+    else if (screen === 'results') results.update(engine.snapshot());
+  });
   root.addEventListener('click', onRootClick, true);
   if (typeof win.addEventListener === 'function') win.addEventListener(PROFILES_EVENT, onProfiles);
   unlockTarget().addEventListener('pointerdown', unlockOnce, true);
@@ -661,6 +672,8 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     destroy() {
       destroyed = true;
       offChange();
+      offBoard();
+      party.destroy();
       root.removeEventListener('click', onRootClick, true);
       offUnlock();
       if (typeof offFx === 'function') offFx();

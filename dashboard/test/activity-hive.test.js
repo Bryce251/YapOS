@@ -827,7 +827,8 @@ test('the game definition fits the lobby', () => {
   assert.equal(hive.minPlayers, 1);
   assert.equal(hive.emoji, '🐝');
   const timer = hive.settings.find((x) => x.id === 'timer');
-  assert.deepEqual(timer.options.map((o) => o.value), [90, 120, 180]);
+  assert.deepEqual(timer.options.map((o) => o.value), [60, 90, 120, 180]);
+  assert.equal(timer.default, 90);
   for (const t of [hive.name, hive.blurb, ...timer.options.map((o) => o.label)]) for (const re of BANNED) assert.equal(re.test(t), false, t);
 });
 

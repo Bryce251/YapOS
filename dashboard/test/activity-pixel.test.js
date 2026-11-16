@@ -97,7 +97,7 @@ test('the game is a drawing game with 2 to 3 minutes to paint', () => {
   assert.equal(pixel.id, 'pixel');
   assert.equal(pixel.category, 'drawing');
   assert.equal(pixel.emoji, '🟪');
-  assert.deepEqual(pixel.settings.find((s) => s.id === 'timer').options.map((o) => o.value), [120, 150, 180]);
+  assert.deepEqual(pixel.settings.find((s) => s.id === 'timer').options.map((o) => o.value), [90, 120, 150, 180, 240, 300]);
   assert.deepEqual(pixel.prefixes, [PREFIX]);
   for (const re of BANNED) assert.doesNotMatch(`${pixel.name} ${pixel.blurb}`, re);
 });

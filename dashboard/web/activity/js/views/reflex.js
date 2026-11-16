@@ -1,6 +1,8 @@
 import reflex, { MIN_MS, MAX_MS } from '../games/reflex.js';
 import { EARLY, FOOLED, GUESS, SLOW, NONE, TIPS, FAKE_TIPS, rating, pickLine } from '../../data/reflex.js';
+import { koLine } from '../games/knockout.js';
 import { h, memo, timer, avatar, plural } from '../ui/dom.js';
+import { koBar } from './knockout.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
 const MEDALS = ['🥇', '🥈', '🥉'];
@@ -154,13 +156,22 @@ function inDialog(node) {
 
 function topModel(m) {
   if (!m) return null;
-  return { phase: m.phase, number: m.number, total: m.total, fakeouts: m.fakeouts, starts: m.starts, ends: m.ends, note: m.note, last: m.last };
+  return { phase: m.phase, number: m.number, total: m.total, fakeouts: m.fakeouts, starts: m.starts, ends: m.ends, note: m.note, last: m.last, ko: m.ko };
+}
+
+export function koNote(m) {
+  if (!m || !m.ko) return '';
+  if (m.phase === 'show' && m.ko.champ) return m.ko.champ.isMe ? `👑 You won the knockout! +${m.survivor}` : `👑 ${m.ko.champ.name} won the knockout!`;
+  if (m.ko.out.some((p) => p.isMe)) return 'You are out this round. Thanks for playing, cheer on the rest!';
+  if (m.ko.imOut) return "You're out, so cheer on the others!";
+  if (!m.ko.imAlive && m.watching) return "You're watching the knockout. You'll be in next game.";
+  return '';
 }
 
 function bottomModel(m) {
   if (!m) return null;
-  if (m.phase === 'wait') return { phase: 'wait', done: m.done, players: m.players, waiting: m.waiting, watching: m.watching, doneBy: m.doneBy };
-  return { phase: 'show', results: m.results, best: m.best, wasFake: m.wasFake };
+  if (m.phase === 'wait') return { phase: 'wait', done: m.done, players: m.players, waiting: m.waiting, watching: m.watching, doneBy: m.doneBy, ko: koNote(m) };
+  return { phase: 'show', results: m.results, best: m.best, wasFake: m.wasFake, ko: koNote(m), champ: Boolean(m.ko && m.ko.champ && m.ko.champ.isMe) };
 }
 
 export function createReflexView({ engine, fx, cues, win, perf } = {}) {
@@ -193,9 +204,11 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
         'div',
         { class: 'game-head' },
         h('span', { class: 'chip chip-static', text: t.fakeouts ? 'Fake-outs on' : 'No fake-outs' }),
-        h('span', { class: 'game-count', text: `Round ${t.number} of ${t.total}` }),
+        t.ko ? h('span', { class: ['chip', 'chip-static', 'ko-chip', t.ko.duel ? 'is-duel' : null], text: koLine(t.ko) }) : null,
+        h('span', { class: 'game-count', text: t.ko ? `Round ${t.number}` : `Round ${t.number} of ${t.total}` }),
         show ? timer(t.starts, t.ends, t.last ? 'Final results in' : 'Next round in') : h('span', { class: 'reflex-hint', text: 'Tap or press Space' }),
       ),
+      koBar(t.ko),
       t.note === 'host' && !show ? h('p', { class: 'notice', text: 'The host changed, so this round starts again.' }) : null,
     ];
   }
@@ -204,10 +217,11 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
     if (!b) return null;
     if (b.phase === 'wait') {
       const m = { phase: 'wait', done: b.done, players: b.players, waiting: b.waiting, watching: b.watching };
-      return h('div', { class: 'game-foot' }, h('span', { class: 'foot-text', text: footText(m) }), faces(b.doneBy));
+      return [b.ko ? h('p', { class: 'notice ko-note', text: b.ko }) : null, h('div', { class: 'game-foot' }, h('span', { class: 'foot-text', text: footText(m) }), faces(b.doneBy))];
     }
     const m = { phase: 'show', results: b.results };
     return [
+      b.ko ? h('p', { class: ['notice', 'ko-note', b.champ ? 'is-champ' : null], attrs: { role: 'status' }, text: b.ko }) : null,
       h('div', { class: ['game-foot', b.results.some((x) => x.isMe && x.pts) ? 'is-good' : null] }, h('span', { class: 'foot-text', text: footText(m) }), b.wasFake ? h('span', { class: 'chip chip-static reflex-fake', text: 'That was a fake-out round' }) : null),
       b.results.length ? h('ol', { class: 'reflex-results', attrs: { 'aria-label': 'This round' } }, b.results.map(resultRow)) : null,
       bestList(b),
@@ -345,6 +359,7 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
     const { now, cues: list, burst } = reflexMoment(heard, m);
     heard = now;
     list.forEach((name, i) => cue.play(name, i ? { at: 300 } : undefined));
+    if (list.length && m.ko && m.ko.champ && m.ko.champ.isMe && fx && typeof fx.confetti === 'function') fx.confetti(80);
     if (burst) {
       const row = bottom.querySelector('.reflex-row.is-fast');
       if (row) cue.burst(row, { count: 14, emoji: ['⚡', '🎉'] });

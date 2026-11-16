@@ -11,6 +11,7 @@ import { textFlag } from '../ui/report.js';
 import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
 import { TEAM_MS, teamInfo, finalText } from '../games/teams.js';
 import { PACK_EMOJI } from '../games/packs.js';
+import { HEAT } from '../games/drawfun.js';
 import { teamBar, teamFinal, packChip } from './teams.js';
 
 export const SCALE = 2;
@@ -124,9 +125,29 @@ export function countText(m) {
   return m.words > 1 ? `${base} · ${plural(m.words, 'word', 'words')}` : base;
 }
 
+export function heatBadge(f) {
+  const x = f && f.heat ? HEAT[f.heat] : null;
+  if (!x || f.kind === 'ok') return null;
+  return h('span', { class: ['feed-heat', `heat-${f.heat}`], text: `${x.emoji} ${x.text}`, attrs: { title: x.text } });
+}
+
+export function twistLine(m) {
+  if (!m || !m.twist || (m.phase !== 'pick' && m.phase !== 'draw')) return null;
+  const t = m.twist;
+  if (m.amDrawer) return `${t.emoji} Twist round: ${t.name}. ${t.text}`;
+  if (t.id === 'b') return `${t.emoji} Twist round: ${t.name}. The drawer can't see what they draw!`;
+  return `${t.emoji} Twist round: ${t.name}`;
+}
+
+export function linesText(left) {
+  if (left <= 0) return "That's all your lines!";
+  return left === 1 ? '1 line left' : `${left} lines left`;
+}
+
 export function feedLine(f) {
   if (f.kind === 'ok') return 'guessed the word!';
   if (f.kind === 'close') return f.mine ? `${f.text} · so close!` : 'is so close!';
+  if (f.heat === 'h' && !f.mine && !f.text) return 'is on to something!';
   return f.text;
 }
 
@@ -314,15 +335,17 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   const revealBox = h('div', { class: 'draw-reveal' });
   const boardBox = h('div', { class: 'draw-scores' });
   const flagBox = h('div', { class: 'flag-slot' });
+  const twistBox = h('div', { class: 'draw-twist', attrs: { 'aria-live': 'polite' } });
+  const blindTag = h('p', { class: 'paper-blind', text: '🙈 Blind round! Keep drawing. Everyone else can see it.', attrs: { 'aria-hidden': 'true' } });
   const hiddenTag = h('p', { class: 'paper-hidden', text: HIDDEN_TEXT, attrs: { 'aria-hidden': 'true' } });
-  paper.append(hiddenTag);
+  paper.append(hiddenTag, blindTag);
   board.insertBefore(flagBox, tools);
   const teamBox = h('div', { class: 'draw-teams' });
   const finalBox = h('div', { class: 'draw-final' });
-  el.append(head, teamBox, finalBox, wordBar, revealBox, gotBox, pickBox, h('div', { class: 'draw-main' }, board, side), foot, boardBox);
+  el.append(head, twistBox, teamBox, finalBox, wordBar, revealBox, gotBox, pickBox, h('div', { class: 'draw-main' }, board, side), foot, boardBox);
   const flagged = new Set();
 
-  const mine = { k: null, strokes: [], shown: [], level: 0, count: 0, chunks: [] };
+  const mine = { k: null, strokes: [], shown: [], level: 0, count: 0, chunks: [], used: 0 };
   let redoStack = [];
   const live = new Map();
   const seen = { k: null, sig: null, strokes: [] };
@@ -339,6 +362,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   let frame = null;
   let shownMode = null;
   let heard = null;
+  let blindWas = false;
 
   function hear(m, fids) {
     const { now, cues: list } = drawMoments(heard, m, fids);
@@ -381,9 +405,27 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     ctx.fillRect(0, 0, GRID_W * SCALE, GRID_H * SCALE);
   }
 
+  function tell(text) {
+    if (typeof toast === 'function') toast(text);
+  }
+
+  function twistNow() {
+    return model && model.amDrawer && model.phase === 'draw' && model.twist ? model.twist.id : null;
+  }
+
+  function blind() {
+    return twistNow() === 'b';
+  }
+
+  function linesLeft() {
+    if (twistNow() !== 'l' || !model.lineCap) return Infinity;
+    return Math.max(0, model.lineCap - mine.used);
+  }
+
   function paint() {
     blank();
     if (model && model.hidden) return;
+    if (shownMode === 'mine' && blind()) return;
     if (shownMode === 'mine') {
       painter.paint(ctx, cur ? mine.shown.concat([cur]) : mine.shown);
       return;
@@ -428,6 +470,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   }
 
   function fillAt(p) {
+    if (blind() || linesLeft() <= 0) return;
     stopFrame();
     paint();
     const s = { ...tintOfPen(pen), z: FILL, pts: [p] };
@@ -436,12 +479,19 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     engine.broadcast(msg);
     redoStack = [];
     mine.strokes.push(s);
+    mine.used += 1;
     commit(true);
+    if (twistNow() === 'l') tell(linesText(linesLeft()));
   }
 
   function onDown(e) {
     if (!canDraw() || cur) return;
-    if (pen.drop) {
+    if (linesLeft() <= 0) {
+      e.preventDefault();
+      tell(linesText(0));
+      return;
+    }
+    if (pen.drop && !blind()) {
       e.preventDefault();
       sample(e);
       return;
@@ -449,7 +499,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     const p = pointOf(e);
     if (!p) return;
     e.preventDefault();
-    if (pen.fill) {
+    if (pen.fill && !blind()) {
       fillAt(p);
       return;
     }
@@ -462,7 +512,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     }
     cur = { ...tintOfPen(pen), z: pen.z, pts: [p], si: mine.count };
     sent = 0;
-    strokeOn(ctx, cur);
+    if (!blind()) strokeOn(ctx, cur);
     queueLive();
   }
 
@@ -473,7 +523,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     const list = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
     for (const x of list.length ? list : [e]) addPoint(pointOf(x));
     if (cur.pts.length > before) {
-      strokeOn(ctx, cur, before);
+      if (!blind()) strokeOn(ctx, cur, before);
       queueLive();
     }
   }
@@ -486,7 +536,9 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     if (!canDraw()) return;
     redoStack = [];
     mine.strokes.push(s.c === CUSTOM ? { c: s.c, rgb: s.rgb, z: s.z, pts: s.pts } : { c: s.c, z: s.z, pts: s.pts });
+    mine.used += 1;
     commit(true);
+    if (twistNow() === 'l') tell(linesText(linesLeft()));
   }
 
   function queueLive() {
@@ -531,7 +583,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   }
 
   function undo() {
-    if (!canDraw() || cur || !mine.strokes.length) return;
+    if (!canDraw() || cur || !mine.strokes.length || twistNow() === 'u') return;
     redoStack.push(mine.strokes.pop());
     commit(false);
     engine.broadcast({ t: 'ink', k: mine.k, cut: mine.count });
@@ -539,14 +591,15 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   }
 
   function redo() {
-    if (!canDraw() || cur || !redoStack.length) return;
+    if (!canDraw() || cur || !redoStack.length || twistNow() === 'u' || linesLeft() <= 0) return;
     mine.strokes.push(redoStack.pop());
+    if (twistNow() === 'l') mine.used += 1;
     commit(true);
     repaint();
   }
 
   function clearAll() {
-    if (!canDraw() || cur || !mine.strokes.length) return;
+    if (!canDraw() || cur || !mine.strokes.length || twistNow() === 'u') return;
     redoStack = [];
     mine.strokes = [];
     mine.level = 0;
@@ -709,6 +762,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
               avatar(f, 'xs'),
               h('span', { class: 'feed-name', text: f.isMe ? 'You' : f.name }),
               h('span', { class: 'feed-text', text: feedLine(f) }),
+              heatBadge(f),
               f.ref ? textFlag(engine, f.ref, { toast }) : null,
             ),
           )
@@ -717,6 +771,17 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   );
 
   const paintFoot = memo((m) => h('span', { class: 'foot-text', text: footText(m) }));
+
+  const paintTwist = memo((m) => {
+    const line = twistLine(m);
+    if (!line) return null;
+    return h(
+      'p',
+      { class: ['twist-banner', `twist-${m.twist.id}`] },
+      h('span', { class: 'twist-text', text: line }),
+      m.amDrawer && m.phase === 'draw' && m.twist.id === 'l' ? h('span', { class: 'chip chip-static twist-left', text: linesText(m.left) }) : null,
+    );
+  });
 
   const paintFlag = memo((f) => flagButton(f, () => flag()));
 
@@ -750,6 +815,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
         redoStack = [];
         mine.k = m.k;
         mine.strokes = back.strokes;
+        mine.used = back.strokes.length;
         mine.level = 0;
         const fit = fitInk(mine.strokes, mine.k, 0);
         mine.chunks = fit ? fit.chunks : [];
@@ -799,6 +865,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     paintPick(pickBox, { phase: m.phase, amDrawer: m.amDrawer, choices: m.choices, n: m.n });
     paintFeed(feedBox, { feed: feedRefs(m), phase: m.phase });
     paintFoot(foot, m);
+    paintTwist(twistBox, { phase: m.phase, amDrawer: m.amDrawer, twist: m.twist, left: m.lineCap ? Math.max(0, m.lineCap - mine.used) : 0 });
     el.dataset.phase = m.phase;
     board.classList.toggle('is-drawing', canDraw() || (m.amDrawer && m.phase === 'draw'));
     if (!(m.amDrawer && m.phase === 'draw')) palette.close(false);
@@ -810,9 +877,22 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     syncInk(m, next.state);
     if (m.hidden !== wasHidden) repaint();
     paintFlag(flagBox, flagModel(next, draw.drawingOf(next), flagged));
-    undoBtn.disabled = !m.amDrawer || !mine.strokes.length;
-    redoBtn.disabled = !m.amDrawer || !redoStack.length;
-    clearBtn.disabled = !m.amDrawer || !mine.strokes.length;
+    const tw = twistNow();
+    undoBtn.disabled = !m.amDrawer || !mine.strokes.length || tw === 'u';
+    redoBtn.disabled = !m.amDrawer || !redoStack.length || tw === 'u';
+    clearBtn.disabled = !m.amDrawer || !mine.strokes.length || tw === 'u';
+    board.classList.toggle('twist-no-undo', tw === 'u');
+    board.classList.toggle('is-blind', tw === 'b');
+    paper.classList.toggle('is-blind', tw === 'b');
+    blindTag.setAttribute('aria-hidden', tw === 'b' ? 'false' : 'true');
+    fillBtn.disabled = tw === 'b';
+    dropBtn.disabled = tw === 'b';
+    if (tw === 'b' && (pen.fill || pen.drop)) setPen({ fill: false, drop: false });
+    if (blindWas !== (tw === 'b')) {
+      blindWas = tw === 'b';
+      repaint();
+    }
+
     if (feedTurn !== m.n) {
       feedTurn = m.n;
       lastFeed = 0;

@@ -22,6 +22,7 @@ import { renderPacks } from './pages/packs.js';
 import { renderPacksBrowse } from './pages/packs-browse.js';
 import { renderProfile } from './pages/profile.js';
 import { renderSeasons } from './pages/seasons.js';
+import { renderPartyLeaderboard } from './pages/party-leaderboard.js';
 import { renderStats } from './pages/stats.js';
 import { renderAccount } from './pages/account.js';
 import { renderOwner, renderOwnerUser } from './pages/owner.js';
@@ -46,6 +47,7 @@ const TITLES = {
   'packs-browse': 'Browse word packs',
   account: 'Your account',
   seasons: 'Past seasons',
+  'party-leaderboard': 'Party leaderboard',
   profile: 'Profile',
   stats: 'Stats',
   overview: 'Overview',
@@ -82,6 +84,7 @@ const PAGES = {
 const PUBLIC_PAGES = {
   profile: renderProfile,
   seasons: renderSeasons,
+  'party-leaderboard': renderPartyLeaderboard,
   'packs-browse': renderPacksBrowse,
 };
 

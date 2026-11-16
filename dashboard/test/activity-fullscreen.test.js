@@ -409,7 +409,7 @@ test('focus mode never hides a button, field or canvas in the lobby, the drawing
     r.engines[0].lobby.pick(id);
     await r.clock.advance(300);
     r.engines[0].lobby.start();
-    for (let i = 0; i < 40; i += 1) {
+    for (let i = 0; i < 48; i += 1) {
       await r.clock.advance(2500);
       const game = views[0].root.querySelector('.game');
       seen.add(`${id}:${views[0].root.dataset.phase}:${game && game.dataset.phase ? game.dataset.phase : ''}`);

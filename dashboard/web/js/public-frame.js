@@ -6,6 +6,7 @@ import { loginUrl } from './router.js';
 
 const LINKS = [
   { href: '/p/global', label: 'Leaderboard' },
+  { href: '/party/leaderboard', label: 'Party top' },
   { href: '/seasons', label: 'Seasons' },
   { href: '/packs/browse', label: 'Word packs' },
 ];

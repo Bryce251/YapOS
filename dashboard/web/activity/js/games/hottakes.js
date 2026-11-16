@@ -6,8 +6,11 @@ import { face } from './trivia.js';
 
 export const KEY = 'hottakes';
 export const ANSWER_PREFIX = 'hottakes.';
+export const RECAP_KEY = 'hotrecap';
 export const ANSWER_MAX = 80;
-export const VOTE_MS = 30000;
+export const VOTE_MS = 20000;
+export const RECAP_MS = 15000;
+export const RECAP_BYTES = 3600;
 export const REVEAL_BASE_MS = 7000;
 export const REVEAL_STEP_MS = 600;
 export const REVEAL_MAX_MS = 16000;
@@ -98,6 +101,79 @@ export function tally(authors, votes) {
   return { res, top, gained };
 }
 
+function give(api, slot, n) {
+  const got = api.addPoints(slot, n);
+  return Number.isFinite(got) ? got : n;
+}
+
+function say(api, kind, data) {
+  if (typeof api.say === 'function') api.say(kind, data);
+}
+
+function nameAt(api, slot) {
+  return typeof api.nameOf === 'function' ? api.nameOf(slot) : 'Someone';
+}
+
+export function fitRecap(list, max = RECAP_BYTES) {
+  let out = list.slice();
+  while (out.length > 1 && jsonBytes(out) > max) out = out.slice(1);
+  if (jsonBytes(out) > max) out = [];
+  return out;
+}
+
+export function biggestFan(fans) {
+  let best = null;
+  for (const [voter, row] of Object.entries(fans || {})) {
+    for (const [author, n] of Object.entries(row || {})) {
+      if (n < 2) continue;
+      if (!best || n > best.n) best = { fan: Number(voter), of: Number(author), n };
+    }
+  }
+  return best;
+}
+
+function remember(api, st, cur, res, top, answers) {
+  const fans = api.memory.fans && typeof api.memory.fans === 'object' ? api.memory.fans : {};
+  api.memory.fans = fans;
+  for (const [voter, id] of Object.entries(cur.votes || {})) {
+    const author = cur.authors[id];
+    if (!Number.isInteger(author)) continue;
+    fans[voter] = fans[voter] || {};
+    fans[voter][author] = (fans[voter][author] || 0) + 1;
+  }
+  const votes = api.memory.votes && typeof api.memory.votes === 'object' ? api.memory.votes : {};
+  api.memory.votes = votes;
+  for (const row of res) votes[row[1]] = (votes[row[1]] || 0) + row[2];
+  const best = res.find((row) => top.includes(row[0]));
+  if (!best) return;
+  const text = answers.get(best[0]);
+  if (!text) return;
+  const prev = api.get(RECAP_KEY);
+  const list = Array.isArray(prev) ? prev.filter((x) => x && x.n !== st.n) : [];
+  list.push({ n: st.n, no: st.nonce, id: best[0], p: st.p.id, t: text, a: best[1], v: best[3], k: best[2], all: res.reduce((sum, row) => sum + row[2], 0) });
+  api.put(RECAP_KEY, fitRecap(list));
+}
+
+function cheer(api, res, top) {
+  const sk = api.memory.sk && typeof api.memory.sk === 'object' ? api.memory.sk : {};
+  api.memory.sk = sk;
+  const winners = res.filter((row) => top.includes(row[0])).map((row) => row[1]);
+  for (const s of Object.keys(sk).map(Number)) if (!winners.includes(s)) sk[s] = 0;
+  for (const s of new Set(winners)) {
+    sk[s] = (sk[s] || 0) + 1;
+    if (sk[s] >= 2) say(api, 'streak', { slot: s, n: sk[s] });
+  }
+  const total = res.reduce((sum, row) => sum + row[2], 0);
+  const lead = res[0];
+  if (lead && top.length === 1 && total >= 3 && lead[2] === total) {
+    say(api, 'custom', { text: `🌶️ Every single vote went to ${nameAt(api, lead[1])}!` });
+    return;
+  }
+  if (lead && top.length === 1) say(api, 'win', { slot: lead[1] });
+  const second = res[1];
+  if (lead && second && top.length === 1 && lead[2] >= 2 && lead[2] - second[2] === 1) say(api, 'close', { slot: second[1] });
+}
+
 function clearAnswers(api) {
   for (const k of api.keys()) if (k.startsWith(ANSWER_PREFIX)) api.put(k, null);
 }
@@ -121,6 +197,7 @@ function ask(api, deck, i, note) {
   const starts = api.now();
   const ends = starts + api.settings.timer * 1000;
   api.memory.cur = { n, answers: {}, authors: null, votes: {} };
+  if (typeof api.round === 'function') api.round(i + 1, deck.length);
   api.put(KEY, {
     v: 1,
     deck,
@@ -143,6 +220,7 @@ function ask(api, deck, i, note) {
     note: note || null,
     starts,
     ends,
+    rc: api.settings.recap === false ? 0 : 1,
   });
   api.setDeadline(ends);
   return undefined;
@@ -151,6 +229,15 @@ function ask(api, deck, i, note) {
 function next(api, deck, i) {
   if (i + 1 < deck.length && api.players().length) return ask(api, deck, i + 1);
   clearAnswers(api);
+  const st = api.get(KEY);
+  const recap = api.get(RECAP_KEY);
+  if (st && st.phase === 'reveal' && st.rc !== 0 && Array.isArray(recap) && recap.length && api.players().length) {
+    const starts = api.now();
+    const ends = starts + RECAP_MS;
+    api.put(KEY, { ...st, phase: 'recap', chunks: 0, count: 0, res: null, top: [], gained: {}, note: null, starts, ends });
+    api.setDeadline(ends);
+    return undefined;
+  }
   return api.finish();
 }
 
@@ -220,9 +307,14 @@ function reveal(api) {
     api.memory.cur = null;
     return toReveal(api, st, { res: null, top: [], gained: {}, lost: true, note: 'host' });
   }
-  const { res, top, gained } = tally(cur.authors, cur.votes);
-  for (const [slot, pts] of Object.entries(gained)) api.addPoints(Number(slot), pts);
-  api.memory.tops = [...new Set((Array.isArray(api.memory.tops) ? api.memory.tops : []).concat(top.filter(Number.isInteger)))];
+  const { res, top, gained: base } = tally(cur.authors, cur.votes);
+  const gained = {};
+  for (const [slot, pts] of Object.entries(base)) gained[slot] = give(api, Number(slot), pts);
+  const authorsTop = res.filter((row) => top.includes(row[0])).map((row) => row[1]);
+  api.memory.tops = [...new Set((Array.isArray(api.memory.tops) ? api.memory.tops : []).concat(authorsTop.filter(Number.isInteger)))];
+  const texts = new Map(answersFrom(Object.fromEntries(api.keys().filter((k) => k.startsWith(ANSWER_PREFIX)).map((k) => [k, api.get(k)])), st).map((a) => [a.id, a.text]));
+  remember(api, st, cur, res, top, texts);
+  cheer(api, res, top);
   api.memory.cur = null;
   return toReveal(api, st, { res, top, gained, note: null });
 }
@@ -303,15 +395,65 @@ const hottakes = {
   category: 'party',
   blurb: 'Fill in the blank with your funniest answer, then vote for the best one. Votes are points.',
   minPlayers: 3,
-  keys: [KEY],
+  keys: [KEY, RECAP_KEY],
   prefixes: [ANSWER_PREFIX],
+  cards: ['swap', 'double', 'peek'],
   settings: [
-    { id: 'rounds', label: 'Rounds', type: 'choice', options: [3, 5, 7].map((v) => ({ value: v, label: String(v) })), default: 5 },
-    { id: 'timer', label: 'Time to write', type: 'choice', options: [45, 60, 90].map((v) => ({ value: v, label: `${v} s` })), default: 60 },
+    { id: 'rounds', label: 'Rounds', type: 'choice', options: [3, 4, 5, 7].map((v) => ({ value: v, label: String(v) })), default: 4 },
+    { id: 'timer', label: 'Time to write', type: 'choice', options: [30, 45, 60, 90].map((v) => ({ value: v, label: `${v} s` })), default: 45 },
+    { id: 'recap', label: '👀 Who voted for what', type: 'toggle', default: true, fun: true },
   ],
 
   start(api) {
+    api.memory.fans = {};
+    api.memory.votes = {};
+    api.memory.sk = {};
+    api.memory.tops = [];
+    if (api.get(RECAP_KEY) !== null) api.put(RECAP_KEY, null);
     ask(api, buildDeck(api.settings.rounds, api.random), 0);
+  },
+
+  hint(api) {
+    const st = api.get(KEY);
+    const cur = st ? fresh(api, st) : null;
+    if (!st || st.phase !== 'vote' || !cur || !cur.authors) return null;
+    const count = {};
+    for (const id of Object.values(cur.votes || {})) count[id] = (count[id] || 0) + 1;
+    const best = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+    if (!best) return null;
+    const text = answersFrom(Object.fromEntries(api.keys().filter((k) => k.startsWith(ANSWER_PREFIX)).map((k) => [k, api.get(k)])), st).find((a) => String(a.id) === best[0]);
+    if (!text) return null;
+    return `👀 Leading so far with ${best[1] === 1 ? '1 vote' : `${best[1]} votes`}: “${text.text}”`;
+  },
+
+  awards(api) {
+    const out = [];
+    const votes = api.memory.votes || {};
+    const list = Object.entries(votes).map(([s, n]) => [Number(s), n]).filter(([s, n]) => Number.isInteger(s) && n > 0);
+    if (list.length) {
+      const best = Math.max(...list.map((x) => x[1]));
+      if (best >= 2) out.push({ emoji: '🌶️', title: 'Hottest takes', who: list.filter((x) => x[1] === best).map((x) => x[0]), why: `${best} votes in total` });
+    }
+    const fan = biggestFan(api.memory.fans);
+    if (fan) out.push({ emoji: '🥰', title: 'Biggest fan', who: fan.fan, why: `Voted for ${nameAt(api, fan.of)} ${fan.n} times` });
+    const recap = api.get(RECAP_KEY);
+    const sweep = (Array.isArray(recap) ? recap : []).find((x) => x && x.k >= 3 && x.k === x.all);
+    if (sweep && Number.isInteger(sweep.a)) out.push({ emoji: '💯', title: 'Clean sweep', who: sweep.a, why: 'Got every single vote in a round' });
+    return out;
+  },
+
+  highlights(api) {
+    const recap = api.get(RECAP_KEY);
+    return (Array.isArray(recap) ? recap : [])
+      .filter((x) => x && typeof x.t === 'string' && Number.isInteger(x.a))
+      .sort((a, b) => (b.k || 0) - (a.k || 0))
+      .slice(0, 5)
+      .map((x) => {
+        const p = promptById(x.p);
+        const { before, after } = promptParts(p ? p.t : '');
+        const full = p && p.t.includes('____') ? `${before}${x.t}${after}` : `“${x.t}”`;
+        return { text: full.length <= 120 ? full : `“${x.t}”`, who: x.a };
+      });
   },
 
   results(api) {
@@ -329,12 +471,13 @@ const hottakes = {
     if (!st) return api.finish();
     if (st.phase === 'write') return toVote(api);
     if (st.phase === 'vote') return reveal(api);
+    if (st.phase === 'recap') return api.finish();
     return next(api, st.deck, st.i);
   },
 
   admin(api, action) {
     const st = api.get(KEY);
-    if (!st || !['write', 'vote', 'reveal'].includes(st.phase)) return false;
+    if (!st || !['write', 'vote', 'reveal', 'recap'].includes(st.phase)) return false;
     if (action.type === 'skip') {
       hottakes.deadline(api);
       return true;
@@ -350,6 +493,15 @@ const hottakes = {
 
   texts(api) {
     const st = api.get(KEY);
+    if (st && st.phase === 'recap') {
+      const recap = api.get(RECAP_KEY);
+      return (Array.isArray(recap) ? recap : [])
+        .filter((x) => x && typeof x.t === 'string' && Number.isInteger(x.a) && Number.isInteger(x.id))
+        .map((x) => {
+          const p = promptById(x.p);
+          return { r: answerRef(x.n, x.no, x.id), author: x.a, text: x.t, context: p ? `Prompt: ${p.t}` : null };
+        });
+    }
     if (!st || (st.phase !== 'vote' && st.phase !== 'reveal')) return [];
     const authors = {};
     if (st.phase === 'vote') {
@@ -377,7 +529,7 @@ const hottakes = {
     if (!st) return hottakes.start(api);
     if (st.phase === 'write' && !fresh(api, st)) return ask(api, st.deck, st.i, 'host');
     if (st.phase === 'vote' && !fresh(api, st)) return reveal(api);
-    if (api.deadline === null) api.setDeadline(api.now());
+    if (api.deadline === null) api.setDeadline(st.phase === 'recap' ? Math.max(api.now(), st.ends || 0) : api.now());
     return undefined;
   },
 
@@ -405,6 +557,34 @@ const hottakes = {
       const p = bySlot.get(slot);
       return p ? face(p, mine) : null;
     };
+    if (st.phase === 'recap') {
+      const recap = Array.isArray(snap.state[RECAP_KEY]) ? snap.state[RECAP_KEY] : [];
+      return {
+        phase: 'recap',
+        n: st.n,
+        number: st.total,
+        total: st.total,
+        starts: st.starts,
+        ends: st.ends,
+        note: null,
+        rounds: recap
+          .filter((x) => x && typeof x.t === 'string' && Number.isInteger(x.a))
+          .map((x) => {
+            const p = promptById(x.p);
+            return {
+              n: x.n,
+              ref: answerRef(x.n, x.no, x.id),
+              prompt: p ? p.t : '',
+              text: cleanShared(x.t, ANSWER_MAX),
+              author: faceOf(x.a) || { name: 'Someone', initials: '?', hue: 20, isMe: false },
+              isMine: x.a === mine,
+              votes: Number(x.k) || 0,
+              voters: (Array.isArray(x.v) ? x.v : []).map(faceOf).filter(Boolean),
+              iVoted: Array.isArray(x.v) && x.v.includes(mine),
+            };
+          }),
+      };
+    }
     const playing = Array.isArray(st.in) ? st.in : [];
     const waiting = mine !== null && Array.isArray(st.wait) && st.wait.includes(mine);
     const inRound = mine !== null && playing.includes(mine);

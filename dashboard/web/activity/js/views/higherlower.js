@@ -1,5 +1,7 @@
 import higherlower, { REVEAL_MS } from '../games/higherlower.js';
+import { koLine } from '../games/knockout.js';
 import { h, memo, timer, avatar, plural } from '../ui/dom.js';
+import { koBar } from './knockout.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
 
@@ -21,11 +23,15 @@ export function footText(m) {
   if (!m) return '';
   if (m.phase === 'guess') {
     const count = `${m.done} of ${plural(m.players, 'player', 'players')} picked`;
+    if (m.ko && m.ko.imOut) return `You're out, so cheer on the others! ${count}`;
+    if (m.ko && m.watching) return `You're watching the knockout. You'll be in next game. ${count}`;
     if (m.waiting) return `You joined near the end of this one, so you're in from the next round. ${count}`;
     if (m.watching) return `You're watching this one. ${count}`;
     if (m.myPick) return `Locked in! ${count}`;
     return count;
   }
+  if (m.ko && m.ko.champ && m.ko.champ.isMe) return `You won the knockout! +${m.myGain}`;
+  if (m.ko && m.ko.out.some((p) => p.isMe)) return m.correct ? 'Right, but too slow this time. You are out!' : 'Knocked out! Thanks for playing, cheer on the rest.';
   if (m.watching || m.waiting) return 'Here are the numbers. Get ready for the next one!';
   if (!m.myPick) return "Time's up! No pick means your streak starts again.";
   if (m.correct) return m.streak >= 2 ? `Right! That's ${m.streak} in a row. +${m.myGain}` : `Right! +${m.myGain}`;
@@ -89,9 +95,11 @@ export function createHigherlowerView({ engine, fx, cues }) {
         'div',
         { class: 'game-head' },
         h('span', { class: ['chip', 'chip-static', m.streak >= 2 ? 'hl-streak' : null], text: m.streak >= 2 ? `🔥 ${m.streak} in a row` : 'Streak 0' }),
-        h('span', { class: 'game-count', text: `Round ${m.number} of ${m.total}` }),
-        timer(reveal ? m.ends - REVEAL_MS : m.starts, m.ends, reveal ? 'Next round in' : 'Time left to pick'),
+        m.ko ? h('span', { class: ['chip', 'chip-static', 'ko-chip', m.ko.duel ? 'is-duel' : null], text: koLine(m.ko) }) : null,
+        h('span', { class: 'game-count', text: m.ko ? `Round ${m.number}` : `Round ${m.number} of ${m.total}` }),
+        timer(reveal ? m.ends - REVEAL_MS : m.starts, m.ends, reveal ? (m.ko && m.ko.champ ? 'Results in' : 'Next round in') : 'Time left to pick'),
       ),
+      koBar(m.ko),
       h('h2', { class: 'question hl-ask', text: m.ask }),
       m.note === 'host' && !reveal ? h('p', { class: 'notice', text: 'The host changed, so this round starts again. Pick again!' }) : null,
       h('div', { class: 'hl-cards' }, card(m, 'a'), h('span', { class: 'or hl-or', text: 'or', attrs: { 'aria-hidden': 'true' } }), card(m, 'b')),
@@ -119,6 +127,10 @@ export function createHigherlowerView({ engine, fx, cues }) {
     const { now, cues: list } = higherlowerMoment(heard, m);
     heard = now;
     list.forEach((name, i) => cue.play(name, i ? { at: 320 } : undefined));
+    if (list.length && m.ko && m.ko.champ && m.ko.champ.isMe && cheered !== `ko${m.r}`) {
+      cheered = `ko${m.r}`;
+      confetti(80);
+    }
     if (list.includes('correct')) {
       const mine = el.querySelector(`.hl-card-${m.myPick}`);
       if (mine) {

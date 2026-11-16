@@ -181,7 +181,9 @@ test('guesses must use the same letters; other real words with those letters cou
   assert.equal(cleanGuess('Ap-ple!'), 'apple');
   assert.deepEqual([0, 1, 2, 3, 4, 9].map(placePoints), [100, 70, 50, 30, LATE_POINTS, LATE_POINTS]);
   assert.deepEqual(PLACE_POINTS, [100, 70, 50, 30]);
-  assert.equal(hintFrom(1000, 31000), 16000);
+  assert.equal(ROUND_MS, 25000);
+  assert.equal(hintFrom(1000, 1000 + ROUND_MS), 1000 + ROUND_MS / 2);
+  assert.equal(hintFrom(1000, 61000), 1000 + ROUND_MS / 2);
 });
 
 test('decks respect the length setting and mixed decks go from short to long', () => {
@@ -253,7 +255,7 @@ test('a full game: fastest solves score most, wrong guesses cost nothing, and it
   await r.clock.advance(REVEAL_MS + 400);
   const snap = host.snapshot();
   assert.equal(snap.room.phase, 'results');
-  assert.equal(snap.scores.g[host.snapshot().meSlot], 50 + 4 * 100);
+  assert.equal(snap.scores.g[host.snapshot().meSlot], 50 + 3 * 100 + 200, 'the final word counts double');
   assert.deepEqual(r.hub.violations, []);
 });
 
@@ -616,7 +618,8 @@ test('scramble files follow the house rules', () => {
   assert.equal(scramble.category, 'words');
   assert.equal(scramble.minPlayers, 1);
   assert.equal(scramble.emoji, '🔀');
-  assert.deepEqual(scramble.settings.find((x) => x.id === 'rounds').options.map((o) => o.value), [5, 10, 15]);
+  assert.deepEqual(scramble.settings.find((x) => x.id === 'rounds').options.map((o) => o.value), [5, 8, 10, 15]);
+  assert.equal(scramble.settings.find((x) => x.id === 'rounds').default, 8);
   assert.deepEqual(scramble.settings.find((x) => x.id === 'length').options.map((o) => o.value), ['mixed', 'short', 'medium', 'long']);
 });
 
@@ -659,7 +662,7 @@ test('a solo player can play a whole game and every word ends the moment it is s
   }
   const snap = host.snapshot();
   assert.equal(snap.room.phase, 'results');
-  assert.equal(snap.scores.g[snap.meSlot], 500);
+  assert.equal(snap.scores.g[snap.meSlot], 600, 'the final word counts double');
   assert.deepEqual(r.hub.violations, []);
 });
 

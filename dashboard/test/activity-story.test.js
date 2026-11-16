@@ -59,7 +59,8 @@ test('the game is a party game for 2 or more with laps and a timer', () => {
   assert.equal(story.emoji, '📖');
   assert.equal(story.minPlayers, 2);
   assert.deepEqual(story.settings.find((s) => s.id === 'laps').options.map((o) => o.value), [2, 3]);
-  assert.ok(story.settings.find((s) => s.id === 'timer').options.some((o) => o.value === 40));
+  assert.deepEqual(story.settings.find((s) => s.id === 'timer').options.map((o) => o.value), [20, 30, 45, 60]);
+  assert.equal(story.settings.find((s) => s.id === 'timer').default, 30);
   for (const re of BANNED) assert.doesNotMatch(`${story.name} ${story.blurb}`, re);
 });
 
@@ -97,7 +98,8 @@ test('players take turns, the writer adds a line, then everyone votes and the be
   assert.equal(s.phase, 'vote');
   assert.equal(lines(r).length, 6);
   const [a, b, c] = order;
-  assert.equal(r.engines[0].snapshot().scores.g[a], undefined, 'line points land at the reveal');
+  assert.equal(r.engines[0].snapshot().scores.g[a], 2 * LINE_POINTS, 'line points land as each line is written');
+  assert.equal(r.engines[0].snapshot().fun.final, true, 'the vote is the final round');
   bySlot(r, a).act({ type: 'vote', i: 0 });
   await r.clock.advance(300);
   assert.equal(st(r).voted.length, 0, 'you cannot vote for your own line');
@@ -108,11 +110,11 @@ test('players take turns, the writer adds a line, then everyone votes and the be
   s = st(r);
   assert.equal(s.phase, 'reveal');
   assert.deepEqual(s.top, [1]);
-  assert.equal(s.gained[b], 2 * VOTE_POINTS + TOP_BONUS);
-  assert.equal(s.gained[c], VOTE_POINTS);
+  assert.equal(s.gained[b], 2 * (2 * VOTE_POINTS + TOP_BONUS), 'votes count double in the final round');
+  assert.equal(s.gained[c], 2 * VOTE_POINTS);
   const scores = r.engines[0].snapshot().scores.g;
   assert.equal(scores[a], 2 * LINE_POINTS);
-  assert.equal(scores[b], 2 * LINE_POINTS + 2 * VOTE_POINTS + TOP_BONUS);
+  assert.equal(scores[b], 2 * LINE_POINTS + 2 * (2 * VOTE_POINTS + TOP_BONUS));
   assert.deepEqual(story.results({ memory: { top: [b] } }), { extra: { topLine: [b] } });
   await r.clock.advance(revealMs(6) + 500);
   assert.equal(r.hub.state.room.phase, 'results');

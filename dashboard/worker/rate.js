@@ -24,6 +24,7 @@ export const LIMITS = {
   packReports: 5,
   seasons: 120,
   stats: 30,
+  leaderboard: 120,
 };
 
 export async function hit(db, key, limit, t, weight = 1) {

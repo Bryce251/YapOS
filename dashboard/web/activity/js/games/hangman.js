@@ -3,6 +3,7 @@ import { shuffle } from '../engine.js';
 import { isBlockedGameWord } from '../filter.js';
 import { mask, unmask } from './draw.js';
 import { face } from './trivia.js';
+import { award, roundAt, say, streak, missRest, bump, prize, bestStreak, keep, reel, list, nameOf, funMem } from './funkit.js';
 
 export const KEY = 'hangman';
 export const LIVES = 6;
@@ -79,6 +80,7 @@ function ask(api, deck, i, k) {
   const ends = starts + api.settings.timer * 1000;
   const ps = {};
   for (const p of api.players()) ps[p.slot] = fresh(w.w.length);
+  roundAt(api, i + 1, deck.length);
   api.put(KEY, {
     v: 1,
     n,
@@ -127,7 +129,8 @@ function reveal(api) {
   const word = wordOf(st);
   if (!word) return api.finish();
   const gained = scoreRound(word, st.ps);
-  for (const [slot, pts] of Object.entries(gained)) api.addPoints(Number(slot), pts);
+  for (const [slot, pts] of Object.entries(gained)) gained[slot] = award(api, slot, pts);
+  noteReveal(api, st, word);
   const ps = {};
   for (const [slot, row] of Object.entries(st.ps)) ps[slot] = [row[0], row[1], row[2], row[3], row[2] > 0 ? word : row[4]];
   const starts = api.now();
@@ -163,6 +166,36 @@ function solve(api, st, slot, row, word) {
   row[2] = st.solved;
   row[3] = Math.max(0, api.now() - st.starts);
   row[4] = word;
+  bump(api, 'solved', slot);
+  if (row[2] === 1) {
+    bump(api, 'first', slot);
+    say(api, 'fast', { slot });
+  }
+  if (row[1] === 1) say(api, 'custom', { text: `😅 ${nameOf(api, slot)} solved it with one life left!` });
+  if (row[1] >= LIVES) bump(api, 'flawless', slot);
+  streak(api, slot, true);
+}
+
+function noteReveal(api, st, word) {
+  const done = [];
+  for (const [k, row] of Object.entries(st.ps || {})) {
+    const slot = Number(k);
+    if (row[2] > 0) done.push(slot);
+    if (row[2] === 1) keep(api, `${nameOf(api, slot)} solved ${word.toUpperCase()} first${row[1] >= LIVES ? ' without a single miss' : ''}`, slot, 2 + (row[1] >= LIVES ? 2 : 0) + word.length / 10);
+    else if (row[2] > 0 && row[1] === 1) keep(api, `${nameOf(api, slot)} solved ${word.toUpperCase()} hanging on by one life`, slot, 2);
+  }
+  missRest(api, done);
+}
+
+export function hangmanHint(st, word, slot) {
+  if (!st || st.phase !== 'guess' || !word) return null;
+  const row = st.ps && st.ps[slot];
+  if (row && finished(row)) return null;
+  const tried = row ? row[0] : '';
+  const left = [...new Set(Array.from(word))].filter((l) => !tried.includes(l));
+  if (!left.length) return null;
+  const pick = left[(st.n + slot) % left.length];
+  return `The word has the letter "${pick.toUpperCase()}" in it.`;
 }
 
 function onLetter(api, slot, action) {
@@ -208,9 +241,10 @@ const hangman = {
   blurb: 'Everyone guesses letters for the same secret word at once. Six lives each. Solve it first to score big.',
   minPlayers: 1,
   keys: [KEY],
+  cards: ['swap', 'double', 'peek'],
   settings: [
     { id: 'rounds', label: 'Words', type: 'choice', options: [3, 5, 7].map((v) => ({ value: v, label: String(v) })), default: 5 },
-    { id: 'timer', label: 'Time per word', type: 'choice', options: [45, 60, 90].map((v) => ({ value: v, label: `${v} s` })), default: 60 },
+    { id: 'timer', label: 'Time per word', type: 'choice', options: [30, 45, 60, 90].map((v) => ({ value: v, label: `${v} s` })), default: 45 },
     {
       id: 'cat',
       label: 'Topic',
@@ -229,6 +263,25 @@ const hangman = {
   intent(api, slot, action) {
     if (action.type === 'letter') onLetter(api, slot, action);
     else if (action.type === 'word') onWord(api, slot, action);
+  },
+
+  hint(api, slot) {
+    const st = api.get(KEY);
+    return hangmanHint(st, wordOf(st), slot);
+  },
+
+  awards(api) {
+    funMem(api);
+    const hot = bestStreak(api);
+    return list(
+      prize(api, 'first', 'Fastest solver', '🏁', (n) => (n === 1 ? 'Solved one word first' : `Solved ${n} words first`), 2),
+      prize(api, 'flawless', 'Flawless', '💎', (n) => (n === 1 ? 'Solved a word without a miss' : `Solved ${n} words without a miss`)),
+      hot ? { title: 'Word streak', emoji: '🔥', who: hot.slots, why: `Solved ${hot.n} words in a row` } : null,
+    );
+  },
+
+  highlights(api) {
+    return reel(api);
   },
 
   deadline(api) {

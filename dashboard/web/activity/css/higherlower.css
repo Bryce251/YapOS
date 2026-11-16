@@ -155,6 +155,242 @@
   }
 }
 
+.ko-chip {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.ko-chip.is-duel {
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+  color: var(--warning);
+  animation: ko-pulse 1.4s var(--ease) infinite;
+}
+
+.ko-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+}
+
+.ko-alive {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.ko-face {
+  display: inline-flex;
+  border-radius: var(--radius-full);
+  box-shadow: 0 0 0 2px var(--surface-2);
+}
+
+.ko-face.is-me {
+  box-shadow: 0 0 0 2px var(--game);
+}
+
+.ko-bar.is-duel .ko-face {
+  box-shadow: 0 0 0 2px var(--warning);
+}
+
+.ko-out {
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  animation: hl-in 320ms var(--pop);
+}
+
+.ko-note {
+  text-align: center;
+}
+
+.ko-note.is-champ {
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-weight: var(--weight-bold);
+}
+
+.qz-wager-chip {
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.qz-bolt-chip {
+  border-color: var(--info-soft);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.qz-wager-title {
+  text-align: center;
+}
+
+.qz-wager-sub {
+  margin: 0 0 var(--space-3);
+  color: var(--text-2);
+  text-align: center;
+  text-wrap: balance;
+}
+
+.qz-bets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+.qz-bet {
+  min-height: 56px;
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: var(--weight-bold);
+  cursor: pointer;
+  transition: transform var(--dur) var(--ease), border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.qz-bet:hover:not(:disabled) {
+  border-color: var(--warning-line);
+  transform: translateY(-2px);
+}
+
+.qz-bet:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.qz-bet.is-all {
+  border-color: var(--warning-line);
+  color: var(--warning);
+}
+
+.qz-bet.is-mine {
+  opacity: 1;
+  border-color: var(--warning);
+  background: var(--warning-soft);
+  box-shadow: inset 0 0 0 1px var(--warning);
+  animation: pop 360ms var(--pop);
+}
+
+.qz-wager-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+}
+
+.qz-wager-mine,
+.qz-wager-other {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.qz-steal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: var(--weight-bold);
+  animation: hl-in 320ms var(--pop);
+}
+
+.qz-bolt-dots {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+
+.qz-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  transition: background var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.qz-dot.is-done {
+  background: var(--info);
+}
+
+.qz-dot.is-now {
+  background: var(--warning);
+  transform: scale(1.3);
+}
+
+.qz-review {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.qz-review-row {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.qz-review-row.is-right {
+  border-color: var(--success-line);
+}
+
+.qz-review-row.is-wrong {
+  border-color: var(--danger-line);
+}
+
+.qz-review-q {
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.qz-review-a {
+  color: var(--success);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+}
+
+.qz-review-mine {
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+@keyframes ko-pulse {
+  50% {
+    transform: scale(1.06);
+  }
+}
+
 @media (max-width: 520px) {
   .hl-cards {
     grid-template-columns: 1fr;
@@ -163,11 +399,19 @@
   .hl-card {
     min-height: 120px;
   }
+
+  .qz-bets {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .hl-value,
-  .hl-card.is-win {
+  .hl-card.is-win,
+  .ko-chip.is-duel,
+  .ko-out,
+  .qz-bet.is-mine,
+  .qz-steal {
     animation: none;
   }
 }

@@ -2,12 +2,13 @@ import { STARTERS, starterById } from '../../data/story.js';
 import { shuffle } from '../engine.js';
 import { cleanShared } from '../text.js';
 import { face } from './trivia.js';
+import { award, roundAt, say, bump, most, prize, keep, reel, list, nameOf, funMem, isFrozen, thaw } from './funkit.js';
 
 export const KEY = 'story';
 export const LINE_PREFIX = 'story.l.';
 export const LINE_MAX = 120;
 export const MAX_LINES = 24;
-export const VOTE_MS = 30000;
+export const VOTE_MS = 25000;
 export const REVEAL_BASE_MS = 9000;
 export const REVEAL_STEP_MS = 400;
 export const REVEAL_MAX_MS = 20000;
@@ -90,12 +91,24 @@ function writerAt(api, st, from) {
   return null;
 }
 
+export function lapsOf(st) {
+  return st.order.length ? Math.max(1, Math.ceil(st.turns / st.order.length)) : 1;
+}
+
 function openTurn(api, st, from, note = null) {
-  const pick = writerAt(api, st, from);
+  let pick = writerAt(api, st, from);
+  let skipped = null;
+  while (pick && isFrozen(api, pick.slot)) {
+    thaw(api, pick.slot);
+    skipped = pick.slot;
+    pick = writerAt(api, st, pick.t + 1);
+  }
   if (!pick) return toVote(api, st);
+  if (Number.isInteger(skipped)) note = 'frozen';
+  roundAt(api, Math.floor(pick.t / Math.max(1, st.order.length)) + 1, lapsOf(st) + 1);
   const starts = api.now();
   const ends = starts + api.settings.timer * 1000;
-  api.put(KEY, { ...st, phase: 'write', turn: pick.t, writer: pick.slot, note, starts, ends });
+  api.put(KEY, { ...st, phase: 'write', turn: pick.t, writer: pick.slot, note, iced: Number.isInteger(skipped) ? skipped : null, starts, ends });
   api.setDeadline(ends);
   return undefined;
 }
@@ -109,6 +122,7 @@ function toVote(api, st) {
   const authors = authorsOf(api, st);
   if (!Object.keys(authors).length || !voters(api, st, authors).length) return showReveal(api, st, authors, {});
   api.memory.cur = { run: st.run, votes: {} };
+  roundAt(api, lapsOf(st) + 1, lapsOf(st) + 1);
   const starts = api.now();
   const ends = starts + VOTE_MS;
   const next = { ...st, phase: 'vote', writer: null, voted: [], note: null, starts, ends };
@@ -119,14 +133,15 @@ function toVote(api, st) {
 
 function showReveal(api, st, authors, votes) {
   const { res, top, gained } = tally(authors, votes);
-  const total = { ...gained };
-  for (const slot of Object.values(authors)) total[slot] = (total[slot] || 0) + LINE_POINTS;
-  for (const [slot, pts] of Object.entries(total)) api.addPoints(Number(slot), pts);
+  for (const [slot, pts] of Object.entries(gained)) gained[slot] = award(api, slot, pts);
+  const paid = Number.isInteger(st.paid) ? st.paid : 0;
+  for (const [i, by] of Object.entries(authors)) if (Number(i) >= paid) award(api, by, LINE_POINTS, { raw: true });
+  noteReveal(api, st, authors, res, top);
   api.memory.cur = null;
   api.memory.top = top.map((i) => authors[i]).filter(Number.isInteger);
   const starts = api.now();
   const ends = starts + revealMs(st.lines);
-  api.put(KEY, { ...st, phase: 'reveal', writer: null, res, top, gained, starts, ends });
+  api.put(KEY, { ...st, phase: 'reveal', writer: null, paid: st.lines, res, top, gained, starts, ends });
   api.setDeadline(ends);
 }
 
@@ -144,7 +159,26 @@ function allVoted(api, st) {
 
 function addLine(api, st, slot, text) {
   api.put(lineKey(st.lines), [slot, text]);
-  return openTurn(api, { ...st, lines: st.lines + 1 }, st.turn + 1);
+  const paid = Number.isInteger(st.paid) ? st.paid : 0;
+  const fresh = paid === st.lines;
+  if (fresh) award(api, slot, LINE_POINTS);
+  bump(api, 'lines', slot);
+  bump(api, 'chars', slot, Array.from(text).length);
+  return openTurn(api, { ...st, lines: st.lines + 1, paid: fresh ? st.lines + 1 : paid }, st.turn + 1);
+}
+
+function noteReveal(api, st, authors, res, top) {
+  const fx = funMem(api);
+  const lines = readLines((k) => api.get(k), st.lines);
+  const textAt = new Map(lines.map((l) => [l.i, l.text]));
+  const ranked = res.filter((r) => r[2] > 0).sort((a, b) => b[2] - a[2] || a[0] - b[0]);
+  for (const r of ranked.slice(0, 4)) {
+    const text = textAt.get(r[0]);
+    if (text) keep(api, `"${text}" by ${nameOf(api, r[1])} (${r[2] === 1 ? '1 vote' : `${r[2]} votes`})`, r[1], r[2] + (top.includes(r[0]) ? 1 : 0));
+  }
+  for (const r of res) bump(api, 'votes', r[1], r[2]);
+  fx.top = top.map((i) => authors[i]).filter(Number.isInteger);
+  if (top.length === 1 && ranked.length) say(api, 'custom', { text: `📖 ${nameOf(api, authors[top[0]])} wrote the best line!` });
 }
 
 function onLine(api, slot, action) {
@@ -188,10 +222,43 @@ const story = {
   minPlayers: 2,
   keys: [KEY],
   prefixes: [LINE_PREFIX],
+  cards: ['swap', 'double', 'freeze'],
   settings: [
     { id: 'laps', label: 'Laps', type: 'choice', options: [2, 3].map((v) => ({ value: v, label: String(v) })), default: 2 },
-    { id: 'timer', label: 'Time per line', type: 'choice', options: [30, 40, 60].map((v) => ({ value: v, label: `${v} s` })), default: 40 },
+    { id: 'timer', label: 'Time per line', type: 'choice', options: [20, 30, 45, 60].map((v) => ({ value: v, label: `${v} s` })), default: 30 },
   ],
+
+  canFreeze(api, to) {
+    const st = api.get(KEY);
+    return Boolean(st && st.phase === 'write' && st.order.includes(to) && writerAt(api, st, st.turn + 1));
+  },
+
+  awards(api) {
+    funMem(api);
+    const chars = most(api, 'chars');
+    const lines = most(api, 'lines');
+    let wordy = null;
+    if (chars && lines) {
+      const t = api.memory.fx.n;
+      let best = 0;
+      for (const [k, c] of Object.entries(t.chars || {})) {
+        const avg = c / Math.max(1, t.lines[k] || 1);
+        if (avg > best) {
+          best = avg;
+          wordy = Number(k);
+        }
+      }
+      if (best < 60) wordy = null;
+    }
+    return list(
+      prize(api, 'votes', 'Fan favourite', '📖', (n) => (n === 1 ? 'Got 1 vote' : `Got ${n} votes`), 2),
+      Number.isInteger(wordy) ? { title: 'Novelist', emoji: '✍️', who: wordy, why: 'Wrote the longest lines' } : null,
+    );
+  },
+
+  highlights(api) {
+    return reel(api);
+  },
 
   start(api) {
     clearLines(api);
@@ -324,6 +391,7 @@ const story = {
       starts: st.starts,
       ends: st.ends,
       note: st.note || null,
+      iced: st.phase === 'write' && Number.isInteger(st.iced) ? faceOf(st.iced) : null,
       playing: mine !== null && st.order.includes(mine),
       canVote: st.phase === 'vote' && mine !== null && present.has(mine) && !voted && myVote === null && choosable,
       hasVoted: voted || myVote !== null,

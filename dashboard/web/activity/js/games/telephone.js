@@ -3,6 +3,7 @@ import { shuffle } from '../engine.js';
 import { pack, seatBudget, seatKey, seatOf, validChunk, readSeat, seatRoom, SEAT_CHUNKS } from './ink.js';
 import { mask, unmask } from './draw.js';
 import { cleanShared, plainKey } from '../text.js';
+import { timeSetting, addPts, roundOf, say } from './drawfun.js';
 
 export const KEY = 'tel';
 export const IN_KEY = 'tel.in';
@@ -15,11 +16,13 @@ export const TEXT_MAX = 80;
 export const TEXT_BYTES = 160;
 export const GRACE_MS = 1500;
 export const SETTLE_MS = 1200;
-export const TEXT_SHOW_MS = 9000;
-export const DRAW_SHOW_MS = 12000;
-export const END_SHOW_MS = 14000;
+export const TEXT_SHOW_MS = 7000;
+export const DRAW_SHOW_MS = 10000;
+export const END_SHOW_MS = 12000;
 export const NEXT_MIN_MS = 1500;
-export const AWARDS_MS = 15000;
+export const AWARDS_MS = 12000;
+export const REEL_TEXT = 52;
+export const DRAW_TIMES_TEL = Object.freeze([50, 70, 80, 90, 120, 150, 180]);
 export const LOST_MS = 7000;
 export const REACT_POINTS = 10;
 export const AWARD_POINTS = 50;
@@ -428,6 +431,7 @@ function showChain(api, st, pos) {
   clearPrefix(api, ENTRY_PREFIX);
   const c = mem.order[pos];
   const chain = mem.chains[c];
+  roundOf(api, pos + 1, mem.order.length);
   putEntry(api, chain, c, 0);
   const starts = api.now();
   const ends = starts + showFor(chain, 0);
@@ -495,7 +499,7 @@ function showAwards(api, st) {
   const mem = api.memory;
   const slots = [...new Set((mem.chains || []).flat().map((e) => e.by))];
   const aw = pickAwards(mem, slots);
-  for (const a of aw) api.addPoints(a.slot, AWARD_POINTS);
+  for (const a of aw) addPts(api, a.slot, AWARD_POINTS, { raw: true });
   const starts = api.now();
   const ends = starts + AWARDS_MS;
   api.put(KEY, { ...st, phase: 'awards', rv: null, rx: null, aw, starts, ends });
@@ -536,6 +540,7 @@ function markDone(api, st, seat) {
   const took = Math.max(0, api.now() - st.starts);
   const mem = api.memory;
   mem.speed[by] = (mem.speed[by] || []).concat([took]);
+  if (st.done.length === 1 && st.seats.length >= 3 && took <= (st.ends - st.starts) / 3) say(api, 'fast', { slot: by });
   api.put(KEY, st);
   settle(api, st);
 }
@@ -595,7 +600,40 @@ function react(api, st, slot, action) {
   if (entry.k === 'd') g.d = (g.d || 0) + 1;
   else g.w = (g.w || 0) + 1;
   api.put(KEY, { ...st, rx });
-  api.addPoints(entry.by, REACT_POINTS);
+  addPts(api, entry.by, REACT_POINTS);
+}
+
+function clip(text, max) {
+  const chars = Array.from(String(text || ''));
+  return chars.length > max ? `${chars.slice(0, max - 1).join('').trim()}…` : chars.join('');
+}
+
+export function telephoneHighlights(mem) {
+  const chains = Array.isArray(mem && mem.chains) ? mem.chains : [];
+  const rows = [];
+  for (const c of chains) {
+    if (!Array.isArray(c) || c.length < 3 || !c[0] || c[0].miss || typeof c[0].t !== 'string' || !c[0].t) continue;
+    let end = null;
+    for (let i = c.length - 1; i >= 1; i -= 1) {
+      if (c[i] && c[i].k === 't' && !c[i].miss && typeof c[i].t === 'string' && c[i].t) {
+        end = c[i];
+        break;
+      }
+    }
+    if (!end || end.t === c[0].t) continue;
+    rows.push({ who: c[0].by, text: `"${clip(c[0].t, REEL_TEXT)}" turned into "${clip(end.t, REEL_TEXT)}"`, score: likeness(c[0].t, end.t) });
+  }
+  return rows
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 5)
+    .map(({ who, text }) => ({ who, text }));
+}
+
+export function telephoneAwards(st) {
+  const list = st && Array.isArray(st.aw) ? st.aw : [];
+  return list
+    .filter((a) => a && Number.isInteger(a.slot) && typeof a.title === 'string')
+    .map((a) => ({ emoji: a.e || '🏅', title: a.title, who: a.slot, why: typeof a.why === 'string' ? a.why : '' }));
 }
 
 const telephone = {
@@ -610,9 +648,20 @@ const telephone = {
   prefixes: [INK_PREFIX, ENTRY_PREFIX],
   open: [INK_PREFIX],
   settings: [
-    { id: 'write', label: 'Time to write', type: 'choice', options: [30, 40, 60].map((v) => ({ value: v, label: `${v} s` })), default: 40 },
-    { id: 'draw', label: 'Time to draw', type: 'choice', options: [50, 70, 90].map((v) => ({ value: v, label: `${v} s` })), default: 70 },
+    { id: 'write', label: 'Time to write', type: 'choice', options: [20, 30, 40, 60].map((v) => ({ value: v, label: `${v} s` })), default: 30 },
+    timeSetting('draw', DRAW_TIMES_TEL, 80),
   ],
+
+  cards: ['swap', 'double'],
+
+  awards(api) {
+    return telephoneAwards(api.get(KEY));
+  },
+
+  highlights(api) {
+    const st = api.get(KEY);
+    return st && owned(api, st) ? telephoneHighlights(api.memory) : [];
+  },
 
   writer(get, key, slot, value) {
     if (!key.startsWith(INK_PREFIX)) return false;

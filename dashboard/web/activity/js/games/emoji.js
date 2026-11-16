@@ -2,6 +2,7 @@ import { CATEGORIES, PUZZLES, puzzleByN, categoryById } from '../../data/emoji.j
 import { shuffle } from '../engine.js';
 import { face } from './trivia.js';
 import { cleanText, plainKey, editDistance, closeEnough } from '../text.js';
+import { award, roundAt, say, streak, missRest, bump, prize, bestStreak, keep, reel, list, nameOf, funMem } from './funkit.js';
 
 export const KEY = 'emoji';
 export const REVEAL_MS = 5000;
@@ -10,6 +11,8 @@ export const MAX_POINTS = 1000;
 export const LATE_MIN_MS = 4000;
 export const GUESS_CHARS = 60;
 export const GUESS_GAP_MS = 300;
+export const FAST_MS = 5000;
+export const WRONG_KEEP = 3;
 
 export function mask(n, k) {
   return (n ^ k) & 0xffff;
@@ -130,6 +133,8 @@ function ask(api, base, i, note) {
   const ends = starts + api.settings.timer * 1000;
   api.memory.gaps = {};
   api.memory.round = i;
+  api.memory.wrong = {};
+  roundAt(api, i + 1, base.deck.length);
   api.put(KEY, {
     k: base.k,
     deck: base.deck,
@@ -162,6 +167,8 @@ function reveal(api, why) {
   if (!st || st.phase !== 'guess') return;
   const p = puzzleOf(st);
   const now = api.now();
+  missRest(api, (st.got || []).map((g) => g[0]));
+  if (p) keepWrong(api, p);
   api.put(KEY, { ...st, phase: 'reveal', a: p ? p.a : '', why: why || 'time', starts: now, ends: now + REVEAL_MS });
   api.setDeadline(now + REVEAL_MS);
 }
@@ -212,12 +219,55 @@ function guess(api, slot, action) {
   if (gaps[slot] && at - gaps[slot] < GUESS_GAP_MS) return;
   gaps[slot] = at;
   const p = puzzleOf(st);
-  if (!p || judge(text, p) !== 'right') return;
-  const pts = speedPoints(Math.min(at, st.ends), st.starts, st.ends);
+  if (!p) return;
+  const verdict = judge(text, p);
+  if (verdict !== 'right') return noteWrong(api, st, slot, text, verdict);
+  const pts = award(api, slot, speedPoints(Math.min(at, st.ends), st.starts, st.ends));
+  if (!st.got.length) {
+    bump(api, 'first', slot);
+    if (at - st.starts <= FAST_MS) say(api, 'fast', { slot });
+  }
+  bump(api, 'solved', slot);
   st.got.push([slot, pts]);
-  api.addPoints(slot, pts);
+  streak(api, slot, true);
   api.put(KEY, st);
   if (everyoneGot(api, st)) reveal(api, 'all');
+}
+
+function noteWrong(api, st, slot, text, verdict) {
+  bump(api, 'tries', slot);
+  if (verdict === 'close' || verdict === 'part') {
+    const near = (api.memory.near = api.memory.near || {});
+    const key = `${st.i}:${slot}`;
+    if (!near[key]) {
+      near[key] = 1;
+      say(api, verdict === 'close' ? 'close' : 'hot', { slot });
+    }
+    return;
+  }
+  const wrong = (api.memory.wrong = api.memory.wrong || {});
+  const mine = wrong[slot] || (wrong[slot] = []);
+  if (mine.length < WRONG_KEEP && !mine.includes(text)) mine.push(text);
+}
+
+function keepWrong(api, p) {
+  const wrong = api.memory.wrong || {};
+  for (const [k, texts] of Object.entries(wrong)) {
+    const slot = Number(k);
+    const pick = texts.slice().sort((a, b) => b.length - a.length)[0];
+    if (pick && pick.length >= 4) keep(api, `${nameOf(api, slot)} guessed "${pick}" for ${p.e}. It was ${p.a}.`, slot, 1 + Math.min(4, pick.length / 6));
+  }
+  api.memory.wrong = {};
+}
+
+export function emojiHint(st, p, slot) {
+  if (!st || st.phase !== 'guess' || !p) return null;
+  if ((st.got || []).some((g) => g[0] === slot)) return null;
+  const words = String(p.a).trim().split(/\s+/).filter(Boolean);
+  const first = Array.from(words[0] || '')[0];
+  if (!first) return null;
+  const count = words.length === 1 ? 'one word' : `${words.length} words`;
+  return `It's ${count} and starts with "${first.toUpperCase()}".`;
 }
 
 const emoji = {
@@ -228,9 +278,10 @@ const emoji = {
   blurb: 'A row of emoji hides a movie, a saying, a place and more. Crack it first to score big.',
   minPlayers: 1,
   keys: [KEY],
+  cards: ['swap', 'double', 'peek'],
   settings: [
-    { id: 'rounds', label: 'Puzzles', type: 'choice', options: [5, 10, 15].map((v) => ({ value: v, label: String(v) })), default: 10 },
-    { id: 'timer', label: 'Time to guess', type: 'choice', options: [20, 30, 45].map((v) => ({ value: v, label: `${v} s` })), default: 30 },
+    { id: 'rounds', label: 'Puzzles', type: 'choice', options: [5, 8, 10, 15].map((v) => ({ value: v, label: String(v) })), default: 8 },
+    { id: 'timer', label: 'Time to guess', type: 'choice', options: [20, 25, 30, 45].map((v) => ({ value: v, label: `${v} s` })), default: 25 },
     { id: 'cats', label: 'Categories', type: 'multi', options: CATEGORIES.map((c) => ({ value: c.id, label: `${c.emoji} ${c.plural}` })), default: CATEGORIES.map((c) => c.id) },
   ],
 
@@ -242,6 +293,25 @@ const emoji = {
 
   intent(api, slot, action) {
     if (action.type === 'guess') guess(api, slot, action);
+  },
+
+  hint(api, slot) {
+    const st = api.get(KEY);
+    return emojiHint(st, puzzleOf(st), slot);
+  },
+
+  awards(api) {
+    funMem(api);
+    const hot = bestStreak(api);
+    return list(
+      prize(api, 'first', 'Code cracker', '🧩', (n) => (n === 1 ? 'Cracked one puzzle first' : `Cracked ${n} puzzles first`), 2),
+      hot ? { title: 'On a roll', emoji: '🔥', who: hot.slots, why: `${hot.n} puzzles in a row` } : null,
+      prize(api, 'tries', 'Never gives up', '🎲', (n) => `${n} creative guesses`, 6),
+    );
+  },
+
+  highlights(api) {
+    return reel(api);
   },
 
   deadline(api) {

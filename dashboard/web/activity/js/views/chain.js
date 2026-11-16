@@ -1,25 +1,52 @@
-import chain, { checkWord, usedFrom, PROBLEMS, MAX_LETTERS, wordRef } from '../games/chain.js';
+import chain, { checkWord, usedFrom, PROBLEMS, MAX_LETTERS, wordRef, catProblem } from '../games/chain.js';
 import { load as loadDictionary } from '../dictionary.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, avatar, button, plural, clock } from '../ui/dom.js';
 import { textFlag } from '../ui/report.js';
 
+export function speedText(span) {
+  return `Speeding up! Turns are now ${span} s`;
+}
+
 export function eventText(m) {
+  const said = [baseEvent(m), skipText(m)].filter(Boolean).join(' ');
+  if (!m.sped || !m.span || m.phase !== 'turn') return said;
+  return [said, `${speedText(m.span)}.`].filter(Boolean).join(' ');
+}
+
+export function skipText(m) {
+  const p = m.skipped;
+  if (!p || m.phase !== 'turn') return '';
+  return p.isMe ? '❄️ You were frozen, so your turn was skipped.' : `❄️ ${p.name} was frozen, so their turn was skipped.`;
+}
+
+export function problemText(why, m) {
+  if (why === 'cat' && m && m.cat) return catProblem(m.cat.id);
+  return PROBLEMS[why] || 'That word does not work.';
+}
+
+function baseEvent(m) {
   const e = m.last;
   if (m.note === 'first' && m.cur) return `${m.cur.isMe ? 'You go' : `${m.cur.name} goes`} first.`;
   if (!e) return '';
   const who = e.isMe ? 'You' : e.name;
-  if (e.kind === 'word') return m.vote ? '' : `${who} played “${e.w}”.`;
+  if (e.kind === 'word') {
+    if (m.vote) return '';
+    if (e.bonus) return `💥 ${who} played “${e.w}”, ending on ${e.w.slice(-1).toUpperCase()} for double points!`;
+    return `${who} played “${e.w}”.`;
+  }
   if (e.kind === 'miss') return `${who} ran out of time and lost a life.`;
   if (e.kind === 'out') return e.isMe ? "You're out of lives!" : `${e.name} is out of lives!`;
   if (e.kind === 'reject') return `“${e.w}” was voted not a word. ${who} lost a life.`;
   if (e.kind === 'left') return `${e.name} left, so their turn was skipped.`;
+  if (e.kind === 'time') return "Time's up!";
   if (e.kind === 'skip') return `An admin skipped ${e.isMe ? 'your' : `${e.name}'s`} turn. No life lost.`;
   return '';
 }
 
 export function turnText(m) {
-  if (m.phase !== 'turn' || !m.cur) return 'That’s the game!';
+  if (m.phase !== 'turn' || !m.cur) return m.fin ? 'Most lives left wins, then most points.' : 'That’s the game!';
   const L = m.letter.toUpperCase();
+  if (m.myTurn && m.cat && m.catOn) return `Your turn! Type ${m.cat.what} that starts with ${L}.`;
   if (m.myTurn) return `Your turn! Type a word that starts with ${L}.`;
   if (!m.playing) return `You're watching. ${m.cur.name} needs a word that starts with ${L}.`;
   if (!m.alive) return m.dict ? `You're out, but you can keep watching. ${m.cur.name} is up.` : `You're out, but you can still vote. ${m.cur.name} is up.`;
@@ -42,6 +69,7 @@ export function chainMoments(was, m) {
   if (!was) return { now, cues: [] };
   const cues = [];
   if (top > was.top) cues.push({ name: 'send', word: top });
+  if (top > was.top && m.last && m.last.kind === 'word' && m.last.bonus) cues.push({ name: 'correct', word: top, boom: true, opts: { at: 180 } });
   let lost = 0;
   let out = false;
   for (const p of m.players) {
@@ -55,7 +83,7 @@ export function chainMoments(was, m) {
   return { now, cues };
 }
 
-export function createChainView({ engine, toast, cues }) {
+export function createChainView({ engine, toast, cues, fx }) {
   const cue = cues && typeof cues.play === 'function' ? cues : QUIET;
   const el = h('section', { class: 'game game-chain', attrs: { 'aria-label': 'Word Chain' } });
   const head = h('div', { class: 'chain-headwrap' });
@@ -95,7 +123,14 @@ export function createChainView({ engine, toast, cues }) {
       const i = m.words.findIndex((w) => w.n === c.word);
       const chips = stage.querySelector('.chain-words');
       const chip = chips && i >= 0 ? chips.children[i] : null;
-      if (chip) cue.burst(chip, { count: 10, spread: 44 });
+      if (!chip) continue;
+      if (!c.boom) {
+        cue.burst(chip, { count: 10, spread: 44 });
+        continue;
+      }
+      cue.burst(chip, { count: 22, spread: 80, emoji: ['💥', '✨', '⭐'] });
+      cue.float(chip, '×2');
+      if (fx && typeof fx.confetti === 'function') fx.confetti(30);
     }
   }
 
@@ -115,9 +150,9 @@ export function createChainView({ engine, toast, cues }) {
     if (!model || !model.myTurn || !snap) return;
     const st = snap.state.chain;
     if (local.sentT === model.t) return;
-    const problem = checkWord(input.value, st.letter, usedFrom(snap.state));
+    const problem = checkWord(input.value, st.letter, usedFrom(snap.state), { cat: model.catOn && model.cat ? model.cat.id : null });
     if (problem) {
-      hint.textContent = PROBLEMS[problem] || 'That word does not work.';
+      hint.textContent = problemText(problem, model);
       refuse();
       return;
     }
@@ -140,6 +175,18 @@ export function createChainView({ engine, toast, cues }) {
       'div',
       { class: 'game-head' },
       h('span', { class: 'chip chip-static', text: plural(m.count, 'word', 'words') }),
+      m.until && m.phase === 'turn'
+        ? h(
+            'span',
+            { class: 'chip chip-static countdown chain-clock', dataset: { starts: m.starts, ends: m.until }, attrs: { role: 'timer', 'aria-label': 'Time left in the game' } },
+            h('span', { class: 'chain-clock-lead', text: 'Game ends in' }),
+            h('strong', { class: 'countdown-num', text: clock(m.until - m.starts) }),
+          )
+        : null,
+      m.span && m.phase === 'turn'
+        ? h('span', { class: ['chip', 'chip-static', 'chain-speed', m.sped ? 'is-faster' : null], attrs: { title: m.extra ? 'Category words and Q, X or Z starts get a few extra seconds' : m.fast ? 'Turns get 1 s shorter each lap, down to 5 s' : 'Turns stay this long all game' } }, m.extra ? `${m.span} s turns +${m.extra} s` : `${m.span} s turns`)
+        : null,
+      m.bonus && m.phase === 'turn' ? h('span', { class: 'chip chip-static chain-bonus-chip', attrs: { title: 'End a word on Q, X or Z for double points' } }, 'Q X Z ×2') : null,
       m.phase === 'turn' ? timer(m.starts, m.ends, 'Time left for this turn') : null,
     ),
   );
@@ -161,9 +208,17 @@ export function createChainView({ engine, toast, cues }) {
   );
 
   const paintStage = memo((m) => [
+    m.cat
+      ? h(
+          'div',
+          { class: ['chain-cat', m.catOn ? 'is-on' : 'is-free'], attrs: { role: 'status' } },
+          h('span', { class: 'chain-cat-emoji', text: m.cat.emoji, attrs: { 'aria-hidden': 'true' } }),
+          h('span', { class: 'chain-cat-text' }, h('strong', { text: `Category round: ${m.cat.name}` }), h('span', { class: 'chain-cat-sub', text: m.catOn ? `Every word must be ${m.cat.what}.` : `Nothing on my list starts with ${(m.letter || '').toUpperCase()}, so any word goes!` })),
+        )
+      : null,
     h(
       'div',
-      { class: 'chain-letter-wrap' },
+      { class: ['chain-letter-wrap', m.hard ? 'is-hard' : null] },
       h('span', { class: 'eyebrow', text: 'Next word starts with' }),
       h('span', { class: 'chain-letter', text: (m.letter || '?').toUpperCase(), attrs: { 'aria-live': 'polite' } }),
     ),
@@ -174,7 +229,7 @@ export function createChainView({ engine, toast, cues }) {
           m.words.map((w) =>
             h(
               'li',
-              { class: ['chain-word', w.latest ? 'is-latest' : null, w.isMe ? 'is-me' : 'has-flag'] },
+              { class: ['chain-word', w.latest ? 'is-latest' : null, w.bonus ? 'is-bonus' : null, w.isMe ? 'is-me' : 'has-flag'] },
               h('span', { class: 'chain-word-text' }, h('strong', { text: w.word.slice(0, 1).toUpperCase() }), w.word.slice(1, -1), h('strong', { class: 'chain-tail', text: w.word.length > 1 ? w.word.slice(-1) : '' })),
               h('span', { class: 'chain-by', text: w.isMe ? 'you' : w.name }),
               w.isMe ? null : textFlag(engine, wordRef(w.n), { toast, corner: true }),
@@ -214,16 +269,16 @@ export function createChainView({ engine, toast, cues }) {
       paintHead(head, { count: 0, phase: 'wait' });
       return;
     }
-    paintHead(head, { count: m.count, phase: m.phase, starts: m.starts, ends: m.ends });
+    paintHead(head, { count: m.count, phase: m.phase, starts: m.starts, ends: m.ends, until: m.until, span: m.span, fast: m.fast, sped: m.sped, bonus: m.bonus, extra: m.extra });
     paintRing(ring, m);
-    paintStage(stage, { letter: m.letter, words: m.words });
+    paintStage(stage, { letter: m.letter, words: m.words, cat: m.phase === 'turn' ? m.cat : null, catOn: m.catOn, hard: m.bonus && 'qxz'.includes(m.letter || '-') });
     paintVote(voteBox, { vote: m.vote, phase: m.phase, dict: m.dict });
     const badKey = m.bad ? `${m.t}:${m.bad.k}` : null;
     if (badKey && badKey !== local.bad && local.sentT === m.t) {
       local.bad = badKey;
       local.sentT = null;
       if (!input.value) input.value = local.sent;
-      hint.textContent = PROBLEMS[m.bad.why] || 'That word does not work.';
+      hint.textContent = problemText(m.bad.why, m);
       refuse();
     }
     paintFoot(foot, m);
@@ -233,8 +288,11 @@ export function createChainView({ engine, toast, cues }) {
     sendBtn.disabled = !open;
     entry.classList.toggle('is-open', open);
     entry.classList.toggle('is-hidden', !m.playing || !m.alive);
-    input.setAttribute('placeholder', m.myTurn ? `Starts with ${m.letter.toUpperCase()}…` : 'Wait your turn');
+    input.setAttribute('placeholder', m.myTurn ? (m.catOn && m.cat ? `${m.cat.name}, starts with ${m.letter.toUpperCase()}…` : `Starts with ${m.letter.toUpperCase()}…`) : 'Wait your turn');
     if (local.t !== m.t) {
+      if (m.sped && local.t !== null && m.phase === 'turn') {
+        toast(speedText(m.span));
+      }
       local.t = m.t;
       if (!open) input.value = '';
       if (m.note === 'again' && m.myTurn) hint.textContent = m.last && m.last.kind === 'reject' && m.last.isMe ? 'That word was voted out. Try another!' : `The last word was voted out, so it's back to ${m.letter.toUpperCase()}. Your clock restarted.`;

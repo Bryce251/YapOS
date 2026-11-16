@@ -2,6 +2,7 @@ import { TUNES, KINDS, tuneById, tunesIn } from '../../data/musicquiz.js';
 import { shuffle } from '../engine.js';
 import { mask, unmask } from './draw.js';
 import { face } from './trivia.js';
+import { award, roundAt, say, streak, bump, prize, bestStreak, keep, reel, list, nameOf, funMem } from './funkit.js';
 
 export const KEY = 'musicquiz';
 export const LEAD_MS = 1800;
@@ -12,6 +13,15 @@ export const LATE_MIN_MS = 5000;
 export const CHOICES = 4;
 export const CLIP_SECONDS = 12;
 export const MIX = 'mix';
+export const FAST_MS = 3000;
+
+export function musicHint(st, cur, slot) {
+  if (!st || st.phase !== 'listen' || !cur || cur.n !== st.n || cur.picks[slot]) return null;
+  const wrong = st.c.map((id, i) => i).filter((i) => i !== cur.answer);
+  if (!wrong.length) return null;
+  const t = tuneById(st.c[wrong[(st.n + slot) % wrong.length]]);
+  return t ? `It's not "${t.title}".` : null;
+}
 
 export function speedPoints(at, starts, ends) {
   const span = Math.max(1, ends - starts);
@@ -79,6 +89,7 @@ function ask(api, st0, i, note = null) {
   const starts = shown + LEAD_MS;
   const ends = starts + api.settings.timer * 1000;
   api.memory.cur = { n, answer: c.indexOf(tune.id), picks: {} };
+  roundAt(api, i + 1, deck.length);
   api.put(KEY, {
     v: 1,
     n,
@@ -123,13 +134,29 @@ function reveal(api) {
   const chose = {};
   const right = [];
   const gained = {};
+  let quick = null;
   for (const [slot, pick] of Object.entries(cur ? cur.picks : {})) {
     chose[slot] = pick.i;
+    const s = Number(slot);
+    streak(api, s, pick.i === answer);
     if (pick.i !== answer) continue;
-    const pts = speedPoints(pick.at, st.starts, st.ends);
-    right.push(Number(slot));
-    gained[slot] = pts;
-    api.addPoints(Number(slot), pts);
+    right.push(s);
+    gained[slot] = award(api, s, speedPoints(pick.at, st.starts, st.ends));
+    bump(api, 'right', s);
+    const ms = Math.max(0, pick.at - st.starts);
+    if (!quick || ms < quick.ms) quick = { slot: s, ms };
+  }
+  if (quick && tune) {
+    if (quick.ms <= FAST_MS) say(api, 'fast', { slot: quick.slot });
+    const fx = funMem(api);
+    if (!fx.quick || quick.ms < fx.quick.ms) fx.quick = { ...quick, title: tune.title };
+  }
+  if (tune && cur) {
+    for (const [slot, pick] of Object.entries(cur.picks)) {
+      if (pick.i === answer) continue;
+      const wrong = tuneById(st.c[pick.i]);
+      if (wrong) keep(api, `${nameOf(api, Number(slot))} heard ${tune.title} and was sure it was ${wrong.title}`, Number(slot), right.length ? 1 + right.length / 4 : 0.5);
+    }
   }
   api.memory.cur = null;
   const starts = api.now();
@@ -165,9 +192,10 @@ const musicquiz = {
   blurb: 'Hear a famous old tune and name it before everyone else. Faster answers score more.',
   minPlayers: 1,
   keys: [KEY],
+  cards: ['swap', 'double', 'peek'],
   settings: [
-    { id: 'rounds', label: 'Tunes', type: 'choice', options: [5, 10, 15].map((v) => ({ value: v, label: String(v) })), default: 10 },
-    { id: 'timer', label: 'Time to answer', type: 'choice', options: [15, 20, 30].map((v) => ({ value: v, label: `${v} s` })), default: 20 },
+    { id: 'rounds', label: 'Tunes', type: 'choice', options: [5, 8, 10, 15].map((v) => ({ value: v, label: String(v) })), default: 8 },
+    { id: 'timer', label: 'Time to answer', type: 'choice', options: [10, 15, 20, 30].map((v) => ({ value: v, label: `${v} s` })), default: 15 },
     {
       id: 'kind',
       label: 'Tunes from',
@@ -201,6 +229,26 @@ const musicquiz = {
     if (!st.answered.includes(slot)) st.answered.push(slot);
     api.put(KEY, st);
     if (everyoneAnswered(api, st)) reveal(api);
+  },
+
+  hint(api, slot) {
+    const st = api.get(KEY);
+    return musicHint(st, st ? fresh(api, st) : null, slot);
+  },
+
+  awards(api) {
+    const fx = funMem(api);
+    const hot = bestStreak(api);
+    const q = fx.quick;
+    return list(
+      prize(api, 'right', 'Golden ears', '🎧', (n) => `Named ${n} tunes`, 3),
+      hot ? { title: 'Perfect pitch', emoji: '🎼', who: hot.slots, why: `${hot.n} tunes in a row` } : null,
+      q && q.ms <= FAST_MS ? { title: 'Name that tune', emoji: '⚡', who: q.slot, why: `Got ${q.title} in ${(q.ms / 1000).toFixed(1)} s` } : null,
+    );
+  },
+
+  highlights(api) {
+    return reel(api);
   },
 
   deadline(api) {

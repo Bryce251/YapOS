@@ -10,6 +10,7 @@ import { packsRoute, getPublicPack } from './party-packs.js';
 import { browsePacks, packReportsRoute } from './pack-browse.js';
 import { getPublicProfile, visibilityRoute } from './public-profiles.js';
 import { getSeasons } from './seasons.js';
+import { getLeaderboard } from './party-leaderboard.js';
 import { ownerApi } from './owner.js';
 import { parseDays, readStats } from './server-stats.js';
 import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
@@ -434,6 +435,7 @@ export async function handleApi(request, env, deps, url) {
     if (segs.length === 3 && segs[2] === 'admins') return activityAdminsRoute(request, env, url, t);
     if (segs.length === 3 && segs[2] === 'reports') return postActivityReport(request, env, t);
     if (segs.length === 3 && segs[2] === 'results') return postResults(request, env, t);
+    if (segs.length === 3 && segs[2] === 'leaderboard') return getLeaderboard(request, env, url, t);
     if (segs[2] === 'daily') return dailyRoute(request, env, segs, url, t);
     if (segs.length === 4 && segs[2] === 'pack') return getPublicPack(request, env, segs[3], t);
     return profileRoute(request, env, segs, url, t);

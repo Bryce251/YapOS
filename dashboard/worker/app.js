@@ -5,7 +5,7 @@ import { handleApi } from './api.js';
 import { handleBot } from './bot.js';
 import { cleanup } from './cron.js';
 
-const SPA_RE = /^\/(servers(\/.*)?|party(\/reports)?|packs(\/browse)?|p\/.+|u\/[^/]+|seasons|account|owner(\/[0-9a-fA-F-]{36})?)$/;
+const SPA_RE = /^\/(servers(\/.*)?|party(\/reports|\/leaderboard)?|packs(\/browse)?|p\/.+|u\/[^/]+|seasons|account|owner(\/[0-9a-fA-F-]{36})?)$/;
 
 async function spa(request, env, url) {
   if (!env.ASSETS || typeof env.ASSETS.fetch !== 'function') {

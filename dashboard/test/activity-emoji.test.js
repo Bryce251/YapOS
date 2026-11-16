@@ -192,7 +192,8 @@ test('a full game with three players runs from start to finish with speed scorin
     s = st(r);
     assert.equal(s.got.length, 2);
     assert.ok(s.got[0][1] > s.got[1][1], 'faster is worth more');
-    assert.ok(s.got[0][1] <= MAX_POINTS && s.got[1][1] >= MIN_POINTS);
+    const mult = round === 4 ? 2 : 1;
+    assert.ok(s.got[0][1] <= MAX_POINTS * mult && s.got[1][1] >= MIN_POINTS * mult, 'the final puzzle counts double');
     await solve(r, 2);
     s = st(r);
     assert.equal(s.phase, 'reveal', 'the round ends when everyone has it');
@@ -207,7 +208,7 @@ test('a full game with three players runs from start to finish with speed scorin
   assert.equal(snap.room.phase, 'results');
   const g = snap.scores.t;
   assert.ok(g[0] > g[1] && g[1] > g[2]);
-  assert.ok(g[0] <= 5 * MAX_POINTS && g[2] >= 5 * MIN_POINTS);
+  assert.ok(g[0] <= 6 * MAX_POINTS && g[2] >= 6 * MIN_POINTS);
   assert.deepEqual(r.hub.violations, []);
 });
 
@@ -462,7 +463,7 @@ test('the view renders each phase, keeps wrong guesses private and cues once', a
   assert.match(text(views[0].el), /letters in total/);
   assert.ok(all(views[0].el).some((el) => el.classList.contains('emoji-blanks')));
   noInline(views[0].el);
-  await r.clock.advance(30000);
+  await r.clock.advance(26000);
   s = st(r);
   assert.equal(s.phase, 'reveal');
   for (const v of views) {
@@ -537,7 +538,7 @@ test('a solo player plays a whole game and each puzzle ends as soon as it is cra
   }
   const snap = r.engines[0].snapshot();
   assert.equal(snap.room.phase, 'results');
-  assert.ok(snap.scores.t[0] >= 4 * MIN_POINTS && snap.scores.t[0] <= 4 * MAX_POINTS);
+  assert.ok(snap.scores.t[0] >= 5 * MIN_POINTS && snap.scores.t[0] <= 5 * MAX_POINTS, 'the final puzzle counts double');
   assert.deepEqual(r.hub.violations, []);
 });
 

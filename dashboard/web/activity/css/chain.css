@@ -1,0 +1,90 @@
+.chain-cat {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 460px;
+  margin: var(--space-3) auto 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--game-line);
+  border-radius: var(--radius);
+  background: var(--game-soft);
+  animation: chain-cat-in 420ms var(--pop);
+}
+
+.chain-cat.is-free {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+
+.chain-cat-emoji {
+  flex: none;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.chain-cat-text {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-tight);
+}
+
+.chain-cat-sub {
+  color: var(--text-2);
+}
+
+.chain-bonus-chip {
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.04em;
+}
+
+.chain-letter-wrap.is-hard .chain-letter {
+  background: var(--warning-solid);
+  box-shadow: 0 0 0 4px var(--warning-soft), var(--shadow-sm);
+}
+
+.chain-word.is-bonus {
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+}
+
+.chain-word.is-bonus .chain-tail {
+  color: var(--warning);
+}
+
+.chain-word.is-bonus.is-latest {
+  animation: chain-boom 700ms var(--pop);
+}
+
+@keyframes chain-cat-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes chain-boom {
+  0% {
+    transform: scale(0.6) rotate(-6deg);
+  }
+  55% {
+    transform: scale(1.25) rotate(3deg);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chain-cat,
+  .chain-word.is-bonus.is-latest {
+    animation: none;
+  }
+}

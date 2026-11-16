@@ -27,7 +27,7 @@ async function startGame(n = 3, settings = {}, opts = {}) {
   await r.clock.advance(500);
   const host = r.engines[0];
   assert.equal(host.lobby.pick('higherlower'), true);
-  for (const [k, v] of Object.entries(settings)) assert.equal(host.lobby.setting(k, v), true, k);
+  for (const [k, v] of Object.entries({ knockout: false, ...settings })) assert.equal(host.lobby.setting(k, v), true, k);
   assert.equal(host.lobby.start().ok, true);
   await r.clock.advance(300);
   return r;
@@ -110,12 +110,13 @@ test('streaks grow the points up to a cap and reset on a miss', () => {
   assert.deepEqual(s.gained, { 0: pointsFor(3) });
 });
 
-test('the game is a quick game with rounds and a 10 s default timer', () => {
+test('the game is a quick game with rounds, an 8 s default timer and knockout on', () => {
   assert.equal(higherlower.id, 'higherlower');
   assert.equal(higherlower.category, 'quick');
   assert.equal(higherlower.emoji, '📈');
   assert.equal(higherlower.settings.find((s) => s.id === 'rounds').default, 10);
-  assert.equal(higherlower.settings.find((s) => s.id === 'timer').default, 10);
+  assert.equal(higherlower.settings.find((s) => s.id === 'timer').default, 8);
+  assert.equal(higherlower.settings.find((s) => s.id === 'knockout').default, true);
   for (const re of BANNED) assert.doesNotMatch(`${higherlower.name} ${higherlower.blurb}`, re);
 });
 
@@ -141,7 +142,7 @@ test('a full game: everyone picks at once, streaks score, the game finishes', as
     assert.ok(s.vals.a && s.vals.b);
     assert.equal(s.streaks[slots[0]], round);
     assert.equal(s.streaks[slots[2]], 0, 'the first pick counts');
-    assert.equal(s.gained[slots[0]], pointsFor(round));
+    assert.equal(s.gained[slots[0]], pointsFor(round) * (round === 5 ? 2 : 1), 'the final round counts double');
     for (const [slot, pts] of Object.entries(s.gained)) totals[slot] = (totals[slot] || 0) + pts;
     assert.deepEqual(r.engines[1].snapshot().scores.g, totals);
     await r.clock.advance(REVEAL_MS + 200);
@@ -154,11 +155,11 @@ test('a full game: everyone picks at once, streaks score, the game finishes', as
 });
 
 test('time running out resets the streak of anyone who did not pick', async () => {
-  const r = await startGame(2, { rounds: 5, timer: 7 });
+  const r = await startGame(2, { rounds: 5, timer: 8 });
   const slots = slotsOf(r);
   const s = st(r);
   bySlot(r, slots[0]).act({ type: 'pick', side: higherSide(s.a.id, s.b.id), r: s.r });
-  await r.clock.advance(7500);
+  await r.clock.advance(8500);
   const after = st(r);
   assert.equal(after.phase, 'reveal');
   assert.equal(after.streaks[slots[0]], 1);
@@ -225,6 +226,7 @@ test('the view hides numbers, sends one pick, and shows the reveal', async () =>
   views[0].update(r.engines[0].snapshot());
   assert.match(text(views[0].el), /Getting the first pair ready/);
   r.engines[0].lobby.pick('higherlower');
+  r.engines[0].lobby.setting('knockout', false);
   r.engines[0].lobby.start();
   await r.clock.advance(400);
   const s = st(r);

@@ -3,6 +3,7 @@ import { shuffle } from '../engine.js';
 import { isBlockedGameWord } from '../filter.js';
 import { seatBudget, seatKey, seatOf, validChunk, readSeat, seatRoom, SEAT_CHUNKS } from './ink.js';
 import { face } from './trivia.js';
+import { timeSetting, addPts, roundOf, say, nameOf, bump, topOf, times } from './drawfun.js';
 
 export const KEY = 'sketchduel';
 export const INK_PREFIX = 'sd.d.';
@@ -10,8 +11,8 @@ export const MIN_PLAYERS = 3;
 export const MAX_DUELS = 4;
 export const GRACE_MS = 1500;
 export const SETTLE_MS = 1200;
-export const VOTE_MS = 15000;
-export const RESULT_MS = 5000;
+export const VOTE_MS = 12000;
+export const RESULT_MS = 4000;
 export const LOST_MS = 6000;
 export const VOTE_POINTS = 100;
 export const WIN_BONUS = 100;
@@ -19,6 +20,7 @@ export const TIE_BONUS = 50;
 export const USED_MAX = 60;
 export const HID_MAX = 24;
 export const MIX = 'mix';
+export const DUEL_TIMES = Object.freeze([60, 75, 90, 120, 150, 180]);
 
 export function inkKey(seat, i = 0) {
   return seatKey(INK_PREFIX, seat, i);
@@ -132,6 +134,7 @@ function openRound(api, st, round) {
     return [seats.length - 2, seats.length - 1, words[i]];
   });
   clearInk(api);
+  roundOf(api, round + 1, st.rounds || 1);
   const starts = api.now();
   const ends = starts + api.settings.draw * 1000;
   api.memory.cur = null;
@@ -219,16 +222,50 @@ function showResult(api) {
   const duel = st.duels[st.d];
   const a = st.seats[duel[0]];
   const b = st.seats[duel[1]];
-  if (res.pts.a) api.addPoints(a, res.pts.a);
-  if (res.pts.b) api.addPoints(b, res.pts.b);
+  if (res.pts.a) res.pts.a = addPts(api, a, res.pts.a);
+  if (res.pts.b) res.pts.b = addPts(api, b, res.pts.b);
   const wins = api.memory.wins || (api.memory.wins = {});
   if (res.win === 'a') wins[a] = (wins[a] || 0) + 1;
   if (res.win === 'b') wins[b] = (wins[b] || 0) + 1;
   api.memory.cur = null;
+  const sx = duelStats(st);
+  const judges = res.a + res.b;
+  const winner = res.win === 'a' ? a : res.win === 'b' ? b : null;
+  if (winner !== null) {
+    sx.w = bump(sx.w, winner);
+    if (judges >= 2 && (res.a === 0 || res.b === 0)) {
+      sx.s = bump(sx.s, winner);
+      say(api, 'custom', { text: `🧹 Clean sweep! Every vote went to ${nameOf(api, winner)}.` });
+    } else if (Math.abs(res.a - res.b) === 1 && judges >= 3) {
+      say(api, 'custom', { text: `😮‍💨 ${nameOf(api, winner)} wins it by a single vote!` });
+    } else {
+      say(api, 'win', { slot: winner });
+    }
+  } else if (res.win === 'tie') {
+    sx.t = bump(bump(sx.t, a), b);
+    say(api, 'custom', { text: `🤝 Dead heat between ${nameOf(api, a)} and ${nameOf(api, b)}!` });
+  }
   const starts = api.now();
   const ends = starts + RESULT_MS;
-  api.put(KEY, { ...st, phase: 'result', res, starts, ends });
+  api.put(KEY, { ...st, phase: 'result', res, sx, starts, ends });
   api.setDeadline(ends);
+}
+
+function duelStats(st) {
+  const sx = st && st.sx && typeof st.sx === 'object' ? st.sx : {};
+  return { w: sx.w || {}, s: sx.s || {}, t: sx.t || {} };
+}
+
+export function duelAwards(st) {
+  const sx = duelStats(st);
+  const out = [];
+  const champ = topOf(sx.w, 2);
+  if (champ) out.push({ emoji: '⚔️', title: 'Duel champion', who: champ.slot, why: `Won ${times(champ.n, 'duel', 'duels')}` });
+  const sweep = topOf(sx.s, 1);
+  if (sweep && (!champ || sweep.slot !== champ.slot)) out.push({ emoji: '🧹', title: 'Landslide artist', who: sweep.slot, why: `Took every single vote ${times(sweep.n, 'time', 'times')}` });
+  const tie = topOf(sx.t, 1);
+  if (tie) out.push({ emoji: '🤝', title: 'Photo finish', who: tie.slot, why: 'Drew a duel dead level' });
+  return out;
 }
 
 function endRound(api, st) {
@@ -322,8 +359,8 @@ const sketchduel = {
   prefixes: [INK_PREFIX],
   open: [INK_PREFIX],
   settings: [
-    { id: 'rounds', label: 'Rounds', type: 'choice', options: [2, 3, 4].map((v) => ({ value: v, label: String(v) })), default: 3 },
-    { id: 'draw', label: 'Time to draw', type: 'choice', options: [60, 75, 90].map((v) => ({ value: v, label: `${v} s` })), default: 75 },
+    { id: 'rounds', label: 'Rounds', type: 'choice', options: [1, 2, 3, 4].map((v) => ({ value: v, label: String(v) })), default: 2 },
+    timeSetting('draw', DUEL_TIMES, 90),
     {
       id: 'level',
       label: 'Words',
@@ -332,6 +369,12 @@ const sketchduel = {
       default: MIX,
     },
   ],
+
+  cards: ['swap', 'double'],
+
+  awards(api) {
+    return duelAwards(api.get(KEY));
+  },
 
   writer(get, key, slot, value) {
     if (!key.startsWith(INK_PREFIX)) return false;

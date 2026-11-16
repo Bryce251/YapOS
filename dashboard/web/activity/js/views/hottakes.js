@@ -23,6 +23,7 @@ function faces(list, max = 8) {
 
 export function footText(m) {
   if (!m) return '';
+  if (m.phase === 'recap') return m.rounds.some((r) => r.isMine) ? 'Your take made the hall of fame! Results are next.' : 'The hottest take of every round. Results are next!';
   if (m.phase === 'write') {
     const count = `${m.done} of ${plural(m.players, 'player', 'players')} answered`;
     if (m.waiting) return `You joined near the end of this one, so you can vote next. ${count}`;
@@ -50,6 +51,7 @@ export function hottakesMoment(was, m) {
   if (!was || (was.n === m.n && was.phase === m.phase)) return { now, cues: [] };
   if (m.phase === 'write') return { now, cues: ['whoosh'] };
   if (m.phase === 'vote') return { now, cues: ['pop'] };
+  if (m.phase === 'recap') return { now, cues: ['whoosh'] };
   return { now, cues: m.iTopped ? ['reveal', 'correct'] : ['reveal'] };
 }
 
@@ -178,18 +180,20 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
 
   const paintHead = memo((m) => {
     if (!m) return null;
-    const label = m.phase === 'write' ? 'Time left to write' : m.phase === 'vote' ? 'Time left to vote' : 'Next round in';
+    const recap = m.phase === 'recap';
+    const label = m.phase === 'write' ? 'Time left to write' : m.phase === 'vote' ? 'Time left to vote' : recap ? 'Results in' : 'Next round in';
     return h(
       'div',
       { class: 'game-head' },
-      h('span', { class: 'chip chip-static', text: m.phase === 'write' ? 'Write' : m.phase === 'vote' ? 'Vote' : 'Results' }),
-      h('span', { class: 'game-count', text: `Round ${m.number} of ${m.total}` }),
+      h('span', { class: 'chip chip-static', text: m.phase === 'write' ? 'Write' : m.phase === 'vote' ? 'Vote' : recap ? 'Recap' : 'Results' }),
+      h('span', { class: 'game-count', text: recap ? plural(m.rounds.length, 'round', 'rounds') : `Round ${m.number} of ${m.total}` }),
       timer(m.starts, m.ends, label),
     );
   });
 
   const paintTop = memo((m) => {
     if (!m) return h('p', { class: 'waiting', text: 'Warming up the first prompt…' });
+    if (m.phase === 'recap') return h('h2', { class: 'question hottakes-prompt', text: 'Who voted for what' });
     const best = m.phase === 'reveal' && m.topIds.length === 1 ? m.cards.find((c) => c.top) : null;
     const notice =
       m.note === 'host' && m.phase === 'write'
@@ -290,8 +294,33 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
     );
   }
 
+  function recapStage(m) {
+    return h(
+      'ol',
+      { class: 'hottakes-recap', attrs: { 'aria-label': 'The hottest take of every round' } },
+      m.rounds.map((r, i) =>
+        h(
+          'li',
+          { class: ['hottakes-item', r.isMine ? null : 'has-flag'] },
+          h(
+            'div',
+            { class: ['hottakes-card', 'hottakes-recap-card', `hottakes-tone-${i % 4}`, r.isMine ? 'is-own' : null], vars: { '--hottakes-order': i } },
+            h('span', { class: 'hottakes-recap-prompt', text: r.prompt }),
+            h('span', { class: 'hottakes-text', text: `“${r.text}”` }),
+            h('div', { class: 'hottakes-by' }, avatar(r.author, 'sm'), h('span', { class: 'hottakes-name', text: r.author.isMe ? 'You' : r.author.name }), h('span', { class: 'hottakes-count', text: plural(r.votes, 'vote', 'votes') })),
+            r.voters.length
+              ? h('div', { class: 'hottakes-recap-voters' }, h('span', { class: 'muted', text: r.iVoted ? 'Voted for by you and' : 'Voted for by' }), faces(r.voters.filter((p) => !p.isMe), 8) || h('span', { class: 'muted', text: 'nobody else' }))
+              : null,
+          ),
+          r.isMine ? null : textFlag(engine, r.ref, { toast, corner: true }),
+        ),
+      ),
+    );
+  }
+
   const paintStage = memo((m) => {
     if (!m) return null;
+    if (m.phase === 'recap') return recapStage(m);
     if (m.phase === 'write') return writeStage(m);
     if (m.phase === 'vote') return voteStage(m);
     return revealStage(m);
@@ -312,6 +341,11 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
     const { now, cues: list } = hottakesMoment(heard, m);
     heard = now;
     list.forEach((name, i) => cue.play(name, i ? { at: 320 } : undefined));
+    if (m.phase === 'recap' && list.length) {
+      const first = stage.querySelector('.hottakes-recap-card');
+      if (first) cue.burst(first, { count: 14, emoji: ['🌶️', '🏆'] });
+      return;
+    }
     if (m.phase !== 'reveal' || !list.length) return;
     for (const c of m.cards) {
       if (!c.top) continue;

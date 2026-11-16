@@ -1,7 +1,18 @@
 import wyr, { REVEAL_MS } from '../games/wyr.js';
 import { h, memo, timer, avatar, plural } from '../ui/dom.js';
 
+export function twinText(t) {
+  if (!t) return '';
+  return `You and ${t.name} picked the same side ${t.same} of ${t.both} times.`;
+}
+
+export function pairText(p) {
+  if (!p || p.people.length < 2) return '';
+  return `💞 ${p.people[0].isMe ? 'You' : p.people[0].name} and ${p.people[1].isMe ? 'you' : p.people[1].name} agreed on ${p.same} of ${p.both}. Soulmates!`;
+}
+
 export function verdict(m) {
+  if (m.phase === 'recap') return m.watching ? 'Here is how everyone voted.' : 'Here is who picked what. Results are next!';
   if (m.phase === 'vote') {
     const count = `${m.voted} of ${plural(m.players, 'player', 'players')} voted`;
     if (m.waiting) return `You joined near the end of this one, so you're in from the next prompt. ${count}`;
@@ -30,6 +41,7 @@ const QUIET = { play() {}, burst() {}, float() {} };
 
 export function wyrMoment(was, m) {
   const now = { pid: m.pid, phase: m.phase };
+  if (m.phase === 'recap') return { now, cues: was && was.phase !== 'recap' ? ['whoosh'] : [] };
   if (!was || m.phase !== 'reveal' || (was.pid === m.pid && was.phase === 'reveal')) return { now, cues: [] };
   const sided = Boolean(m.myVote) && (m.side === m.myVote || m.side === 'tie');
   return { now, cues: sided ? ['reveal', 'correct'] : ['reveal'] };
@@ -74,8 +86,42 @@ export function createWyrView({ engine, fx, cues }) {
     );
   }
 
+  function recapSide(r, side) {
+    const list = side === 'a' ? r.votersA : r.votersB;
+    return h(
+      'div',
+      { class: ['wyr-recap-side', `wyr-recap-${side}`, r.mine === side ? 'is-mine' : null, r.big === side ? 'is-big' : null] },
+      h('span', { class: 'wyr-recap-text', text: r[side] }),
+      faces(list) || h('span', { class: 'muted wyr-recap-none', text: 'Nobody' }),
+    );
+  }
+
+  function recap(m) {
+    const twin = twinText(m.twin);
+    const pair = m.pair && !(m.twin && m.pair.people.some((p) => p.isMe)) ? pairText(m.pair) : '';
+    return [
+      h(
+        'div',
+        { class: 'game-head' },
+        h('span', { class: 'chip chip-static', text: 'Recap' }),
+        h('span', { class: 'game-count', text: plural(m.rounds.length, 'prompt', 'prompts') }),
+        timer(m.starts, m.ends, 'Results in'),
+      ),
+      h('h2', { class: 'question wyr-title', text: 'Who picked what' }),
+      twin ? h('p', { class: 'wyr-twin' }, avatar(m.twin, 'sm'), h('span', { text: twin })) : null,
+      pair ? h('p', { class: 'wyr-twin' }, h('span', { text: pair })) : null,
+      h(
+        'ol',
+        { class: 'wyr-recap', attrs: { 'aria-label': 'Every prompt and who picked each side' } },
+        m.rounds.map((r, i) => h('li', { class: 'wyr-recap-row', vars: { '--wyr-order': i } }, recapSide(r, 'a'), h('span', { class: 'wyr-recap-or', text: 'or', attrs: { 'aria-hidden': 'true' } }), recapSide(r, 'b'))),
+      ),
+      h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } }, h('span', { class: 'foot-text', text: verdict(m) })),
+    ];
+  }
+
   function render(m) {
     if (!m) return h('p', { class: 'waiting', text: 'Getting the first round ready…' });
+    if (m.phase === 'recap') return recap(m);
     const reveal = m.phase === 'reveal';
     return [
       h(

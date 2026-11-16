@@ -1,0 +1,123 @@
+.draw-twist:empty {
+  display: none;
+}
+
+.twist-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  text-align: center;
+  animation: twist-in var(--dur-slow) var(--ease) both;
+}
+
+.twist-banner.twist-b {
+  border-color: var(--info-line);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.twist-banner.twist-u {
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.twist-left {
+  font-variant-numeric: tabular-nums;
+}
+
+.draw-board.twist-no-undo .tool-actions {
+  opacity: 0.45;
+}
+
+.paper-blind {
+  display: none;
+}
+
+.paper.is-blind .paper-blind {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--paper-muted, var(--text-3));
+  font-size: var(--text-md);
+  font-weight: var(--weight-bold);
+  text-align: center;
+  pointer-events: none;
+}
+
+.draw-board.is-blind .tool-fill,
+.draw-board.is-blind .tool-drop {
+  opacity: 0.4;
+}
+
+.feed-heat {
+  flex: none;
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  line-height: 1.6;
+  white-space: nowrap;
+  animation: heat-pop var(--dur) var(--ease) both;
+}
+
+.feed-heat.heat-h {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.feed-heat.heat-w {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.feed-heat.heat-c {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+@keyframes twist-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes heat-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .twist-banner,
+  .feed-heat {
+    animation: none;
+  }
+}

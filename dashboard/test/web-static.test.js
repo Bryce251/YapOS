@@ -185,7 +185,7 @@ test('no external resources and no forbidden wording', () => {
   for (const f of files) {
     if (BINARY.test(f)) continue;
     const src = readFileSync(f, 'utf8');
-    const urls = rel(f) === '_headers' ? [] : src.match(/https?:\/\/[^\s'"`)]+/g) || [];
+    const urls = rel(f) === '_headers' || rel(f) === 'activity/data/words-credits.txt' ? [] : src.match(/https?:\/\/[^\s'"`)]+/g) || [];
     for (const u of urls) {
       const bridgeOrigin = rel(f) === 'activity/js/bridge.js' && ACTIVITY_PARENT_ORIGINS.includes(u);
       assert.ok(bridgeOrigin || u.startsWith('http://www.w3.org/2000/svg') || (rel(f) === 'js/links.js' && u.startsWith('https://www.yapin.gg/bot/')), `${rel(f)} references ${u}`);
