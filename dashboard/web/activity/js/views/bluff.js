@@ -77,7 +77,7 @@ function factLine(m, fill) {
   const { before, after } = factParts(m.fact);
   return h(
     'h2',
-    { class: 'question bluff-fact' },
+    { class: 'question bluff-fact fx-display' },
     before,
     fill ? h('span', { class: 'bluff-blank is-filled', text: fill }) : h('span', { class: 'bluff-blank', text: ' ', attrs: { 'aria-label': 'blank' } }),
     after,
@@ -284,7 +284,7 @@ export function createBluffView({ engine, fx, cues, toast, win }) {
             h('span', { class: ['bluff-badge', c.truth ? 'is-truth' : null], text: c.truth ? '✅ The truth' : '🃏 Fake' }),
             h('span', { class: 'bluff-text', text: c.text }),
             c.owners.length
-              ? h('div', { class: 'bluff-by' }, faces(c.owners, 4, 'sm'), h('span', { class: 'bluff-name', text: `by ${names(c.owners)}` }), c.fooled ? h('span', { class: 'bluff-gain', text: `fooled ${c.fooled}` }) : null)
+              ? h('div', { class: 'bluff-by' }, faces(c.owners, 4, 'sm'), h('span', { class: 'bluff-name', text: `by ${names(c.owners)}` }), c.fooled ? h('span', { class: 'bluff-gain fx-num', text: `fooled ${c.fooled}` }) : null)
               : null,
             c.pickers.length ? h('div', { class: 'bluff-pickers' }, h('span', { class: 'bluff-count', text: `${plural(c.pickers.length, 'pick', 'picks')}` }), faces(c.pickers, 6)) : null,
           ),
@@ -320,7 +320,10 @@ export function createBluffView({ engine, fx, cues, toast, win }) {
     if (m.phase !== 'reveal' || !list.length) return;
     const truth = m.cards.find((c) => c.truth);
     const node = truth ? cardFor(truth.id) : null;
-    if (node && m.foundTruth) cue.burst(node, { count: 14, emoji: ['✅', '🧠'] });
+    if (node && m.foundTruth) {
+      node.classList.add('fx-shine', 'is-shining');
+      cue.burst(node, { count: 14, emoji: ['✅', '🧠'] });
+    }
     if (m.myGain) {
       const mine = m.cards.find((c) => c.isMine) || truth;
       const at = mine ? cardFor(mine.id) : null;

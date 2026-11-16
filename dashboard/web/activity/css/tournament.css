@@ -150,9 +150,22 @@
   padding: var(--space-8) var(--space-6) var(--space-6);
   border-color: color-mix(in srgb, var(--gold) 45%, transparent);
   border-radius: var(--radius-xl);
-  background: radial-gradient(70% 80% at 50% 0%, color-mix(in srgb, var(--gold) 18%, transparent), transparent 70%), radial-gradient(50% 60% at 90% 0%, var(--aurora-c), transparent 70%), var(--surface);
+  background: radial-gradient(70% 80% at 50% 0%, color-mix(in srgb, var(--gold) 18%, transparent), transparent 70%), radial-gradient(50% 60% at 90% 0%, var(--aurora-c), transparent 70%), color-mix(in srgb, var(--surface) 90%, transparent);
   text-align: center;
-  box-shadow: var(--shadow-md), var(--inset-hi), 0 0 48px -24px color-mix(in srgb, var(--gold) 70%, transparent);
+  box-shadow: var(--fx-depth-2), var(--inset-hi), 0 0 64px -24px color-mix(in srgb, var(--gold) 70%, transparent);
+}
+
+.tour-card.is-champion .tour-champ {
+  color: var(--gold);
+}
+
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .tour-card.is-champion .tour-champ {
+    background: linear-gradient(180deg, #fff 20%, var(--gold));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
 }
 
 .tour-crown {
@@ -163,10 +176,23 @@
 }
 
 .tour-champ-face {
+  position: relative;
+  isolation: isolate;
   display: inline-grid;
   place-items: center;
   padding-top: var(--space-2);
-  animation: tour-in var(--dur-celebrate) var(--pop) both;
+  animation: fx-slam 520ms var(--fx-spring) 120ms both;
+}
+
+.tour-champ-face::before {
+  content: '';
+  position: absolute;
+  inset: -40%;
+  z-index: -1;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--gold) 32%, transparent), transparent);
+  pointer-events: none;
+  animation: fx-breathe 3.2s var(--ease) infinite;
 }
 
 .tour-card.is-champion .eyebrow {
@@ -820,18 +846,6 @@
   }
 }
 
-@keyframes tour-in {
-  0% {
-    opacity: 0;
-    transform: scale(0.7);
-  }
-
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-
 @keyframes tour-pop {
   0% {
     transform: scale(0.9);
@@ -842,9 +856,25 @@
   }
 }
 
+[data-fx-paused] .tour-crown,
+[data-fx-paused] .tour-champ-face::before {
+  animation-play-state: paused;
+}
+
+[data-fx="lite"] .tour-crown,
+[data-fx="lite"] .tour-champ-face::before,
+[data-fx="static"] .tour-crown,
+[data-fx="static"] .tour-champ-face,
+[data-fx="static"] .tour-champ-face::before,
+[data-fx="static"] .tour-gain,
+[data-fx="static"] .predict-pick.is-on {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tour-crown,
   .tour-champ-face,
+  .tour-champ-face::before,
   .tour-gain,
   .predict-pick.is-on {
     animation: none;

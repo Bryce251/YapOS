@@ -62,6 +62,11 @@ function hearts(n, max) {
 
 const QUIET = { play() {}, burst() {}, float() {} };
 
+function acting(node, on) {
+  if (on) node.classList.add('fx-acting');
+  return node;
+}
+
 function idOf(snap, slot) {
   const p = snap && Array.isArray(snap.players) ? snap.players.find((x) => x.slot === slot) : null;
   return p && p.id !== undefined && p.id !== null ? p.id : null;
@@ -204,7 +209,7 @@ export function createChainView({ engine, toast, cues, fx }) {
         h(
           'li',
           { class: ['chain-player', p.isCur ? 'is-up' : null, p.out ? 'is-out' : null, p.isMe ? 'is-me' : null, p.present ? null : 'is-away'] },
-          profileButton(p, 'sm'),
+          acting(profileButton(p, 'sm'), p.isCur && !p.out),
           h('span', { class: 'chain-name', text: p.isMe ? `${p.name} (you)` : p.name }),
           hearts(p.lives, m.max),
         ),

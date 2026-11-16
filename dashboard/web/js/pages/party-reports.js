@@ -4,7 +4,9 @@ import { ApiError } from '../api.js';
 import { mountAsync } from './common.js';
 import { state } from '../state.js';
 import { formatDate, relativeTime } from '../format.js';
-import { decodeStroke, paintInk, GRID_W, GRID_H } from '../../activity/js/games/ink.js';
+import { decodeStroke, paintInk } from '../../activity/js/games/ink.js';
+import { replayOf } from '../replay-model.js';
+import { createReplayPlayer } from './party-replay.js';
 
 export const REPORTS_PATH = '/api/party/reports';
 export const BANS_PATH = '/api/party/bans';
@@ -25,6 +27,7 @@ export const GAME_NAMES = Object.freeze({
   sketchduel: 'Sketch Duel',
   story: 'Story Builder',
   hangman: 'Hangman Royale',
+  pixel: 'Pixel Art',
 });
 export const ART_SCALE = 2;
 const FILTERS = [['open', 'Open'], ['dismissed', 'Dismissed'], ['all', 'All']];
@@ -81,6 +84,7 @@ function readReport(r) {
     created: Number(r.created) || 0,
     status: r.status === 'dismissed' ? 'dismissed' : 'open',
     ink: kind === 'drawing' && Array.isArray(r.ink) ? r.ink.filter((s) => typeof s === 'string') : [],
+    replay: kind === 'drawing' && r.replay && typeof r.replay === 'object' ? r.replay : null,
     drawer: {
       id: str(d.id),
       name: str(d.name),
@@ -185,6 +189,8 @@ export function renderPartyReports(ctx) {
   let kind = 'all';
   let view = readReports(null);
   let bans = readBans(null);
+  const players = [];
+  if (ctx.signal && typeof ctx.signal.addEventListener === 'function') ctx.signal.addEventListener('abort', () => stopPlayers());
 
   const openCount = h('span', { class: 'party-count' });
   const filterBar = h('div', { class: 'segmented', attrs: { role: 'group', 'aria-label': 'Show reports' } });
@@ -252,9 +258,20 @@ export function renderPartyReports(ctx) {
         h('blockquote', { class: 'report-quote-text', text: r.text || 'No text was sent with this report.' }),
         r.context ? h('figcaption', { class: 'report-quote-context' }, h('span', { class: 'report-label', text: 'Context' }), h('span', { text: r.context })) : null);
     } else {
-      const canvas = h('canvas', { class: 'report-canvas', width: GRID_W * ART_SCALE, height: GRID_H * ART_SCALE, attrs: { role: 'img', 'aria-label': `Reported drawing by ${drawerName(d)}` } });
-      art = r.ink.length ? h('div', { class: 'report-art' }, canvas) : h('div', { class: 'report-art is-empty' }, h('span', { class: 'muted', text: 'No drawing was sent with this report.' }));
-      if (r.ink.length) paintReport(canvas, r.ink);
+      const replay = replayOf(r);
+      if (replay) {
+        const player = createReplayPlayer({
+          replay,
+          drawerId: d.id,
+          label: `${r.game === 'pixel' ? 'picture' : 'drawing'} by ${drawerName(d)}`,
+          onBan: (a, btn) => banArtist(r, a, btn),
+          canBan: (a) => canBan({ id: a.id, banned: a.banned, role: a.role }),
+        });
+        players.push(player);
+        art = h('div', { class: 'report-replay' }, player.el);
+      } else {
+        art = h('div', { class: 'report-art is-empty' }, h('span', { class: 'muted', text: 'No drawing was sent with this report.' }));
+      }
     }
     const tags = isPack
       ? [badge('Word pack', 'accent', 'folder'), r.pack.blocked ? badge('Hidden from browser', 'danger', 'eye-off') : r.pack.public ? badge('Public', 'neutral', 'globe') : badge('Not public', 'neutral')]
@@ -272,7 +289,7 @@ export function renderPartyReports(ctx) {
     const note = d.role === 'admin' && view.role !== 'owner'
       ? h('p', { class: 'report-note', text: 'Only the owner can ban a party admin.' })
       : null;
-    return h('li', { class: ['report-item', isText || isPack ? 'is-text' : '', r.status === 'dismissed' ? 'is-dismissed' : ''], dataset: { id: r.id, kind: r.kind } },
+    return h('li', { class: ['report-item', isText || isPack ? 'is-text' : '', art.classList.contains('report-replay') ? 'has-replay' : '', r.status === 'dismissed' ? 'is-dismissed' : ''], dataset: { id: r.id, kind: r.kind } },
       art,
       h('div', { class: 'report-info' },
         h('div', { class: 'report-head' }, ...tags, h('time', { class: 'report-time', attrs: { datetime: new Date(r.created || 0).toISOString(), title: formatDate(r.created) }, text: relativeTime(r.created) })),
@@ -289,7 +306,12 @@ export function renderPartyReports(ctx) {
         h('div', { class: 'report-actions' }, ...actions)));
   }
 
+  function stopPlayers() {
+    for (const p of players.splice(0)) p.destroy();
+  }
+
   function drawReports() {
+    stopPlayers();
     openCount.textContent = `${view.open} open`;
     if (!view.reports.length) {
       replace(listBody, emptyState({
@@ -329,7 +351,34 @@ export function renderPartyReports(ctx) {
 
   function markBanned(id, banned) {
     const key = id.toLowerCase();
-    for (const r of view.reports) if (r.drawer.id.toLowerCase() === key) r.drawer.banned = banned;
+    for (const r of view.reports) {
+      if (r.drawer.id.toLowerCase() === key) r.drawer.banned = banned;
+      for (const a of Array.isArray(r.replay?.authors) ? r.replay.authors : []) if (a && typeof a.id === 'string' && a.id.toLowerCase() === key) a.banned = banned;
+    }
+  }
+
+  async function banArtist(r, a, btn) {
+    const name = a.name || 'this player';
+    const ok = await confirmDialog({
+      title: `Ban ${name} from YapOS Party?`,
+      body: `${name} drew on this canvas too. They won't be able to join YapOS Party games in any server, but they can still watch.${a.role === 'admin' ? ' They also stop being a party admin.' : ''} You can unban them any time.`,
+      confirmLabel: 'Ban',
+    });
+    if (!ok || ctx.signal?.aborted) return;
+    if (btn?.isConnected) setBusy(btn, true, 'Banning');
+    try {
+      const data = await api.post(BANS_PATH, { id: a.id, reason: banReason(r), name: a.name || undefined }, { signal: ctx.signal });
+      if (ctx.signal?.aborted) return;
+      markBanned(a.id, true);
+      drawReports();
+      showBans(data);
+      toast(`${name} is banned from YapOS Party.`);
+    } catch (err) {
+      if (ctx.signal?.aborted) return;
+      if (btn?.isConnected) setBusy(btn, false);
+      if (err instanceof ApiError && err.status === 403 && err.code === 'staff_only') return denied();
+      failToast(err, "Couldn't ban them");
+    }
   }
 
   async function ban(r, btn) {

@@ -236,7 +236,6 @@
 .game-sketchduel .sketchduel-paper,
 .game-odd .odd-paper {
   box-shadow: 0 0 0 6px var(--surface-2), 0 0 0 7px var(--border), var(--shadow-md);
-  transition: box-shadow var(--dur) var(--ease);
 }
 
 .game-draw .draw-board.is-drawing .paper,
@@ -418,4 +417,32 @@
   .game-sketchduel .swatch.is-on {
     transform: none;
   }
+}
+
+.game-draw .paper,
+.game-odd .paper {
+  box-shadow: 0 0 0 1px var(--border-strong), var(--fx-depth-2), 0 18px 48px -30px var(--game);
+}
+
+.game-draw .draw-board.is-drawing .paper,
+.game-odd .odd-board.is-drawing .paper {
+  box-shadow: 0 0 0 1px var(--game-line), var(--fx-depth-2), 0 18px 48px -26px var(--game), 0 -10px 36px -26px var(--fx-b);
+}
+
+.game-draw:has(.timer.is-low) .paper,
+.game-odd:has(.timer.is-low) .odd-board.is-drawing .paper {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 70%, transparent), var(--fx-depth-2);
+}
+
+.game-draw :is(.word-secret, .word-reveal),
+.game-odd .word-reveal {
+  font-weight: var(--fx-display-weight);
+  letter-spacing: -0.02em;
+  box-shadow: var(--inset-hi), var(--fx-depth-1);
+}
+
+.draw-acting,
+.odd-acting {
+  display: inline-flex;
+  border-radius: 50%;
 }

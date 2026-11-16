@@ -31,9 +31,9 @@
   border-radius: var(--radius-xl);
   border: 1px solid color-mix(in srgb, var(--game) 20%, var(--border-strong));
   background: radial-gradient(70% 90% at 50% 0%, color-mix(in srgb, var(--game) 16%, transparent), transparent 70%), var(--surface-2);
-  box-shadow: var(--inset-hi), inset 0 -3px 0 color-mix(in srgb, var(--game) 30%, transparent);
+  box-shadow: var(--inset-hi), inset 0 -3px 0 color-mix(in srgb, var(--game) 30%, transparent), var(--fx-depth-2);
   overflow: hidden;
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur-slow) var(--ease), background-color var(--dur) var(--ease);
+  transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
 }
 
 .musicquiz-stage::before {
@@ -214,4 +214,13 @@
   .musicquiz-bar {
     transition: none;
   }
+}
+
+[data-fx="lite"] .musicquiz-stage.is-playing .musicquiz-bar,
+[data-fx="static"] .musicquiz-stage.is-playing .musicquiz-bar {
+  transform: scaleY(0.7);
+}
+
+[data-fx="static"] .musicquiz-answer.card.glass {
+  animation: none;
 }

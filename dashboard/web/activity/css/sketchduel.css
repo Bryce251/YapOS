@@ -200,7 +200,7 @@
   border: 1px solid var(--border);
   background: var(--surface-2);
   box-shadow: var(--inset-hi);
-  transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), opacity var(--dur-slow) var(--ease);
+  transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease), opacity var(--dur-slow) var(--ease);
 }
 
 .sketchduel-side.is-picked {
@@ -340,4 +340,22 @@
   .sketchduel-side {
     transition: none;
   }
+}
+
+.sketchduel-task-card {
+  background: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--game) 22%, transparent), transparent 70%), color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow: var(--inset-hi), var(--fx-depth-2);
+}
+
+.game-sketchduel:has(.timer.is-low) .sketchduel-task-card {
+  box-shadow: var(--inset-hi), inset 0 0 0 1px color-mix(in srgb, var(--danger) 55%, transparent), var(--fx-depth-2);
+}
+
+.sketchduel-word {
+  font-weight: var(--fx-display-weight);
+  letter-spacing: var(--fx-display-track);
+}
+
+.sketchduel-versus {
+  background: linear-gradient(135deg, var(--game), var(--fx-b));
 }

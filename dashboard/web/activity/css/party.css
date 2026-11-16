@@ -31,8 +31,6 @@
   border-radius: var(--radius-full);
   border: 1px solid var(--border-strong);
   background: var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-lg);
   color: var(--text);
   font-size: var(--text-sm);
@@ -112,6 +110,7 @@
 .react-layer {
   position: absolute;
   inset: 0;
+  contain: layout paint;
 }
 
 .react-float {
@@ -128,9 +127,57 @@
 }
 
 .react-float-emoji {
-  font-size: 34px;
+  font-size: calc(34px * var(--s, 1));
   line-height: 1;
   font-family: var(--font);
+}
+
+.card-fx {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  gap: var(--space-2);
+  width: 220px;
+  height: 260px;
+  margin: -130px 0 0 -110px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--accent-line);
+  background: radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--game, var(--accent)) 40%, transparent), transparent 68%), linear-gradient(160deg, var(--accent-solid), var(--surface-float));
+  box-shadow: var(--modal-shadow), var(--fx-depth-2);
+  text-align: center;
+  animation: card-fx 900ms var(--fx-spring) both;
+}
+
+.card-fx-emoji {
+  font-size: 72px;
+  line-height: 1;
+}
+
+.card-fx-name {
+  color: var(--text);
+  font-size: var(--text-lg);
+}
+
+@keyframes card-fx {
+  0% {
+    opacity: 0;
+    transform: scale(1.6) rotate(-8deg);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(0.96) rotate(1deg);
+  }
+  45%,
+  78% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-24px) scale(0.9);
+  }
 }
 
 .react-float-name {
@@ -257,8 +304,6 @@
   border-radius: var(--radius-full);
   border: 1px solid var(--border-strong);
   background: var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-md);
   color: var(--text);
   font-size: var(--text-xs);
@@ -373,8 +418,6 @@
   border-radius: var(--radius-full);
   border-color: var(--border-strong);
   background: var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-lg);
   font-size: 22px;
 }
@@ -393,8 +436,6 @@
   border-radius: var(--radius-full);
   border: 1px solid var(--border-strong);
   background: var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-lg);
   animation: party-line-in 240ms var(--pop) both;
 }
@@ -658,19 +699,56 @@
 @keyframes react-up {
   0% {
     opacity: 0;
-    transform: translate(-50%, 20px) scale(0.6) rotate(0deg);
+    transform: translate(-50%, 0) scale(1.6) rotate(0deg);
   }
-  12% {
+  10% {
     opacity: 1;
-    transform: translate(-50%, 0) scale(1.1) rotate(var(--tilt, 0deg));
+    transform: translate(-50%, 0) scale(0.94) rotate(var(--tilt, 0deg));
+  }
+  18% {
+    transform: translate(-50%, -6px) scale(1) rotate(var(--tilt, 0deg));
+  }
+  55% {
+    transform: translate(calc(-50% - var(--drift, 0px) * 0.4), -70px) rotate(calc(var(--tilt, 0deg) * -0.5));
   }
   80% {
     opacity: 1;
   }
   100% {
     opacity: 0;
-    transform: translate(calc(-50% + var(--drift, 0px)), -46vh) scale(0.9) rotate(var(--tilt, 0deg));
+    transform: translate(calc(-50% + var(--drift, 0px)), -140px) scale(0.92) rotate(var(--tilt, 0deg));
   }
+}
+
+@keyframes react-fade {
+  0%,
+  100% {
+    opacity: 0;
+    transform: translateX(-50%);
+  }
+  15%,
+  75% {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+[data-fx="static"] .react-float {
+  animation: react-fade var(--dur, 600ms) linear both;
+}
+
+[data-fx="static"] .party-line,
+[data-fx="static"] .party-hint,
+[data-fx="static"] .chaos-card,
+[data-fx="static"] .card-pop,
+[data-fx="static"] .react-bar,
+[data-fx="static"] .react-btn.is-cool,
+[data-fx="static"] .final-splash {
+  animation: none;
+}
+
+[data-fx="static"] .card-fx {
+  display: none;
 }
 
 @keyframes react-cool {
@@ -752,23 +830,11 @@
     animation: none;
   }
 
-  .react-float {
-    animation: react-fade var(--dur, 2600ms) linear both;
+  .card-fx {
+    display: none;
   }
 
-  @keyframes react-fade {
-    0% {
-      opacity: 0;
-      transform: translateX(-50%);
-    }
-    15%,
-    75% {
-      opacity: 1;
-      transform: translateX(-50%);
-    }
-    100% {
-      opacity: 0;
-      transform: translateX(-50%);
-    }
+  .react-float {
+    animation: react-fade var(--dur, 2600ms) linear both;
   }
 }

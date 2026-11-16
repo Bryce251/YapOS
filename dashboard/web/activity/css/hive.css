@@ -386,7 +386,7 @@
 }
 
 .hive-word.is-new {
-  animation: pop 320ms var(--pop);
+  animation: fx-pop-in 420ms var(--fx-spring);
 }
 
 .hive-word-text {
@@ -629,7 +629,19 @@
   }
 
   .hive-word.is-new,
-  .hive-card {
+  .hive-card,
+  .hive-tile {
     animation: none;
   }
+}
+
+.hive-tile {
+  animation: fx-flip-in 380ms var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+[data-fx="static"] .hive-word.is-new,
+[data-fx="static"] .hive-card,
+[data-fx="static"] .hive-tile {
+  animation: none;
 }

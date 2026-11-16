@@ -250,6 +250,9 @@ test('the view hides numbers, sends one pick, and shows the reveal', async () =>
   assert.match(text(views[i1].el), /Not this time/);
   assert.equal(views[i0].el.querySelectorAll('.hl-value.is-hidden').length, 0);
   assert.ok(views[i0].el.querySelector('.hl-card.is-win'));
+  assert.ok(views[i0].el.querySelector('.hl-card.is-win.fx-right'));
+  assert.ok(views[i1].el.querySelector(`.hl-card-${right === 'a' ? 'b' : 'a'}.fx-wrong`));
+  assert.ok(views[i0].el.querySelector('.hl-ask.fx-display'));
   assert.ok(played.includes('correct'));
   assert.ok(played.includes('wrong'));
   for (const v of views) v.destroy();

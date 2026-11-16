@@ -11,8 +11,6 @@
   position: absolute;
   inset: 0;
   background: var(--overlay-strong);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
   animation: lb-fade var(--dur-enter) var(--ease-out) both;
 }
 
@@ -27,7 +25,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: radial-gradient(90% 50% at 50% 0%, var(--aurora-a), transparent 70%), radial-gradient(60% 40% at 100% 0%, var(--aurora-c), transparent 70%), var(--surface);
-  box-shadow: var(--modal-shadow);
+  box-shadow: var(--modal-shadow), var(--fx-glass-edge);
   animation: lb-pop var(--dur-enter) var(--ease-out) both;
 }
 
@@ -198,6 +196,8 @@
   border: 1px solid transparent;
   border-radius: var(--radius);
   transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
 }
 
 .lb-row.is-top-1 {
@@ -289,7 +289,7 @@
 }
 
 .lb-row.is-top-1 .lb-value {
-  text-shadow: 0 0 12px var(--num-glow);
+  text-shadow: var(--fx-num-shadow);
 }
 
 .lb-total {
@@ -308,9 +308,8 @@
   grid-column: 1 / -1;
   height: 14px;
   border-radius: var(--radius-full);
-  background: linear-gradient(90deg, var(--surface-3), var(--border-strong), var(--surface-3));
-  background-size: 200% 100%;
-  animation: lb-shimmer 1.4s var(--ease) infinite;
+  background: var(--border-strong);
+  animation: fx-breathe 1.4s var(--ease) infinite;
 }
 
 .lb-state {
@@ -469,14 +468,12 @@
   }
 }
 
-@keyframes lb-shimmer {
-  0% {
-    background-position: 100% 0;
-  }
+[data-fx-paused] .lb-ghost-bar {
+  animation-play-state: paused;
+}
 
-  100% {
-    background-position: -100% 0;
-  }
+[data-fx="static"] .lb-ghost-bar {
+  animation: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

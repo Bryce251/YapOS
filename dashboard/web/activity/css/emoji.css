@@ -11,7 +11,7 @@
   border-radius: var(--radius-xl);
   border: 1px solid color-mix(in srgb, var(--game) 24%, var(--border-strong));
   background: radial-gradient(70% 90% at 50% 0%, color-mix(in srgb, var(--game) 20%, transparent), transparent 70%), var(--surface-2);
-  box-shadow: var(--inset-hi), inset 0 -3px 0 color-mix(in srgb, var(--game) 35%, transparent);
+  box-shadow: var(--inset-hi), inset 0 -3px 0 color-mix(in srgb, var(--game) 35%, transparent), var(--fx-depth-2);
   overflow: hidden;
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), background-color var(--dur) var(--ease);
 }
@@ -62,8 +62,8 @@
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--inset-hi), inset 0 -3px 0 color-mix(in srgb, var(--game) 40%, transparent), var(--shadow-sm);
-  animation: emoji-in 400ms var(--pop) both;
-  animation-delay: calc(var(--i, 0) * 100ms);
+  animation: fx-slam 460ms var(--fx-spring) both;
+  animation-delay: calc(var(--i, 0) * 110ms);
 }
 
 .emoji-card.is-reveal .emoji-tile,
@@ -270,18 +270,6 @@
   box-shadow: 0 0 18px -8px var(--gold);
 }
 
-@keyframes emoji-in {
-  0% {
-    opacity: 0;
-    transform: translateY(8px) scale(0.7);
-  }
-
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-
 @keyframes emoji-up {
   0% {
     opacity: 0;
@@ -335,4 +323,20 @@
   .emoji-card {
     transition: none;
   }
+}
+
+.emoji-answer-text {
+  text-shadow: 0 2px 28px color-mix(in srgb, var(--game) 35%, transparent);
+}
+
+.emoji-card.is-solved .emoji-answer-text {
+  text-shadow: 0 2px 28px color-mix(in srgb, var(--success) 40%, transparent);
+}
+
+[data-fx="static"] .emoji-tile,
+[data-fx="static"] .emoji-cat.is-fresh,
+[data-fx="static"] .emoji-blanks,
+[data-fx="static"] .emoji-answer,
+[data-fx="static"] .emoji-try {
+  animation: none;
 }

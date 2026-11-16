@@ -1,0 +1,562 @@
+:root {
+  --fx-b: var(--glow-c);
+  --fx-line: rgba(255, 255, 255, 0.05);
+  --fx-grain-a: rgba(255, 255, 255, 0.022);
+  --fx-grain-b: rgba(0, 0, 0, 0.18);
+  --fx-vignette: rgba(3, 3, 5, 0.72);
+  --fx-display-weight: 850;
+  --fx-display-track: -0.045em;
+  --fx-num-shadow: 0 1px 0 rgba(0, 0, 0, 0.45), 0 0 22px var(--num-glow);
+  --fx-shine: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.22) 48%, rgba(255, 255, 255, 0.05) 56%, transparent 70%);
+  --fx-glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --fx-depth-1: 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  --fx-depth-2: 0 1px 0 rgba(255, 255, 255, 0.05), 0 18px 48px -18px rgba(0, 0, 0, 0.85);
+  --fx-urgent: var(--danger);
+  --fx-screen-in: 360ms;
+  --fx-screen-out: 180ms;
+  --fx-reveal: 520ms;
+  --fx-stagger: 70ms;
+  --fx-spring: cubic-bezier(0.22, 1.4, 0.36, 1);
+  --fx-snap: cubic-bezier(0.5, 0, 0.1, 1);
+  --fx-z-backdrop: -2;
+}
+
+[data-game="trivia"] { --fx-b: #a78bfa; }
+[data-game="draw"] { --fx-b: #fbbf24; }
+[data-game="chain"] { --fx-b: #60a5fa; }
+[data-game="wyr"] { --fx-b: #f472b6; }
+[data-game="odd"] { --fx-b: #2dd4bf; }
+[data-game="telephone"] { --fx-b: #fde047; }
+[data-game="scramble"] { --fx-b: #a3e635; }
+[data-game="hive"] { --fx-b: #fb923c; }
+[data-game="emoji"] { --fx-b: #f472b6; }
+[data-game="hottakes"] { --fx-b: #f59e0b; }
+[data-game="truths"] { --fx-b: #60a5fa; }
+[data-game="reflex"] { --fx-b: #22d3ee; }
+[data-game="bluff"] { --fx-b: #f43f5e; }
+[data-game="pixel"] { --fx-b: #38bdf8; }
+[data-game="higherlower"] { --fx-b: #a3e635; }
+[data-game="sketchduel"] { --fx-b: #fbbf24; }
+[data-game="story"] { --fx-b: #f472b6; }
+[data-game="hangman"] { --fx-b: #c084fc; }
+[data-game="musicquiz"] { --fx-b: #22d3ee; }
+
+.fx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--fx-z-backdrop);
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+}
+
+.fx-backdrop > span {
+  position: absolute;
+  display: block;
+}
+
+.fx-aurora {
+  width: 70vmax;
+  height: 70vmax;
+  border-radius: 50%;
+  opacity: 0.6;
+  transition: opacity var(--dur-slow) var(--ease);
+}
+
+.fx-aurora-1 {
+  top: -38vmax;
+  left: -12vmax;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--game, var(--accent)) 34%, transparent), transparent);
+  animation: fx-drift-a 30s ease-in-out infinite alternate;
+}
+
+.fx-aurora-2 {
+  top: -30vmax;
+  right: -24vmax;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--fx-b) 26%, transparent), transparent);
+  animation: fx-drift-b 36s ease-in-out infinite alternate;
+}
+
+.fx-aurora-3 {
+  bottom: -44vmax;
+  left: 18vmax;
+  opacity: 0.42;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--glow-b) 22%, transparent), transparent);
+  animation: fx-drift-c 42s ease-in-out infinite alternate;
+}
+
+.fx-floor {
+  left: -50%;
+  right: -50%;
+  bottom: -10%;
+  height: 70%;
+  background-image: linear-gradient(color-mix(in srgb, var(--game, var(--accent)) 26%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--game, var(--accent)) 18%, transparent) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: linear-gradient(transparent, #000 45%, transparent 92%);
+  mask-image: linear-gradient(transparent, #000 45%, transparent 92%);
+  opacity: 0.38;
+  transform-origin: 50% 0;
+  transform: perspective(520px) rotateX(62deg);
+}
+
+.fx-motif {
+  inset: -64px;
+  opacity: 0;
+  transition: opacity var(--dur-slow) var(--ease);
+  -webkit-mask-image: radial-gradient(90% 70% at 50% 20%, #000, transparent 80%);
+  mask-image: radial-gradient(90% 70% at 50% 20%, #000, transparent 80%);
+}
+
+[data-game="draw"] .fx-motif,
+[data-game="odd"] .fx-motif,
+[data-game="telephone"] .fx-motif,
+[data-game="sketchduel"] .fx-motif {
+  opacity: 1;
+  background-image: linear-gradient(var(--fx-line) 1px, transparent 1px), linear-gradient(90deg, var(--fx-line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  animation: fx-pan-diag 40s linear infinite;
+}
+
+[data-game="pixel"] .fx-motif {
+  opacity: 1;
+  background-image: conic-gradient(var(--fx-line) 25%, transparent 0 50%, var(--fx-line) 0 75%, transparent 0);
+  background-size: 32px 32px;
+  animation: fx-pan-diag 40s steps(8) infinite;
+}
+
+[data-game="chain"] .fx-motif,
+[data-game="scramble"] .fx-motif,
+[data-game="hangman"] .fx-motif {
+  opacity: 1;
+  background-image: repeating-linear-gradient(45deg, var(--fx-line) 0 1px, transparent 1px 32px), repeating-linear-gradient(-45deg, var(--fx-line) 0 1px, transparent 1px 32px);
+  animation: fx-pan-diag 50s linear infinite;
+}
+
+[data-game="hive"] .fx-motif {
+  opacity: 1;
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--game) 16%, transparent) 0 2px, transparent 3px), radial-gradient(circle, color-mix(in srgb, var(--game) 16%, transparent) 0 2px, transparent 3px);
+  background-size: 32px 56px;
+  background-position: 0 0, 16px 28px;
+  animation: fx-pan-diag 50s linear infinite;
+}
+
+[data-game="trivia"] .fx-motif,
+[data-game="emoji"] .fx-motif,
+[data-game="bluff"] .fx-motif,
+[data-game="musicquiz"] .fx-motif {
+  opacity: 0.8;
+  inset: -10% -30% 20%;
+  transform-origin: 50% 0;
+  background-image: repeating-conic-gradient(from 160deg at 50% -8%, color-mix(in srgb, var(--game) 12%, transparent) 0 3deg, transparent 3deg 14deg);
+  -webkit-mask-image: radial-gradient(70% 90% at 50% 0%, #000, transparent 75%);
+  mask-image: radial-gradient(70% 90% at 50% 0%, #000, transparent 75%);
+  animation: fx-sway 14s ease-in-out infinite alternate;
+}
+
+[data-game="wyr"] .fx-motif,
+[data-game="hottakes"] .fx-motif,
+[data-game="truths"] .fx-motif,
+[data-game="story"] .fx-motif {
+  opacity: 1;
+  background-image: radial-gradient(circle at 12% 30%, color-mix(in srgb, var(--game) 14%, transparent) 0 26px, transparent 28px), radial-gradient(circle at 78% 18%, color-mix(in srgb, var(--fx-b) 12%, transparent) 0 40px, transparent 42px), radial-gradient(circle at 64% 62%, color-mix(in srgb, var(--game) 9%, transparent) 0 18px, transparent 20px), radial-gradient(circle at 30% 78%, color-mix(in srgb, var(--fx-b) 10%, transparent) 0 34px, transparent 36px);
+  animation: fx-float 18s ease-in-out infinite alternate;
+}
+
+[data-game="reflex"] .fx-motif,
+[data-game="higherlower"] .fx-motif {
+  opacity: 1;
+  inset: 0 -120px;
+  background-image: repeating-linear-gradient(100deg, color-mix(in srgb, var(--game) 10%, transparent) 0 2px, transparent 2px 60px);
+  animation: fx-speed 2.4s linear infinite;
+}
+
+.fx-grain {
+  inset: 0;
+  background-image: radial-gradient(var(--fx-grain-a) 0.5px, transparent 1px), radial-gradient(var(--fx-grain-b) 0.5px, transparent 1px);
+  background-size: 3px 3px, 5px 7px;
+  background-position: 0 0, 1px 2px;
+  opacity: 0.7;
+}
+
+.fx-vignette {
+  inset: 0;
+  background: radial-gradient(130% 100% at 50% 30%, transparent 55%, var(--fx-vignette));
+}
+
+@keyframes fx-drift-a {
+  to { transform: translate3d(14vmax, 8vmax, 0) scale(1.12); }
+}
+
+@keyframes fx-drift-b {
+  to { transform: translate3d(-12vmax, 10vmax, 0) scale(0.92); }
+}
+
+@keyframes fx-drift-c {
+  to { transform: translate3d(-10vmax, -8vmax, 0) scale(1.08); }
+}
+
+@keyframes fx-pan-diag {
+  to { transform: translate3d(32px, 32px, 0); }
+}
+
+@keyframes fx-sway {
+  from { transform: rotate(-4deg); }
+  to { transform: rotate(4deg); }
+}
+
+@keyframes fx-float {
+  to { transform: translate3d(0, -28px, 0); }
+}
+
+@keyframes fx-speed {
+  to { transform: translate3d(-61px, 0, 0); }
+}
+
+@keyframes fx-screen-in {
+  from { opacity: 0; transform: translate3d(0, 14px, 0) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes fx-screen-out {
+  to { opacity: 0; transform: translate3d(0, -8px, 0) scale(0.99); }
+}
+
+@keyframes fx-pop-in {
+  0% { opacity: 0; transform: scale(0.6); }
+  60% { opacity: 1; transform: scale(1.08); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes fx-slam {
+  0% { opacity: 0; transform: scale(1.6) rotate(-6deg); }
+  55% { opacity: 1; transform: scale(0.94) rotate(1deg); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes fx-rise {
+  0% { opacity: 0; transform: translate3d(0, 40px, 0) scaleY(0.6); }
+  70% { opacity: 1; transform: translate3d(0, -4px, 0) scaleY(1.02); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes fx-shake {
+  0%, 100% { transform: none; }
+  20% { transform: translate3d(-6px, 0, 0); }
+  40% { transform: translate3d(5px, 0, 0); }
+  60% { transform: translate3d(-3px, 0, 0); }
+  80% { transform: translate3d(2px, 0, 0); }
+}
+
+@keyframes fx-urgent {
+  0%, 100% { transform: none; }
+  15% { transform: scale(1.14); }
+}
+
+@keyframes fx-ring-out {
+  from { opacity: 0.9; transform: scale(0.85); }
+  to { opacity: 0; transform: scale(1.5); }
+}
+
+@keyframes fx-shine-sweep {
+  from { transform: translate3d(-120%, 0, 0); }
+  to { transform: translate3d(120%, 0, 0); }
+}
+
+@keyframes fx-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fx-breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@keyframes fx-beam {
+  0% { opacity: 0; transform: scaleY(0.2); }
+  40% { opacity: 1; }
+  100% { opacity: 0.85; transform: none; }
+}
+
+@keyframes fx-flip-in {
+  from { opacity: 0; transform: perspective(600px) rotateX(-70deg); }
+  to { opacity: 1; transform: none; }
+}
+
+.fx-screen-in {
+  animation: fx-screen-in var(--fx-screen-in) var(--ease-out) both;
+}
+
+.fx-screen-out {
+  pointer-events: none;
+  animation: fx-screen-out var(--fx-screen-out) var(--ease-in) both;
+}
+
+.fx-display {
+  font-weight: var(--fx-display-weight);
+  letter-spacing: var(--fx-display-track);
+  line-height: 1.02;
+  text-wrap: balance;
+}
+
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .fx-display.is-lit {
+    color: transparent;
+    background: linear-gradient(180deg, #fff 30%, color-mix(in srgb, var(--game, var(--accent)) 55%, #fff));
+    -webkit-background-clip: text;
+    background-clip: text;
+  }
+}
+
+.fx-num {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-heavy);
+  letter-spacing: var(--tracking-tight);
+  text-shadow: var(--fx-num-shadow);
+}
+
+.fx-shine {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.fx-shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--fx-shine);
+  transform: translate3d(-120%, 0, 0);
+  pointer-events: none;
+}
+
+@media (hover: hover) {
+  .fx-shine:hover:not(:disabled)::after {
+    animation: fx-shine-sweep 700ms var(--ease) both;
+  }
+
+  .fx-lift {
+    transition: transform var(--dur) var(--ease);
+  }
+
+  .fx-lift:hover:not(:disabled) {
+    transform: translate3d(0, -3px, 0);
+  }
+}
+
+.fx-shine.is-shining::after {
+  animation: fx-shine-sweep 900ms var(--ease) both;
+}
+
+.fx-pop {
+  animation: fx-pop-in 420ms var(--fx-spring) both;
+}
+
+.fx-slam {
+  animation: fx-slam 460ms var(--fx-spring) both;
+}
+
+.fx-rise {
+  transform-origin: 50% 100%;
+  animation: fx-rise var(--fx-reveal) var(--fx-spring) both;
+  animation-delay: calc(var(--i, 0) * var(--fx-stagger));
+}
+
+.fx-stagger > * {
+  animation: fx-screen-in var(--fx-screen-in) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * var(--fx-stagger));
+}
+
+.fx-flip {
+  animation: fx-flip-in 380ms var(--ease-out) both;
+}
+
+.fx-right {
+  position: relative;
+  animation: fx-pop-in 420ms var(--fx-spring);
+}
+
+.fx-right::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  border: 2px solid var(--success);
+  opacity: 0;
+  pointer-events: none;
+  animation: fx-ring-out 620ms var(--ease-out) both;
+}
+
+.fx-wrong {
+  animation: fx-shake 420ms var(--fx-snap);
+}
+
+.timer.is-low .timer-num,
+.countdown.is-low .countdown-num {
+  color: var(--fx-urgent);
+  animation: fx-urgent 1s var(--ease) infinite;
+}
+
+.timer.is-low .timer-fill {
+  background: linear-gradient(90deg, var(--warning), var(--fx-urgent));
+}
+
+.fx-acting {
+  position: relative;
+}
+
+.fx-acting::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  background: conic-gradient(var(--game, var(--glow-a)), var(--fx-b), transparent 70%, var(--game, var(--glow-a)));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+  pointer-events: none;
+  animation: fx-spin 1.6s linear infinite;
+}
+
+.fx-spotlight {
+  position: relative;
+  isolation: isolate;
+}
+
+.fx-spotlight::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 40%;
+  z-index: -1;
+  width: 140%;
+  height: 160%;
+  translate: -50% 0;
+  transform-origin: 50% 0;
+  background: conic-gradient(from 160deg at 50% 0%, transparent, color-mix(in srgb, var(--gold) 26%, transparent) 14deg, color-mix(in srgb, var(--gold) 6%, transparent) 26deg, transparent 40deg);
+  pointer-events: none;
+  animation: fx-beam 900ms var(--ease-out) 200ms both;
+}
+
+.fx-glass {
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  box-shadow: var(--fx-glass-edge), var(--fx-depth-1);
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .fx-glass.is-blur {
+    -webkit-backdrop-filter: blur(12px) saturate(1.3);
+    backdrop-filter: blur(12px) saturate(1.3);
+  }
+}
+
+[data-fx-paused] *,
+[data-fx-paused] *::before,
+[data-fx-paused] *::after {
+  animation-play-state: paused !important;
+}
+
+[data-fx="lite"] {
+  --fx-depth-1: 0 1px 0 rgba(255, 255, 255, 0.04), 0 4px 10px -6px rgba(0, 0, 0, 0.6);
+  --fx-depth-2: 0 1px 0 rgba(255, 255, 255, 0.05), 0 6px 14px -8px rgba(0, 0, 0, 0.7);
+  --fx-num-shadow: 0 1px 0 rgba(0, 0, 0, 0.45);
+}
+
+[data-fx="lite"] .fx-backdrop *,
+[data-fx="lite"] .fx-loop,
+[data-fx="lite"] .fx-loop::before,
+[data-fx="lite"] .fx-loop::after,
+[data-fx="lite"] .fx-acting::after {
+  animation: none !important;
+}
+
+[data-fx="lite"] .fx-floor {
+  display: none;
+}
+
+[data-fx="lite"] .fx-motif,
+[data-fx="lite"] .fx-grain,
+[data-fx="lite"] .fx-aurora-3 {
+  display: none;
+}
+
+[data-fx="lite"] .fx-shine::after,
+[data-fx="lite"] .fx-spotlight::before {
+  display: none;
+}
+
+[data-fx="lite"] .fx-glass.is-blur {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--surface);
+}
+
+[data-fx="static"] .fx-backdrop *,
+[data-fx="static"] .fx-loop {
+  animation: none;
+}
+
+[data-fx="static"] .fx-screen-in,
+[data-fx="static"] .fx-screen-out,
+[data-fx="static"] .fx-pop,
+[data-fx="static"] .fx-slam,
+[data-fx="static"] .fx-rise,
+[data-fx="static"] .fx-stagger > *,
+[data-fx="static"] .fx-flip,
+[data-fx="static"] .fx-right,
+[data-fx="static"] .fx-wrong,
+[data-fx="static"] .fx-acting::after,
+[data-fx="static"] .fx-right::after,
+[data-fx="static"] .fx-spotlight::before,
+[data-fx="static"] .timer.is-low .timer-num,
+[data-fx="static"] .countdown.is-low .countdown-num {
+  animation: none;
+  opacity: 1;
+  transform: none;
+}
+
+[data-fx="static"] .fx-right::after,
+[data-fx="static"] .fx-shine::after,
+[data-fx="static"] .fx-motif {
+  display: none;
+}
+
+@media (max-height: 520px) and (orientation: landscape) {
+  .fx-floor,
+  .fx-motif {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-backdrop *,
+  .fx-loop {
+    animation: none;
+  }
+
+  .fx-screen-in,
+  .fx-screen-out,
+  .fx-pop,
+  .fx-slam,
+  .fx-rise,
+  .fx-stagger > *,
+  .fx-flip,
+  .fx-right,
+  .fx-wrong,
+  .fx-acting::after,
+  .fx-spotlight::before,
+  .timer.is-low .timer-num,
+  .countdown.is-low .countdown-num {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .fx-right::after,
+  .fx-shine::after {
+    display: none;
+  }
+
+  .fx-lift:hover:not(:disabled) {
+    transform: none;
+  }
+}

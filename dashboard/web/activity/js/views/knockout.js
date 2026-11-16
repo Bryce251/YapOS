@@ -10,7 +10,7 @@ export function koBar(ko) {
     h(
       'span',
       { class: 'ko-alive' },
-      ko.alive.slice(0, 10).map((p) => h('span', { class: ['ko-face', p.isMe ? 'is-me' : null], attrs: { title: p.isMe ? 'You' : p.name } }, profileButton(p, 'sm'))),
+      ko.alive.slice(0, 10).map((p) => h('span', { class: ['ko-face', p.isMe ? 'is-me' : null, ko.duel ? 'fx-acting' : null], attrs: { title: p.isMe ? 'You' : p.name } }, profileButton(p, 'sm'))),
       ko.alive.length > 10 ? h('span', { class: 'faces-more', text: `+${ko.alive.length - 10}` }) : null,
     ),
     out ? h('span', { class: 'ko-out', attrs: { role: 'status' }, text: out }) : null,

@@ -23,7 +23,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--game) 20%, transparent), transparent 70%), var(--surface);
-  box-shadow: var(--shadow-sm), var(--inset-hi);
+  box-shadow: var(--fx-depth-2), var(--inset-hi);
 }
 
 .scramble-stage.is-reveal {
@@ -388,6 +388,7 @@
 @media (prefers-reduced-motion: reduce) {
   .scramble-tiles.is-fresh .scramble-tile,
   .scramble-answer.is-fresh .scramble-tile,
+  .scramble-slots.is-won > .scramble-slot,
   .scramble-solver {
     animation: none;
   }
@@ -400,4 +401,16 @@
   .scramble-tile:hover:not(:disabled) {
     transform: none;
   }
+}
+
+.scramble-slots.is-won > .scramble-slot {
+  animation: fx-pop-in 420ms var(--fx-spring) backwards;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+[data-fx="static"] .scramble-tiles.is-fresh .scramble-tile,
+[data-fx="static"] .scramble-answer.is-fresh .scramble-tile,
+[data-fx="static"] .scramble-slots.is-won > .scramble-slot,
+[data-fx="static"] .scramble-solver {
+  animation: none;
 }

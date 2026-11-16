@@ -1,9 +1,3 @@
-@property --angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
-}
-
 .avatar-btn.ring-glow {
   position: relative;
   isolation: isolate;
@@ -15,11 +9,11 @@
   inset: -6px;
   z-index: -1;
   border-radius: 50%;
-  background: conic-gradient(from var(--angle), var(--glow-a), var(--glow-b), var(--glow-c), var(--glow-a));
+  background: conic-gradient(var(--glow-a), var(--glow-b), var(--glow-c), var(--glow-a));
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
   opacity: 1;
-  animation: results-ring 6s linear infinite;
+  animation: fx-spin 6s linear infinite;
 }
 
 .avatar-btn.ring-glow .avatar {
@@ -45,7 +39,7 @@
 .results-wrap > .card {
   position: relative;
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm), var(--inset-hi);
+  box-shadow: var(--fx-depth-1), var(--inset-hi);
 }
 
 .results-wrap > .awards-card,
@@ -103,13 +97,14 @@
   overflow: hidden;
   border-color: color-mix(in srgb, var(--gold) 30%, var(--border));
   border-radius: var(--radius-xl);
-  background: radial-gradient(70% 90% at 50% 0%, color-mix(in srgb, var(--gold) 16%, transparent), transparent 70%), radial-gradient(50% 60% at 90% 0%, var(--aurora-c), transparent 70%), radial-gradient(50% 60% at 10% 0%, var(--aurora-b), transparent 70%), var(--surface);
-  box-shadow: var(--shadow-md), var(--inset-hi);
+  background: radial-gradient(70% 90% at 50% 0%, color-mix(in srgb, var(--gold) 16%, transparent), transparent 70%), radial-gradient(50% 60% at 90% 0%, color-mix(in srgb, var(--game, var(--glow-c)) 18%, transparent), transparent 70%), radial-gradient(50% 60% at 10% 0%, var(--aurora-b), transparent 70%), color-mix(in srgb, var(--surface) 90%, transparent);
+  box-shadow: var(--fx-depth-2), var(--inset-hi), 0 0 64px -28px color-mix(in srgb, var(--gold) 55%, transparent);
 }
 
 .winner-card.is-draw {
-  border-color: var(--border);
-  background: radial-gradient(70% 90% at 50% 0%, var(--aurora-c), transparent 70%), var(--surface);
+  border-color: color-mix(in srgb, var(--silver) 30%, var(--border));
+  background: radial-gradient(70% 90% at 50% 0%, color-mix(in srgb, var(--silver) 12%, transparent), transparent 70%), color-mix(in srgb, var(--surface) 90%, transparent);
+  box-shadow: var(--fx-depth-2), var(--inset-hi);
 }
 
 .winner-card::after {
@@ -189,10 +184,103 @@
   max-width: 20ch;
   color: var(--text);
   font-size: var(--text-display);
-  font-weight: var(--weight-display);
-  letter-spacing: var(--tracking-display);
-  line-height: 1.05;
+  font-weight: var(--fx-display-weight);
+  letter-spacing: var(--fx-display-track);
+  line-height: 1.02;
   text-wrap: balance;
+}
+
+.results-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.podium {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 96px);
+  align-items: end;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  margin-top: var(--space-2);
+}
+
+.podium-step {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.podium-who {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+
+.podium-name {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.podium-block {
+  --podium-tint: var(--bronze);
+  --podium-h: 56px;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: 2px;
+  width: 100%;
+  height: var(--podium-h);
+  padding-top: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--podium-tint) 40%, transparent);
+  border-bottom: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--podium-tint) 26%, var(--surface-2)), var(--surface-2) 85%);
+  box-shadow: var(--inset-hi);
+}
+
+.step-1 .podium-block {
+  --podium-tint: var(--gold);
+  --podium-h: 96px;
+  box-shadow: var(--inset-hi), 0 -12px 32px -18px var(--gold);
+}
+
+.step-2 .podium-block {
+  --podium-tint: var(--silver);
+  --podium-h: 72px;
+}
+
+.podium-step.is-me .podium-name {
+  color: var(--accent-text);
+}
+
+.podium-rank {
+  color: var(--podium-tint);
+  font-size: var(--text-lg);
+  font-weight: var(--fx-display-weight);
+  line-height: 1;
+}
+
+.step-1 .podium-rank {
+  font-size: var(--text-xl);
+}
+
+.podium-pts {
+  color: var(--text-2);
+  font-size: var(--text-2xs);
 }
 
 .winner-card.is-me .winner-title {
@@ -281,12 +369,20 @@
 
 .btn-cta {
   box-shadow: var(--inset-hi), 0 0 0 1px var(--accent-line), 0 0 24px -6px var(--glow-ring), 0 0 40px -14px var(--glow-ring-2);
-  animation: results-breathe 3.2s var(--ease) infinite;
+}
+
+.btn-cta::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--fx-shine);
+  transform: translate3d(-120%, 0, 0);
+  pointer-events: none;
+  animation: results-cta-sweep 6s var(--ease) 1.2s infinite;
 }
 
 .btn-cta:focus-visible {
   box-shadow: var(--focus-ring);
-  animation: none;
 }
 
 .results-waiting {
@@ -391,6 +487,12 @@
   gap: var(--space-2);
 }
 
+.award:nth-child(n + 7),
+.reel-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
+}
+
 .reel-item {
   padding: var(--space-3) var(--space-12) var(--space-3) var(--space-5);
   overflow: hidden;
@@ -431,18 +533,10 @@
 
 .party-line {
   border-color: var(--border-strong);
-  background: var(--surface-float);
+  background: var(--glass-strong);
   box-shadow: var(--shadow-md), var(--inset-hi);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
-}
-
-@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .party-line {
-    background: var(--glass-strong);
-    -webkit-backdrop-filter: var(--glass-blur);
-    backdrop-filter: var(--glass-blur);
-  }
 }
 
 .party-line.is-banner {
@@ -569,8 +663,6 @@
   gap: var(--space-1);
   border-color: var(--border-strong);
   background: var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-lg), var(--inset-hi);
 }
 
@@ -578,6 +670,31 @@
 .react-btn {
   width: var(--touch);
   height: var(--touch);
+}
+
+.react-bar .react-btn {
+  font-size: 22px;
+}
+
+.react-bar .react-close {
+  font-size: var(--text-sm);
+}
+
+.card-tray.is-open .card-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + var(--space-2));
+  z-index: 2;
+}
+
+@media (max-width: 480px) {
+  .react-bar {
+    gap: 2px;
+  }
+
+  .react-bar .react-btn {
+    width: 36px;
+  }
 }
 
 .react-toggle:focus-visible,
@@ -603,33 +720,97 @@
   }
 }
 
-.results-wrap.juice-podium {
-  animation: results-in var(--dur-enter) var(--ease-out) both;
+@media (prefers-reduced-motion: no-preference) {
+  .results-wrap.juice-podium {
+    animation: results-in var(--dur-enter) var(--ease-out) both;
+  }
+
+  .is-cinema .podium-step {
+    transform-origin: 50% 100%;
+    animation: fx-rise var(--fx-reveal) var(--fx-spring) both;
+    animation-delay: calc(var(--i, 0) * 160ms + 120ms);
+  }
+
+  .is-cinema .winner-face {
+    animation: results-face var(--dur-celebrate) var(--pop) both;
+    animation-delay: calc(var(--i, 0) * 90ms + 700ms);
+  }
+
+  .results-wrap.is-cinema .winner-title {
+    animation: fx-slam 460ms var(--fx-spring) 900ms both;
+  }
+
+  .is-cinema .earn-row .xp-chip,
+  .is-cinema .earn-row .shard-chip {
+    animation: fx-pop-in 420ms var(--fx-spring) 1100ms both;
+  }
+
+  .is-cinema .earn-row .shard-chip {
+    animation-delay: 1180ms;
+  }
+
+  .is-cinema .award:nth-child(-n + 6) {
+    animation: fx-flip-in 380ms var(--ease-out) both;
+    animation-delay: calc(var(--i, 0) * 90ms + 1300ms);
+  }
+
+  .is-cinema .reel-item {
+    animation: results-rise var(--dur-slow) var(--ease-out) both;
+    animation-delay: calc(var(--i, 0) * 70ms + 1200ms);
+  }
+
+  .results-wrap.is-revealed,
+  .results-wrap.is-revealed .podium-step,
+  .results-wrap.is-revealed .winner-face,
+  .results-wrap.is-revealed .winner-title,
+  .results-wrap.is-revealed .earn-row .xp-chip,
+  .results-wrap.is-revealed .earn-row .shard-chip,
+  .results-wrap.is-revealed .award,
+  .results-wrap.is-revealed .reel-item,
+  .results-wrap.is-revealed .fx-spotlight::before,
+  .results-wrap.is-revealed .board-top .board-card,
+  .results-wrap.is-revealed .board-rest .board-row {
+    animation: none;
+  }
+
+  .is-cinema .fx-spotlight::before {
+    animation-delay: 700ms;
+  }
 }
 
-.juice-podium .winner-face {
-  animation: results-face var(--dur-celebrate) var(--pop) both;
-  animation-delay: calc(var(--i, 0) * 90ms + 120ms);
+.winner-face.fx-spotlight::before {
+  bottom: 30%;
+  width: 260%;
+  height: 300%;
 }
 
-.juice-podium .earn-row .xp-chip,
-.juice-podium .earn-row .shard-chip {
-  animation: results-chip var(--dur-slow) var(--pop) both;
-  animation-delay: 360ms;
+[data-fx-paused] .avatar-btn.ring-glow::before,
+[data-fx-paused] .btn-cta::before {
+  animation-play-state: paused;
 }
 
-.juice-podium .earn-row .shard-chip {
-  animation-delay: 440ms;
+[data-fx="lite"] .avatar-btn.ring-glow::before,
+[data-fx="lite"] .btn-cta::before {
+  animation: none;
 }
 
-.juice-podium .award {
-  animation: results-rise var(--dur-slow) var(--ease-out) both;
-  animation-delay: calc(var(--i, 0) * 90ms + 240ms);
+[data-fx="lite"] .is-cinema .award,
+[data-fx="lite"] .is-cinema .reel-item {
+  animation: none;
 }
 
-.juice-podium .reel-item {
-  animation: results-rise var(--dur-slow) var(--ease-out) both;
-  animation-delay: calc(var(--i, 0) * 70ms + 200ms);
+[data-fx="static"] .results-wrap *,
+[data-fx="static"] .results-wrap,
+[data-fx="static"] .btn-cta::before {
+  animation: none;
+}
+
+[data-fx="static"] .btn-cta::before {
+  display: none;
+}
+
+[data-fx="static"] .winner-card.has-winner {
+  box-shadow: var(--fx-depth-2), var(--inset-hi), 0 0 48px -16px color-mix(in srgb, var(--gold) 60%, transparent);
 }
 
 @media (max-width: 760px) {
@@ -681,12 +862,6 @@
   }
 }
 
-@keyframes results-ring {
-  to {
-    --angle: 360deg;
-  }
-}
-
 @keyframes results-in {
   0% {
     opacity: 0;
@@ -728,39 +903,27 @@
   }
 }
 
-@keyframes results-chip {
+@keyframes results-cta-sweep {
   0% {
-    opacity: 0;
-    transform: scale(0.8);
+    transform: translate3d(-120%, 0, 0);
   }
 
+  18%,
   100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes results-breathe {
-  0%,
-  100% {
-    box-shadow: var(--inset-hi), 0 0 0 1px var(--accent-line), 0 0 18px -8px var(--glow-ring), 0 0 30px -16px var(--glow-ring-2);
-  }
-
-  50% {
-    box-shadow: var(--inset-hi), 0 0 0 1px var(--accent-line), 0 0 30px -4px var(--glow-ring), 0 0 52px -12px var(--glow-ring-2);
+    transform: translate3d(120%, 0, 0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .avatar-btn.ring-glow::before,
-  .btn-cta,
-  .results-wrap.juice-podium,
-  .juice-podium .winner-face,
-  .juice-podium .earn-row .xp-chip,
-  .juice-podium .earn-row .shard-chip,
-  .juice-podium .award,
-  .juice-podium .reel-item {
+  .btn-cta::before,
+  .results-wrap,
+  .results-wrap * {
     animation: none;
+  }
+
+  .btn-cta::before {
+    display: none;
   }
 
   .winner-card.has-winner {

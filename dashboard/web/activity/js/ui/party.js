@@ -1,7 +1,13 @@
 import { h, memo } from './dom.js';
 import { REACTIONS, LINE_SHOW_MS, PARTY_SETTINGS } from '../fun.js';
+import { fxLevel, sharedLoop } from './fxmode.js';
+import { burstFrom } from './juice.js';
 
 export const FLOAT_MAX = 28;
+export const LITE_FLOAT_MAX = 10;
+export const STILL_FLOAT_MS = 600;
+export const CARD_FX_MS = 900;
+export const STREAK_MS = 1200;
 export const FLOAT_MS = 2600;
 export const SPLASH_MS = 2600;
 export const HINT_MS = 8000;
@@ -157,7 +163,10 @@ export function createParty({ engine, win = globalThis, sfx = null, toast = null
   const floats = h('div', { class: 'react-layer', attrs: { 'aria-hidden': 'true' } });
   const hintSlot = h('div', { class: 'party-hint-slot', attrs: { 'aria-live': 'polite' } });
   const dock = h('div', { class: 'party-dock' });
-  const el = h('div', { class: 'party-layer' }, floats, lineSlot, splashSlot, hintSlot, dock);
+  const cardFx = h('div', { class: 'card-fx-slot', attrs: { 'aria-hidden': 'true' } });
+  const el = h('div', { class: 'party-layer' }, floats, cardFx, lineSlot, splashSlot, hintSlot, dock);
+  let streak = { i: -1, n: 0, at: 0 };
+  let nextScale = 1;
   let open = (Number(win.innerWidth) || 0) >= WIDE_PX;
   let cardOpen = false;
   let shownLine = null;
@@ -193,7 +202,21 @@ export function createParty({ engine, win = globalThis, sfx = null, toast = null
     if (last) update(last);
   }
 
-  function playCard(id, target) {
+  function showCardFx(face) {
+    if (!face || fxLevel() === 'static') return;
+    const box = h('div', { class: 'card-fx' }, h('span', { class: 'card-fx-emoji', text: face.emoji || '🃏' }), h('strong', { class: 'card-fx-name fx-display', text: face.name || '' }));
+    cardFx.replaceChildren(box);
+    later(() => {
+      if (box.parentNode === cardFx) cardFx.replaceChildren();
+    }, CARD_FX_MS);
+    try {
+      burstFrom(box, { count: fxLevel() === 'lite' ? 6 : 10, spread: 90, size: 7 });
+    } catch {
+      return;
+    }
+  }
+
+  function playCard(id, target, face = null) {
     let ok = false;
     try {
       ok = Boolean(engine.play(id, target));
@@ -207,7 +230,18 @@ export function createParty({ engine, win = globalThis, sfx = null, toast = null
     }
     cardOpen = false;
     play(sfx, 'fx');
+    showCardFx(face);
     repaint();
+  }
+
+  function popButton(i) {
+    const btn = dock.querySelector(`[data-key="react-${i}"]`);
+    if (!btn || fxLevel() === 'static') return;
+    btn.classList.remove('fx-pop');
+    sharedLoop().add(() => {
+      btn.classList.add('fx-pop');
+      return false;
+    });
   }
 
   function sendReact(i) {
@@ -216,6 +250,12 @@ export function createParty({ engine, win = globalThis, sfx = null, toast = null
       ok = Boolean(engine.react(i));
     } catch {
       ok = false;
+    }
+    if (ok) {
+      const t = Date.now();
+      streak = streak.i === i && t - streak.at < STREAK_MS ? { i, n: streak.n + 1, at: t } : { i, n: 1, at: t };
+      nextScale = streak.n >= 3 ? 1.4 : streak.n === 2 ? 1.2 : 1;
+      popButton(i);
     }
     if (!ok) {
       const btn = dock.querySelector(`[data-key="react-${i}"]`);
@@ -255,13 +295,13 @@ export function createParty({ engine, win = globalThis, sfx = null, toast = null
             c.targets.map((t) =>
               h(
                 'button',
-                { class: ['chip', 'card-target', 'spot'], type: 'button', dataset: { key: `card-to-${t.slot}` }, on: { click: () => playCard(c.id, t.slot) } },
+                { class: ['chip', 'card-target', 'spot'], type: 'button', dataset: { key: `card-to-${t.slot}` }, on: { click: () => playCard(c.id, t.slot, c) } },
                 `${c.emoji} ${t.name}`,
               ),
             ),
           )
         : h('p', { class: 'card-empty', text: 'Nobody to pick right now.' })
-      : h('button', { class: ['btn', 'btn-primary', 'btn-sm', 'spot'], type: 'button', dataset: { key: 'card-play' }, on: { click: () => playCard(c.id, null) } }, h('span', { class: 'btn-label', text: `Play ${c.name}` }));
+      : h('button', { class: ['btn', 'btn-primary', 'btn-sm', 'spot'], type: 'button', dataset: { key: 'card-play' }, on: { click: () => playCard(c.id, null, c) } }, h('span', { class: 'btn-label', text: `Play ${c.name}` }));
     return h(
       'div',
       { class: 'card-tray is-open' },
@@ -348,9 +388,9 @@ export function createParty({ engine, win = globalThis, sfx = null, toast = null
     cancel(splashTimer);
     const box = h(
       'div',
-      { class: 'final-splash', attrs: { role: 'status' } },
-      h('span', { class: 'final-splash-kicker', text: '🎯' }),
-      h('strong', { class: 'final-splash-title', text: 'FINAL ROUND' }),
+      { class: ['final-splash', 'fx-shine', 'is-shining'], attrs: { role: 'status' } },
+      h('span', { class: 'final-splash-kicker fx-screen-in', text: '🎯' }),
+      h('strong', { class: 'final-splash-title fx-display is-lit fx-slam', text: 'FINAL ROUND' }),
       h('span', { class: 'final-splash-sub', text: 'Double points' }),
     );
     splashSlot.replaceChildren(box);
@@ -386,7 +426,8 @@ export function createParty({ engine, win = globalThis, sfx = null, toast = null
   }
 
   function onReact(ev) {
-    if (destroyed || !ev || typeof ev.emoji !== 'string' || live >= FLOAT_MAX) return;
+    const level = fxLevel();
+    if (destroyed || !ev || typeof ev.emoji !== 'string' || live >= (level === 'lite' ? LITE_FLOAT_MAX : FLOAT_MAX)) return;
     const bit = h(
       'span',
       { class: ['react-float', ev.mine ? 'is-mine' : null] },
@@ -397,7 +438,9 @@ export function createParty({ engine, win = globalThis, sfx = null, toast = null
     bit.style.setProperty('--x', `${Math.round(6 + r() * 78)}%`);
     bit.style.setProperty('--drift', `${Math.round((r() - 0.5) * 80)}px`);
     bit.style.setProperty('--tilt', `${Math.round((r() - 0.5) * 30)}deg`);
-    bit.style.setProperty('--dur', `${Math.round(FLOAT_MS * (0.85 + r() * 0.3))}ms`);
+    bit.style.setProperty('--dur', `${level === 'static' ? STILL_FLOAT_MS : Math.round(FLOAT_MS * (0.85 + r() * 0.3))}ms`);
+    if (ev.mine && nextScale > 1) bit.style.setProperty('--s', String(nextScale));
+    if (ev.mine) nextScale = 1;
     live += 1;
     floats.append(bit);
     let gone = false;

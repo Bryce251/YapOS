@@ -465,3 +465,40 @@
     transform: none;
   }
 }
+
+.bluff-hero {
+  background: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--game) 22%, transparent), transparent 70%), color-mix(in srgb, var(--surface-2) 88%, transparent);
+  box-shadow: var(--inset-hi), var(--fx-depth-2);
+}
+
+.game-bluff:has(.timer.is-low) .bluff-hero:not(.is-reveal) {
+  box-shadow: var(--inset-hi), inset 0 0 0 1px color-mix(in srgb, var(--danger) 55%, transparent), var(--fx-depth-2);
+}
+
+.bluff-hero .question.fx-display {
+  font-weight: var(--fx-display-weight);
+  letter-spacing: var(--fx-display-track);
+}
+
+.bluff-hero.is-reveal::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: conic-gradient(from 160deg at 50% -10%, transparent, color-mix(in srgb, var(--success) 22%, transparent) 16deg, transparent 40deg);
+  transform-origin: 50% 0;
+  pointer-events: none;
+  animation: fx-beam 900ms var(--ease-out) both;
+}
+
+[data-fx="lite"] .bluff-hero.is-reveal::after,
+[data-fx="static"] .bluff-hero.is-reveal::after {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bluff-hero.is-reveal::after {
+    animation: none;
+  }
+}

@@ -744,7 +744,7 @@ test('Odd One Out files have no comments, inline styles or outside resources, an
   const own = classes.filter((c) => c.startsWith('odd-'));
   assert.ok(own.length > 20);
   const reused = new Set(classes.filter((c) => !c.startsWith('odd-')));
-  for (const c of reused) assert.ok(['is-crew', 'is-odd', 'is-hidden', 'is-up', 'is-me', 'is-away', 'is-mine', 'is-caught', 'is-escaped', 'play', 'game-odd', 'strip', 'strip-list', 'strip-empty'].includes(c), c);
+  for (const c of reused) assert.ok(['is-crew', 'is-odd', 'is-hidden', 'is-up', 'is-me', 'is-away', 'is-mine', 'is-caught', 'is-escaped', 'play', 'game-odd', 'strip', 'strip-list', 'strip-empty', 'fx-display'].includes(c), c);
 });
 
 test('a full 12 player game plays every round to the results with fair roles, scores and limits', async () => {

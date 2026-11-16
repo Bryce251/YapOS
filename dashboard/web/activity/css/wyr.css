@@ -320,3 +320,24 @@
     animation: none;
   }
 }
+
+.wyr-hero {
+  background: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--game) 22%, transparent), transparent 70%), color-mix(in srgb, var(--surface-2) 88%, transparent);
+  box-shadow: var(--inset-hi), var(--fx-depth-2);
+}
+
+.game-wyr:has(.timer.is-low) .wyr-hero {
+  box-shadow: var(--inset-hi), inset 0 0 0 1px color-mix(in srgb, var(--danger) 55%, transparent), var(--fx-depth-2);
+}
+
+.wyr-hero .question.fx-display {
+  font-weight: var(--fx-display-weight);
+  letter-spacing: var(--fx-display-track);
+}
+
+.wyr-choices .or {
+  background: linear-gradient(135deg, var(--game), var(--fx-b));
+  color: var(--on-accent);
+  font-weight: var(--weight-heavy);
+  box-shadow: 0 0 0 2px var(--surface), var(--fx-depth-1);
+}

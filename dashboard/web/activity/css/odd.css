@@ -479,3 +479,8 @@
   font-size: var(--text-sm);
   line-height: 1;
 }
+
+.odd-reveal-head.fx-display {
+  font-weight: var(--fx-display-weight);
+  letter-spacing: var(--fx-display-track);
+}

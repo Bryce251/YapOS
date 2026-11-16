@@ -8,6 +8,7 @@ import { createAdminPanel } from './admin-panel.js';
 import { createTrolls, ALL_FX, seesFx } from './trolls.js';
 import { sfx as defaultSfx } from './sfx.js';
 import { createRecorder } from './replay.js';
+import { replayLog } from '../games/replaylog.js';
 import { predictModel, predictBox, predictWaitModel, predictWait } from './predict.js';
 import { hostBarModel, hostBar, REMOVED_TEXT, LATE_LOCKED_TEXT } from './hosttools.js';
 import { tourStatus } from './tournament.js';
@@ -15,6 +16,28 @@ import { createFullscreen } from './fullscreen.js';
 import { createParty, createBoardLink } from './party.js';
 import { createProfileCard } from './profilecard.js';
 import { createSignin } from './signin.js';
+import { startFxMode, mountBackdrop, fxLevel } from './fxmode.js';
+
+export const SCREEN_IN_MS = 450;
+export const ROUNDCARD_MS = 900;
+export const RELIGHT_MS = 180;
+export const SHINE_MS = 6000;
+
+export function roundCardModel(snap) {
+  if (!snap || !snap.ready || !snap.room || snap.room.phase !== 'game' || !snap.game) return null;
+  const live = snap.tour ? snap.tour.live : null;
+  const n = Number(snap.room.round) || 0;
+  return { emoji: snap.game.emoji || '🎮', name: snap.game.name || 'Game', eyebrow: live ? tourStatus(live) : n > 0 ? `Game ${n}` : 'Get ready' };
+}
+
+function backdropFor(doc) {
+  try {
+    if (doc && typeof doc.createElement === 'function') return mountBackdrop(doc);
+  } catch {
+    return h('div', { class: 'fx-backdrop', attrs: { 'aria-hidden': 'true' } });
+  }
+  return h('div', { class: 'fx-backdrop', attrs: { 'aria-hidden': 'true' } });
+}
 
 export const ANNOUNCE_MS = 10000;
 export const LEAVE_GRACE_MS = 6000;
@@ -165,14 +188,41 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const party = createParty({ engine, win, sfx: sound, toast });
   const boardHost = h('div', { class: 'leaderboard-host' });
   const boardLink = createBoardLink({ engine, host: boardHost, loader: leaderboard });
-  root.replaceChildren(h('div', { class: 'aurora', attrs: { 'aria-hidden': 'true' } }), shell, fxLayer, party.el, panel.el, boardHost, toastRoot);
+  const fxMode = startFxMode({ win });
+  const backdrop = backdropFor(win.document || (typeof document !== 'undefined' ? document : null));
+  let tintShown = null;
+  let shineAt = 0;
+  let shineArm = false;
+  const fxTimers = new Set();
+  root.replaceChildren(backdrop, shell, fxLayer, party.el, panel.el, boardHost, toastRoot);
+  const offFxMode = fxMode.onChange(() => repaintHead());
   const profileCard = createProfileCard({ win, engine, alone });
   const offProfileCard = profileCard.bind(root);
   const gate = signin ? createSignin({ win, engine, toast, dev: Boolean(signin.dev), alone, host: root, onChange: () => repaintHead() }) : null;
   if (gate) root.append(gate.el);
 
   function withSignin(m) {
-    return gate && gate.needsLink() ? { ...m, signin: true } : m;
+    const out = { ...m, fx: fxMode.button() };
+    return gate && gate.needsLink() ? { ...out, signin: true } : out;
+  }
+
+  function fxButton(model) {
+    const still = model.level === 'static';
+    return h(
+      'button',
+      {
+        class: ['btn', 'btn-ghost', 'btn-sm', 'btn-fx', 'spot'],
+        type: 'button',
+        dataset: { key: 'fx' },
+        attrs: { 'aria-pressed': model.pressed ? 'true' : 'false', 'aria-label': model.label, title: model.title, 'aria-disabled': still ? 'true' : null },
+        on: { click: () => {
+          if (still) return;
+          fxMode.cycle();
+          repaintHead();
+        } },
+      },
+      h('span', { class: 'btn-fx-icon', text: model.icon, attrs: { 'aria-hidden': 'true' } }),
+    );
   }
 
   function signinButton() {
@@ -235,6 +285,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
         m.signin ? signinButton() : null,
         soundButton(m.sound),
         fullscreen.button(),
+        m.fx ? fxButton(m.fx) : null,
         m.admin
           ? button('ADMIN', {
               variant: 'admin',
@@ -614,6 +665,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     const tint = gameTint(snap, hm.phase);
     if (tint) root.dataset.game = tint;
     else delete root.dataset.game;
+    relight(tint, hm.phase);
     watchKick(snap);
     announceLive = announceModel(snap, now());
     paintAnnounce(announceSlot, announceLive ? { text: announceLive.text, until: announceLive.until } : null);
@@ -629,23 +681,108 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     direct(snap);
   }
 
+  function watchInk(snap) {
+    try {
+      replayLog.observe(snap);
+    } catch {
+      return;
+    }
+  }
+
+  function hearInk(msg) {
+    try {
+      if (msg) replayLog.hear(msg.data, msg.by);
+    } catch {
+      return;
+    }
+  }
+
+  function fxLater(fn, ms) {
+    const id = win.setTimeout(() => {
+      fxTimers.delete(id);
+      if (!destroyed) fn();
+    }, ms);
+    fxTimers.add(id);
+  }
+
+  function enter(el) {
+    if (!el || !el.classList || fxLevel() === 'static') return;
+    el.classList.remove('fx-screen-in');
+    el.classList.add('fx-screen-in');
+    let done = false;
+    const off = () => {
+      if (done) return;
+      done = true;
+      el.classList.remove('fx-screen-in');
+      el.removeEventListener('animationend', onEnd);
+    };
+    const onEnd = (e) => {
+      if (!e || e.target === el) off();
+    };
+    el.addEventListener('animationend', onEnd);
+    fxLater(off, SCREEN_IN_MS);
+  }
+
+  function roundCard(m) {
+    const old = gameWrap.querySelector('.fx-roundcard');
+    if (old) old.remove();
+    if (!m || fxLevel() === 'static') return;
+    const card = h(
+      'div',
+      { class: 'fx-roundcard', attrs: { 'aria-hidden': 'true' } },
+      h('span', { class: 'fx-roundcard-emoji fx-slam', text: m.emoji }),
+      h('p', { class: 'eyebrow-caps', text: m.eyebrow }),
+      h('p', { class: 'fx-roundcard-name fx-display is-lit fx-pop', text: m.name }),
+    );
+    gameWrap.append(card);
+    fxLater(() => card.remove(), ROUNDCARD_MS);
+  }
+
+  function relight(tint, phase) {
+    const was = tintShown;
+    tintShown = tint;
+    if (phase !== 'lobby' || was === null || was === tint || fxLevel() === 'static' || !backdrop.classList) return;
+    backdrop.classList.add('is-relight');
+    fxLater(() => backdrop.classList.remove('is-relight'), RELIGHT_MS);
+  }
+
+  function tickShine(t) {
+    if ((screen !== 'lobby' && screen !== 'results') || fxLevel() !== 'full') return;
+    if (shineArm) {
+      shineArm = false;
+      for (const b of stage.querySelectorAll('.fx-cta')) b.classList.add('is-shining');
+      return;
+    }
+    if (t - shineAt < SHINE_MS) return;
+    shineAt = t;
+    shineArm = true;
+    for (const b of stage.querySelectorAll('.fx-cta.is-shining')) b.classList.remove('is-shining');
+  }
+
   function paintBody(snap, hm) {
     if (screen === 'results' && hm.phase !== 'results') fx.clear();
     if (hm.phase === 'game') replays.record(snap, snap.game);
+    if (hm.phase === 'game') watchInk(snap);
     if (hm.phase === 'connecting') {
       screen = 'connecting';
       paintConnect(stage, connectModel(snap));
       return;
     }
     if (hm.phase === 'lobby') {
-      if (screen !== 'lobby') swap(stage, lobby.el);
+      if (screen !== 'lobby') {
+        swap(stage, lobby.el);
+        enter(lobby.el);
+      }
       screen = 'lobby';
       lobby.update(snap);
       tickTimers(stage, now(), timerHooks);
       return;
     }
     if (hm.phase === 'results') {
-      if (screen !== 'results') swap(stage, results.el);
+      if (screen !== 'results') {
+        swap(stage, results.el);
+        enter(results.el);
+      }
       screen = 'results';
       results.update(snap);
       return;
@@ -657,8 +794,12 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       view = make ? make({ engine, fx, toast, win, sfx: sound }) : null;
       viewKey = key;
       swap(gameCard, view ? view.el : h('p', { class: 'waiting', text: 'This game needs a newer version of YapOS Party. Reopen the activity to update.' }));
+      roundCard(roundCardModel(snap));
     }
-    if (screen !== 'game') swap(stage, gameWrap);
+    if (screen !== 'game') {
+      swap(stage, gameWrap);
+      enter(gameWrap);
+    }
     screen = 'game';
     if (view) view.update(snap);
     const pick = predictModel(snap);
@@ -684,12 +825,14 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   unlockTarget().addEventListener('pointerdown', unlockOnce, true);
   unlockTarget().addEventListener('keydown', unlockOnce, true);
   const offFx = typeof engine.on === 'function' ? engine.on('fx', onFx) : null;
+  const offInk = typeof engine.on === 'function' ? engine.on('message', hearInk) : null;
   const offSound = sound && typeof sound.on === 'function' ? sound.on('change', repaintHead) : null;
   if (juice && typeof juice === 'object') useJuice(juice);
   else if (juice !== false) import('./juice.js').then(useJuice, () => null);
   const ticker = win.setInterval(() => {
     tickTimers(stage, now(), timerHooks);
     tickAnnounce(now());
+    tickShine(now());
     if (screen === 'connecting' || (predictUntil && now() >= predictUntil)) render(engine.snapshot());
   }, 200);
   render(engine.snapshot());
@@ -715,6 +858,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       root.removeEventListener('click', onRootClick, true);
       offUnlock();
       if (typeof offFx === 'function') offFx();
+      if (typeof offInk === 'function') offInk();
       if (typeof offSound === 'function') offSound();
       if (detachJuice) {
         try {
@@ -734,6 +878,10 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       profileTimer = null;
       stopSpot();
       win.clearInterval(ticker);
+      for (const id of fxTimers) win.clearTimeout(id);
+      fxTimers.clear();
+      offFxMode();
+      fxMode.destroy();
       if (view) view.destroy();
       fx.destroy();
     },

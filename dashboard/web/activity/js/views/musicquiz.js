@@ -239,7 +239,7 @@ export function createMusicquizView({ engine, fx, cues, sfx, win }) {
   const el = h('section', { class: 'game game-musicquiz', attrs: { 'aria-label': 'Music Quiz' } });
   const head = h('div', { class: 'musicquiz-headwrap' });
   const stage = h('div', { class: 'musicquiz-stage' });
-  const bars = h('div', { class: 'musicquiz-bars', attrs: { 'aria-hidden': 'true' } }, Array.from({ length: BARS }, (_, i) => h('span', { class: 'musicquiz-bar', vars: { '--i': i } })));
+  const bars = h('div', { class: 'musicquiz-bars', attrs: { 'aria-hidden': 'true' } }, Array.from({ length: BARS }, (_, i) => h('span', { class: 'musicquiz-bar fx-loop', vars: { '--i': i } })));
   const playBtn = button('Play again', { variant: 'ghost', size: 'sm', key: 'musicquiz-play', on: () => replay(), kids: h('span', { class: 'btn-icon', text: '🔊', attrs: { 'aria-hidden': 'true' } }) });
   const note = h('p', { class: 'musicquiz-note muted', attrs: { role: 'note' } });
   stage.append(bars, h('div', { class: 'musicquiz-controls' }, playBtn), note);
@@ -249,6 +249,7 @@ export function createMusicquizView({ engine, fx, cues, sfx, win }) {
   let snap = null;
   let heard = null;
   let cheered = null;
+  let shown = null;
   let started = null;
   let startTimer = null;
 
@@ -319,8 +320,8 @@ export function createMusicquizView({ engine, fx, cues, sfx, win }) {
     return [
       m.note === 'host' && !reveal ? h('p', { class: 'notice', text: 'The host changed, so this tune starts again.' }) : null,
       reveal && m.title
-        ? h('div', { class: 'musicquiz-answer card glass' }, h('strong', { class: 'musicquiz-title', text: m.title }), m.by ? h('span', { class: 'musicquiz-by muted', text: m.by }) : null)
-        : h('h2', { class: 'question musicquiz-question', text: 'Which tune is this?' }),
+        ? h('div', { class: 'musicquiz-answer card glass' }, h('strong', { class: 'musicquiz-title fx-display is-lit', text: m.title }), m.by ? h('span', { class: 'musicquiz-by muted', text: m.by }) : null)
+        : h('h2', { class: 'question musicquiz-question fx-display', text: 'Which tune is this?' }),
       h(
         'div',
         { class: ['options', reveal ? 'is-reveal' : null] },
@@ -328,8 +329,9 @@ export function createMusicquizView({ engine, fx, cues, sfx, win }) {
           h(
             'button',
             {
-              class: ['option', `option-${o.i}`, 'spot', o.mine ? 'is-mine' : null, o.correct === true ? 'is-right' : null, reveal && o.correct === false ? (o.mine ? 'is-wrong' : 'is-dim') : null],
+              class: ['option', `option-${o.i}`, 'spot', 'fx-lift', o.mine ? 'is-mine' : null, o.correct === true ? 'is-right' : null, reveal && o.correct === false ? (o.mine ? 'is-wrong' : 'is-dim') : null],
               type: 'button',
+              vars: { '--i': o.i },
               disabled: reveal || m.iAnswered || !m.canAnswer,
               dataset: { key: `opt-${o.i}` },
               attrs: { 'aria-pressed': o.mine ? 'true' : 'false' },
@@ -347,7 +349,7 @@ export function createMusicquizView({ engine, fx, cues, sfx, win }) {
         h('span', { class: 'foot-text', text: footText(m) }),
         !reveal ? faces(m.answeredBy) : null,
         reveal && m.right.length
-          ? h('ul', { class: 'got-list' }, m.right.slice(0, 8).map((p) => h('li', { class: ['got-item', p.isMe ? 'is-me' : null] }, profileButton(p, 'xs'), h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }), h('span', { class: 'got-tick', text: `+${p.pts.toLocaleString('en-US')}` }))))
+          ? h('ul', { class: 'got-list' }, m.right.slice(0, 8).map((p) => h('li', { class: ['got-item', p.isMe ? 'is-me' : null] }, profileButton(p, 'xs'), h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }), h('span', { class: 'got-tick fx-num', text: `+${p.pts.toLocaleString('en-US')}` }))))
           : null,
       ),
     ];
@@ -367,6 +369,20 @@ export function createMusicquizView({ engine, fx, cues, sfx, win }) {
     el.dataset.phase = m.phase;
     const { now, cue: moment } = musicMoment(heard, m);
     heard = now;
+    const beat = `${m.phase}:${m.n}`;
+    if (beat !== shown) {
+      shown = beat;
+      const opts = body.querySelector('.options');
+      if (opts && m.phase !== 'reveal') opts.classList.add('is-dealt');
+      const mark = (sel, cls) => {
+        const node = body.querySelector(sel);
+        if (node) node.classList.add(cls);
+      };
+      if (m.phase === 'reveal') {
+        mark('.option.is-right', 'fx-right');
+        mark('.option.is-wrong', 'fx-wrong');
+      }
+    }
     if (moment) {
       cue.play(moment);
       const mineBtn = moment === 'correct' ? body.querySelector(`.option-${m.myPick}`) : null;

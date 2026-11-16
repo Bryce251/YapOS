@@ -702,7 +702,7 @@ test('the files have no comments, no inline styles and only telephone- classes i
   assert.equal(/url\(|@import/.test(css), false);
   for (const m of css.matchAll(/\.([a-z][a-z0-9-]*)/g)) {
     if (m[1].startsWith('telephone-')) continue;
-    assert.ok(['is-on', 'is-me', 'btn'].includes(m[1]), `css class ${m[1]}`);
+    assert.ok(['is-on', 'is-me', 'btn', 'timer', 'is-low', 'fx-display'].includes(m[1]), `css class ${m[1]}`);
   }
 });
 

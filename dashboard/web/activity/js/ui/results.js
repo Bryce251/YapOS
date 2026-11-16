@@ -1,6 +1,6 @@
-import { h, memo, button } from './dom.js';
+import { h, memo, button, avatar } from './dom.js';
 import { joinButton } from './lobby.js';
-import { board, standings } from './board.js';
+import { board, standings, fmt } from './board.js';
 import { burstFrom } from './juice.js';
 import { createDailyBox, finishDaily } from './daily.js';
 import { partyXp, PARTY_XP_DAY, partyShards, PARTY_SHARDS_PREDICTION, PARTY_SHARDS_DAY } from '../admin.js';
@@ -10,12 +10,16 @@ import { createReplayStrip, REPLAY_GAMES } from './replay.js';
 import { awardsModel, awardsCard, reelCard, upsetLine } from './awards.js';
 import { boardButton } from './party.js';
 import { pfp } from './pfp.js';
+import { fxLevel } from './fxmode.js';
 
 export const SAME_TEAMS_LABEL = 'Same teams again';
 export const SAME_TEAMS_TITLE = 'Play again with the same teams';
 
 export const WIN_EMOJI = ['🏆', '⭐', '✨', '🎉', '👑'];
-export const BURST_DELAY_MS = 640;
+export const BURST_DELAY_MS = 900;
+export const REVEAL_MS = 2400;
+export const PODIUM_MIN = 2;
+export const PODIUM_ORDER = [2, 1, 3];
 
 export const FRESH_MS = 8000;
 export const CHAMP_FACES = 5;
@@ -86,6 +90,37 @@ export function headline(m) {
   return `${m.winners.length}-way tie!`;
 }
 
+export function podiumRows(rows) {
+  const top = (Array.isArray(rows) ? rows : []).filter((r) => r && r.pts > 0).slice(0, 3);
+  if (top.length < PODIUM_MIN) return [];
+  return PODIUM_ORDER.map((n) => (top[n - 1] ? { ...top[n - 1], step: n } : null)).filter(Boolean);
+}
+
+export function podiumCard(rows) {
+  const list = podiumRows(rows);
+  if (!list.length) return null;
+  return h(
+    'div',
+    { class: ['podium', `has-${list.length}`], attrs: { 'aria-hidden': 'true' } },
+    list.map((r) =>
+      h(
+        'div',
+        { class: ['podium-step', `step-${r.step}`, `place-${r.place}`, r.isMe ? 'is-me' : null], vars: { '--i': String(3 - r.step) } },
+        h('span', { class: 'podium-who' }, avatar(r, r.step === 1 ? 'md' : 'sm'), h('span', { class: 'podium-name', text: r.name })),
+        h('span', { class: 'podium-block' }, h('span', { class: 'podium-rank', text: String(r.place) }), h('span', { class: 'podium-pts fx-num', text: fmt(r.pts) })),
+      ),
+    ),
+  );
+}
+
+export function announce(m) {
+  const top = m.round && m.round[0];
+  if (!m.winners.length) return 'No winner this time.';
+  if (m.winners.length > 1) return `${headline(m)} ${m.winners.join(', ')}.`;
+  const who = m.iWon ? 'You win' : `${m.winners[0]} wins`;
+  return top && top.pts > 0 ? `${who} with ${fmt(top.pts)} points.` : `${who}.`;
+}
+
 export function createResults({ engine, fx, replays = null, win = globalThis, toast = null, boardLink = null }) {
   const el = h('section', { class: 'screen results', attrs: { 'aria-label': 'Results' } });
   const paint = memo(render);
@@ -94,13 +129,25 @@ export function createResults({ engine, fx, replays = null, win = globalThis, to
   let pending = 0;
   const daily = createDailyBox();
   const strip = createReplayStrip({ win });
+  const live = h('p', { class: 'results-sr', attrs: { 'aria-live': 'polite', role: 'status' } });
+  let revealTimer = 0;
+
+  function revealed() {
+    if (revealTimer) globalThis.clearTimeout(revealTimer);
+    revealTimer = 0;
+    const wrap = el.querySelector('.results-wrap');
+    if (wrap && wrap.classList.contains('is-cinema')) wrap.classList.add('is-revealed');
+  }
+
+  el.addEventListener('pointerdown', revealed);
+  el.addEventListener('keydown', revealed);
 
   function cheerWinner(iWon) {
     const spot = el.querySelector('.winner-face') || el.querySelector('.board-top .place-1') || el.querySelector('.trophy');
     if (!spot || !spot.isConnected) return;
-    burstFrom(spot, { count: iWon ? 34 : 22, spread: iWon ? 180 : 130, size: 9, emoji: WIN_EMOJI });
+    burstFrom(spot, { count: iWon ? 18 : 12, spread: iWon ? 180 : 130, size: 9, emoji: WIN_EMOJI });
     const trophy = el.querySelector('.trophy');
-    if (trophy && trophy !== spot) burstFrom(trophy, { count: 12, spread: 90, size: 7, colors: ['var(--amber)', '#ffd76a', 'var(--accent-text)'] });
+    if (trophy && trophy !== spot && fxLevel() === 'full') burstFrom(trophy, { count: 8, spread: 90, size: 7, colors: ['var(--amber)', '#ffd76a', 'var(--accent-text)'] });
   }
 
   function onJoinTap(e) {
@@ -137,7 +184,7 @@ export function createResults({ engine, fx, replays = null, win = globalThis, to
       : h('p', { class: 'waiting results-waiting', attrs: { role: 'status' } }, h('span', { class: 'pulse-dot', attrs: { 'aria-hidden': 'true' } }), midTour ? `Waiting for ${m.hostName} to start the next game` : `Waiting for ${m.hostName} to pick what's next`);
     return h(
       'div',
-      { class: ['results-wrap', fresh ? 'juice-podium' : null] },
+      { class: ['results-wrap', fresh ? 'juice-podium' : null, fresh ? 'is-cinema' : null] },
       h(
         'div',
         { class: ['card', 'glass', 'winner-card', m.iWon ? 'is-me' : null, m.winners.length ? 'has-winner' : 'is-draw', m.champs.length > 1 ? 'is-tie' : null] },
@@ -148,14 +195,15 @@ export function createResults({ engine, fx, replays = null, win = globalThis, to
           h('span', { class: 'trophy', text: m.winners.length ? '🏆' : '🤝', attrs: { 'aria-hidden': 'true' } }),
           m.game ? h('span', { class: 'eyebrow', text: `${m.game.emoji} ${m.game.name}` }) : h('span', { class: 'eyebrow', text: 'Game over' }),
         ),
+        podiumCard(m.round),
         m.champs.length
           ? h(
               'div',
               { class: ['winner-faces', `has-${Math.min(m.champs.length, CHAMP_FACES)}`] },
-              m.champs.map((p, i) => h('span', { class: 'winner-face', vars: { '--i': String(i) } }, pfp(p, m.champs.length > 2 ? 'lg' : 'xl', { crown: true, ring: 'glow' }))),
+              m.champs.map((p, i) => h('span', { class: ['winner-face', i === 0 && m.champs.length === 1 ? 'fx-spotlight' : null], vars: { '--i': String(i) } }, pfp(p, m.champs.length > 2 ? 'lg' : 'xl', { crown: true, ring: 'glow' }))),
             )
           : null,
-        h('h2', { class: 'winner-title', text: headline(m) }),
+        h('h2', { class: ['winner-title', 'fx-display', m.winners.length ? 'is-lit' : null], text: headline(m) }),
         m.note ? h('p', { class: 'results-note', text: m.note }) : null,
         upsetLine(m.upset),
         m.xp || m.shards
@@ -198,14 +246,20 @@ export function createResults({ engine, fx, replays = null, win = globalThis, to
       m.replays = list.length;
       if (m.daily) finishDaily(m.daily.kind, m.daily.date);
       daily.show(m.daily ? m.daily.kind : null, { date: m.daily ? m.daily.date : null });
-      paint(el, m);
+      const painted = paint(el, m);
+      if (live.parentNode !== el) el.append(live);
       if (m.at && m.at !== celebrated) {
         celebrated = m.at;
+        live.textContent = announce(m);
+        if (painted && fxLevel() !== 'static') {
+          if (revealTimer) globalThis.clearTimeout(revealTimer);
+          revealTimer = globalThis.setTimeout(revealed, REVEAL_MS);
+        }
         if (m.winners.length && Math.abs(snap.now - m.at) < FRESH_MS) {
-          fx.confetti(m.iWon ? 120 : 60);
           if (pending) globalThis.clearTimeout(pending);
           pending = globalThis.setTimeout(() => {
             pending = 0;
+            fx.confetti(m.iWon ? 60 : 30);
             cheerWinner(m.iWon);
           }, BURST_DELAY_MS);
         }
@@ -214,6 +268,10 @@ export function createResults({ engine, fx, replays = null, win = globalThis, to
     destroy() {
       if (pending) globalThis.clearTimeout(pending);
       pending = 0;
+      if (revealTimer) globalThis.clearTimeout(revealTimer);
+      revealTimer = 0;
+      el.removeEventListener('pointerdown', revealed);
+      el.removeEventListener('keydown', revealed);
       strip.destroy();
       daily.destroy();
     },

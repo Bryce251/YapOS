@@ -673,8 +673,8 @@ export function createHiveView({ engine, fx, cues, timers }) {
       h(
         'div',
         { class: 'hive-rank-top' },
-        h('strong', { class: 'hive-rank-name', text: m.rank.name }),
-        h('span', { class: 'hive-rank-score', text: `${plural(m.me.pts, 'point', 'points')} · ${plural(m.me.count, 'word', 'words')}` }),
+        h('strong', { class: 'hive-rank-name fx-display', text: m.rank.name }),
+        h('span', { class: 'hive-rank-score fx-num', text: `${plural(m.me.pts, 'point', 'points')} · ${plural(m.me.count, 'word', 'words')}` }),
       ),
       h('div', { class: 'hive-rank-track', attrs: { role: 'img', 'aria-label': `${m.rank.name}, ${m.rank.pct}% of the way to the top rank` } }, h('span', { class: 'hive-rank-fill', vars: { '--pct': m.rank.pct } })),
       m.rank.next ? h('span', { class: 'hive-rank-next muted', text: `${plural(m.rank.need, 'point', 'points')} to ${m.rank.next}` }) : h('span', { class: 'hive-rank-next', text: 'Top rank! 👑' }),
@@ -725,7 +725,7 @@ export function createHiveView({ engine, fx, cues, timers }) {
           profileButton(p, 'sm', { ring: i === 0 && p.pts > 0 ? 'lead' : null }),
           h('span', { class: 'hive-player-name', text: p.isMe ? `${p.name} (you)` : p.name }),
           p.pangrams ? h('span', { class: 'hive-star', text: '🌟', attrs: { title: 'Found a pangram', 'aria-label': 'Found a pangram' } }) : null,
-          h('span', { class: 'hive-player-stat', text: `${plural(p.count, 'word', 'words')} · ${p.pts}` }),
+          h('span', { class: 'hive-player-stat fx-num', text: `${plural(p.count, 'word', 'words')} · ${p.pts}` }),
         ),
       ),
     );
@@ -745,7 +745,7 @@ export function createHiveView({ engine, fx, cues, timers }) {
       h(
         'div',
         { class: 'hive-letters', attrs: { 'aria-label': `The letters were ${m.letters.toUpperCase().split('').join(' ')}` } },
-        m.letters.split('').map((l) => h('span', { class: ['hive-tile', l === m.centre ? 'is-centre' : null], text: l.toUpperCase() })),
+        m.letters.split('').map((l, i) => h('span', { class: ['hive-tile', l === m.centre ? 'is-centre' : null], vars: { '--i': i }, text: l.toUpperCase() })),
       ),
       pangramLine ? h('p', { class: 'hive-pangram-line', text: pangramLine }) : null,
       r.players.length

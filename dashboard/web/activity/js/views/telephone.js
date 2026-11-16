@@ -714,7 +714,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
           'li',
           { class: ['telephone-award', 'card', 'glass', a.who.isMe ? 'is-me' : null], dataset: { award: a.id }, vars: { '--i': i } },
           h('span', { class: 'telephone-award-emoji', text: a.e, attrs: { 'aria-hidden': 'true' } }),
-          h('strong', { class: 'telephone-award-title', text: a.title }),
+          h('strong', { class: 'telephone-award-title fx-display is-lit', text: a.title }),
           faceRow(a.who, '', 'sm'),
           h('span', { class: 'telephone-award-why muted', text: a.why }),
         ),

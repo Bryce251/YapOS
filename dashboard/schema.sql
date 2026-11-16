@@ -132,6 +132,12 @@ CREATE TABLE IF NOT EXISTS party_report_texts (
 );
 CREATE INDEX IF NOT EXISTS party_report_texts_ip ON party_report_texts (ip_hash, created);
 
+CREATE TABLE IF NOT EXISTS party_report_replays (
+  report_id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  created INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS party_bans (
   id TEXT PRIMARY KEY,
   name TEXT,

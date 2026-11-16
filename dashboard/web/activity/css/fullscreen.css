@@ -75,9 +75,13 @@
   grid-template-areas: "game players";
 }
 
-.app.is-focus .aurora,
+.app.is-focus .fx-backdrop,
 .app.is-focus::before {
   opacity: 0.6;
+}
+
+.app.is-focus .fx-floor {
+  opacity: 0.2;
 }
 
 .app.is-focus[data-phase='game'] .play {
@@ -138,7 +142,11 @@
 
 @media (min-width: 1120px) {
   .app.is-full[data-phase='game'] .question {
-    font-size: var(--text-display);
+    font-size: clamp(32px, 5vw, 64px);
+    font-weight: var(--fx-display-weight);
+    letter-spacing: var(--fx-display-track);
+    line-height: 1.04;
+    text-wrap: balance;
   }
 
   .app.is-full[data-phase='game'] .option {

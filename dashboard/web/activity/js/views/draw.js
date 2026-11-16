@@ -8,6 +8,7 @@ import { HIDDEN_NOTE } from '../filter.js';
 import { flagInfo } from '../engine.js';
 import { sendReport } from '../admin.js';
 import { textFlag } from '../ui/report.js';
+import { replayLog } from '../games/replaylog.js';
 import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
 import { TEAM_MS, teamInfo, finalText } from '../games/teams.js';
 import { PACK_EMOJI } from '../games/packs.js';
@@ -68,14 +69,14 @@ export function flagButton(f, onFlag, note = null) {
   );
 }
 
-export function reportOf(snap, game, item) {
+export function reportOf(snap, game, item, log = replayLog) {
   if (!snap || !item) return null;
   const players = Array.isArray(snap.players) ? snap.players : [];
   const drawer = players.find((p) => p.slot === item.drawer);
   const me = players.find((p) => p.isMe);
   if (!drawer || !drawer.id || !me) return null;
   const prof = person({ id: drawer.id, name: drawer.name }) || {};
-  return {
+  const body = {
     game,
     drawer: { id: drawer.id, name: drawer.name, username: drawer.username || prof.username || null },
     reporter: { id: me.id, name: me.name },
@@ -83,6 +84,14 @@ export function reportOf(snap, game, item) {
     word: typeof item.word === 'string' && item.word ? item.word : null,
     at: Date.now(),
   };
+  let replay = null;
+  try {
+    replay = log.replayFor(game, item);
+  } catch {
+    replay = null;
+  }
+  if (replay && replay.authors.some((a) => a.id === drawer.id)) body.replay = replay;
+  return body;
 }
 
 export function flagDrawing({ engine, snap, game, item, local, toast }) {
@@ -196,12 +205,13 @@ export function boardRows(snap, drawerSlot) {
     });
 }
 
-function who(p, { verb = '', me = 'You', size = 'sm', cls = null } = {}) {
+function who(p, { verb = '', me = 'You', size = 'sm', cls = null, ring = false } = {}) {
   const handle = handleText(p);
+  const face = profileButton(p, size);
   return h(
     'span',
     { class: ['who', cls] },
-    profileButton(p, size),
+    ring ? h('span', { class: 'fx-acting draw-acting' }, face) : face,
     h(
       'span',
       { class: 'who-text' },
@@ -683,7 +693,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
       h('span', { class: 'chip chip-static', text: `Round ${m.round} of ${m.rounds}` }),
       m.drawerTeam ? h('span', { class: ['chip', 'chip-static', 'team-chip', `team-${m.drawerTeam}`], text: teamChipText(m.drawerTeam) }) : null,
       packChip(m.pack, m.packMiss, 'words'),
-      who(m.drawer, { verb: m.phase === 'pick' ? 'is up next' : 'is drawing', me: m.phase === 'pick' ? "You're up next" : "You're drawing", size: 'sm', cls: 'drawer-tag' }),
+      who(m.drawer, { verb: m.phase === 'pick' ? 'is up next' : 'is drawing', me: m.phase === 'pick' ? "You're up next" : "You're drawing", size: 'sm', cls: 'drawer-tag', ring: m.phase === 'draw' }),
       timer(m.timerStarts, m.ends, m.phase === 'pick' ? 'Time left to pick' : m.phase === 'reveal' ? 'Next turn in' : 'Time left to draw'),
     );
   });
@@ -697,7 +707,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     if (m.phase === 'reveal') return h('p', { class: 'word-line' }, h('span', { class: 'muted', text: 'The word was ' }), h('strong', { class: 'word-reveal', text: m.word || '???' }));
     if (m.phase === 'pick') {
       if (m.amDrawer) return h('p', { class: 'word-line muted', text: 'Your turn to draw! Pick a word.' });
-      return h('div', { class: 'word-line pick-wait' }, who(m.drawer, { verb: 'is picking a word…', size: 'md', cls: 'who-big' }));
+      return h('div', { class: 'word-line pick-wait' }, who(m.drawer, { verb: 'is picking a word…', size: 'md', cls: 'who-big', ring: true }));
     }
     if (m.amDrawer) return h('p', { class: 'word-line' }, h('span', { class: 'muted', text: 'Draw this: ' }), h('strong', { class: 'word-secret', text: m.word }));
     if (!m.hint) return null;
@@ -728,13 +738,13 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
         'div',
         { class: 'reveal-drawer' },
         who(m.drawer, { verb: 'drew this', me: 'You drew this', size: 'md', cls: 'who-big' }),
-        h('span', { class: ['reveal-gain', m.drawerGain ? null : 'is-zero'], text: gainText(m) }),
+        h('span', { class: ['reveal-gain', 'fx-num', m.drawerGain ? null : 'is-zero'], text: gainText(m) }),
       ),
       m.got.length
         ? h(
             'ul',
             { class: 'reveal-got', attrs: { 'aria-label': 'Who guessed it' } },
-            m.got.map((g) => h('li', { class: ['reveal-guess', g.isMe ? 'is-me' : null] }, profileButton(g, 'xs'), h('span', { class: 'reveal-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'reveal-pts', text: `+${g.pts}` }))),
+            m.got.map((g) => h('li', { class: ['reveal-guess', g.isMe ? 'is-me' : null] }, profileButton(g, 'xs'), h('span', { class: 'reveal-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'reveal-pts fx-num', text: `+${g.pts}` }))),
           )
         : h('p', { class: 'reveal-none muted', text: 'Nobody guessed it this time.' }),
     );

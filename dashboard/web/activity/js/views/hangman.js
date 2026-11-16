@@ -2,6 +2,7 @@ import hangman, { REVEAL_MS, WORD_COST, cleanLetter, cleanGuess } from '../games
 import { h, memo, timer, profileButton, button, plural } from '../ui/dom.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
+const FLASH = { wrong: ['.hangman-hearts', 'fx-wrong'], lose: ['.hangman-word', 'fx-wrong'], win: ['.hangman-word', 'fx-pop'] };
 const MEDALS = ['🥇', '🥈', '🥉'];
 
 export function rankText(rank) {
@@ -206,6 +207,10 @@ export function createHangmanView({ engine, fx, toast, win, cues }) {
     const { now, cues: list } = hangmanMoment(heard, m);
     heard = now;
     list.forEach((name, i) => cue.play(name, i ? { at: 260 } : undefined));
+    for (const name of list) {
+      const hit = FLASH[name] ? board.querySelector(FLASH[name][0]) : null;
+      if (hit) hit.classList.add(FLASH[name][1]);
+    }
     if (m.solved && cheered !== m.n) {
       cheered = m.n;
       const tiles = board.querySelector('.hangman-word');

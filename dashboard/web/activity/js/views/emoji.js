@@ -69,7 +69,7 @@ function gotList(list) {
         profileButton(p, 'xs'),
         h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }),
         p.first ? h('span', { class: 'emoji-medal', text: '🥇', attrs: { 'aria-label': 'First' } }) : null,
-        h('span', { class: 'got-tick', text: `+${p.pts.toLocaleString('en-US')}` }),
+        h('span', { class: 'got-tick fx-num', text: `+${p.pts.toLocaleString('en-US')}` }),
       ),
     ),
     list.length > 10 ? h('li', { class: 'tag', text: `+${list.length - 10} more` }) : null,
@@ -178,7 +178,7 @@ export function createEmojiView({ engine, fx, cues, win }) {
         tiles(m.emoji).map((t, i) => h('span', { class: 'emoji-tile', text: t, vars: { '--i': i } })),
       ),
       m.answer
-        ? h('div', { class: 'emoji-answer' }, h('span', { class: 'eyebrow', text: m.phase === 'reveal' ? 'The answer was' : 'You got it!' }), h('span', { class: 'word-reveal emoji-answer-text', text: m.answer }))
+        ? h('div', { class: 'emoji-answer' }, h('span', { class: 'eyebrow', text: m.phase === 'reveal' ? 'The answer was' : 'You got it!' }), h('span', { class: 'word-reveal emoji-answer-text fx-display', text: m.answer }))
         : null,
     ),
   );
@@ -227,6 +227,7 @@ export function createEmojiView({ engine, fx, cues, win }) {
     if (list.includes('correct')) {
       const card = stage.querySelector('.emoji-card');
       if (card) {
+        card.classList.add('fx-shine', 'is-shining');
         cue.burst(card, { count: 16, emoji: ['🧩', '🎉'] });
         if (m.myGain) cue.float(card, `+${m.myGain.toLocaleString('en-US')}`);
       }

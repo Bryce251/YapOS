@@ -79,6 +79,11 @@ const ICONS = {
   chart: [['path', { d: 'M4 20h16' }], ['rect', { x: 5.5, y: 11, width: 3, height: 6, rx: 1 }], ['rect', { x: 10.5, y: 6, width: 3, height: 11, rx: 1 }], ['rect', { x: 15.5, y: 9, width: 3, height: 8, rx: 1 }]],
   eye: [['path', { d: 'M3 12s4-6 9-6 9 6 9 6-4 6-9 6-9-6-9-6z' }], ['circle', { cx: 12, cy: 12, r: 3 }]],
   'eye-off': [['path', { d: 'M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c5 0 9 6 9 6a16 16 0 0 1-2.6 3.2M6.6 6.6C4.3 8.1 3 12 3 12s4 6 9 6a9 9 0 0 0 4.4-1.2M9.9 9.9a3 3 0 0 0 4.2 4.2' }]],
+  play: [['path', { d: 'M7 4.8v14.4a1 1 0 0 0 1.5.9l11.3-7.2a1 1 0 0 0 0-1.8L8.5 3.9A1 1 0 0 0 7 4.8z' }]],
+  pause: [['rect', { x: 6, y: 4.5, width: 4, height: 15, rx: 1 }], ['rect', { x: 14, y: 4.5, width: 4, height: 15, rx: 1 }]],
+  'skip-back': [['path', { d: 'M6 5v14M18 6.2v11.6a1 1 0 0 1-1.6.8L9 13a1.2 1.2 0 0 1 0-2l7.4-5.6a1 1 0 0 1 1.6.8z' }]],
+  'skip-forward': [['path', { d: 'M18 5v14M6 6.2v11.6a1 1 0 0 0 1.6.8L15 13a1.2 1.2 0 0 0 0-2L7.6 5.4A1 1 0 0 0 6 6.2z' }]],
+  rewind: [['path', { d: 'M4 12a8 8 0 1 0 2.4-5.7L4 8.6M4 4v4.6h4.6' }]],
 };
 
 function make(tag, attrs) {

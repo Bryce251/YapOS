@@ -1,9 +1,3 @@
-@property --pcard-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
 .avatar.pcard-trigger {
   position: relative;
   overflow: visible;
@@ -66,8 +60,6 @@
   position: absolute;
   inset: 0;
   background: var(--overlay-strong);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
   animation: pcard-fade var(--dur-enter) var(--ease-out) both;
 }
 
@@ -193,10 +185,10 @@
   position: absolute;
   inset: calc(-1 * (var(--pcard-ring) + var(--pcard-gap)));
   border-radius: 50%;
-  background: conic-gradient(from var(--pcard-angle), var(--glow-a), var(--glow-b), var(--glow-c), var(--glow-a));
+  background: conic-gradient(var(--glow-a), var(--glow-b), var(--glow-c), var(--glow-a));
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - var(--pcard-ring)), #000 calc(100% - var(--pcard-ring) + 0.5px));
   mask: radial-gradient(farthest-side, transparent calc(100% - var(--pcard-ring)), #000 calc(100% - var(--pcard-ring) + 0.5px));
-  animation: pcard-spin 6s linear infinite;
+  animation: fx-spin 6s linear infinite;
 }
 
 .pcard-avatar::after {
@@ -525,9 +517,8 @@
 
 .pcard-bone,
 .pcard-badge.is-skeleton {
-  background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%);
-  background-size: 200% 100%;
-  animation: pcard-shimmer 1.4s var(--ease) infinite;
+  background: var(--surface-3);
+  animation: fx-breathe 1.4s var(--ease) infinite;
 }
 
 .pcard-stat.is-skeleton {
@@ -652,21 +643,6 @@
   }
 }
 
-@keyframes pcard-spin {
-  to {
-    --pcard-angle: 360deg;
-  }
-}
-
-@keyframes pcard-shimmer {
-  from {
-    background-position: 100% 0;
-  }
-  to {
-    background-position: -100% 0;
-  }
-}
-
 @media (max-width: 420px) {
   .pcard-layer {
     align-items: end;
@@ -728,6 +704,28 @@
   .pcard-stat-value {
     font-size: var(--text-md);
   }
+}
+
+[data-fx-paused] .pcard-avatar::before,
+[data-fx-paused] .pcard-avatar::after,
+[data-fx-paused] .pcard-bone,
+[data-fx-paused] .pcard-badge.is-skeleton {
+  animation-play-state: paused;
+}
+
+[data-fx="lite"] .pcard-avatar::before,
+[data-fx="lite"] .pcard-avatar::after,
+[data-fx="static"] .pcard-avatar,
+[data-fx="static"] .pcard-avatar::before,
+[data-fx="static"] .pcard-avatar::after,
+[data-fx="static"] .pcard-bone,
+[data-fx="static"] .pcard-badge.is-skeleton {
+  animation: none;
+}
+
+[data-fx="lite"] .pcard-avatar::after {
+  filter: none;
+  opacity: 0.3;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -66,7 +66,7 @@
   border: 1px solid var(--border-strong);
   background: var(--surface-2);
   box-shadow: var(--shadow-md), var(--inset-hi);
-  transition: width var(--dur-slow) var(--ease), box-shadow var(--dur-slow) var(--ease), border-color var(--dur) var(--ease);
+  transition: border-color var(--dur) var(--ease);
 }
 
 .pixel-frame.is-live {
@@ -278,4 +278,22 @@
   .pixel-swatch:hover:not(.is-active) {
     transform: none;
   }
+}
+
+.pixel-titlewrap {
+  background: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--game) 22%, transparent), transparent 70%), color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow: var(--inset-hi), var(--fx-depth-2);
+}
+
+.pixel-theme.fx-display {
+  font-weight: var(--fx-display-weight);
+  letter-spacing: var(--fx-display-track);
+}
+
+.pixel-frame.is-live {
+  box-shadow: var(--inset-hi), var(--fx-depth-2), 0 0 0 1px var(--game-line), 0 20px 44px -24px var(--game), 0 -14px 40px -28px var(--fx-b);
+}
+
+.game-pixel:has(.timer.is-low) .pixel-frame.is-live {
+  border-color: color-mix(in srgb, var(--danger) 70%, transparent);
 }

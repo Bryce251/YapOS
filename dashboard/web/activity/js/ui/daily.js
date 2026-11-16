@@ -121,11 +121,11 @@ export function myLine(p) {
 function topRow(r, i) {
   return h(
     'li',
-    { class: ['daily-row', i < 3 ? `is-top-${i + 1}` : null] },
+    { class: ['daily-row', i < 3 ? `is-top-${i + 1}` : null], vars: { '--i': i } },
     h('span', { class: 'daily-place', text: String(i + 1) }),
     h('span', { class: 'daily-who' }, h('strong', { class: 'daily-name', text: r.name }), r.username ? h('span', { class: 'daily-handle', text: `@${r.username}` }) : null),
     r.streak > 1 ? h('span', { class: 'daily-streak', text: `🔥${r.streak}`, attrs: { title: `${r.streak}-day streak` } }) : null,
-    h('span', { class: 'daily-score', text: String(r.score) }),
+    h('span', { class: 'daily-score fx-num', text: String(r.score) }),
   );
 }
 
@@ -138,13 +138,13 @@ export function dailyView(m) {
     { class: ['daily-box', m.compact ? 'is-compact' : null] },
     h('div', { class: 'daily-head' }, h('span', { class: 'daily-badge', text: '📅', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'daily-title', text: `Daily ${name}` }), m.date ? h('span', { class: 'daily-date', text: m.date }) : null),
     m.intro ? h('p', { class: 'daily-intro', text: m.intro }) : null,
-    mine ? h('p', { class: ['daily-mine', `is-${mine.tone}`], attrs: { role: 'status' } }, mine.text) : null,
-    mine && mine.streak ? h('p', { class: 'daily-streak-line', text: mine.streak }) : null,
+    mine ? h('p', { class: ['daily-mine', `is-${mine.tone}`, mine.tone === 'good' ? 'fx-pop' : null], attrs: { role: 'status' } }, mine.text) : null,
+    mine && mine.streak ? h('p', { class: 'daily-streak-line fx-pop', text: mine.streak }) : null,
     h('span', { class: 'eyebrow daily-top-title', text: "Today's best" }),
     rows === null
       ? h('p', { class: 'muted daily-empty', text: m.loading ? 'Loading today’s best…' : "Today's best couldn't load right now." })
       : rows.length
-      ? h('ol', { class: 'daily-top', attrs: { 'aria-label': "Today's best" } }, rows.map(topRow))
+      ? h('ol', { class: 'daily-top fx-stagger', attrs: { 'aria-label': "Today's best" } }, rows.map(topRow))
       : h('p', { class: 'muted daily-empty', text: 'Nobody has played today yet. Be the first!' }),
   );
 }

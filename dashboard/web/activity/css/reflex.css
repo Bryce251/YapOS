@@ -33,7 +33,7 @@
   border: 1px solid color-mix(in srgb, var(--pad) 70%, var(--border-strong));
   border-radius: var(--radius-xl);
   background: radial-gradient(70% 80% at 50% 30%, color-mix(in srgb, white 10%, var(--pad)), var(--pad) 70%);
-  box-shadow: var(--inset-hi), inset 0 -4px 0 color-mix(in srgb, black 25%, var(--pad)), 0 18px 48px -24px var(--pad-glow);
+  box-shadow: var(--inset-hi), inset 0 -4px 0 color-mix(in srgb, black 25%, var(--pad)), 0 18px 48px -24px var(--pad-glow), var(--fx-depth-2);
   color: var(--text);
   text-align: center;
   font: inherit;
@@ -77,7 +77,7 @@
 .reflex-big {
   font-size: clamp(34px, 9vw, 64px);
   line-height: 1.05;
-  font-weight: var(--weight-heavy);
+  font-weight: var(--fx-display-weight);
   letter-spacing: var(--tracking-display);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
@@ -363,8 +363,32 @@
 
 @media (prefers-reduced-motion: reduce) {
   .reflex-pad,
+  .reflex-pad::after,
   .reflex-row {
     transition: none;
     animation: none;
   }
+}
+
+.reflex-pad::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.4), transparent 62%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.reflex-pad.is-go::after {
+  animation: fx-ring-out 480ms var(--ease-out);
+}
+
+.fx-rush .fx-motif {
+  animation-duration: 0.8s;
+}
+
+[data-fx="static"] .reflex-pad,
+[data-fx="static"] .reflex-pad::after,
+[data-fx="static"] .reflex-row {
+  animation: none;
 }

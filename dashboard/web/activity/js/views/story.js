@@ -156,7 +156,7 @@ export function createStoryView({ engine, fx, toast, win, cues }) {
       h('span', { class: 'story-by', attrs: { title: l.by.isMe ? 'You' : l.by.name } }, profileButton(l.by, 'sm')),
       body,
       reveal && l.votes
-        ? h('span', { class: 'story-votes' }, l.top ? h('span', { class: 'story-badge', text: '⭐ Best line' }) : null, h('span', { class: 'story-count', text: plural(l.votes, 'vote', 'votes') }), l.gain ? h('span', { class: 'story-gain', text: `+${l.gain}` }) : null)
+        ? h('span', { class: 'story-votes' }, l.top ? h('span', { class: 'story-badge', text: '⭐ Best line' }) : null, h('span', { class: 'story-count', text: plural(l.votes, 'vote', 'votes') }), l.gain ? h('span', { class: 'story-gain fx-num', text: `+${l.gain}` }) : null)
         : null,
       l.ref ? textFlag(engine, l.ref, { toast, corner: true }) : null,
     );
@@ -172,7 +172,7 @@ export function createStoryView({ engine, fx, toast, win, cues }) {
       m.lines.length
         ? h('ol', { class: 'story-lines' }, m.lines.map((l) => lineItem(m, l)))
         : h('p', { class: 'story-empty muted', text: m.phase === 'write' ? 'The first line is up for grabs…' : 'No lines yet.' }),
-      m.phase === 'write' && m.writer ? h('p', { class: 'story-typing muted', attrs: { 'aria-hidden': 'true' } }, quietFace(m.writer), h('span', { class: 'story-dots', text: '…' })) : null,
+      m.phase === 'write' && m.writer ? h('p', { class: 'story-typing muted', attrs: { 'aria-hidden': 'true' } }, quietFace(m.writer), h('span', { class: 'story-dots fx-loop', text: '…' })) : null,
     ),
   );
 
@@ -182,7 +182,7 @@ export function createStoryView({ engine, fx, toast, win, cues }) {
       'div',
       { class: ['story-turn', m.myTurn ? 'is-mine' : null] },
       h('span', { class: 'story-turn-label muted', text: m.myTurn ? 'Your turn' : 'Writing now' }),
-      h('span', { class: 'story-turn-who' }, profileButton(m.writer, 'md'), h('strong', { text: m.writer.isMe ? 'You' : m.writer.name })),
+      h('span', { class: 'story-turn-who' }, h('span', { class: 'fx-acting story-acting' }, profileButton(m.writer, 'md')), h('strong', { text: m.writer.isMe ? 'You' : m.writer.name })),
       m.upcoming.length ? h('span', { class: 'story-next muted' }, h('span', { text: 'Up next' }), h('span', { class: 'faces' }, m.upcoming.map((p) => profileButton(p, 'sm')))) : null,
     );
   });

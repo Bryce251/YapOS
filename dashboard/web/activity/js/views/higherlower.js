@@ -81,7 +81,7 @@ export function createHigherlowerView({ engine, fx, cues }) {
       },
       h('span', { class: 'hl-emoji', text: it.emoji, attrs: { 'aria-hidden': 'true' } }),
       h('span', { class: 'hl-name', text: it.name }),
-      reveal ? h('span', { class: 'hl-value', text: it.value || '' }) : h('span', { class: 'hl-value is-hidden', text: '?' }),
+      reveal ? h('span', { class: 'hl-value fx-num', text: it.value || '' }) : h('span', { class: 'hl-value is-hidden', text: '?' }),
       m.myPick === side ? h('span', { class: 'hl-tag', text: reveal ? (win ? 'Your pick ✓' : 'Your pick') : 'Your pick' }) : null,
       reveal ? faces(m.pickers[side], 7, false) : null,
     );
@@ -94,13 +94,13 @@ export function createHigherlowerView({ engine, fx, cues }) {
       h(
         'div',
         { class: 'game-head' },
-        h('span', { class: ['chip', 'chip-static', m.streak >= 2 ? 'hl-streak' : null], text: m.streak >= 2 ? `🔥 ${m.streak} in a row` : 'Streak 0' }),
-        m.ko ? h('span', { class: ['chip', 'chip-static', 'ko-chip', m.ko.duel ? 'is-duel' : null], text: koLine(m.ko) }) : null,
+        h('span', { class: ['chip', 'chip-static', 'fx-num', m.streak >= 2 ? 'hl-streak' : null], text: m.streak >= 2 ? `🔥 ${m.streak} in a row` : 'Streak 0' }),
+        m.ko ? h('span', { class: ['chip', 'chip-static', 'ko-chip', m.ko.duel ? 'is-duel fx-loop' : null], text: koLine(m.ko) }) : null,
         h('span', { class: 'game-count', text: m.ko ? `Round ${m.number}` : `Round ${m.number} of ${m.total}` }),
         timer(reveal ? m.ends - REVEAL_MS : m.starts, m.ends, reveal ? (m.ko && m.ko.champ ? 'Results in' : 'Next round in') : 'Time left to pick'),
       ),
       koBar(m.ko),
-      h('h2', { class: 'question hl-ask', text: m.ask }),
+      h('h2', { class: 'question hl-ask fx-display', text: m.ask }),
       m.note === 'host' && !reveal ? h('p', { class: 'notice', text: 'The host changed, so this round starts again. Pick again!' }) : null,
       h('div', { class: 'hl-cards' }, card(m, 'a'), h('span', { class: 'or hl-or', text: 'or', attrs: { 'aria-hidden': 'true' } }), card(m, 'b')),
       m.hot.length
@@ -126,6 +126,13 @@ export function createHigherlowerView({ engine, fx, cues }) {
     if (!m) return;
     const { now, cues: list } = higherlowerMoment(heard, m);
     heard = now;
+    rush(m.streak >= 3);
+    if (list.includes('reveal')) {
+      const win = el.querySelector('.hl-card.is-win');
+      if (win) win.classList.add('fx-right');
+      const lost = list.includes('wrong') ? el.querySelector(`.hl-card-${m.myPick}`) : null;
+      if (lost) lost.classList.add('fx-wrong');
+    }
     list.forEach((name, i) => cue.play(name, i ? { at: 320 } : undefined));
     if (list.length && m.ko && m.ko.champ && m.ko.champ.isMe && cheered !== `ko${m.r}`) {
       cheered = `ko${m.r}`;
@@ -144,5 +151,17 @@ export function createHigherlowerView({ engine, fx, cues }) {
     }
   }
 
-  return { el, update, destroy() {} };
+  let app = null;
+  function rush(on) {
+    if (!app) app = el.closest('.app');
+    if (app) app.classList.toggle('fx-rush', on);
+  }
+
+  return {
+    el,
+    update,
+    destroy() {
+      rush(false);
+    },
+  };
 }

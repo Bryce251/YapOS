@@ -420,7 +420,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
     return h(
       'div',
       { class: ['sketchduel-side', `sketchduel-side-${s}`, picked ? 'is-picked' : null, reveal && info.win ? 'is-win' : null, reveal && !info.win && d.win ? 'is-lose' : null], dataset: { side: s } },
-      h('div', { class: 'sketchduel-who' }, profileButton(info.who, 'sm'), h('strong', { class: 'sketchduel-name', text: info.who.isMe ? 'You' : info.who.name }), reveal && info.win ? h('span', { class: 'sketchduel-crown', text: d.win === 'tie' ? '🤝' : '👑', attrs: { 'aria-hidden': 'true' } }) : null),
+      h('div', { class: 'sketchduel-who' }, profileButton(info.who, 'sm'), h('strong', { class: 'sketchduel-name', text: info.who.isMe ? 'You' : info.who.name }), reveal && info.win ? h('span', { class: 'sketchduel-crown fx-slam', text: d.win === 'tie' ? '🤝' : '👑', attrs: { 'aria-hidden': 'true' } }) : null),
       h(
         'div',
         { class: ['paper', 'sketchduel-mini', info.hidden ? 'is-hidden' : null] },
@@ -441,7 +441,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
             'div',
             { class: 'sketchduel-score' },
             h('span', { class: 'sketchduel-votes', text: plural(info.votes || 0, 'vote', 'votes') }),
-            info.pts ? h('span', { class: 'sketchduel-gain', text: `+${info.pts}` }) : null,
+            info.pts ? h('span', { class: 'sketchduel-gain fx-num', text: `+${info.pts}` }) : null,
             info.voters.length ? h('span', { class: 'faces' }, info.voters.slice(0, 6).map((p) => profileButton(p, 'xs'))) : null,
           )
         : null,

@@ -13,6 +13,7 @@ import { createBudget } from '../engine/budget.js';
 import { createLogger } from '../engine/log.js';
 import { monthKey, shiftMonth } from '../apps/wrapped.js';
 import { encodeStroke } from './web/activity/js/games/ink.js';
+import { cleanReplay } from './worker/reports.js';
 import { dayKey } from './web/activity/js/daily.js';
 import { seedOwnerPanel, createOwnerSim, botHandlesOwner } from './dev/owner-sim.js';
 
@@ -312,6 +313,103 @@ export function seedPartyReport(db, t = Date.now()) {
     .run(DEV_TEXT_REPORT_ID, rex.id, rex.display_name, rex.username, mila.id, mila.display_name, t - 2 * 60_000, t - 2 * 60_000);
   db.raw.prepare("INSERT INTO party_report_texts (id, text, context, ip_hash, created) VALUES (?, ?, ?, 'dev', ?) ON CONFLICT (id) DO NOTHING")
     .run(DEV_TEXT_REPORT_ID, 'Pineapple on pizza people should be kicked out of every call, no exceptions', 'What is the worst food opinion?', t - 2 * 60_000);
+  const artists = DEV_ARTISTS.map(fakeProfile);
+  for (const a of artists) stmt.run(a.id, a.username, a.display_name, t);
+  const insert = db.raw.prepare("INSERT INTO party_reports (id, game, drawer_id, drawer_name, drawer_username, reporter_id, reporter_name, ink, word, at, created, ip_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dev', 'open') ON CONFLICT (id) DO NOTHING");
+  const keep = db.raw.prepare('INSERT INTO party_report_replays (report_id, data, created) VALUES (?, ?, ?) ON CONFLICT (report_id) DO NOTHING');
+  const odd = devOddReplay(artists);
+  const last = artists[odd.lastArtist];
+  insert.run(DEV_ODD_REPORT_ID, 'odd', last.id, last.display_name, last.username, mila.id, mila.display_name, JSON.stringify(odd.ink), 'lighthouse', t - 4 * 60_000, t - 4 * 60_000);
+  keep.run(DEV_ODD_REPORT_ID, JSON.stringify(cleanReplay(odd.replay, 'odd', last.id)), t - 4 * 60_000);
+  const pixel = devPixelReplay(artists.slice(0, 3));
+  const top = artists[0];
+  insert.run(DEV_PIXEL_REPORT_ID, 'pixel', top.id, top.display_name, top.username, mila.id, mila.display_name, '[]', 'a heart with wings', t - 3 * 60_000, t - 3 * 60_000);
+  keep.run(DEV_PIXEL_REPORT_ID, JSON.stringify(cleanReplay(pixel, 'pixel', top.id)), t - 3 * 60_000);
+}
+
+export const DEV_ODD_REPORT_ID = 'devreport0003';
+export const DEV_PIXEL_REPORT_ID = 'devreport0004';
+export const DEV_ARTISTS = Object.freeze([5, 6, 7, 8].map((n) => `de7e0000-0000-4000-8000-${String(n).padStart(12, '0')}`));
+
+function line(points, steps = 8) {
+  const out = [];
+  for (let k = 0; k < points.length - 1; k += 1) {
+    const [x0, y0] = points[k];
+    const [x1, y1] = points[k + 1];
+    for (let i = 0; i < steps; i += 1) out.push([Math.round(x0 + ((x1 - x0) * i) / steps), Math.round(y0 + ((y1 - y0) * i) / steps)]);
+  }
+  out.push(points[points.length - 1]);
+  return out;
+}
+
+export function devOddReplay(artists) {
+  const cols = [3, 8, 6, 9];
+  const turns = [
+    [0, line([[200, 320], [210, 140], [270, 140], [280, 320]])],
+    [1, line([[195, 140], [240, 80], [285, 140]])],
+    [2, ring(240, 110, 14, 14, 0, Math.PI * 2, 16)],
+    [3, line([[60, 330], [140, 300], [240, 325], [340, 300], [430, 330]], 10)],
+    [0, line([[205, 200], [275, 200]], 6)],
+    [1, line([[210, 260], [270, 260]], 6)],
+    [2, line([[254, 110], [440, 60]], 12)],
+    [3, line([[254, 110], [440, 160]], 12)],
+    [0, ring(90, 70, 30, 30, 0, Math.PI * 2, 20)],
+    [1, line([[100, 140], [120, 130], [140, 140], [160, 130]], 4)],
+    [2, line([[320, 230], [360, 215], [400, 232]], 6)],
+    [3, line([[225, 320], [225, 290], [255, 290], [255, 320]], 4)],
+  ];
+  const times = [3200, 9800, 15100, 21400, 27900, 34600, 41800, 47200, 66500, 72100, 78800, 85300];
+  const events = [];
+  const ink = [];
+  turns.forEach(([a, pts], i) => {
+    const s = encodeStroke({ c: cols[a], z: 1, pts });
+    events.push([a, times[i], s]);
+    if (a === 3) ink.push(s);
+  });
+  return {
+    lastArtist: 3,
+    ink,
+    replay: { v: 1, kind: 'ink', authors: artists.map((a) => ({ id: a.id, name: a.display_name })), events },
+  };
+}
+
+function heartCells() {
+  const inside = (c, r) => {
+    const x = (c - 11.5) / 8.5;
+    const y = (10.5 - r) / 8.5;
+    const q = x * x + y * y - 1;
+    return q * q * q - x * x * y * y * y <= 0;
+  };
+  const fill = [];
+  const edge = [];
+  for (let r = 0; r < 24; r += 1) {
+    for (let c = 0; c < 24; c += 1) {
+      if (!inside(c, r)) continue;
+      const rim = !inside(c - 1, r) || !inside(c + 1, r) || !inside(c, r - 1) || !inside(c, r + 1);
+      (rim ? edge : fill).push(r * 24 + c);
+    }
+  }
+  return { fill, edge };
+}
+
+export function devPixelReplay(artists) {
+  const { fill, edge } = heartCells();
+  const grid = Array(576).fill('0');
+  const events = [];
+  let t = 1200;
+  const paint = (a, i, c, gap = 110) => {
+    t += gap;
+    grid[i] = c;
+    events.push([a, t, i, c]);
+  };
+  edge.forEach((i, k) => paint(0, i, '4', k % 8 === 7 ? 600 : 90));
+  t += 6000;
+  fill.forEach((i, k) => paint(1, i, k % 5 === 0 ? 'b' : '4', k % 12 === 11 ? 500 : 70));
+  t += 2500;
+  for (const i of [2, 3, 26, 27, 20, 21, 44, 45, 530, 531, 554, 555]) paint(2, i, '6', 160);
+  paint(2, 27, '0', 900);
+  for (const i of [100, 101, 124, 125]) paint(1, i, '2', 140);
+  return { v: 1, kind: 'pixel', authors: artists.map((a) => ({ id: a.id, name: a.display_name })), events, grid: grid.join('') };
 }
 
 export const DEV_PUBLIC_PACKS = Object.freeze([

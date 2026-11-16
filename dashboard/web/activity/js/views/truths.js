@@ -136,7 +136,7 @@ export function createTruthsView({ engine, fx, cues, toast }) {
   const form = h(
     'div',
     { class: ['truths-form', 'truths-off'] },
-    h('div', { class: 'truths-form-head' }, h('p', { class: 'truths-eyebrow', text: 'Your turn to write' }), h('h2', { class: 'truths-form-title', text: 'Two truths and one lie about you' }), h('p', { class: 'truths-form-sub', text: 'Tap Lie next to the one you made up.' })),
+    h('div', { class: 'truths-form-head' }, h('p', { class: 'truths-eyebrow', text: 'Your turn to write' }), h('h2', { class: 'truths-form-title fx-display', text: 'Two truths and one lie about you' }), h('p', { class: 'truths-form-sub', text: 'Tap Lie next to the one you made up.' })),
     rows.map((r) => r.row),
     ideaBox,
     h('div', { class: 'truths-actions' }, lockBtn, editBtn),
@@ -317,7 +317,7 @@ export function createTruthsView({ engine, fx, cues, toast }) {
         h(
           'div',
           { class: 'truths-wait glass' },
-          h('span', { class: 'truths-wait-icon', text: '🕵️', attrs: { 'aria-hidden': 'true' } }),
+          h('span', { class: 'truths-wait-icon fx-loop', text: '🕵️', attrs: { 'aria-hidden': 'true' } }),
           h('p', { class: 'truths-wait-text', text: m.late ? 'Everyone is writing two truths and a lie. You get to play detective on all of them!' : 'Everyone is writing two truths and a lie. Get ready to guess!' }),
           faces(m.doneBy, 10, 'sm'),
         ),
@@ -342,7 +342,7 @@ export function createTruthsView({ engine, fx, cues, toast }) {
           who(m.writerFace, { size: 'lg', profile: true }),
           h('span', { class: 'truths-writer-says', text: m.isWriter ? 'These are yours!' : 'says…' }),
         ),
-        h('h2', { class: 'question truths-question', text: m.phase === 'vote' ? (m.isWriter ? 'Can they find your lie?' : 'Which one is the lie?') : m.lost ? 'This one got lost' : 'The lie was…' }),
+        h('h2', { class: ['question', 'truths-question', 'fx-display', m.phase === 'reveal' && !m.lost ? 'is-lit' : null], text: m.phase === 'vote' ? (m.isWriter ? 'Can they find your lie?' : 'Which one is the lie?') : m.lost ? 'This one got lost' : 'The lie was…' }),
       ),
       notice,
       h('div', { class: ['truths-options', m.phase === 'reveal' ? 'is-reveal' : null, m.phase === 'vote' && m.myPick !== null ? 'is-voted' : null] }, m.statements.map((s) => statement(m, s))),
@@ -378,9 +378,15 @@ export function createTruthsView({ engine, fx, cues, toast }) {
     if (m && m.phase === 'reveal' && list.includes('correct')) {
       const target = m.isWriter ? stage.querySelector('.truths-writer') : stage.querySelector('.truths-is-lie');
       if (target) {
+        if (!m.isWriter) target.classList.add('fx-shine', 'is-shining');
         cue.burst(target, { count: 14, emoji: m.isWriter ? ['🤥', '🎭'] : ['🔍', '🎉'] });
         if (m.myGain) cue.float(target, `+${m.myGain}`);
       }
+    }
+    if (m && m.phase === 'reveal' && list.includes('wrong')) {
+      const row = stage.querySelector('.truths-statement.is-mine');
+      const wrap = row ? row.parentElement : null;
+      if (wrap) wrap.classList.add('fx-wrong');
     }
   }
 

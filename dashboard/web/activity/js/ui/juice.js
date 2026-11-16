@@ -1,7 +1,9 @@
 import { reducedMotion } from './fx.js';
+import { fxLevel, particleCap } from './fxmode.js';
 
 export const MAX_LIVE = 120;
 export const MAX_FLOATS = 24;
+export const LITE_FLOATS = 8;
 export const PRESS_CLASS = 'juice-press';
 export const PRESS_MS = 280;
 export const JUICE_TARGETS = 'button, [role=button], [role=tab], [role=radio], .chip';
@@ -23,6 +25,12 @@ function docOf() {
 
 export function quietMotion() {
   return reducedMotion(winOf());
+}
+
+export function juiceRoom(level = fxLevel()) {
+  if (level === 'static') return { bits: 0, floats: 0 };
+  if (level === 'lite') return { bits: Math.min(MAX_LIVE, particleCap(level)), floats: LITE_FLOATS };
+  return { bits: MAX_LIVE, floats: MAX_FLOATS };
 }
 
 export function liveParticles() {
@@ -87,7 +95,7 @@ export function burst(x, y, opts = {}) {
   if (!host) return 0;
   const random = typeof opts.random === 'function' ? opts.random : Math.random;
   const want = Math.max(0, Math.min(48, Math.round(Number(opts.count ?? 10) || 0)));
-  const n = Math.min(want, MAX_LIVE - live);
+  const n = Math.min(want, juiceRoom().bits - live);
   if (n <= 0) return 0;
   const emoji = opts.emoji ? (Array.isArray(opts.emoji) ? opts.emoji.filter(Boolean) : [String(opts.emoji)]) : [];
   const colors = Array.isArray(opts.colors) && opts.colors.length ? opts.colors : PALETTE;
@@ -133,7 +141,7 @@ export function burstFrom(el, opts = {}) {
 }
 
 export function floatText(el, text, opts = {}) {
-  if (!el || quietMotion() || floats >= MAX_FLOATS) return null;
+  if (!el || quietMotion() || floats >= juiceRoom().floats) return null;
   const host = ensureLayer();
   if (!host) return null;
   const c = centerOf(el);

@@ -37,7 +37,7 @@ export async function cleanup(db, t) {
     ...statsCleanupStatements(db, t),
     ...ownerCleanupStatements(db, t),
   ]);
-  const names = ['sessions', 'states', 'jobs', 'rate', 'grants', 'userServers', 'publicPages', 'snapshots', 'profileWanted', 'profiles', 'activityLinks', 'activitySessions', 'dismissedReports', 'extraReports', 'orphanReportTexts', 'partyResults', 'partyXp', 'partyShards', 'dailyScores', 'publicProfiles', 'profileSettings', 'packReports', 'serverStats', 'ownerActions'];
+  const names = ['sessions', 'states', 'jobs', 'rate', 'grants', 'userServers', 'publicPages', 'snapshots', 'profileWanted', 'profiles', 'activityLinks', 'activitySessions', 'dismissedReports', 'extraReports', 'orphanReportTexts', 'orphanReportReplays', 'partyResults', 'partyXp', 'partyShards', 'dailyScores', 'publicProfiles', 'profileSettings', 'packReports', 'serverStats', 'ownerActions'];
   const removed = {};
   results.forEach((r, i) => {
     removed[names[i]] = Number((r && r.meta && r.meta.changes) || 0);

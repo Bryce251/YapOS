@@ -76,7 +76,7 @@ function gotList(list) {
         { class: ['got-item', p.isMe ? 'is-me' : null, p.team ? `team-${p.team}` : null], attrs: { title: p.username ? `${p.name} (@${p.username})` : p.name } },
         profileButton(p, 'xs'),
         h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }),
-        h('span', { class: 'got-tick', text: `+${num(p.pts)}` }),
+        h('span', { class: 'got-tick fx-num', text: `+${num(p.pts)}` }),
       ),
     ),
     list.length > 8 ? h('li', { class: 'tag', text: `+${list.length - 8} more` }) : null,
@@ -116,6 +116,7 @@ export function createTriviaView({ engine, fx, cues }) {
   let snap = null;
   let cheered = null;
   let heard = null;
+  let shown = null;
   const paint = memo(render);
 
   function choose(m, i) {
@@ -157,14 +158,15 @@ export function createTriviaView({ engine, fx, cues }) {
     return [
       h('div', { class: 'game-head' }, h('span', { class: 'chip chip-static qz-wager-chip', text: '💰 Wager round' }), ...headChips(m), h('span', { class: 'game-count', text: `Question ${m.number} of ${m.total}` }), timer(m.starts, m.ends, 'Bets close in')),
       teamBar(m.teams),
-      h('h2', { class: 'question qz-wager-title', text: 'How much do you dare to bet?' }),
+      h('h2', { class: 'question qz-wager-title fx-display', text: 'How much do you dare to bet?' }),
       h('p', { class: 'qz-wager-sub', text: `Next up: ${m.emoji} ${m.category}. Get it right and you win your bet. Get it wrong and you lose it.` }),
       h(
         'div',
         { class: 'qz-bets', attrs: { role: 'group', 'aria-label': 'Your bet' } },
-        m.bets.map((b) =>
+        m.bets.map((b, i) =>
           h('button', {
-            class: ['qz-bet', 'spot', b.p === 100 ? 'is-all' : null, b.mine ? 'is-mine' : null],
+            class: ['qz-bet', 'spot', 'fx-lift', b.p === 100 ? 'is-all' : null, b.mine ? 'is-mine' : null],
+            vars: { '--i': i },
             type: 'button',
             disabled: !m.canBet,
             dataset: { key: `bet-${b.p}` },
@@ -192,14 +194,14 @@ export function createTriviaView({ engine, fx, cues }) {
       show ? null : h('div', { class: 'qz-bolt-dots', attrs: { 'aria-hidden': 'true' } }, Array.from({ length: m.count }, (_, i) => h('span', { class: ['qz-dot', i < m.at ? 'is-done' : null, i === m.at ? 'is-now' : null] }))),
       m.current
         ? [
-            h('h2', { class: 'question qz-bolt-q', text: m.current.text }),
+            h('h2', { class: 'question qz-bolt-q fx-display', text: m.current.text }),
             h(
               'div',
               { class: 'options qz-bolt-options' },
               m.current.options.map((o) =>
                 h(
                   'button',
-                  { class: ['option', `option-${o.i}`, 'spot'], type: 'button', disabled: !m.canAnswer, dataset: { key: `bolt-${m.current.k}-${o.i}` }, on: { click: () => bolt(m, o.i) } },
+                  { class: ['option', `option-${o.i}`, 'spot', 'fx-lift'], type: 'button', disabled: !m.canAnswer, vars: { '--i': o.i }, dataset: { key: `bolt-${m.current.k}-${o.i}` }, on: { click: () => bolt(m, o.i) } },
                   h('span', { class: 'option-letter', text: LETTERS[o.i], attrs: { 'aria-hidden': 'true' } }),
                   h('span', { class: 'option-text', text: o.text }),
                 ),
@@ -212,10 +214,10 @@ export function createTriviaView({ engine, fx, cues }) {
         ? h(
             'ol',
             { class: 'qz-review', attrs: { 'aria-label': 'Lightning answers' } },
-            m.review.map((r) =>
+            m.review.map((r, i) =>
               h(
                 'li',
-                { class: ['qz-review-row', r.mine === null ? null : r.right ? 'is-right' : 'is-wrong'] },
+                { class: ['qz-review-row', r.mine === null ? null : r.right ? 'is-right' : 'is-wrong'], vars: { '--i': i } },
                 h('span', { class: 'qz-review-q', text: r.text }),
                 h('span', { class: 'qz-review-a', text: `✓ ${r.answer}` }),
                 r.mine !== null && !r.right ? h('span', { class: 'qz-review-mine', text: `You said ${r.mine}` }) : null,
@@ -264,7 +266,7 @@ export function createTriviaView({ engine, fx, cues }) {
             bigBets.map((w) => h('span', { class: 'qz-wager-other' }, profileButton(w.who, 'xs'), h('span', { text: `${w.who.name} bet ${num(w.amt)}` }))),
           )
         : null,
-      h('h2', { class: 'question', text: m.text }),
+      h('h2', { class: 'question fx-display', text: m.text }),
       h(
         'div',
         { class: ['options', reveal ? 'is-reveal' : null] },
@@ -272,8 +274,9 @@ export function createTriviaView({ engine, fx, cues }) {
           h(
             'button',
             {
-              class: ['option', `option-${o.i}`, 'spot', o.mine ? 'is-mine' : null, o.correct === true ? 'is-right' : null, reveal && o.correct === false ? (o.mine ? 'is-wrong' : 'is-dim') : null],
+              class: ['option', `option-${o.i}`, 'spot', 'fx-lift', o.mine ? 'is-mine' : null, o.correct === true ? 'is-right' : null, reveal && o.correct === false ? (o.mine ? 'is-wrong' : 'is-dim') : null],
               type: 'button',
+              vars: { '--i': o.i },
               disabled: reveal || m.iAnswered || !m.canAnswer,
               dataset: { key: `opt-${o.i}` },
               attrs: { 'aria-pressed': o.mine ? 'true' : 'false' },
@@ -296,6 +299,30 @@ export function createTriviaView({ engine, fx, cues }) {
     ];
   }
 
+  function mark(sel, ...cls) {
+    const node = el.querySelector(sel);
+    if (node) node.classList.add(...cls);
+  }
+
+  function glow(m) {
+    const beat = `${m.phase}:${m.qid || m.key}:${m.current ? m.current.k : ''}`;
+    if (beat === shown) return;
+    shown = beat;
+    if (m.phase === 'question' || m.phase === 'bolt') {
+      mark('.question', 'fx-flip');
+      mark('.options', 'is-dealt');
+    } else if (m.phase === 'wager') {
+      mark('.question', 'fx-slam');
+      mark('.qz-bets', 'is-dealt');
+    } else if (m.phase === 'boltshow') {
+      mark('.qz-review', 'fx-stagger');
+    } else if (m.phase === 'reveal') {
+      mark('.option.is-right', 'fx-right');
+      mark('.option.is-wrong', 'fx-wrong');
+      mark('.qz-steal', 'fx-slam');
+    }
+  }
+
   function update(next) {
     snap = next;
     const m = trivia.model(next, local);
@@ -304,6 +331,7 @@ export function createTriviaView({ engine, fx, cues }) {
       return;
     }
     paint(el, m);
+    glow(m);
     const { now, cue: moment } = triviaMoment(heard, m);
     heard = now;
     if (!moment) return;

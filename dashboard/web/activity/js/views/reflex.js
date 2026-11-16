@@ -108,14 +108,14 @@ function placeMark(x) {
   return MEDALS[x.place - 1] || String(x.place);
 }
 
-function resultRow(x) {
+function resultRow(x, i) {
   return h(
     'li',
-    { class: ['reflex-row', `is-${x.kind}`, x.isMe ? 'is-me' : null, x.fastest ? 'is-fast' : null] },
+    { class: ['reflex-row', `is-${x.kind}`, x.isMe ? 'is-me' : null, x.fastest ? 'is-fast' : null], vars: { '--i': i } },
     h('span', { class: 'reflex-place', text: placeMark(x), attrs: { 'aria-hidden': 'true' } }),
     profileButton(x, 'sm'),
     h('span', { class: 'reflex-name', text: x.isMe ? 'You' : x.name }),
-    h('span', { class: 'reflex-time', text: kindText(x) }),
+    h('span', { class: 'reflex-time fx-num', text: kindText(x) }),
     x.kind === 'ok' ? h('span', { class: 'reflex-rate', text: rating(x.ms).emoji, attrs: { title: rating(x.ms).label } }) : null,
     h('span', { class: ['reflex-pts', x.pts ? null : 'is-zero'], text: x.pts ? `+${x.pts}` : '0' }),
   );
@@ -180,7 +180,7 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
   const w = win && typeof win.setTimeout === 'function' ? win : null;
   const el = h('section', { class: 'game game-reflex', attrs: { 'aria-label': 'Reflex' } });
   const top = h('div', { class: 'reflex-top' });
-  const big = h('span', { class: 'reflex-big' });
+  const big = h('span', { class: 'reflex-big fx-display fx-num' });
   const small = h('span', { class: 'reflex-small' });
   const pad = h('button', { class: 'reflex-pad is-idle', type: 'button', dataset: { key: 'reflex-pad' } }, big, small);
   const live = h('p', { class: 'reflex-live', attrs: { role: 'status', 'aria-live': 'polite' } });
@@ -195,6 +195,7 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
   let lightTimer = null;
   let frame = null;
   let gone = false;
+  let app = null;
 
   function renderTop(t) {
     if (!t) return h('p', { class: 'waiting', text: 'Getting the first round ready…' });
@@ -204,7 +205,7 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
         'div',
         { class: 'game-head' },
         h('span', { class: 'chip chip-static', text: t.fakeouts ? 'Fake-outs on' : 'No fake-outs' }),
-        t.ko ? h('span', { class: ['chip', 'chip-static', 'ko-chip', t.ko.duel ? 'is-duel' : null], text: koLine(t.ko) }) : null,
+        t.ko ? h('span', { class: ['chip', 'chip-static', 'ko-chip', t.ko.duel ? 'is-duel fx-loop' : null], text: koLine(t.ko) }) : null,
         h('span', { class: 'game-count', text: t.ko ? `Round ${t.number}` : `Round ${t.number} of ${t.total}` }),
         show ? timer(t.starts, t.ends, t.last ? 'Final results in' : 'Next round in') : h('span', { class: 'reflex-hint', text: 'Tap or press Space' }),
       ),
@@ -231,6 +232,7 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
   function paintPad() {
     const st = padState(model, local.key === (model && model.key) ? local.mine : null, local.light, mySlot);
     pad.className = ['reflex-pad', `is-${st.tone}`, st.watch ? 'is-watch' : null].filter(Boolean).join(' ');
+    rush(st.tone === 'go');
     if (big.textContent !== st.big) big.textContent = st.big;
     if (small.textContent !== st.small) small.textContent = st.small;
     const open = Boolean(model && model.phase === 'wait' && model.canPlay && !model.iDone && !local.mine);
@@ -359,6 +361,10 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
     const { now, cues: list, burst } = reflexMoment(heard, m);
     heard = now;
     list.forEach((name, i) => cue.play(name, i ? { at: 300 } : undefined));
+    if (list.length) {
+      const rows = bottom.querySelector('.reflex-results');
+      if (rows) rows.classList.add('fx-stagger');
+    }
     if (list.length && m.ko && m.ko.champ && m.ko.champ.isMe && fx && typeof fx.confetti === 'function') fx.confetti(80);
     if (burst) {
       const row = bottom.querySelector('.reflex-row.is-fast');
@@ -367,7 +373,13 @@ export function createReflexView({ engine, fx, cues, win, perf } = {}) {
     }
   }
 
+  function rush(on) {
+    if (!app) app = el.closest('.app');
+    if (app) app.classList.toggle('fx-rush', on);
+  }
+
   function destroy() {
+    rush(false);
     gone = true;
     stopTimers();
     if (keyTarget) keyTarget.removeEventListener('keydown', onKey);

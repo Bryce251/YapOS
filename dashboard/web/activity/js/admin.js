@@ -1,5 +1,6 @@
 import { findBlocked, isBlockedGameWord } from './filter.js';
 import { decodeStroke, fitLevels } from './games/ink.js';
+import { trimReplay, inkMatches, SOLO_GAMES } from './games/replayformat.js';
 export const ADMINS_EVENT = 'yapos:admins';
 export const ADMINS_ENDPOINT = '/api/activity/admins';
 export const ADMIN_BATCH = 40;
@@ -7,7 +8,7 @@ export const ADMIN_REFRESH_MS = 60000;
 export const ADMIN_RETRY_MS = 5000;
 export const ADMIN_TRACK_MAX = 400;
 export const REPORTS_ENDPOINT = '/api/activity/reports';
-export const REPORT_GAMES = Object.freeze(['draw', 'odd', 'telephone', 'sketchduel']);
+export const REPORT_GAMES = Object.freeze(['draw', 'odd', 'telephone', 'sketchduel', 'pixel']);
 export const REPORT_STROKES = 200;
 export const REPORT_INK_CHARS = 16000;
 export const REPORT_NAME_MAX = 64;
@@ -270,6 +271,15 @@ export function reportInk(list) {
   return fit && Array.isArray(fit.parts) ? fit.parts : [];
 }
 
+export function replayFits(replay, game, drawerId, ink) {
+  if (!replay || replay.kind !== (game === 'pixel' ? 'pixel' : 'ink')) return false;
+  const ids = replay.authors.map((a) => String(a.id).toLowerCase());
+  const me = String(drawerId).toLowerCase();
+  if (!ids.includes(me)) return false;
+  if (SOLO_GAMES.includes(game) && (ids.length !== 1 || ids[0] !== me)) return false;
+  return inkMatches(replay, ink, REPORT_STROKES, 16 * 1024, me);
+}
+
 export function reportBody(input) {
   const x = input && typeof input === 'object' ? input : {};
   if (!REPORT_GAMES.includes(x.game)) return null;
@@ -280,7 +290,7 @@ export function reportBody(input) {
   if (!validId(drawerId) || !validId(reporterId) || drawerId === reporterId) return null;
   const handle = typeof d.username === 'string' ? cleanReportName(d.username.replace(/^@+/, '')).replace(/\s/g, '') : '';
   const word = typeof x.word === 'string' ? Array.from(cleanReportName(x.word)).slice(0, REPORT_WORD_MAX).join('') : '';
-  return {
+  const body = {
     game: x.game,
     drawer: { id: drawerId, name: cleanReportName(d.name) || 'Player', username: handle || null },
     reporter: { id: reporterId, name: cleanReportName(r.name) || 'Player' },
@@ -288,6 +298,9 @@ export function reportBody(input) {
     word: word || null,
     at: Number.isFinite(x.at) ? Math.round(x.at) : env.now(),
   };
+  const replay = x.replay ? trimReplay(x.replay) : null;
+  if (replay && replayFits(replay, x.game, drawerId, body.ink)) body.replay = replay;
+  return body;
 }
 
 export function wasReported(key) {

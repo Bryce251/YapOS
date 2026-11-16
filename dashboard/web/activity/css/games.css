@@ -848,6 +848,10 @@
     box-shadow: var(--shadow-md);
   }
 
+  .app[data-dock="on"] .draw-side.is-guessing .guess-row {
+    bottom: 64px;
+  }
+
   .feed {
     min-height: 0;
     max-height: 190px;
@@ -1130,11 +1134,14 @@
 
 .word-input.is-refused {
   border-color: var(--danger);
-  animation: refuse-shake 320ms var(--ease);
+  box-shadow: 0 0 0 2px var(--danger-line);
+  animation: fx-shake 420ms var(--fx-snap);
 }
 
 .options.is-reveal .option.is-right {
-  animation: pop 360ms var(--pop);
+  position: relative;
+  overflow: hidden;
+  animation: fx-pop-in 420ms var(--fx-spring);
 }
 
 @keyframes refuse-shake {
@@ -1156,23 +1163,74 @@
   }
 }
 
-@keyframes refuse-tint {
-  from {
-    box-shadow: 0 0 0 2px var(--danger-line);
-  }
+.options.is-reveal .option.is-right::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(105deg, transparent 30%, color-mix(in srgb, var(--success) 34%, transparent) 50%, transparent 70%);
+  transform: translate3d(120%, 0, 0);
+  pointer-events: none;
+  animation: fx-shine-sweep 760ms var(--ease) 120ms both;
+}
 
-  to {
-    box-shadow: 0 0 0 0 transparent;
-  }
+.options.is-reveal .option.is-wrong {
+  animation: fx-shake 420ms var(--fx-snap);
+}
+
+.option-letter,
+.choice-letter {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -2px 0 rgba(0, 0, 0, 0.18);
+}
+
+.option:hover:not(:disabled) {
+  border-color: var(--tone);
+}
+
+.question {
+  font-weight: var(--fx-display-weight);
+  letter-spacing: var(--fx-display-track);
+}
+
+.timer-num {
+  font-weight: var(--weight-heavy);
+  text-shadow: var(--fx-num-shadow);
+}
+
+.play-card.is-urgent {
+  box-shadow: var(--fx-depth-2), var(--inset-hi), inset 0 3px 0 var(--danger), inset 0 0 0 1px var(--danger-line);
+}
+
+.reveal-gain,
+.team-pts,
+.reveal-pts {
+  text-shadow: var(--fx-num-shadow);
+}
+
+[data-fx="lite"] .options.is-reveal .option.is-right::before {
+  display: none;
+}
+
+[data-fx="static"] .word-input.is-refused,
+[data-fx="static"] .options.is-reveal .option.is-right,
+[data-fx="static"] .options.is-reveal .option.is-wrong,
+[data-fx="static"] .reveal-card {
+  animation: none;
+}
+
+[data-fx="static"] .options.is-reveal .option.is-right::before {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .word-input.is-refused {
-    animation: refuse-tint 600ms linear;
+  .word-input.is-refused,
+  .options.is-reveal .option.is-right,
+  .options.is-reveal .option.is-wrong {
+    animation: none;
   }
 
-  .options.is-reveal .option.is-right {
-    animation: none;
+  .options.is-reveal .option.is-right::before {
+    display: none;
   }
 }
 

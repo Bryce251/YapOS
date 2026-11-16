@@ -74,7 +74,7 @@ test('the activity page works under the strict activity CSP', () => {
     if (f.endsWith('.js')) {
       assert.equal(/\.style\.(?!setProperty)[a-zA-Z]+\s*=/.test(src), false, `${f} sets inline styles`);
       const fetches = [path.join('ui', 'app.js'), path.join('js', 'dictionary.js'), path.join('js', 'profiles.js'), path.join('js', 'admin.js'), path.join('ui', 'leaderboard.js'), path.join('ui', 'profilecard.js'), path.join('js', 'account.js')].some((x) => f.endsWith(x));
-      const remembers = { [path.join('ui', 'sfx.js')]: 'SOUND_KEY', [path.join('ui', 'lobby.js')]: 'TAB_KEY', [path.join('views', 'palette.js')]: 'RECENT_KEY', [path.join('ui', 'fullscreen.js')]: 'FOCUS_KEY', [path.join('js', 'account.js')]: 'AUTH_KEY' };
+      const remembers = { [path.join('ui', 'sfx.js')]: 'SOUND_KEY', [path.join('ui', 'lobby.js')]: 'TAB_KEY', [path.join('views', 'palette.js')]: 'RECENT_KEY', [path.join('ui', 'fullscreen.js')]: 'FOCUS_KEY', [path.join('js', 'account.js')]: 'AUTH_KEY', [path.join('ui', 'fxmode.js')]: 'FX_STORE_KEY' };
       const memoryKey = Object.entries(remembers).find(([x]) => f.endsWith(x));
       assert.equal(/sessionStorage|XMLHttpRequest|WebSocket/.test(src), false, f);
       if (memoryKey) assert.deepEqual([...src.matchAll(/setItem\(([^,]+),/g)].map((m) => m[1]), [memoryKey[1]], f);

@@ -36,7 +36,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--game) 20%, transparent), transparent 70%), var(--surface);
-  box-shadow: var(--shadow-sm), var(--inset-hi);
+  box-shadow: var(--fx-depth-2), var(--inset-hi);
 }
 
 .game-hangman[data-phase="reveal"] .hangman-board {
@@ -395,4 +395,10 @@
   .hangman-key:hover:not(:disabled) {
     transform: none;
   }
+}
+
+[data-fx="static"] .hangman-tile.is-shown,
+[data-fx="static"] .hangman-tile.is-missed,
+[data-fx="static"] .hangman-badge {
+  animation: none;
 }

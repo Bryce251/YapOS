@@ -4,6 +4,29 @@
   z-index: 70;
   overflow: hidden;
   pointer-events: none;
+  contain: layout paint;
+}
+
+[data-fx="static"] .juice-layer,
+[data-fx="static"] .board-row.is-rankup::after,
+[data-fx="static"] .board-card.is-rankup::after {
+  display: none;
+}
+
+[data-fx="static"] .game-tile.juice-pick,
+[data-fx="static"] .game-tile.juice-pick .game-emoji,
+[data-fx="static"] .player.juice-in,
+[data-fx="static"] .player.juice-in .avatar,
+[data-fx="static"] .board-row.is-climb,
+[data-fx="static"] .board-card.is-climb,
+[data-fx="static"] .board-row.is-drop,
+[data-fx="static"] .board-card.is-drop,
+[data-fx="static"] .juice-podium .board-top .board-card,
+[data-fx="static"] .juice-podium .board-rest .board-row,
+[data-fx="static"] .juice-podium .winner-title {
+  animation: none;
+  opacity: 1;
+  transform: none;
 }
 
 .juice-bit {
@@ -122,6 +145,11 @@
 
 .game-tile .game-emoji {
   transition: transform 220ms var(--pop);
+}
+
+.game-tile.is-on .game-emoji {
+  background: radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--game) 30%, transparent), transparent 70%), var(--game-soft);
+  box-shadow: inset 0 0 0 1px var(--game-line), 0 8px 20px -10px var(--game);
 }
 
 @media (hover: hover) {

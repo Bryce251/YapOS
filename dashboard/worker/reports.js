@@ -2,8 +2,9 @@ import { MINUTE, DAY, ID_RE, USER_BODY_LIMIT, HttpError, json, fail, readJson, i
 import { hit, tooMany, LIMITS } from './rate.js';
 import { lookupProfiles, cleanText, MAX_PROFILE_IDS } from './profiles.js';
 import { isPartyOwner } from './party.js';
+import { REPLAY_VERSION, REPLAY_EVENTS, REPLAY_CHARS, REPLAY_AUTHORS, REPLAY_MAX_MS, PIXEL_CELLS, PIXEL_CODES, SOLO_GAMES, inkMatches, pixelMismatch } from '../web/activity/js/games/replayformat.js';
 
-export const REPORT_GAMES = new Set(['draw', 'odd', 'telephone', 'sketchduel']);
+export const REPORT_GAMES = new Set(['draw', 'odd', 'telephone', 'sketchduel', 'pixel']);
 export const TEXT_GAMES = new Set(['draw', 'odd', 'telephone', 'hottakes', 'truths', 'chain', 'emoji', 'scramble', 'trivia', 'wyr', 'hive', 'bluff', 'story', 'hangman']);
 export const REPORT_KINDS = new Set(['drawing', 'text']);
 export const TEXT_MAX = 300;
@@ -11,7 +12,7 @@ export const CONTEXT_MAX = 200;
 export const TEXT_REPORTS_PER_WINDOW = 30;
 export const MAX_STROKES = 200;
 export const MAX_INK_CHARS = 16 * 1024;
-export const REPORT_BODY_LIMIT = 24 * 1024;
+export const REPORT_BODY_LIMIT = 80 * 1024;
 export const REPORT_WINDOW = 10 * MINUTE;
 export const REPORTS_PER_WINDOW = 10;
 export const DEDUPE_WINDOW = 10 * MINUTE;
@@ -28,8 +29,13 @@ const NAME_MAX = 64;
 const WORD_MAX = 64;
 const REASON_MAX = 200;
 const STAFF_ONLY = 'Only the owner of YapOS Party and party admins can see reports.';
-const REPORT_COLUMNS = 'r.id, r.game, r.drawer_id, r.drawer_name, r.drawer_username, r.reporter_id, r.reporter_name, r.ink, r.word, r.at, r.created, r.status, r.dismissed_at, r.dismissed_by, x.id AS text_id, x.text, x.context';
+const REPORT_COLUMNS = 'r.id, r.game, r.drawer_id, r.drawer_name, r.drawer_username, r.reporter_id, r.reporter_name, r.ink, r.word, r.at, r.created, r.status, r.dismissed_at, r.dismissed_by, x.id AS text_id, x.text, x.context, y.data AS replay';
 const DROP_ORPHAN_TEXTS = 'DELETE FROM party_report_texts WHERE id NOT IN (SELECT id FROM party_reports)';
+const DROP_ORPHAN_REPLAYS = 'DELETE FROM party_report_replays WHERE report_id NOT IN (SELECT id FROM party_reports)';
+const REPLAY_FIELDS = new Set(['v', 'kind', 'authors', 'events', 'grid', 'truncated', 'late']);
+const STROKE_ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const GRID_RE = new RegExp(`^[${PIXEL_CODES}]{${PIXEL_CELLS}}$`);
+const BAD_REPLAY = "The drawing's replay doesn't look right.";
 
 function bad(code, message) {
   return new HttpError(400, code, message);
@@ -70,6 +76,95 @@ export function cleanInk(value) {
   return value.slice();
 }
 
+function strokeOk(s) {
+  if (typeof s !== 'string' || !INK_RE.test(s)) return false;
+  const c = STROKE_ABC.indexOf(s[0]);
+  if (c < 0 || c > 12) return false;
+  const head = c === 12 ? 4 : 0;
+  if (s.length < head + 6) return false;
+  const z = STROKE_ABC.indexOf(s[head + 1]);
+  return z >= 0 && z <= 4;
+}
+
+function replayAuthor(value, seen) {
+  if (!isPlainObject(value) || Object.keys(value).some((k) => k !== 'id' && k !== 'name')) throw bad('bad_replay', BAD_REPLAY);
+  if (typeof value.id !== 'string' || !ID_RE.test(value.id.trim())) throw bad('bad_replay', 'An artist id in the replay doesn\'t look right.');
+  const id = value.id.trim().toLowerCase();
+  if (seen.has(id)) throw bad('bad_replay', 'An artist is listed twice in the replay.');
+  seen.add(id);
+  if (value.name !== undefined && value.name !== null && typeof value.name !== 'string') throw bad('bad_replay', BAD_REPLAY);
+  return { id, name: cleanName(value.name) };
+}
+
+export function cleanReplay(value, game, drawerId, drawer = null, ink = null) {
+  const out = readReplay(value, game, drawerId);
+  const me = drawerId ? String(drawerId).toLowerCase() : '';
+  if (me && SOLO_GAMES.includes(game) && (out.authors.length !== 1 || out.authors[0].id !== me)) throw bad('bad_replay', 'Only the reported player can be an artist in this replay.');
+  if (drawer && drawer.name) for (const a of out.authors) if (a.id === me) a.name = drawer.name;
+  if (out.kind === 'pixel' && pixelMismatch(out.events, out.grid).size) throw bad('bad_replay', "The replay doesn't end in the reported picture.");
+  if (ink && me && !inkMatches(out, ink, MAX_STROKES, MAX_INK_CHARS, me)) throw bad('bad_replay', "The replay doesn't end in the reported drawing.");
+  return out;
+}
+
+function readReplay(value, game, drawerId) {
+  if (!isPlainObject(value)) throw bad('bad_replay', BAD_REPLAY);
+  let size = Infinity;
+  try {
+    size = JSON.stringify(value).length;
+  } catch {
+    size = Infinity;
+  }
+  if (size > REPLAY_CHARS) throw bad('bad_replay', 'That replay is too big to report.');
+  for (const k of Object.keys(value)) if (!REPLAY_FIELDS.has(k)) throw bad('bad_replay', BAD_REPLAY);
+  const kind = game === 'pixel' ? 'pixel' : 'ink';
+  if (value.v !== REPLAY_VERSION || value.kind !== kind) throw bad('bad_replay', BAD_REPLAY);
+  if (!Array.isArray(value.authors) || !value.authors.length || value.authors.length > REPLAY_AUTHORS) throw bad('bad_replay', 'The replay has too many or too few artists.');
+  const seen = new Set();
+  const authors = value.authors.map((a) => replayAuthor(a, seen));
+  if (drawerId && !seen.has(String(drawerId).toLowerCase())) throw bad('bad_replay', "The reported player isn't one of the replay's artists.");
+  if (!Array.isArray(value.events) || !value.events.length || value.events.length > REPLAY_EVENTS) throw bad('bad_replay', 'The replay has too many or too few steps.');
+  const used = new Set();
+  const events = [];
+  let last = 0;
+  let count = 0;
+  for (const e of value.events) {
+    if (!Array.isArray(e) || e.length !== (kind === 'pixel' ? 4 : 3)) throw bad('bad_replay', BAD_REPLAY);
+    const [a, t] = e;
+    if (!Number.isInteger(a) || a < 0 || a >= authors.length) throw bad('bad_replay', 'A step in the replay names an artist that is not listed.');
+    if (!Number.isInteger(t) || t < 0 || t > REPLAY_MAX_MS) throw bad('bad_replay', 'A step in the replay has a bad time.');
+    if (t < last) throw bad('bad_replay', 'The replay steps are out of order.');
+    last = t;
+    used.add(a);
+    if (kind === 'pixel') {
+      if (!Number.isInteger(e[2]) || e[2] < 0 || e[2] >= PIXEL_CELLS) throw bad('bad_replay', 'A pixel in the replay is off the canvas.');
+      if (typeof e[3] !== 'string' || e[3].length !== 1 || !PIXEL_CODES.includes(e[3])) throw bad('bad_replay', 'A pixel in the replay has a colour that is not in the palette.');
+      events.push([a, t, e[2], e[3]]);
+    } else if (typeof e[2] === 'string') {
+      if (!strokeOk(e[2])) throw bad('bad_replay', 'A line in the replay doesn\'t look right.');
+      count += 1;
+      events.push([a, t, e[2]]);
+    } else {
+      if (!Number.isInteger(e[2]) || e[2] < 0 || e[2] > count) throw bad('bad_replay', 'An undo in the replay doesn\'t add up.');
+      count = e[2];
+      events.push([a, t, e[2]]);
+    }
+  }
+  if (used.size !== authors.length) throw bad('bad_replay', 'The replay lists an artist who drew nothing.');
+  const out = { v: REPLAY_VERSION, kind, authors, events };
+  if (kind === 'pixel') {
+    if (typeof value.grid !== 'string' || !GRID_RE.test(value.grid)) throw bad('bad_replay', 'The pixel picture in the replay doesn\'t look right.');
+    out.grid = value.grid;
+  } else if (value.grid !== undefined) {
+    throw bad('bad_replay', BAD_REPLAY);
+  }
+  for (const k of ['truncated', 'late']) {
+    if (value[k] === undefined || value[k] === false) continue;
+    if (value[k] !== true) throw bad('bad_replay', BAD_REPLAY);
+    out[k] = true;
+  }
+  return out;
+}
+
 function cleanAt(value) {
   const at = Number(value);
   if (!Number.isFinite(at) || at < 0 || at > 1e15) throw bad('bad_time', "The report time doesn't look right.");
@@ -104,13 +199,14 @@ export function cleanReport(body) {
   const drawer = cleanPerson(body.drawer, 'drawer', true);
   const reporter = cleanPerson(body.reporter, 'reporter', false);
   if (drawer.id === reporter.id) throw bad('own_drawing', "You can't report your own drawing.");
-  const ink = cleanInk(body.ink);
+  const ink = body.game === 'pixel' ? [] : cleanInk(body.ink);
   let word = null;
   if (body.word !== null && body.word !== undefined) {
     if (typeof body.word !== 'string') throw bad('bad_word', "The word doesn't look right.");
     word = cleanText(body.word, WORD_MAX);
   }
-  return { game: body.game, drawer, reporter, ink, word, at: cleanAt(body.at) };
+  const replay = body.replay === undefined || body.replay === null ? null : cleanReplay(body.replay, body.game, drawer.id, drawer, ink);
+  return { game: body.game, drawer, reporter, ink, word, at: cleanAt(body.at), replay };
 }
 
 export function ipBucket(ip) {
@@ -165,6 +261,11 @@ export async function postActivityReport(request, env, t) {
       insert,
       env.DB.prepare('INSERT INTO party_report_texts (id, text, context, ip_hash, created) VALUES (?, ?, ?, ?, ?)').bind(id, report.text, report.context, ipHash, t),
     ]);
+  } else if (report.replay) {
+    await env.DB.batch([
+      insert,
+      env.DB.prepare('INSERT INTO party_report_replays (report_id, data, created) VALUES (?, ?, ?)').bind(id, JSON.stringify(report.replay), t),
+    ]);
   } else {
     await insert.run();
   }
@@ -179,6 +280,7 @@ export async function trimReports(db) {
   const [res] = await db.batch([
     db.prepare("DELETE FROM party_reports WHERE id IN (SELECT id FROM party_reports ORDER BY (status = 'open') ASC, created ASC, id ASC LIMIT ?)").bind(extra),
     db.prepare(DROP_ORPHAN_TEXTS),
+    db.prepare(DROP_ORPHAN_REPLAYS),
   ]);
   return Number((res && res.meta && res.meta.changes) || 0);
 }
@@ -188,6 +290,7 @@ export function cleanupStatements(db, t) {
     db.prepare("DELETE FROM party_reports WHERE status = 'dismissed' AND dismissed_at < ?").bind(t - DISMISSED_KEEP),
     db.prepare("DELETE FROM party_reports WHERE id IN (SELECT id FROM party_reports ORDER BY (status = 'open') DESC, created DESC, id DESC LIMIT -1 OFFSET ?)").bind(MAX_REPORTS),
     db.prepare(DROP_ORPHAN_TEXTS),
+    db.prepare(DROP_ORPHAN_REPLAYS),
   ];
 }
 
@@ -221,6 +324,24 @@ function profileOut(p) {
   return p ? { username: p.username, display_name: p.display_name, avatar: p.avatar } : null;
 }
 
+function replayOut(env, data, profiles, admins, bans) {
+  return {
+    v: data.v,
+    kind: data.kind,
+    authors: data.authors.map((a) => ({
+      id: a.id,
+      name: a.name,
+      profile: profileOut(profiles.get(a.id)),
+      banned: bans.has(String(a.id).toLowerCase()),
+      role: roleOf(env, admins, String(a.id)),
+    })),
+    events: data.events,
+    grid: typeof data.grid === 'string' ? data.grid : null,
+    truncated: data.truncated === true,
+    late: data.late === true,
+  };
+}
+
 async function listReports(request, env, url, role, t) {
   const status = url.searchParams.get('status') || 'open';
   if (!STATUSES.has(status)) throw bad('bad_status', 'Pick open, dismissed or all reports.');
@@ -245,13 +366,20 @@ async function listReports(request, env, url, role, t) {
     where.push('(r.created < ? OR (r.created = ? AND r.id < ?))');
     args.push(cursor.created, cursor.created, cursor.id);
   }
-  const sql = `SELECT ${REPORT_COLUMNS} FROM party_reports r LEFT JOIN party_report_texts x ON x.id = r.id${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY r.created DESC, r.id DESC LIMIT ?`;
+  const sql = `SELECT ${REPORT_COLUMNS} FROM party_reports r LEFT JOIN party_report_texts x ON x.id = r.id LEFT JOIN party_report_replays y ON y.report_id = r.id${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY r.created DESC, r.id DESC LIMIT ?`;
   const res = await env.DB.prepare(sql).bind(...args, REPORTS_PAGE + 1).all();
   const rows = (res && res.results) || [];
   const more = rows.length > REPORTS_PAGE;
   const page = rows.slice(0, REPORTS_PAGE);
-  const drawers = [...new Set(page.map((r) => String(r.drawer_id).toLowerCase()))];
-  const people = [...new Set(page.flatMap((r) => [r.drawer_id, r.reporter_id]))].slice(0, MAX_PROFILE_IDS);
+  const replays = new Map();
+  for (const r of page) {
+    if (r.text_id !== null && r.text_id !== undefined) continue;
+    const data = r.replay ? parseJsonSafe(r.replay, null) : null;
+    if (data && Array.isArray(data.authors) && Array.isArray(data.events)) replays.set(r.id, data);
+  }
+  const artists = [...replays.values()].flatMap((x) => x.authors.map((a) => a && a.id)).filter((id) => typeof id === 'string');
+  const drawers = [...new Set(page.map((r) => String(r.drawer_id).toLowerCase()).concat(artists.map((id) => id.toLowerCase())))].slice(0, 90);
+  const people = [...new Set(page.flatMap((r) => [r.drawer_id, r.reporter_id]).concat(artists))].slice(0, MAX_PROFILE_IDS);
   const [admins, bans, found, open] = await Promise.all([
     adminSet(env.DB, drawers),
     banSet(env.DB, drawers),
@@ -284,6 +412,7 @@ async function listReports(request, env, url, role, t) {
         role: roleOf(env, admins, String(r.drawer_id)),
       },
       reporter: { id: r.reporter_id, name: r.reporter_name, profile: profileOut(found.profiles.get(r.reporter_id)) },
+      ...(replays.has(r.id) ? { replay: replayOut(env, replays.get(r.id), found.profiles, admins, bans) } : {}),
     });
   }
   const last = page[page.length - 1];
@@ -317,6 +446,7 @@ async function deleteReport(env, raw) {
   const [res] = await env.DB.batch([
     env.DB.prepare('DELETE FROM party_reports WHERE id = ?').bind(id),
     env.DB.prepare('DELETE FROM party_report_texts WHERE id = ?').bind(id),
+    env.DB.prepare('DELETE FROM party_report_replays WHERE report_id = ?').bind(id),
   ]);
   return json({ ok: true, deleted: Boolean(res && res.meta && res.meta.changes) });
 }

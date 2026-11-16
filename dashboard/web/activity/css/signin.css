@@ -1,8 +1,3 @@
-@property --signin-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
-}
 
 .signin-layer {
   position: fixed;
@@ -26,8 +21,6 @@
   position: absolute;
   inset: 0;
   background: var(--overlay-strong);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
 }
 
 .signin-card {
@@ -95,13 +88,21 @@
   position: absolute;
   inset: -5px;
   border-radius: 26%;
-  background: conic-gradient(from var(--signin-angle), var(--glow-a), var(--glow-b), var(--glow-c), var(--glow-a));
+  overflow: hidden;
+  background: var(--glow-b);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
   padding: 2px;
   box-shadow: var(--avatar-glow);
-  animation: signin-spin 6s linear infinite;
+}
+
+.signin-crest-ring::before {
+  content: '';
+  position: absolute;
+  inset: -50%;
+  background: conic-gradient(var(--glow-a), var(--glow-b), var(--glow-c), var(--glow-a));
+  animation: fx-spin 6s linear infinite;
 }
 
 .signin-crest-mark {
@@ -436,12 +437,6 @@
   }
 }
 
-@keyframes signin-spin {
-  to {
-    --signin-angle: 360deg;
-  }
-}
-
 @keyframes signin-breathe {
   50% {
     opacity: 0.5;
@@ -521,7 +516,19 @@
   }
 }
 
+[data-fx-paused] .signin-crest-ring::before,
+[data-fx-paused] .signin-code-row.is-loading .signin-code {
+  animation-play-state: paused;
+}
+
+[data-fx="lite"] .signin-crest-ring::before,
+[data-fx="static"] .signin-crest-ring::before,
+[data-fx="static"] .signin-code-row.is-loading .signin-code {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .signin-crest-ring::before,
   .signin-layer,
   .signin-layer.is-closing,
   .signin-card,

@@ -82,7 +82,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--game) 20%, transparent), transparent 70%), var(--surface);
-  box-shadow: var(--shadow-sm), var(--inset-hi);
+  box-shadow: var(--fx-depth-2), var(--inset-hi);
   overflow: hidden;
 }
 
@@ -156,7 +156,8 @@
   font-weight: var(--weight-heavy);
   letter-spacing: var(--tracking-display);
   box-shadow: var(--inset-hi), inset 0 -4px 0 color-mix(in srgb, var(--game) 55%, black), 0 0 0 6px var(--game-soft), 0 16px 40px -14px var(--game);
-  animation: pop var(--dur-slow) var(--pop);
+  text-shadow: 0 2px 0 color-mix(in srgb, var(--game) 50%, black);
+  animation: fx-slam 460ms var(--fx-spring) both;
 }
 
 .chain-letter-wrap.is-hard .chain-letter {
@@ -369,4 +370,16 @@
   .game-chain .chain-player.is-up::after {
     animation: none;
   }
+}
+
+[data-fx="lite"] .game-chain .chain-player.is-up::after,
+[data-fx="static"] .game-chain .chain-player.is-up::after,
+[data-fx="static"] .chain-cat,
+[data-fx="static"] .chain-word,
+[data-fx="static"] .game-chain .chain-letter {
+  animation: none;
+}
+
+[data-fx-paused] .game-chain .chain-player.is-up::after {
+  animation-play-state: paused;
 }

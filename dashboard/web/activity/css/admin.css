@@ -691,7 +691,7 @@
 
 .shell {
   transform-origin: 50% 40%;
-  transition: transform 600ms var(--ease), filter 400ms var(--ease), opacity 400ms var(--ease);
+  transition: transform 600ms var(--ease), opacity 400ms var(--ease);
 }
 
 .shell.troll-flip {
@@ -1208,10 +1208,10 @@
 
 @keyframes disco-hue {
   0% {
-    filter: hue-rotate(0deg);
+    transform: rotate(0deg);
   }
   100% {
-    filter: hue-rotate(360deg);
+    transform: rotate(360deg);
   }
 }
 
@@ -1334,4 +1334,17 @@
     animation: none;
     transform: scaleX(0.6);
   }
+}
+
+[data-fx="lite"] .admin-backdrop {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+[data-fx="lite"] .disco-lights,
+[data-fx="lite"] .disco-light,
+[data-fx="lite"] .disco-ball,
+[data-fx="lite"] .disco-ball::before,
+[data-fx="lite"] .hype-box {
+  animation: none;
 }

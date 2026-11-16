@@ -1,7 +1,9 @@
 import { h, uidOf, profileButton } from './dom.js';
 import { floatText, burstFrom } from './juice.js';
+import { countTo, sharedLoop, fxLevel } from './fxmode.js';
 
 export const COUNT_MS = 650;
+export const BIG_GAIN = 500;
 export const TOP_COUNT = 3;
 const seen = new Map();
 const SEEN_MAX = 400;
@@ -80,40 +82,46 @@ export function motion(scope, r, idx) {
   return { cls: rankUp ? ['is-climb', 'is-rankup'] : ['is-drop'], shift, rankUp };
 }
 
-function afterMount(fn) {
-  const raf = globalThis.requestAnimationFrame;
-  if (typeof raf !== 'function') return;
-  raf(() => raf(fn));
+function canAnimate() {
+  return typeof globalThis.requestAnimationFrame === 'function' && !quiet(globalThis) && fxLevel() !== 'static';
 }
 
-function cheer(el, gain, rankUp, mine) {
+function afterMount(fn) {
+  if (!canAnimate()) return;
+  let frames = 0;
+  sharedLoop().add(() => {
+    frames += 1;
+    if (frames < 2) return true;
+    fn();
+    return false;
+  });
+}
+
+function cheer(el, gain, rankUp, mine, crown) {
   if (mine) gain = 0;
   if (!gain && !rankUp) return;
   afterMount(() => {
     if (!el.isConnected) return;
     const spot = el.querySelector('.board-num, .board-pts') || el;
     if (gain) floatText(spot, `+${fmt(gain)}`);
-    if (rankUp) burstFrom(el, { count: 8, spread: 46, size: 6, colors: ['var(--gold)', 'var(--glow-a)', 'var(--glow-b)'] });
+    if (rankUp) burstFrom(el, { count: crown ? 12 : 8, spread: crown ? 60 : 46, size: 6, colors: ['var(--gold)', 'var(--glow-a)', 'var(--glow-b)'] });
   });
 }
 
 function countUp(el, from, to) {
-  const win = globalThis;
-  if (from === null || from === to || quiet(win) || typeof win.requestAnimationFrame !== 'function') {
+  if (from === null || from === to || !canAnimate()) {
     el.textContent = fmt(to);
     return;
   }
-  el.textContent = fmt(from);
-  let t0 = 0;
-  const step = (ts) => {
-    if (!t0) t0 = ts;
-    const k = Math.min(1, (ts - t0) / COUNT_MS);
-    const eased = 1 - (1 - k) ** 3;
-    el.textContent = fmt(from + (to - from) * eased);
-    if (k < 1 && el.isConnected !== false) win.requestAnimationFrame(step);
-    else el.textContent = fmt(to);
-  };
-  win.requestAnimationFrame(step);
+  countTo(el, to, { from, ms: COUNT_MS, format: fmt });
+}
+
+function gainChip(gain, big) {
+  return h('span', { class: ['board-gain', big ? 'is-big' : null, big ? 'fx-shine' : null, big ? 'is-shining' : null], text: `+${fmt(gain)}` });
+}
+
+function crownFor(move, r) {
+  return move.rankUp && r.place === 1 ? h('span', { class: 'board-crown fx-slam', text: '👑', attrs: { 'aria-hidden': 'true' } }) : null;
 }
 
 function points(r, scope, cls) {
@@ -124,11 +132,12 @@ function points(r, scope, cls) {
   return { num, up, before };
 }
 
-function face(r, size, mark) {
+function face(r, size, mark, crown = null) {
   return h(
     'span',
     { class: 'board-face' },
     profileButton(r, size, { ring: r.place === 1 && r.pts > 0 ? 'lead' : null }),
+    crown,
     mark ? h('span', { class: 'board-badge', text: mark.icon, dataset: { badge: mark.label || 'marked' }, attrs: { title: mark.label || '', 'aria-label': mark.label || '' } }) : null,
   );
 }
@@ -151,15 +160,15 @@ function card(r, opts, scope, idx, count) {
       vars: { '--rise': Math.max(0, count - 1 - idx), '--shift': move.shift || null },
     },
     h('span', { class: ['board-medal', 'medal', `medal-${Math.min(r.place, 4)}`], text: String(r.place), attrs: { 'aria-label': `Place ${r.place}` } }),
-    face(r, 'md', mark),
+    face(r, 'md', mark, crownFor(move, r)),
     h(
       'span',
       { class: 'board-who' },
       h('span', { class: 'board-name', text: nameOf(r), attrs: { 'data-uid': uidOf(r) } }),
-      h('span', { class: 'board-score' }, pts.num, gain ? h('span', { class: 'board-gain', text: `+${fmt(gain)}` }) : null),
+      h('span', { class: 'board-score' }, pts.num, gain ? gainChip(gain, gain >= BIG_GAIN) : null),
     ),
   );
-  cheer(el, pts.up ? gain || r.pts - (pts.before || 0) : 0, move.rankUp, r.isMe);
+  cheer(el, pts.up ? gain || r.pts - (pts.before || 0) : 0, move.rankUp, r.isMe, r.place === 1);
   return el;
 }
 
@@ -178,17 +187,17 @@ function row(r, opts, scope, idx, i) {
       vars: { '--rise': i, '--shift': move.shift || null },
     },
     h('span', { class: 'board-place', text: scored ? String(r.place) : '–', attrs: { 'aria-label': scored ? `Place ${r.place}` : 'No points yet' } }),
-    face(r, 'sm', mark),
+    face(r, 'sm', mark, crownFor(move, r)),
     h(
       'span',
       { class: 'board-who' },
       h('span', { class: 'board-name', text: nameOf(r), attrs: { 'data-uid': uidOf(r) } }),
       r.username ? h('span', { class: 'board-user', text: `@${r.username}` }) : null,
     ),
-    gain ? h('span', { class: 'board-gain', text: `+${fmt(gain)}` }) : null,
+    gain ? gainChip(gain, gain >= BIG_GAIN) : null,
     pts.num,
   );
-  cheer(el, pts.up ? gain || r.pts - (pts.before || 0) : 0, move.rankUp, r.isMe);
+  cheer(el, pts.up ? gain || r.pts - (pts.before || 0) : 0, move.rankUp, r.isMe, r.place === 1);
   return el;
 }
 

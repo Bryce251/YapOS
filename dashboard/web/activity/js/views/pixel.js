@@ -1,6 +1,8 @@
 import pixel, { SIZE, CELLS, PALETTE, EMPTY, MAX_BATCH, encodeCells } from '../games/pixel.js';
 import { h, memo, timer, button, plural } from '../ui/dom.js';
 import { flagModel, flagLabel, FLAG_ICON } from './draw.js';
+import { sendReport } from '../admin.js';
+import { pixelReport } from '../games/replaylog.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
 export const PAINT_MS = 250;
@@ -245,7 +247,7 @@ export function createPixelView({ engine, fx, cues, toast, win }) {
     if (!m) return h('p', { class: 'waiting', text: 'Setting up the canvas…' });
     return [
       h('span', { class: 'eyebrow', text: m.phase === 'paint' ? 'Paint together' : 'You all made' }),
-      h('h2', { class: 'question pixel-theme', text: m.theme }),
+      h('h2', { class: 'question pixel-theme fx-display is-lit', text: m.theme }),
       m.note === 'wiped' ? h('p', { class: 'notice', text: 'Enough players flagged the picture, so the canvas was wiped. Start fresh!' }) : null,
     ];
   });
@@ -257,6 +259,8 @@ export function createPixelView({ engine, fx, cues, toast, win }) {
       return;
     }
     flagged.add(f.d);
+    const body = snap ? pixelReport(snap) : null;
+    if (body) sendReport(f.d, body).catch(() => false);
     tell(FLAG_SENT);
     if (snap) update(snap);
   }

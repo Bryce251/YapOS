@@ -43,7 +43,7 @@ export function awardsCard(list) {
       list.map((a, i) =>
         h(
           'li',
-          { class: ['award', a.mine ? 'is-me' : null], vars: { '--i': String(i) } },
+          { class: ['award', 'fx-lift', a.mine ? 'is-me' : null], vars: { '--i': String(i) } },
           h('span', { class: 'award-badge', attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'award-emoji', text: a.emoji })),
           h(
             'span',

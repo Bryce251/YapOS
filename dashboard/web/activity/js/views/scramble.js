@@ -99,7 +99,7 @@ function faceRow(list) {
         h('span', { class: ['medal', g.place <= 3 ? `medal-${g.place}` : null, 'scramble-medal'], text: String(g.place), attrs: { 'aria-label': `${ordinal(g.place)} place` } }),
         profileButton(g, 'sm'),
         h('span', { class: 'scramble-solver-name', text: g.isMe ? 'You' : g.name }),
-        h('span', { class: 'scramble-solver-pts', text: `+${g.pts}` }),
+        h('span', { class: 'scramble-solver-pts fx-num', text: `+${g.pts}` }),
       ),
     ),
   );
@@ -271,6 +271,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
       slots.push(
         h('span', {
           class: ['scramble-slot', ch ? 'is-filled' : null, ch && !v.marks[i] ? 'is-off' : null, ghost ? 'is-hint' : null, v.solved ? 'is-solved' : null],
+          vars: { '--i': i },
           text: ch ? ch.toUpperCase() : ghost ? v.hint.toUpperCase() : '',
         }),
       );
@@ -341,6 +342,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
     if (list.includes('correct')) {
       const slots = board.querySelector('.scramble-slots');
       if (slots) {
+        slots.classList.add('is-won');
         cue.burst(slots, { count: 14, emoji: ['🔀', '🎉'] });
         if (m.myPts) cue.float(slots, `+${m.myPts}`);
       }

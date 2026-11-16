@@ -67,7 +67,7 @@ function promptLine(m, fill) {
   const { before, after } = promptParts(m.prompt);
   return h(
     'h2',
-    { class: 'question hottakes-prompt' },
+    { class: 'question hottakes-prompt fx-display' },
     before,
     fill ? h('span', { class: 'hottakes-blank is-filled', text: fill }) : h('span', { class: 'hottakes-blank', text: ' ', attrs: { 'aria-label': 'blank' } }),
     after,
@@ -201,7 +201,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
 
   const paintTop = memo((m) => {
     if (!m) return h('p', { class: 'waiting', text: 'Warming up the first prompt…' });
-    if (m.phase === 'recap') return h('div', { class: 'hottakes-hero' }, h('p', { class: 'hottakes-eyebrow', text: heroLabel(m) }), h('h2', { class: 'question hottakes-prompt', text: 'Who voted for what' }));
+    if (m.phase === 'recap') return h('div', { class: 'hottakes-hero' }, h('p', { class: 'hottakes-eyebrow', text: heroLabel(m) }), h('h2', { class: 'question hottakes-prompt fx-display is-lit', text: 'Who voted for what' }));
     const best = m.phase === 'reveal' && m.topIds.length === 1 ? m.cards.find((c) => c.top) : null;
     const notice =
       m.note === 'host' && m.phase === 'write'
@@ -284,7 +284,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
                   { class: 'hottakes-by' },
                   profileButton(c.author, 'sm'),
                   h('span', { class: 'hottakes-name', text: c.author.isMe ? 'You' : c.author.name }),
-                  c.gained ? h('span', { class: 'hottakes-gain', text: `+${c.gained}` }) : null,
+                  c.gained ? h('span', { class: 'hottakes-gain fx-num', text: `+${c.gained}` }) : null,
                 )
               : null,
             m.lost
@@ -360,7 +360,9 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
     for (const c of m.cards) {
       if (!c.top) continue;
       const card = cardFor(c.id);
-      if (card) cue.burst(card, { count: 16, emoji: ['🌶️', '🔥'] });
+      if (!card) continue;
+      card.classList.add('fx-shine', 'is-shining');
+      cue.burst(card, { count: 16, emoji: ['🌶️', '🔥'] });
     }
     if (m.myGain) {
       const mine = m.cards.find((c) => c.isMine);
@@ -399,10 +401,16 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
     if (m && m.phase === 'write' && m.wrote && hint.textContent === 'Sending…') hint.textContent = sentNote();
   }
 
+  function heat(on) {
+    const app = typeof el.closest === 'function' ? el.closest('.app') : null;
+    if (app) app.classList.toggle('fx-hot', on);
+  }
+
   function update(next) {
     snap = next;
     const m = hottakes.model(next, local);
     model = m;
+    heat(Boolean(m && m.phase === 'reveal'));
     paintHead(head, m);
     paintTop(top, m);
     syncEntry(m);
@@ -419,6 +427,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
     update,
     destroy() {
       stopVoteTimer();
+      heat(false);
     },
   };
 }

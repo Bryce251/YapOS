@@ -134,12 +134,12 @@ export function joinButton(m, { size = 'xl', key = 'join' } = {}) {
     key,
     disabled: busy,
   });
-  if (size === 'xl') btn.classList.add('btn-glow');
+  if (size === 'xl') btn.classList.add('btn-glow', 'fx-shine', 'fx-cta');
   return btn;
 }
 
 function glow(btn) {
-  btn.classList.add('btn-glow');
+  btn.classList.add('btn-glow', 'fx-shine', 'fx-cta');
   return btn;
 }
 
@@ -289,18 +289,18 @@ function waiting(text) {
 
 export const FACES_MAX = 6;
 
-function heroBlock(m, gameMeta) {
+function heroBlock(m, gameMeta, popped = false) {
   const faces = m.playing.slice(0, FACES_MAX);
   const more = m.playing.length - faces.length;
   return h(
     'section',
     { class: 'card glass lobby-hero', attrs: { 'aria-labelledby': 'lobby-hero-title' } },
-    h('span', { class: 'lobby-hero-emoji', text: gameMeta.emoji, attrs: { 'aria-hidden': 'true' } }),
+    h('span', { class: ['lobby-hero-emoji', popped ? 'fx-slam' : null], text: gameMeta.emoji, attrs: { 'aria-hidden': 'true' } }),
     h(
       'div',
       { class: 'lobby-hero-text' },
       h('p', { class: 'eyebrow-caps', text: m.tour.on ? 'Tournament' : 'Up next' }),
-      h('h2', { class: 'lobby-hero-title', text: gameMeta.name, attrs: { id: 'lobby-hero-title' } }),
+      h('h2', { class: ['lobby-hero-title', 'fx-display', 'is-lit', popped ? 'fx-pop' : null], text: gameMeta.name, attrs: { id: 'lobby-hero-title' } }),
       gameMeta.blurb ? h('p', { class: 'lobby-hero-blurb', text: gameMeta.blurb }) : null,
     ),
     h(
@@ -309,7 +309,7 @@ function heroBlock(m, gameMeta) {
       faces.length
         ? h('span', { class: 'faces lobby-faces' }, faces.map((p) => profileButton(p, 'sm', { host: p.isHost })), more > 0 ? h('span', { class: 'faces-more', text: `+${more}` }) : null)
         : null,
-      h('span', { class: 'lobby-hero-count' }, h('strong', { text: String(m.playing.length) }), h('span', { text: m.playing.length === 1 ? ' player in' : ' players in' })),
+      h('span', { class: 'lobby-hero-count' }, h('strong', { class: 'fx-num', text: String(m.playing.length) }), h('span', { text: m.playing.length === 1 ? ' player in' : ' players in' })),
     ),
   );
 }
@@ -487,7 +487,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
 
   function joinBlock(m) {
     const btn = joinButton(m);
-    if (m.isHost) btn.classList.remove('btn-glow');
+    if (m.isHost) btn.classList.remove('btn-glow', 'fx-shine', 'fx-cta');
     btn.addEventListener('click', onJoinTap);
     const hint = m.meJoined ? "You're in! Have fun." : "You're watching. Join to play in the next game.";
     return h('div', { class: ['join-row', m.meJoined ? 'is-in' : null] }, btn, h('p', { class: 'join-hint', text: hint }));
@@ -553,7 +553,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
         h(
           'button',
           {
-            class: ['game-tile', 'spot', g.id === game.id ? 'is-on' : null, popped && g.id === game.id ? 'juice-pick' : null],
+            class: ['game-tile', 'spot', 'fx-shine', g.id === game.id ? 'is-on' : null, popped && g.id === game.id ? 'juice-pick' : null],
             type: 'button',
             disabled: !m.isHost,
             dataset: { key: `pick-${g.id}` },
@@ -609,7 +609,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       board(m.totals, { empty: 'Play a game to get on the board.', label: 'Session scores' }),
       m.isHost && m.totals.some((t) => t.pts > 0) ? button(RESET_LABEL, { variant: 'ghost', size: 'sm', key: 'reset', on: resetTap }) : null,
     );
-    return h('div', { class: 'lobby-grid' }, heroBlock(m, gameMeta), gameCard, playersCard, scoreCard);
+    return h('div', { class: 'lobby-grid' }, heroBlock(m, gameMeta, popped), gameCard, playersCard, scoreCard);
   }
 
   return {

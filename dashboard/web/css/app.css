@@ -4657,6 +4657,30 @@ a.server-card:focus-visible,
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .topbar-brand {
+    flex-shrink: 0;
+  }
+
+  .topbar-right {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .topbar-right::-webkit-scrollbar {
+    display: none;
+  }
+
+  .topbar .user-block {
+    gap: 2px;
+  }
+
+  .topbar .user-block > .avatar {
+    display: none;
+  }
+
   .site-header-inner,
   .site-main {
     padding-left: 16px;
