@@ -1,3 +1,5 @@
+import { MORE_ROWS } from './emoji-more.js';
+
 export const CATEGORIES = Object.freeze([
   { id: 'movies', name: 'Movie', plural: 'Movies', emoji: '🎬' },
   { id: 'books', name: 'Book or story', plural: 'Books & stories', emoji: '📚' },
@@ -8,6 +10,9 @@ export const CATEGORIES = Object.freeze([
   { id: 'sports', name: 'Sport', plural: 'Sports', emoji: '🏅' },
   { id: 'sayings', name: 'Saying', plural: 'Sayings', emoji: '💬' },
   { id: 'things', name: 'Everyday thing', plural: 'Everyday things', emoji: '🏠' },
+  { id: 'tv', name: 'TV show', plural: 'TV shows', emoji: '📺' },
+  { id: 'games', name: 'Video game', plural: 'Video games', emoji: '🎮' },
+  { id: 'characters', name: 'Character', plural: 'Characters', emoji: '🦸' },
 ]);
 
 const ROWS = {
@@ -241,9 +246,13 @@ const ROWS = {
   ],
 };
 
+function flatten(groups) {
+  return Object.entries(groups).flatMap(([cat, rows]) => rows.map(([e, a, ...alt]) => ({ cat, e, a, alt })));
+}
+
 export const PUZZLES = Object.freeze(
-  Object.entries(ROWS)
-    .flatMap(([cat, rows]) => rows.map(([e, a, ...alt]) => ({ cat, e, a, alt })))
+  flatten(ROWS)
+    .concat(flatten(MORE_ROWS))
     .map((p, i) => Object.freeze({ n: i + 1, id: `e${String(i + 1).padStart(3, '0')}`, cat: p.cat, e: p.e, a: p.a, alt: Object.freeze(p.alt) })),
 );
 

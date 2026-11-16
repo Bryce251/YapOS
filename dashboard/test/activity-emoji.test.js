@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { room, seeded } from './activity-kit.test.js';
 import { installDom } from './dom-shim.js';
 import emoji, { KEY, judge, mask, unmask, scramble, unscramble, speedPoints, hintLevel, pattern, patternText, letterCount, buildDeck, puzzleOf, MIN_POINTS, MAX_POINTS, REVEAL_MS } from '../web/activity/js/games/emoji.js';
 import { CATEGORIES, PUZZLES, puzzleByN } from '../web/activity/data/emoji.js';
+import { plainKey } from '../web/activity/js/text.js';
 import { createEmojiView, emojiMoment, footText, tiles } from '../web/activity/js/views/emoji.js';
 import { cueKit } from '../web/activity/js/views/index.js';
 import { jsonBytes, MAX_VALUE_BYTES } from '../web/activity/js/limits.js';
@@ -78,7 +80,7 @@ function fakeApi(state, { slots = [0, 1, 2], now = 1000, settings = { rounds: 5,
 }
 
 test('the puzzle list is big, original-looking and well formed', () => {
-  assert.ok(PUZZLES.length >= 180, `only ${PUZZLES.length} puzzles`);
+  assert.ok(PUZZLES.length >= 1150, `only ${PUZZLES.length} puzzles`);
   const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
   const cats = new Set(CATEGORIES.map((c) => c.id));
   const ids = new Set();
@@ -88,6 +90,7 @@ test('the puzzle list is big, original-looking and well formed', () => {
     const n = [...seg.segment(p.e)].length;
     assert.ok(n >= 2 && n <= 6, `${p.id} has ${n} emoji`);
     assert.ok(!/[a-z]/i.test(p.e), `${p.id} emoji only`);
+    if (p.n > 210) assert.ok(!/[0-9⃣]/.test(p.e), `${p.id} has a digit or keycap`);
     assert.ok(p.a && typeof p.a === 'string');
     assert.ok(Array.isArray(p.alt));
     assert.equal(ids.has(p.id), false);
@@ -100,6 +103,28 @@ test('the puzzle list is big, original-looking and well formed', () => {
     for (const re of BANNED) assert.equal(re.test(p.a), false, p.a);
   }
   for (const c of CATEGORIES) assert.ok(PUZZLES.filter((p) => p.cat === c.id).length >= 18, c.id);
+});
+
+test('there are twelve categories and no two puzzles share an answer or a typed alternate', () => {
+  assert.deepEqual(CATEGORIES.map((c) => c.id), ['movies', 'books', 'animals', 'food', 'places', 'jobs', 'sports', 'sayings', 'things', 'tv', 'games', 'characters']);
+  const owner = new Map();
+  for (const p of PUZZLES) {
+    for (const k of new Set([p.a, ...p.alt].map(plainKey))) {
+      assert.equal(owner.has(k), false, `${p.id} ${k} clashes with ${owner.get(k)}`);
+      owner.set(k, p.id);
+    }
+  }
+});
+
+test('the first 210 puzzles keep their numbers, ids and answers', () => {
+  assert.equal(puzzleByN(1).a, 'The Lion King');
+  assert.equal(puzzleByN(1).id, 'e001');
+  assert.equal(puzzleByN(210).a, 'Window shopping');
+  assert.equal(puzzleByN(210).id, 'e210');
+  assert.equal(puzzleByN(211).id, 'e211');
+  const first = PUZZLES.slice(0, 210).map((p) => [p.n, p.id, p.cat, p.e, p.a, p.alt]);
+  const hash = createHash('sha256').update(JSON.stringify(first)).digest('hex');
+  assert.equal(hash, 'ae3e5e40a0ec6a30ffa5048f1308bb54683f3c955d9619a60dbacbb3ccfb3fa5');
 });
 
 test('guesses are forgiving but fair', () => {
@@ -474,7 +499,7 @@ test('moments fire once and the footer reads plainly', () => {
 });
 
 test('the files have no comments, inline styles or outside links', () => {
-  const files = ['js/games/emoji.js', 'js/views/emoji.js', 'css/emoji.css', 'data/emoji.js'];
+  const files = ['js/games/emoji.js', 'js/views/emoji.js', 'css/emoji.css', 'data/emoji.js', 'data/emoji-more.js'];
   for (const f of files) {
     const src = readFileSync(new URL(f, ROOT), 'utf8');
     assert.equal(/^\s*\/\//m.test(src), false, `${f} has a line comment`);
