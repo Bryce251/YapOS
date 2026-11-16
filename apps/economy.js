@@ -768,12 +768,40 @@ async function doWork(ctx) {
   return ctx.reply({ embeds: [card({ title: '💼 Shift done', body: `${line}\nBalance **${fmt(res.bal)}** · work again in ${waitText(WORK_COOLDOWN_MS)}`, color: 'economy', footer: false })] });
 }
 
+const BOARD_NAME_TTL_MS = 6 * 60 * 60 * 1000;
+const BOARD_NAME_WAIT_MS = 2500;
+const BOARD_NAME_CACHE_MAX = 2000;
+const boardNameCache = new WeakMap();
+
+async function boardNamer(engine, members, ids) {
+  const names = new Map(members.map((m) => [m.id, nameOfMember(m)]));
+  if (typeof engine.bot?.user !== 'function') return (id) => names.get(id) || 'a yapper elsewhere';
+  let cache = boardNameCache.get(engine);
+  if (!cache) boardNameCache.set(engine, (cache = new Map()));
+  const t = Date.now();
+  const missing = [...new Set(ids)].filter((id) => !names.has(id) && !(cache.get(id) && t - cache.get(id).at < BOARD_NAME_TTL_MS));
+  if (missing.length) {
+    let timer;
+    const late = new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), BOARD_NAME_WAIT_MS); timer.unref?.(); });
+    const found = await Promise.all(missing.map((id) => Promise.race([Promise.resolve().then(() => engine.bot.user(id)).catch(() => null), late])));
+    clearTimeout(timer);
+    if (cache.size + missing.length > BOARD_NAME_CACHE_MAX) cache.clear();
+    missing.forEach((id, i) => {
+      const user = found[i];
+      if (user === undefined) return;
+      const raw = user && (user.display_name || user.displayName || user.username);
+      cache.set(id, { at: t, name: raw ? plainName(raw) : null });
+    });
+  }
+  return (id) => names.get(id) || cache.get(id)?.name || 'a yapper elsewhere';
+}
+
 async function topView(ctx) {
   const { engine } = ctx;
   const cur = currencyOf();
   const list = ranked(engine);
   const members = await ctx.members().catch(() => []);
-  const nameOf = (id) => { const m = members.find((x) => x.id === id); return m ? nameOfMember(m) : 'a yapper elsewhere'; };
+  const nameOf = await boardNamer(engine, members, list.slice(0, TOP_SIZE).map((x) => x.id));
   const lines = list.slice(0, TOP_SIZE).map((x, i) => `${MEDALS[i] || `**${i + 1}.**`} ${nameOf(x.id)} · ${price(cur, x.bal)}`);
   const pos = list.findIndex((x) => x.id === ctx.userId);
   const mine = pos >= 0 ? `You: **#${pos + 1}** of ${fmt(list.length)} · ${price(cur, list[pos].bal)}` : `You aren't ranked yet. Grab your **/daily**!`;
@@ -786,7 +814,7 @@ async function seasonView(ctx) {
   const cur = currencyOf();
   const board = seasonBoard(engine, 'shards');
   const members = await ctx.members().catch(() => []);
-  const nameOf = (id) => { const m = members.find((x) => x.id === id); return m ? nameOfMember(m) : 'a yapper elsewhere'; };
+  const nameOf = await boardNamer(engine, members, board.list.slice(0, TOP_SIZE).map((x) => x.id));
   const lines = board.list.slice(0, TOP_SIZE).map((x, i) => `${MEDALS[i] || `**${i + 1}.**`} ${nameOf(x.id)} · ${price(cur, x.score)} earned`);
   const pos = board.list.findIndex((x) => x.id === ctx.userId);
   const mine = pos >= 0 ? `You: **#${pos + 1}** of ${fmt(board.list.length)} · ${price(cur, board.list[pos].score)} earned` : `You haven't earned any ${cur.name} this month yet. **/daily** is a good start!`;

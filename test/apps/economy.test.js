@@ -248,6 +248,29 @@ test('top shows the richest with medals and your own place', async () => {
   assert.match(text, /You: \*\*#2\*\*/);
 });
 
+test('top names people from other servers by looking them up on Yapin', async () => {
+  const h = await make();
+  const far = 'f0000000-0000-4000-8000-0000000000aa';
+  const gone = 'f0000000-0000-4000-8000-0000000000ab';
+  const asked = [];
+  h.engine.bot.user = async (id) => {
+    asked.push(id);
+    if (id === far) return { id, username: 'faraway', display_name: 'Far *Away*' };
+    throw Object.assign(new Error('nope'), { status: 404 });
+  };
+  eco(h).add(S, far, 5000, 'x');
+  eco(h).add(S, gone, 4000, 'x');
+  eco(h).add(S, IDS.member, 300, 'x');
+  const text = lastText(h, await h.slash('balance', 'top'));
+  assert.match(text, /🥇 Far Away · 5,000 💎/);
+  assert.match(text, /🥈 a yapper elsewhere · 4,000 💎/);
+  assert.match(text, /🥉 Sam · 300 💎/);
+  assert.equal(asked.includes(IDS.member), false);
+  const before = asked.length;
+  await h.slash('balance', 'top');
+  assert.equal(asked.length, before, 'names are cached');
+});
+
 test('history keeps the last 20 changes; others only for admins', async () => {
   const h = await make();
   for (let i = 1; i <= 25; i++) eco(h).add(S, IDS.member, i, `gift ${i}`);
