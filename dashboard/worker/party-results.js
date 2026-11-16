@@ -2,12 +2,12 @@ import { MINUTE, DAY, ID_RE, HttpError, json, fail, readJson, isPlainObject, cli
 import { hit, tooMany, LIMITS } from './rate.js';
 import { cleanText } from './profiles.js';
 import { reportIpHash } from './reports.js';
-import { PARTY_BADGES, COUNTER_GAMES, COUNTER_KEYS, badgesFor } from './party-badges.js';
+import { PARTY_BADGES, COUNTER_GAMES, COUNTER_KEYS, badgesFor, applySkills, SKILL_KEYS, SKILL_GAMES, SKILL_GAME_CAPS, PERFECT_MIN_QUESTIONS, PERFECT_MAX_QUESTIONS } from './party-badges.js';
 import { MAX_PREDICTIONS, REASON_DAILY_LIMIT, loadRates, shardWants, shardStatement, shardTotals, shardReasonCounts, shardsPoll, ackShards, shardsCleanupStatements } from './party-shards.js';
 import { ackSettings } from './public-profiles.js';
 import { pointsStatements, pointsCleanupStatements } from './party-leaderboard.js';
 
-export const PARTY_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel']);
+export const PARTY_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel', 'typerace', 'memory', 'beatdrop', 'closest', 'namefive']);
 export const MAX_PLAYERS = 16;
 export const MIN_COUNTED = 2;
 export const PLAY_XP = 10;
@@ -28,6 +28,7 @@ const TEAM_MAX = 24;
 const AT_PAST = DAY;
 const AT_FUTURE = 5 * MINUTE;
 const XP_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const SKILL_VALUE_MAX = 1000;
 
 function bad(code, message) {
   return new HttpError(400, code, message);
@@ -103,7 +104,38 @@ export function cleanResult(body, t) {
     if (seen.has(winner)) tournament = winner;
   }
   const predictions = cleanPredictions(body.predictions, seen);
-  return { game: body.game, at: Math.floor(at), players, extra, tournament, predictions };
+  const skills = cleanSkills(body.extra, body.game, players);
+  return { game: body.game, at: Math.floor(at), players, extra, tournament, predictions, skills };
+}
+
+export function cleanSkills(raw, game, players) {
+  const out = {};
+  if (raw === undefined || raw === null || !isPlainObject(raw) || raw.skills === undefined || raw.skills === null) return out;
+  const list = raw.skills;
+  if (!isPlainObject(list) || Object.keys(list).length > MAX_PLAYERS) throw bad('bad_extra', "The extra game info doesn't look right.");
+  let questions = 0;
+  if (raw.questions !== undefined && raw.questions !== null) {
+    if (typeof raw.questions !== 'number' || !Number.isInteger(raw.questions) || raw.questions < 0 || raw.questions > SKILL_VALUE_MAX) throw bad('bad_extra', "The extra game info doesn't look right.");
+    questions = raw.questions;
+  }
+  const byId = new Map(players.map((p) => [p.id, p]));
+  for (const [rawId, v] of Object.entries(list)) {
+    if (!isPlainObject(v)) throw bad('bad_extra', "The extra game info doesn't look right.");
+    const player = byId.get(rawId.trim().toLowerCase());
+    const skill = {};
+    for (const key of SKILL_KEYS) {
+      const n = v[key];
+      if (n === undefined || n === null) continue;
+      if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n > SKILL_VALUE_MAX) throw bad('bad_extra', "The extra game info doesn't look right.");
+      if (!n || !player) continue;
+      if (SKILL_GAMES[key] && SKILL_GAMES[key] !== game) continue;
+      if (key === 'p' && (questions < PERFECT_MIN_QUESTIONS || questions > PERFECT_MAX_QUESTIONS || player.score <= 0)) continue;
+      if (key === 'c' && !player.won) continue;
+      skill[key] = Math.min(n, SKILL_GAME_CAPS[key]);
+    }
+    if (player && Object.keys(skill).length) out[player.id] = skill;
+  }
+  return out;
 }
 
 function cleanPredictions(list, seen) {
@@ -192,6 +224,7 @@ export async function postResults(request, env, t) {
     for (const [key, list] of Object.entries(result.extra)) {
       if (list.includes(p.id)) s.counters[key] = (Number(s.counters[key]) || 0) + 1;
     }
+    s.counters = applySkills(s.counters, { won: p.won, skill: result.skills[p.id], day });
     stmts.push(
       db.prepare('INSERT INTO party_stats (user_id, games, wins, by_game, counters, updated) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET games = excluded.games, wins = excluded.wins, by_game = excluded.by_game, counters = excluded.counters, updated = excluded.updated')
         .bind(p.id, s.games, s.wins, JSON.stringify(s.byGame), JSON.stringify(s.counters), t),

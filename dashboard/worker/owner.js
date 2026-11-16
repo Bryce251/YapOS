@@ -3,7 +3,7 @@ import { hit, tooMany } from './rate.js';
 import { getSession, touchSession } from './sessions.js';
 import { isPartyOwner, USER_ID_RE } from './party.js';
 import { cleanText, cleanUsername, cleanAvatar } from './profiles.js';
-import { PARTY_BADGES, badgesFor } from './party-badges.js';
+import { PARTY_BADGES, badgesFor, partySeasonBadges, partySeasonBadgeId, seasonBadgeInfo } from './party-badges.js';
 
 export const OWNER_ACTIONS_PER_MIN = 120;
 export const OWNER_READS_PER_MIN = 300;
@@ -118,11 +118,18 @@ export function cleanCatalog(body) {
 }
 
 export async function readCatalog(db) {
-  const row = await db.prepare('SELECT data, updated FROM owner_catalog WHERE id = ?').bind(CATALOG_KEY).first();
+  const [row, awarded] = await Promise.all([
+    db.prepare('SELECT data, updated FROM owner_catalog WHERE id = ?').bind(CATALOG_KEY).first(),
+    db.prepare('SELECT DISTINCT month, rank FROM party_season_awards ORDER BY month DESC, rank ASC LIMIT 36').all().catch(() => null),
+  ]);
   const data = row ? parseJsonSafe(row.data, {}) : {};
   const achievements = Array.isArray(data.achievements) ? data.achievements : [];
   const botBadges = Array.isArray(data.badges) ? data.badges : [];
   const badges = PARTY_BADGES.map((b) => ({ id: b.id, label: b.label, emoji: b.emoji, source: 'party' }));
+  for (const r of (awarded && awarded.results) || []) {
+    const info = seasonBadgeInfo(partySeasonBadgeId(Number(r.rank), r.month));
+    if (info) badges.push({ id: info.id, label: info.label, emoji: info.emoji, source: 'season' });
+  }
   const have = new Set(badges.map((b) => b.id));
   for (const b of botBadges) {
     if (!b || have.has(b.id)) continue;
@@ -316,7 +323,7 @@ async function userDetail(env, raw) {
   const id = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
   if (!USER_ID_RE.test(id)) return fail(400, 'bad_user', "That user id doesn't look right.");
   const db = env.DB;
-  const [pub, prof, sess, known, stats, streak, actions, catalog] = await Promise.all([
+  const [pub, prof, sess, known, stats, streak, actions, catalog, partySeason] = await Promise.all([
     db.prepare('SELECT user_id, username, name, level, xp, shards, badges, achievements, season, clan, hidden, updated FROM public_profiles WHERE user_id = ?').bind(id).first(),
     db.prepare('SELECT id, username, display_name, avatar_url, missing, fetched FROM profiles WHERE id = ?').bind(id).first(),
     db.prepare('SELECT user_id, username, display_name, avatar_url, MAX(CASE WHEN last_seen > created THEN last_seen ELSE created END) AS seen FROM sessions WHERE LOWER(user_id) = ? GROUP BY user_id').bind(id).first(),
@@ -325,6 +332,7 @@ async function userDetail(env, raw) {
     db.prepare('SELECT best FROM party_daily_streaks WHERE user_id = ?').bind(id).first(),
     db.prepare(`SELECT ${ACTION_COLUMNS} FROM owner_actions WHERE user_id = ? ORDER BY created DESC, rowid DESC LIMIT ?`).bind(id, OWNER_USER_ACTIONS).all(),
     readCatalog(db),
+    partySeasonBadges(db, id).catch(() => []),
   ]);
   const user = mergeUser(blankUser(id), { pub, prof, sess: sess && sess.user_id ? sess : null, known });
   const pubAt = pub ? Number(pub.updated) || 0 : 0;
@@ -342,7 +350,7 @@ async function userDetail(env, raw) {
   const seasonIds = idList(user.season
     .filter((s) => (s.kind === 'xp' || s.kind === 'shards') && Number.isInteger(s.rank) && typeof s.month === 'string' && /^\d{4}-\d{2}$/.test(s.month))
     .map((s) => `season-${s.kind}-${s.rank}-${s.month}`));
-  user.badges = [...new Set([...user.badges, ...seasonIds])];
+  user.badges = [...new Set([...user.badges, ...seasonIds, ...partySeason])];
   const clan = parseJsonSafe(pub && pub.clan, null);
   user.clan = isPlainObject(clan) && typeof clan.name === 'string'
     ? { name: cleanText(clan.name, 32), tag: cleanText(clan.tag, 6), colour: typeof clan.colour === 'string' && /^#[0-9a-f]{6}$/i.test(clan.colour) ? clan.colour.toLowerCase() : null }

@@ -2362,6 +2362,15 @@
   .report-tools {
     justify-content: flex-start;
   }
+
+  .card-header:has(.report-tools) {
+    flex-wrap: wrap;
+  }
+
+  .card-actions:has(> .report-tools) {
+    flex-basis: 100%;
+    min-width: 0;
+  }
 }
 
 @media (max-width: 480px) {
@@ -3367,6 +3376,12 @@ a.season-name:hover {
 
 .plb-blurb {
   font-size: 13px;
+}
+
+.plb-prize {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
 }
 
 .plb-list {

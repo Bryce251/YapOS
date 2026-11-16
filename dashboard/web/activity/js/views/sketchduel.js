@@ -425,7 +425,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
         'div',
         { class: ['paper', 'sketchduel-mini', info.hidden ? 'is-hidden' : null] },
         h('canvas', { class: 'ink-canvas', dataset: { duel: s }, attrs: { width: GRID_W * SCALE, height: GRID_H * SCALE, role: 'img', 'aria-label': info.hidden ? 'Hidden drawing' : `Drawing by ${info.who.isMe ? 'you' : info.who.name}` } }),
-        info.hidden ? h('p', { class: 'sketchduel-blank', text: 'This drawing was hidden.' }) : info.blank ? h('p', { class: 'sketchduel-blank', text: 'Blank page!' }) : null,
+        info.hidden ? h('p', { class: 'sketchduel-blank', text: 'Hidden after a report.' }) : info.blank ? h('p', { class: 'sketchduel-blank', text: 'Blank page!' }) : null,
       ),
       m.phase === 'vote'
         ? button(picked ? 'Your vote' : 'This one!', {

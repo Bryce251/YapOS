@@ -17,6 +17,7 @@ import { createParty, createBoardLink } from './party.js';
 import { createProfileCard } from './profilecard.js';
 import { createSignin } from './signin.js';
 import { startFxMode, mountBackdrop, fxLevel } from './fxmode.js';
+import { createModTray } from './modhold.js';
 
 export const SCREEN_IN_MS = 450;
 export const ROUNDCARD_MS = 900;
@@ -251,7 +252,8 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const predictSlot = h('div', { class: 'predict-slot' });
   const gameCard = h('div', { class: 'card glass play-card' });
   const strip = h('div', { class: 'strip' });
-  gameWrap.append(hostSlot, spectate, predictSlot, gameCard, strip);
+  const modTray = createModTray();
+  gameWrap.append(hostSlot, spectate, predictSlot, gameCard, modTray.el, strip);
   let hostOpen = false;
   let predictUntil = 0;
   const now = () => (typeof engine.now === 'function' ? engine.now() : Date.now());
@@ -689,6 +691,14 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     }
   }
 
+  function holdInk(snap) {
+    try {
+      modTray.update(snap);
+    } catch {
+      return;
+    }
+  }
+
   function hearInk(msg) {
     try {
       if (msg) replayLog.hear(msg.data, msg.by);
@@ -763,6 +773,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     if (screen === 'results' && hm.phase !== 'results') fx.clear();
     if (hm.phase === 'game') replays.record(snap, snap.game);
     if (hm.phase === 'game') watchInk(snap);
+    if (hm.phase === 'game') holdInk(snap);
     if (hm.phase === 'connecting') {
       screen = 'connecting';
       paintConnect(stage, connectModel(snap));

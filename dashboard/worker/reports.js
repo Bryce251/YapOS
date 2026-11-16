@@ -2,6 +2,7 @@ import { MINUTE, DAY, ID_RE, USER_BODY_LIMIT, HttpError, json, fail, readJson, i
 import { hit, tooMany, LIMITS } from './rate.js';
 import { lookupProfiles, cleanText, MAX_PROFILE_IDS } from './profiles.js';
 import { isPartyOwner } from './party.js';
+import { buildCard } from './party-profile.js';
 import { REPLAY_VERSION, REPLAY_EVENTS, REPLAY_CHARS, REPLAY_AUTHORS, REPLAY_MAX_MS, PIXEL_CELLS, PIXEL_CODES, SOLO_GAMES, inkMatches, pixelMismatch } from '../web/activity/js/games/replayformat.js';
 
 export const REPORT_GAMES = new Set(['draw', 'odd', 'telephone', 'sketchduel', 'pixel']);
@@ -20,6 +21,9 @@ export const MAX_REPORTS = 500;
 export const DISMISSED_KEEP = 30 * DAY;
 export const MAX_BANS = 1000;
 export const REPORTS_PAGE = 20;
+export const PERSON_REPORTS = 100;
+export const BAN_LOG_KEEP = 365 * DAY;
+export const BAN_LOG_SHOWN = 20;
 
 const INK_RE = /^[A-Za-z0-9_-]{6,4096}$/;
 const CURSOR_RE = /^(\d{1,16})\.([A-Za-z0-9_-]{1,64})$/;
@@ -291,6 +295,7 @@ export function cleanupStatements(db, t) {
     db.prepare("DELETE FROM party_reports WHERE id IN (SELECT id FROM party_reports ORDER BY (status = 'open') DESC, created DESC, id DESC LIMIT -1 OFFSET ?)").bind(MAX_REPORTS),
     db.prepare(DROP_ORPHAN_TEXTS),
     db.prepare(DROP_ORPHAN_REPLAYS),
+    db.prepare('DELETE FROM party_ban_log WHERE at < ?').bind(t - BAN_LOG_KEEP),
   ];
 }
 
@@ -342,35 +347,7 @@ function replayOut(env, data, profiles, admins, bans) {
   };
 }
 
-async function listReports(request, env, url, role, t) {
-  const status = url.searchParams.get('status') || 'open';
-  if (!STATUSES.has(status)) throw bad('bad_status', 'Pick open, dismissed or all reports.');
-  const kind = url.searchParams.get('kind') || 'all';
-  if (!KIND_FILTERS.has(kind)) throw bad('bad_kind', 'Pick drawings, text or all reports.');
-  const before = url.searchParams.get('before');
-  let cursor = null;
-  if (before) {
-    const m = CURSOR_RE.exec(before);
-    if (!m) throw bad('bad_cursor', 'That page of reports does not exist.');
-    cursor = { created: Number(m[1]), id: m[2] };
-  }
-  const where = [];
-  const args = [];
-  if (status !== 'all') {
-    where.push('r.status = ?');
-    args.push(status);
-  }
-  if (kind === 'drawing') where.push('x.id IS NULL');
-  if (kind === 'text') where.push('x.id IS NOT NULL');
-  if (cursor) {
-    where.push('(r.created < ? OR (r.created = ? AND r.id < ?))');
-    args.push(cursor.created, cursor.created, cursor.id);
-  }
-  const sql = `SELECT ${REPORT_COLUMNS} FROM party_reports r LEFT JOIN party_report_texts x ON x.id = r.id LEFT JOIN party_report_replays y ON y.report_id = r.id${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY r.created DESC, r.id DESC LIMIT ?`;
-  const res = await env.DB.prepare(sql).bind(...args, REPORTS_PAGE + 1).all();
-  const rows = (res && res.results) || [];
-  const more = rows.length > REPORTS_PAGE;
-  const page = rows.slice(0, REPORTS_PAGE);
+async function shapeReports(request, env, page, t, extraIds = []) {
   const replays = new Map();
   for (const r of page) {
     if (r.text_id !== null && r.text_id !== undefined) continue;
@@ -379,13 +356,8 @@ async function listReports(request, env, url, role, t) {
   }
   const artists = [...replays.values()].flatMap((x) => x.authors.map((a) => a && a.id)).filter((id) => typeof id === 'string');
   const drawers = [...new Set(page.map((r) => String(r.drawer_id).toLowerCase()).concat(artists.map((id) => id.toLowerCase())))].slice(0, 90);
-  const people = [...new Set(page.flatMap((r) => [r.drawer_id, r.reporter_id]).concat(artists))].slice(0, MAX_PROFILE_IDS);
-  const [admins, bans, found, open] = await Promise.all([
-    adminSet(env.DB, drawers),
-    banSet(env.DB, drawers),
-    lookupProfiles(env, people, t, clientIp(request)),
-    env.DB.prepare("SELECT COUNT(*) AS n FROM party_reports WHERE status = 'open'").first(),
-  ]);
+  const people = [...new Set(extraIds.concat(page.flatMap((r) => [r.drawer_id, r.reporter_id])).concat(artists))].slice(0, MAX_PROFILE_IDS);
+  const [admins, bans, found] = await Promise.all([adminSet(env.DB, drawers), banSet(env.DB, drawers), lookupProfiles(env, people, t, clientIp(request))]);
   const reports = [];
   for (const r of page) {
     const isText = r.text_id !== null && r.text_id !== undefined;
@@ -415,6 +387,40 @@ async function listReports(request, env, url, role, t) {
       ...(replays.has(r.id) ? { replay: replayOut(env, replays.get(r.id), found.profiles, admins, bans) } : {}),
     });
   }
+  return { reports, found };
+}
+
+async function listReports(request, env, url, role, t) {
+  const status = url.searchParams.get('status') || 'open';
+  if (!STATUSES.has(status)) throw bad('bad_status', 'Pick open, dismissed or all reports.');
+  const kind = url.searchParams.get('kind') || 'all';
+  if (!KIND_FILTERS.has(kind)) throw bad('bad_kind', 'Pick drawings, text or all reports.');
+  const before = url.searchParams.get('before');
+  let cursor = null;
+  if (before) {
+    const m = CURSOR_RE.exec(before);
+    if (!m) throw bad('bad_cursor', 'That page of reports does not exist.');
+    cursor = { created: Number(m[1]), id: m[2] };
+  }
+  const where = [];
+  const args = [];
+  if (status !== 'all') {
+    where.push('r.status = ?');
+    args.push(status);
+  }
+  if (kind === 'drawing') where.push('x.id IS NULL');
+  if (kind === 'text') where.push('x.id IS NOT NULL');
+  if (cursor) {
+    where.push('(r.created < ? OR (r.created = ? AND r.id < ?))');
+    args.push(cursor.created, cursor.created, cursor.id);
+  }
+  const sql = `SELECT ${REPORT_COLUMNS} FROM party_reports r LEFT JOIN party_report_texts x ON x.id = r.id LEFT JOIN party_report_replays y ON y.report_id = r.id${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY r.created DESC, r.id DESC LIMIT ?`;
+  const res = await env.DB.prepare(sql).bind(...args, REPORTS_PAGE + 1).all();
+  const rows = (res && res.results) || [];
+  const more = rows.length > REPORTS_PAGE;
+  const page = rows.slice(0, REPORTS_PAGE);
+  const [shaped, open] = await Promise.all([shapeReports(request, env, page, t), env.DB.prepare("SELECT COUNT(*) AS n FROM party_reports WHERE status = 'open'").first()]);
+  const { reports, found } = shaped;
   const last = page[page.length - 1];
   return json({
     reports,
@@ -432,17 +438,106 @@ function reportId(raw) {
   return raw;
 }
 
-async function dismissReport(env, session, raw, t) {
+const SELF_CLEAR = "You can't clear reports about yourself. Ask another admin or the owner.";
+
+function aboutSelf(session, role, drawerId) {
+  return role !== 'owner' && typeof drawerId === 'string' && drawerId.toLowerCase() === String(session.user_id).toLowerCase();
+}
+
+async function dismissReport(env, session, role, raw, t) {
   const id = reportId(raw);
-  const row = await env.DB.prepare('SELECT id, status FROM party_reports WHERE id = ?').bind(id).first();
+  const row = await env.DB.prepare('SELECT id, status, drawer_id FROM party_reports WHERE id = ?').bind(id).first();
   if (!row) return fail(404, 'not_found', 'That report is gone. Someone may have deleted it.');
+  if (aboutSelf(session, role, row.drawer_id)) return fail(403, 'is_self', SELF_CLEAR);
   if (row.status !== 'open') return json({ ok: true, dismissed: false });
   await env.DB.prepare("UPDATE party_reports SET status = 'dismissed', dismissed_at = ?, dismissed_by = ? WHERE id = ? AND status = 'open'").bind(t, session.user_id, id).run();
   return json({ ok: true, dismissed: true });
 }
 
-async function deleteReport(env, raw) {
+function personId(raw) {
+  if (typeof raw !== 'string' || !ID_RE.test(raw)) throw bad('bad_id', "That user id doesn't look right.");
+  return raw.toLowerCase();
+}
+
+function cardOut(card) {
+  if (!card) return null;
+  if (card.hidden) return { hidden: true };
+  return {
+    hidden: false,
+    name: card.name || null,
+    username: card.username || null,
+    level: card.level,
+    progress: card.progress || null,
+    badges: Array.isArray(card.badges) ? card.badges : [],
+    badgeCount: Number(card.badgeCount) || 0,
+    party: card.party || null,
+    rank: card.rank || null,
+    page: Boolean(card.page),
+  };
+}
+
+async function personReports(request, env, raw, role, t) {
+  const id = personId(raw);
+  const db = env.DB;
+  const [list, agg, games, made, ban, log, isAdmin, card] = await Promise.all([
+    db.prepare(`SELECT ${REPORT_COLUMNS} FROM party_reports r LEFT JOIN party_report_texts x ON x.id = r.id LEFT JOIN party_report_replays y ON y.report_id = r.id WHERE r.drawer_id = ? ORDER BY r.created DESC, r.id DESC LIMIT ?`).bind(id, PERSON_REPORTS + 1).all(),
+    db.prepare("SELECT COUNT(*) AS n, SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open, MIN(created) AS first, MAX(created) AS last FROM party_reports WHERE drawer_id = ?").bind(id).first(),
+    db.prepare('SELECT r.game AS game, COUNT(*) AS n, SUM(CASE WHEN x.id IS NULL THEN 1 ELSE 0 END) AS drawings FROM party_reports r LEFT JOIN party_report_texts x ON x.id = r.id WHERE r.drawer_id = ? GROUP BY r.game ORDER BY n DESC, r.game ASC').bind(id).all(),
+    db.prepare('SELECT COUNT(*) AS n FROM party_reports WHERE reporter_id = ?').bind(id).first(),
+    db.prepare('SELECT id, name, username, reason, banned_by, banned_at FROM party_bans WHERE id = ?').bind(id).first(),
+    db.prepare('SELECT action, reason, by_id, at FROM party_ban_log WHERE user_id = ? ORDER BY at DESC, rowid DESC LIMIT ?').bind(id, BAN_LOG_SHOWN).all(),
+    adminSet(db, [id]).then((x) => x.has(id)),
+    buildCard(db, id).catch(() => null),
+  ]);
+  const rows = (list && list.results) || [];
+  const page = rows.slice(0, PERSON_REPORTS);
+  const { reports, found } = await shapeReports(request, env, page, t, [id]);
+  const latest = page[0] || null;
+  const prof = found.profiles.get(id) || null;
+  const shown = cardOut(card);
+  const username = (prof && prof.username) || (shown && shown.username) || (latest && latest.drawer_username) || (ban && ban.username) || null;
+  const name = (prof && prof.display_name) || (latest && latest.drawer_name) || (shown && shown.name) || (ban && ban.name) || username || 'Player';
+  return json({
+    person: {
+      id,
+      name,
+      username,
+      avatar: (prof && prof.avatar) || null,
+      role: isPartyOwner(env, id) ? 'owner' : isAdmin ? 'admin' : null,
+      banned: ban ? { reason: ban.reason || null, by: ban.banned_by, at: Number(ban.banned_at) } : null,
+      card: shown,
+    },
+    counts: {
+      total: Number(agg && agg.n) || 0,
+      open: Number(agg && agg.open) || 0,
+      first: agg && agg.first !== null && agg.first !== undefined ? Number(agg.first) : null,
+      last: agg && agg.last !== null && agg.last !== undefined ? Number(agg.last) : null,
+      made: Number(made && made.n) || 0,
+      games: ((games && games.results) || []).map((g) => ({ game: g.game, n: Number(g.n) || 0, drawings: Number(g.drawings) || 0 })),
+    },
+    bans: ((log && log.results) || []).map((b) => ({ action: b.action === 'unban' ? 'unban' : 'ban', reason: b.reason || null, by: b.by_id, at: Number(b.at) })),
+    reports,
+    more: rows.length > PERSON_REPORTS,
+    role,
+    pending: found.pending,
+  });
+}
+
+async function dismissPerson(env, session, role, raw, t) {
+  const id = personId(raw);
+  if (aboutSelf(session, role, id)) return fail(403, 'is_self', SELF_CLEAR);
+  const res = await env.DB.prepare("UPDATE party_reports SET status = 'dismissed', dismissed_at = ?, dismissed_by = ? WHERE drawer_id = ? AND status = 'open'").bind(t, session.user_id, id).run();
+  return json({ ok: true, dismissed: Number((res && res.meta && res.meta.changes) || 0) });
+}
+
+function banLog(db, id, action, reason, by, t) {
+  return db.prepare('INSERT INTO party_ban_log (id, user_id, action, reason, by_id, at) VALUES (?, ?, ?, ?, ?, ?)').bind(randomToken(12), id, action, reason || null, by, t);
+}
+
+async function deleteReport(env, session, role, raw) {
   const id = reportId(raw);
+  const row = await env.DB.prepare('SELECT drawer_id FROM party_reports WHERE id = ?').bind(id).first();
+  if (row && aboutSelf(session, role, row.drawer_id)) return fail(403, 'is_self', SELF_CLEAR);
   const [res] = await env.DB.batch([
     env.DB.prepare('DELETE FROM party_reports WHERE id = ?').bind(id),
     env.DB.prepare('DELETE FROM party_report_texts WHERE id = ?').bind(id),
@@ -494,16 +589,19 @@ async function addBan(request, env, session, role, t) {
   if (Number(count && count.n) >= MAX_BANS) return fail(409, 'too_many', `There are already ${MAX_BANS} bans. Unban someone first.`);
   const stmts = [
     env.DB.prepare('INSERT INTO party_bans (id, name, username, reason, banned_by, banned_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING').bind(id, name, username, reason, session.user_id, t),
+    banLog(env.DB, id, 'ban', reason, session.user_id, t),
   ];
   if (isAdmin) stmts.push(env.DB.prepare('DELETE FROM party_admins WHERE id = ?').bind(id));
   await env.DB.batch(stmts);
   return listBans(request, env, role, t, { banned: true, removedAdmin: isAdmin });
 }
 
-async function removeBan(request, env, role, raw, t) {
+async function removeBan(request, env, session, role, raw, t) {
   if (typeof raw !== 'string' || !ID_RE.test(raw)) throw bad('bad_id', "That user id doesn't look right.");
   const res = await env.DB.prepare('DELETE FROM party_bans WHERE id = ?').bind(raw.toLowerCase()).run();
-  return listBans(request, env, role, t, { unbanned: Boolean(res && res.meta && res.meta.changes) });
+  const unbanned = Boolean(res && res.meta && res.meta.changes);
+  if (unbanned) await banLog(env.DB, raw.toLowerCase(), 'unban', null, session.user_id, t).run();
+  return listBans(request, env, role, t, { unbanned });
 }
 
 export async function partyStaffRoute(request, env, session, route, url, t) {
@@ -513,10 +611,15 @@ export async function partyStaffRoute(request, env, session, route, url, t) {
   const method = request.method;
   const read = method === 'GET' || method === 'HEAD';
   const nope = () => fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  if (route[1] === 'reports' && route[2] === 'person' && n >= 4) {
+    if (n === 4) return read ? personReports(request, env, route[3], role, t) : nope();
+    if (n === 5 && route[4] === 'dismiss') return method === 'POST' ? dismissPerson(env, session, role, route[3], t) : nope();
+    return fail(404, 'not_found', "That page of the dashboard doesn't exist.");
+  }
   if (route[1] === 'reports') {
     if (n === 2) return read ? listReports(request, env, url, role, t) : nope();
-    if (n === 3) return method === 'DELETE' ? deleteReport(env, route[2]) : nope();
-    if (n === 4 && route[3] === 'dismiss') return method === 'POST' ? dismissReport(env, session, route[2], t) : nope();
+    if (n === 3) return method === 'DELETE' ? deleteReport(env, session, role, route[2]) : nope();
+    if (n === 4 && route[3] === 'dismiss') return method === 'POST' ? dismissReport(env, session, role, route[2], t) : nope();
   }
   if (route[1] === 'bans') {
     if (n === 2) {
@@ -524,7 +627,7 @@ export async function partyStaffRoute(request, env, session, route, url, t) {
       if (method === 'POST') return addBan(request, env, session, role, t);
       return nope();
     }
-    if (n === 3) return method === 'DELETE' ? removeBan(request, env, role, route[2], t) : nope();
+    if (n === 3) return method === 'DELETE' ? removeBan(request, env, session, role, route[2], t) : nope();
   }
   return fail(404, 'not_found', "That page of the dashboard doesn't exist.");
 }

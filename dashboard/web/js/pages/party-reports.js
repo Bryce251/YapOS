@@ -7,6 +7,7 @@ import { formatDate, relativeTime } from '../format.js';
 import { decodeStroke, paintInk } from '../../activity/js/games/ink.js';
 import { replayOf } from '../replay-model.js';
 import { createReplayPlayer } from './party-replay.js';
+import { openProfilePanel, readPerson, personUrl, personHead, personStats, personBadges, banHistory, gameCounts, filterHistory, reportCountText, STATUS_FILTERS, KIND_FILTERS } from './party-person.js';
 
 export const REPORTS_PATH = '/api/party/reports';
 export const BANS_PATH = '/api/party/bans';
@@ -28,6 +29,14 @@ export const GAME_NAMES = Object.freeze({
   story: 'Story Builder',
   hangman: 'Hangman Royale',
   pixel: 'Pixel Art',
+  reflex: 'Reflex',
+  higherlower: 'Higher or Lower',
+  musicquiz: 'Music Quiz',
+  typerace: 'Typing Race',
+  memory: 'Memory Chain',
+  beatdrop: 'Beat Drop',
+  closest: 'Closest Guess',
+  namefive: 'Name 5',
 });
 export const ART_SCALE = 2;
 const FILTERS = [['open', 'Open'], ['dismissed', 'Dismissed'], ['all', 'All']];
@@ -164,15 +173,19 @@ function listSkeleton() {
 
 const drawerName = (d) => d.name || d.profile?.display_name || d.username || 'this player';
 
-function person(label, p, extra = []) {
+function person(label, p, extra = [], open = null) {
   const known = p.profile && (p.profile.username || p.profile.display_name) ? p.profile : null;
   const claimed = p.username ? `@${p.username}` : '';
+  const face = avatar({ name: p.name || p.id, url: known?.avatar || '', id: p.id, size: 'sm' });
+  const name = h('span', { text: p.name || 'Unknown player' });
+  const canOpen = typeof open === 'function' && Boolean(p.id);
+  const label2 = `Open ${p.name || 'this player'}'s profile`;
   return h('div', { class: 'report-person' },
     h('dt', { class: 'report-label', text: label }),
     h('dd', { class: 'report-who' },
-      avatar({ name: p.name || p.id, url: known?.avatar || '', id: p.id, size: 'sm' }),
+      canOpen ? h('button', { type: 'button', class: 'report-who-open', attrs: { 'aria-label': label2 }, on: { click: () => open(p) } }, face) : face,
       h('span', { class: 'report-who-main' },
-        h('span', { class: 'report-who-name' }, h('span', { text: p.name || 'Unknown player' }), claimed ? h('span', { class: 'report-who-handle', text: claimed }) : null, ...extra),
+        h('span', { class: 'report-who-name' }, canOpen ? h('button', { type: 'button', class: 'report-who-link', attrs: { title: label2 }, on: { click: () => open(p) } }, name) : name, claimed ? h('span', { class: 'report-who-handle', text: claimed }) : null, ...extra),
         h('code', { class: 'report-who-id', text: p.id }),
         known ? h('span', { class: 'report-who-known', text: `Yapin' knows this id as ${[known.display_name, known.username ? `@${known.username}` : ''].filter(Boolean).join(' ')}` }) : null)));
 }
@@ -189,6 +202,9 @@ export function renderPartyReports(ctx) {
   let kind = 'all';
   let view = readReports(null);
   let bans = readBans(null);
+  let who = null;
+  let whoFilter = { status: 'all', kind: 'all', game: '' };
+  let whoGen = 0;
   const players = [];
   if (ctx.signal && typeof ctx.signal.addEventListener === 'function') ctx.signal.addEventListener('abort', () => stopPlayers());
 
@@ -211,7 +227,8 @@ export function renderPartyReports(ctx) {
   function segments(bar, list, current, pick) {
     replace(bar, ...list.map(([v, label]) => {
       const b = button({ label, size: 'sm', variant: current === v ? 'segment-active' : 'segment', onClick: () => {
-        if (current === v) return;
+        if (current === v && !who) return;
+        who = null;
         pick(v);
         drawFilters();
         loadReports();
@@ -266,6 +283,7 @@ export function renderPartyReports(ctx) {
           label: `${r.game === 'pixel' ? 'picture' : 'drawing'} by ${drawerName(d)}`,
           onBan: (a, btn) => banArtist(r, a, btn),
           canBan: (a) => canBan({ id: a.id, banned: a.banned, role: a.role }),
+          onPerson: (a) => openProfile({ id: a.id, name: a.name, profile: a.profile || null }),
         });
         players.push(player);
         art = h('div', { class: 'report-replay' }, player.el);
@@ -286,6 +304,7 @@ export function renderPartyReports(ctx) {
     if (isPack && !r.pack.gone && r.pack.blocked) actions.push(button({ label: 'Put back', icon: 'refresh', size: 'sm', onClick: (e) => packAction(r, 'restore', e.currentTarget) }));
     if (r.status === 'open') actions.push(button({ label: 'Dismiss', icon: 'check', size: 'sm', onClick: (e) => dismiss(r, e.currentTarget) }));
     if (!isPack) actions.push(button({ label: 'Delete', icon: 'trash', size: 'sm', onClick: (e) => remove(r, e.currentTarget) }));
+    if (d.id && !isPack && (!who || who.person.id.toLowerCase() !== d.id.toLowerCase())) actions.push(button({ label: 'Report history', icon: 'clock', size: 'sm', ariaLabel: `See every report against ${drawerName(d)}`, onClick: () => openHistory(d.id) }));
     const note = d.role === 'admin' && view.role !== 'owner'
       ? h('p', { class: 'report-note', text: 'Only the owner can ban a party admin.' })
       : null;
@@ -294,8 +313,8 @@ export function renderPartyReports(ctx) {
       h('div', { class: 'report-info' },
         h('div', { class: 'report-head' }, ...tags, h('time', { class: 'report-time', attrs: { datetime: new Date(r.created || 0).toISOString(), title: formatDate(r.created) }, text: relativeTime(r.created) })),
         h('dl', { class: 'report-facts' },
-          person(isPack ? 'Made it' : isText ? 'Wrote it' : 'Drew it', d),
-          person('Reported by', r.reporter),
+          person(isPack ? 'Made it' : isText ? 'Wrote it' : 'Drew it', d, [], openProfile),
+          person('Reported by', r.reporter, [], openProfile),
           !isText && r.word ? h('div', { class: 'report-person' }, h('dt', { class: 'report-label', text: 'Word' }), h('dd', { class: 'report-word', text: r.word })) : null),
         h('p', { class: 'report-note', text: isPack
           ? 'A signed-in player reported this public pack. Hiding it takes it off the pack browser for everyone, and its code keeps working in games.'
@@ -310,8 +329,105 @@ export function renderPartyReports(ctx) {
     for (const p of players.splice(0)) p.destroy();
   }
 
+  function openProfile(p) {
+    if (!p || !p.id) return;
+    openProfilePanel({
+      api,
+      signal: ctx.signal,
+      id: p.id,
+      seed: { name: p.name || p.profile?.display_name || '', avatar: p.profile?.avatar || '' },
+      role: view.role,
+      gameName,
+      navigate: typeof ctx.navigate === 'function' ? ctx.navigate : null,
+      onHistory: (id) => openHistory(id),
+      onChanged: profileChanged,
+    });
+  }
+
+  function profileChanged(evt) {
+    if (!evt || !evt.id || ctx.signal?.aborted) return;
+    const key = evt.id.toLowerCase();
+    if (evt.type === 'ban' || evt.type === 'unban') {
+      markBanned(evt.id, evt.type === 'ban');
+      if (evt.type === 'ban' && evt.data?.removedAdmin) for (const x of view.reports) if (x.drawer.id.toLowerCase() === key) x.drawer.role = '';
+      if (evt.data) showBans(evt.data);
+    }
+    if (evt.type === 'dismissAll') {
+      const mine = (x) => x.kind !== 'pack' && x.drawer.id.toLowerCase() === key && x.status === 'open';
+      view.open = Math.max(0, view.open - (Number(evt.dismissed) || 0));
+      if (filter === 'open') view.reports = view.reports.filter((x) => !mine(x));
+      else for (const x of view.reports) if (mine(x)) x.status = 'dismissed';
+    }
+    if (who && who.person.id.toLowerCase() === key) {
+      openHistory(who.person.id);
+      return;
+    }
+    drawReports();
+  }
+
+  function historySegments(list, current, pick, label) {
+    return h('div', { class: 'segmented', attrs: { role: 'group', 'aria-label': label } }, ...list.map(([v, text]) => {
+      const b = button({ label: text, size: 'sm', variant: current === v ? 'segment-active' : 'segment', onClick: () => {
+        if (current === v) return;
+        pick(v);
+        drawReports();
+      } });
+      b.setAttribute('aria-pressed', current === v ? 'true' : 'false');
+      return b;
+    }));
+  }
+
+  function drawHistory() {
+    openCount.textContent = `${view.open} open`;
+    const back = button({ label: 'All reports', icon: 'chevron-left', size: 'sm', onClick: () => { who = null; drawReports(); } });
+    if (who.loading) {
+      replace(listBody, h('div', { class: 'person-history' }, h('div', { class: 'person-history-bar' }, back), listSkeleton()));
+      return;
+    }
+    const p = who.person;
+    const shown = filterHistory(who.reports, whoFilter);
+    const tools = h('div', { class: 'person-filters' },
+      historySegments(STATUS_FILTERS, whoFilter.status, (v) => { whoFilter = { ...whoFilter, status: v }; }, 'Show reports by status'),
+      historySegments(KIND_FILTERS, whoFilter.kind, (v) => { whoFilter = { ...whoFilter, kind: v }; }, 'Show reports by kind'),
+      gameCounts(who, gameName, (g) => { whoFilter = { ...whoFilter, game: g }; drawReports(); }, whoFilter.game));
+    replace(listBody, h('div', { class: 'person-history', dataset: { person: p.id } },
+      h('div', { class: 'person-history-bar' }, back, button({ label: 'Profile and actions', icon: 'user', size: 'sm', onClick: () => openProfile({ id: p.id, name: p.name, profile: { avatar: p.avatar } }) })),
+      personHead(who, { size: 'lg' }),
+      personStats(who),
+      personBadges(who),
+      h('section', { class: 'person-history-mini' }, h('h3', { class: 'person-section-title', text: 'Ban history' }), banHistory(who)),
+      h('h3', { class: 'person-section-title', text: reportCountText(who.counts) }),
+      tools,
+      shown.length
+        ? h('ul', { class: 'report-list' }, ...shown.map(reportItem))
+        : emptyState({ icon: 'flag', title: who.reports.length ? 'Nothing matches these filters' : 'No reports against them', body: who.reports.length ? 'Try another filter.' : 'Reports about them show up here. Dismissed ones stay for 30 days.', compact: true }),
+      who.more ? h('p', { class: 'muted person-more', text: 'Showing their 100 newest reports.' }) : null));
+  }
+
+  async function openHistory(id) {
+    whoGen += 1;
+    const mine = whoGen;
+    const same = who && who.person && who.person.id.toLowerCase() === String(id).toLowerCase();
+    if (!same) whoFilter = { status: 'all', kind: 'all', game: '' };
+    who = { loading: true, person: { id: String(id) } };
+    drawReports();
+    try {
+      const data = await api.get(personUrl(id), { signal: ctx.signal });
+      if (ctx.signal?.aborted || mine !== whoGen || !who) return;
+      who = readPerson(data, readReport);
+      drawReports();
+    } catch (err) {
+      if (ctx.signal?.aborted || mine !== whoGen) return;
+      who = null;
+      if (err instanceof ApiError && err.status === 403) return denied();
+      drawReports();
+      failToast(err, "Couldn't load their reports");
+    }
+  }
+
   function drawReports() {
     stopPlayers();
+    if (who) return drawHistory();
     openCount.textContent = `${view.open} open`;
     if (!view.reports.length) {
       replace(listBody, emptyState({
@@ -354,6 +470,13 @@ export function renderPartyReports(ctx) {
     for (const r of view.reports) {
       if (r.drawer.id.toLowerCase() === key) r.drawer.banned = banned;
       for (const a of Array.isArray(r.replay?.authors) ? r.replay.authors : []) if (a && typeof a.id === 'string' && a.id.toLowerCase() === key) a.banned = banned;
+    }
+    if (who && !who.loading) {
+      for (const r of who.reports) {
+        if (r.drawer.id.toLowerCase() === key) r.drawer.banned = banned;
+        for (const a of Array.isArray(r.replay?.authors) ? r.replay.authors : []) if (a && typeof a.id === 'string' && a.id.toLowerCase() === key) a.banned = banned;
+      }
+      if (who.person.id.toLowerCase() === key) who.person.banned = banned ? who.person.banned || { reason: '', by: '', at: Date.now() } : null;
     }
   }
 
@@ -421,6 +544,8 @@ export function renderPartyReports(ctx) {
       const data = await api.post(`${r.kind === 'pack' ? PACK_REPORTS_PATH : REPORTS_PATH}/${encodeURIComponent(r.id)}/dismiss`, {}, { signal: ctx.signal });
       if (ctx.signal?.aborted) return;
       if (data?.dismissed) view.open = Math.max(0, view.open - 1);
+      if (who && !who.loading && data?.dismissed && r.status === 'open') who.counts.open = Math.max(0, who.counts.open - 1);
+      if (who) r.status = 'dismissed';
       if (filter === 'open') view.reports = view.reports.filter((x) => x.id !== r.id);
       else r.status = 'dismissed';
       drawReports();
@@ -482,6 +607,11 @@ export function renderPartyReports(ctx) {
       if (ctx.signal?.aborted) return;
       if (r.status === 'open') view.open = Math.max(0, view.open - 1);
       view.reports = view.reports.filter((x) => x.id !== r.id);
+      if (who && !who.loading) {
+        if (r.status === 'open') who.counts.open = Math.max(0, who.counts.open - 1);
+        who.counts.total = Math.max(0, who.counts.total - 1);
+        who.reports = who.reports.filter((x) => x.id !== r.id);
+      }
       drawReports();
       toast('Report deleted.');
     } catch (err) {

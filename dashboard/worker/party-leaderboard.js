@@ -4,7 +4,7 @@ import { cleanAvatar, cleanUsername } from './profiles.js';
 import { safeName } from './public-profiles.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 
-export const LEADERBOARD_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel']);
+export const LEADERBOARD_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel', 'typerace', 'memory', 'beatdrop', 'closest', 'namefive']);
 export const LEADERBOARD_BOARDS = Object.freeze(['points', 'wins', 'games', 'best']);
 export const DEFAULT_POINT_CAP = 25_000;
 export const POINT_CAPS = Object.freeze({ trivia: 50_000, emoji: 30_000, musicquiz: 30_000, draw: 30_000, hive: 40_000 });
@@ -14,9 +14,14 @@ export const LEADERBOARD_LIMIT = 20;
 export const LEADERBOARD_MAX = 50;
 export const LEADERBOARD_TTL = 30_000;
 export const POINTS_DAY_KEEP = 3 * DAY;
+export const LEADERBOARD_PERIODS = Object.freeze(['all', 'month']);
+export const MONTH_PRIZES = 3;
+export const MONTH_KEEP = 3;
+export const MONTH_GRACE = 10 * 60 * 1000;
 
 const GAME_SET = new Set(LEADERBOARD_GAMES);
 const BOARD_SET = new Set(LEADERBOARD_BOARDS);
+const PERIOD_SET = new Set(LEADERBOARD_PERIODS);
 const NAME_MAX = 64;
 const cache = new WeakMap();
 
@@ -48,6 +53,8 @@ export function pointsStatements(db, result, banned, day, t) {
         .bind(p.id, p.name, p.username, won, pts, result.game, t, ...gate),
       db.prepare(`INSERT INTO party_points_game (user_id, game, points, games, wins, best, updated) SELECT ?, ?, a, 1, ?, ?, ? FROM (${GATE}) WHERE g = 1 ON CONFLICT (user_id, game) DO UPDATE SET points = party_points_game.points + excluded.points, games = party_points_game.games + 1, wins = party_points_game.wins + excluded.wins, best = MAX(party_points_game.best, excluded.best), updated = excluded.updated`)
         .bind(p.id, result.game, won, pts, t, ...gate),
+      db.prepare(`INSERT INTO party_points_month (user_id, month, points, games, wins, best, best_game, updated) SELECT ?, ?, a, 1, ?, ?, ?, ? FROM (${GATE}) WHERE g = 1 ON CONFLICT (user_id, month) DO UPDATE SET points = party_points_month.points + excluded.points, games = party_points_month.games + 1, wins = party_points_month.wins + excluded.wins, best_game = CASE WHEN excluded.best > party_points_month.best THEN excluded.best_game ELSE party_points_month.best_game END, best = MAX(party_points_month.best, excluded.best), updated = excluded.updated`)
+        .bind(p.id, day.slice(0, 7), won, pts, result.game, t, ...gate),
       db.prepare(`INSERT INTO party_points_day (user_id, day, points) SELECT ?, ?, a FROM (${GATE}) WHERE g = 1 ON CONFLICT (user_id, day) DO UPDATE SET points = party_points_day.points + excluded.points`)
         .bind(p.id, day, ...gate),
       db.prepare(`INSERT INTO party_games_day (user_id, day, games) SELECT ?, ?, 1 FROM (${GATE}) WHERE g = 1 ON CONFLICT (user_id, day) DO UPDATE SET games = party_games_day.games + 1`)
@@ -57,9 +64,54 @@ export function pointsStatements(db, result, banned, day, t) {
   return stmts;
 }
 
+export function monthOf(t) {
+  return new Date(t).toISOString().slice(0, 7);
+}
+
+export function monthStart(month) {
+  const [y, m] = month.split('-').map(Number);
+  return Date.UTC(y, m - 1, 1);
+}
+
+export function nextMonth(month) {
+  const [y, m] = month.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 7);
+}
+
+export function prevMonth(month) {
+  const [y, m] = month.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
+}
+
+export function monthInfo(t) {
+  const month = monthOf(t);
+  const ends = monthStart(nextMonth(month));
+  return { month, ends, daysLeft: Math.max(0, Math.ceil((ends - t) / DAY)), prizes: MONTH_PRIZES };
+}
+
 export function pointsCleanupStatements(db, t) {
   const keep = new Date(t - POINTS_DAY_KEEP).toISOString().slice(0, 10);
   return [db.prepare('DELETE FROM party_points_day WHERE day < ?').bind(keep), db.prepare('DELETE FROM party_games_day WHERE day < ?').bind(keep)];
+}
+
+export async function monthCleanup(db, t) {
+  let oldest = monthOf(t);
+  for (let i = 0; i < MONTH_KEEP; i++) oldest = prevMonth(oldest);
+  const res = await db.prepare('DELETE FROM party_points_month WHERE month < ?').bind(oldest).run();
+  return Number((res && res.meta && res.meta.changes) || 0);
+}
+
+export async function awardMonth(db, t) {
+  if (t - monthStart(monthOf(t)) < MONTH_GRACE) return { month: null, awarded: 0 };
+  const month = prevMonth(monthOf(t));
+  const done = await db.prepare('SELECT 1 AS x FROM party_season_awards WHERE month = ? LIMIT 1').bind(month).first();
+  if (done) return { month, awarded: 0 };
+  const res = await db.prepare(`SELECT m.user_id AS user_id, m.points AS points, p.name AS name, p.username AS username FROM party_points_month m LEFT JOIN party_points p ON p.user_id = m.user_id WHERE m.month = ? AND m.points > 0 AND ${NOT_BANNED.replace('{u}', 'm.user_id')} ORDER BY m.points DESC, m.updated ASC, m.user_id ASC LIMIT ?`).bind(month, MONTH_PRIZES).all();
+  const rows = (res && res.results) || [];
+  if (!rows.length) return { month, awarded: 0 };
+  const out = await db.batch(rows.map((r, i) => db.prepare('INSERT OR IGNORE INTO party_season_awards (month, rank, user_id, name, username, points, awarded) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(month, i + 1, String(r.user_id).toLowerCase(), r.name || null, r.username || null, Number(r.points) || 0, t)));
+  return { month, awarded: out.reduce((n, x) => n + Number((x && x.meta && x.meta.changes) || 0), 0) };
 }
 
 export function parseLeaderboardQuery(url) {
@@ -72,10 +124,16 @@ export function parseLeaderboardQuery(url) {
   if (rawMe && !ID_RE.test(rawMe)) throw bad('bad_id', "That user id doesn't look right.");
   const n = Number.parseInt(q.get('limit') || '', 10);
   const limit = Number.isFinite(n) ? Math.min(LEADERBOARD_MAX, Math.max(1, n)) : LEADERBOARD_LIMIT;
-  return { board, game, me: rawMe ? rawMe.toLowerCase() : null, limit };
+  const period = (q.get('period') || 'all').trim().toLowerCase();
+  if (!PERIOD_SET.has(period)) throw bad('bad_period', 'Pick a period: all or month.');
+  if (period === 'month' && game !== 'all') throw bad('bad_game', 'The monthly board covers all games.');
+  return { board, game, me: rawMe ? rawMe.toLowerCase() : null, limit, period };
 }
 
-function source(board, game) {
+function source(board, game, month = null) {
+  if (month) {
+    return { from: 'party_points_month m LEFT JOIN party_points p ON p.user_id = m.user_id', col: `m.${board}`, where: 'm.month = ?', binds: [month], alias: 'm', table: 'party_points_month', key: 'month' };
+  }
   if (game === 'all') {
     return { from: 'party_points p', col: `p.${board}`, where: '1 = 1', binds: [] };
   }
@@ -130,14 +188,15 @@ function cleanHandleOut(value) {
   return u && !findBlocked(u).length ? u : null;
 }
 
-async function buildBoard(db, board, game, limit) {
-  const src = source(board, game);
-  const notBanned = NOT_BANNED.replace('{u}', src.game ? 'g.user_id' : 'p.user_id');
-  const idCol = src.game ? 'g.user_id' : 'p.user_id';
+async function buildBoard(db, board, game, limit, month = null) {
+  const src = source(board, game, month);
+  const al = src.alias || (src.game ? 'g' : 'p');
+  const notBanned = NOT_BANNED.replace('{u}', `${al}.user_id`);
+  const idCol = `${al}.user_id`;
   const pick = src.game
     ? `${idCol} AS user_id, p.name AS name, p.username AS username, ${src.col} AS value, g.games AS games, g.wins AS wins, g.best AS best, g.game AS best_game`
-    : `${idCol} AS user_id, p.name AS name, p.username AS username, ${src.col} AS value, p.games AS games, p.wins AS wins, p.best AS best, p.best_game AS best_game`;
-  const updatedCol = src.game ? 'g.updated' : 'p.updated';
+    : `${idCol} AS user_id, p.name AS name, p.username AS username, ${src.col} AS value, ${al}.games AS games, ${al}.wins AS wins, ${al}.best AS best, ${al}.best_game AS best_game`;
+  const updatedCol = `${al}.updated`;
   const [res, count] = await Promise.all([
     db.prepare(`SELECT ${pick} FROM ${src.from} WHERE ${src.where} AND ${src.col} > 0 AND ${notBanned} ORDER BY ${src.col} DESC, ${updatedCol} ASC, ${idCol} ASC LIMIT ?`).bind(...src.binds, limit).all(),
     db.prepare(`SELECT COUNT(*) AS n FROM ${src.from} WHERE ${src.where} AND ${src.col} > 0 AND ${notBanned}`).bind(...src.binds).first(),
@@ -175,17 +234,19 @@ async function buildBoard(db, board, game, limit) {
   return { rows, total: Number(count && count.n) || 0 };
 }
 
-async function myRank(db, board, game, me) {
+async function myRank(db, board, game, me, month = null) {
   if (!me) return null;
   const banned = await db.prepare('SELECT 1 AS x FROM party_bans WHERE id = ?').bind(me).first();
   if (banned) return null;
-  const src = source(board, game);
-  const own = src.game
+  const src = source(board, game, month);
+  const own = month
+    ? await db.prepare(`SELECT ${board} AS value FROM party_points_month WHERE user_id = ? AND month = ?`).bind(me, month).first()
+    : src.game
     ? await db.prepare(`SELECT ${board} AS value FROM party_points_game WHERE user_id = ? AND game = ?`).bind(me, game).first()
     : await db.prepare(`SELECT ${board} AS value FROM party_points WHERE user_id = ?`).bind(me).first();
   const value = Number(own && own.value) || 0;
   if (value <= 0) return null;
-  const notBanned = NOT_BANNED.replace('{u}', src.game ? 'g.user_id' : 'p.user_id');
+  const notBanned = NOT_BANNED.replace('{u}', `${src.alias || (src.game ? 'g' : 'p')}.user_id`);
   const above = await db.prepare(`SELECT COUNT(*) AS n FROM ${src.from} WHERE ${src.where} AND ${src.col} > ? AND ${notBanned}`).bind(...src.binds, value).first();
   return { rank: (Number(above && above.n) || 0) + 1, value };
 }
@@ -200,15 +261,19 @@ export async function getLeaderboard(request, env, url, t) {
     boards = new Map();
     cache.set(env.DB, boards);
   }
-  const key = `${q.board}|${q.game}|${q.limit}`;
+  const info = q.period === 'month' ? monthInfo(t) : null;
+  const month = info ? info.month : null;
+  const key = `${q.board}|${q.game}|${q.limit}|${month || 'all'}`;
   let entry = boards.get(key);
   if (!entry || entry.at + LEADERBOARD_TTL < t || entry.at > t) {
-    entry = { at: t, ...(await buildBoard(env.DB, q.board, q.game, q.limit)) };
+    entry = { at: t, ...(await buildBoard(env.DB, q.board, q.game, q.limit, month)) };
     boards.set(key, entry);
     if (boards.size > 200) boards.delete(boards.keys().next().value);
   }
-  const me = await myRank(env.DB, q.board, q.game, q.me);
-  return json({ board: q.board, game: q.game, rows: entry.rows, me, total: entry.total, updated: entry.at }, 200, { 'Cache-Control': 'public, max-age=30' });
+  const me = await myRank(env.DB, q.board, q.game, q.me, month);
+  const out = { board: q.board, game: q.game, period: q.period, rows: entry.rows, me, total: entry.total, updated: entry.at };
+  if (info) out.month = info;
+  return json(out, 200, { 'Cache-Control': 'public, max-age=30' });
 }
 
 export function clearLeaderboardCache(db) {

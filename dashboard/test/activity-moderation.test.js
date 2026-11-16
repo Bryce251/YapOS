@@ -101,7 +101,7 @@ async function startDraw(n = 4) {
   const fit = fitInk([{ c: 3, z: 1, pts: line(seeded(3)) }, { c: 5, z: 2, pts: line(seeded(4), 30, 300, 200) }], st.nonce);
   for (const ch of fit.chunks) assert.equal(drawer.direct(inkKey(ch.i), ch), true);
   await r.clock.advance(1200);
-  const guessers = r.engines.filter((e) => e !== drawer);
+  const guessers = r.engines.filter((e) => e !== drawer).sort((a, b) => (a.snapshot().me === OWNER ? 1 : 0) - (b.snapshot().me === OWNER ? 1 : 0));
   return { r, log, st: hostState(r, 'draw'), drawer, guessers };
 }
 
@@ -109,13 +109,13 @@ function inkKeys(r) {
   return Object.keys(r.hub.state).filter((k) => k.startsWith('ink.'));
 }
 
-test('flag helpers: half the other players, rounded up, at least one', () => {
+test('flag helpers: one flag in a group of 2 or 3, two flags once there are 4 or more players', () => {
   assert.equal(flagNeed(0), 1);
   assert.equal(flagNeed(1), 1);
   assert.equal(flagNeed(2), 1);
   assert.equal(flagNeed(3), 2);
   assert.equal(flagNeed(4), 2);
-  assert.equal(flagNeed(9), 5);
+  assert.equal(flagNeed(9), 2);
   assert.equal(validDrawing('draw.12.3'), true);
   assert.equal(validDrawing('bad id'), false);
   assert.equal(validDrawing('x'.repeat(49)), false);
@@ -529,7 +529,7 @@ test('the draw view shows a Flag button to guessers, sends one report and shows 
   guestView.update(guessers[0].snapshot());
   drawerView.update(drawer.snapshot());
   assert.equal(byKey(guestView.el, 'flag'), null);
-  assert.match(text(guestView.el), /This drawing was hidden/);
+  assert.match(text(guestView.el), /Hidden after a report/);
   noInlineStyle(guestView.el);
   noInlineStyle(drawerView.el);
   guestView.destroy();
@@ -551,11 +551,11 @@ test('the odd and telephone views show the Flag button under the drawing', async
   await r.clock.advance(400);
   v.update(viewer.snapshot());
   assert.equal(byKey(v.el, 'flag'), null);
-  assert.match(text(v.el), /This drawing was hidden/);
+  assert.match(text(v.el), /Hidden after a report/);
   noInlineStyle(v.el);
   v.destroy();
   const f = flagModel({ meJoined: true, meSlot: 1, room: { flags: { 'odd.3.2': [1] } }, players: [0, 1, 2, 3].map((slot) => ({ slot, joined: true, present: true })) }, { d: 'odd.3.2', drawer: 2 }, new Set());
-  assert.deepEqual(f, { d: 'odd.3.2', count: 1, need: 2, mine: true });
+  assert.deepEqual(f, { d: 'odd.3.2', count: 1, need: 2, mine: true, capped: false });
 });
 
 test('the admin panel Game tab has a Clear drawing button that targets what is on screen', async () => {

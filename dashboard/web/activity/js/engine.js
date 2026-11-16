@@ -77,6 +77,8 @@ export const ALL_FX = Object.freeze(FUN_FX.concat(TROLL_FX));
 export const TARGET_FX = Object.freeze(['spotlight', 'clown', 'fake-win']);
 export const ADMIN_ACTIONS = Object.freeze(['start', 'end', 'skip', 'time', 'points', 'kick', 'ban', 'unban', 'lock', 'announce', 'clearDrawing']);
 export const FLAG_KEEP = 12;
+export const FLAG_CAP = 2;
+export const FLAG_CROWD = 3;
 export const DRAWING_RE = /^[A-Za-z0-9_.:-]{1,48}$/;
 export const TEXT_REF_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
 export const TEXT_REPORT_LIMIT = 5;
@@ -88,6 +90,8 @@ export const CODE_MAX = 12;
 export const RESULT_MIN_PLAYERS = 2;
 export const RESULT_MAX_PLAYERS = 16;
 export const RESULT_EXTRA_KEYS = 8;
+export const SKILL_QUESTIONS_MAX = 50;
+const SKILL_CAPS = Object.freeze([['s', 20], ['l', 10], ['p', 1]]);
 export const PRED = 'pred';
 export const PREDICT_MS = 20000;
 export const PREDICT_MAX = 16;
@@ -118,12 +122,26 @@ function clip(raw, max) {
 
 export function flagNeed(guessers) {
   const n = Number.isFinite(guessers) ? Math.floor(guessers) : 0;
-  return Math.max(1, Math.ceil(n / 2));
+  return n >= FLAG_CROWD ? 2 : 1;
 }
 
 export function flagsIn(room) {
   const f = room && room.flags;
   return f && typeof f === 'object' && !Array.isArray(f) ? f : {};
+}
+
+export function flagsUsed(room, slot) {
+  const fc = room && room.fc;
+  if (!fc || typeof fc !== 'object' || fc.r !== room.round || !fc.n || typeof fc.n !== 'object') return 0;
+  const n = fc.n[slot];
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
+export function flagsLeft(snap) {
+  const room = snap && snap.room;
+  const me = snap ? snap.meSlot : null;
+  if (!room || !Number.isInteger(me)) return 0;
+  return Math.max(0, FLAG_CAP - flagsUsed(room, me));
 }
 
 function viewerSet(viewers) {
@@ -1010,6 +1028,23 @@ export function createEngine(opts) {
     return out.sort((a, b) => b.score - a.score || a.slot - b.slot).slice(0, RESULT_MAX_PLAYERS);
   }
 
+  function partySkills(info, players) {
+    const raw = info && info.skills && typeof info.skills === 'object' && !Array.isArray(info.skills) ? info.skills : {};
+    const half = Array.isArray(fm.half) ? fm.half : [];
+    const out = {};
+    for (const p of players) {
+      const got = raw[p.slot] && typeof raw[p.slot] === 'object' ? raw[p.slot] : {};
+      const skill = {};
+      for (const [key, cap] of SKILL_CAPS) {
+        const n = Math.floor(Number(got[key]) || 0);
+        if (n > 0) skill[key] = Math.min(n, cap);
+      }
+      if (p.won && half.includes(p.slot)) skill.c = 1;
+      if (Object.keys(skill).length) out[p.id] = skill;
+    }
+    return out;
+  }
+
   function partyExtra(raw, players) {
     const bySlot = new Map(players.map((p) => [p.slot, p.id]));
     const out = {};
@@ -1029,6 +1064,12 @@ export function createEngine(opts) {
     if (trn && trn.done && Number.isInteger(trn.champ)) {
       const champ = players.find((p) => p.slot === trn.champ);
       if (champ) extra.tournament = { winner: champ.id };
+    }
+    const skills = partySkills(info, players);
+    if (Object.keys(skills).length) {
+      extra.skills = skills;
+      const qn = Math.floor(Number(info.questions) || 0);
+      if (qn > 0) extra.questions = Math.min(qn, SKILL_QUESTIONS_MAX);
     }
     const body = { game: game.id, at, players: players.map(({ slot, ...p }) => p), extra };
     const ids = new Set(players.map((p) => p.id));
@@ -1288,11 +1329,17 @@ export function createEngine(opts) {
     const flags = flagsIn(read(ROOM));
     const by = Array.isArray(flags[d]) ? flags[d].filter((s) => Number.isInteger(s)) : [];
     if (by.includes(slot)) return false;
+    const room = read(ROOM) || {};
+    const mod = adminOk(idOfSlot(slot));
+    const used = flagsUsed(room, slot);
+    if (!mod && used >= FLAG_CAP) return false;
     const live = new Set(list.map((x) => x.d));
     const kept = Object.entries(flags)
       .filter(([k, v]) => k !== d && live.has(k) && Array.isArray(v))
       .slice(-(FLAG_KEEP - 1));
-    patchRoom({ flags: Object.fromEntries(kept.concat([[d, by.concat([slot])]])) });
+    const fc = room.fc && room.fc.r === room.round && room.fc.n && typeof room.fc.n === 'object' ? room.fc.n : {};
+    patchRoom({ flags: Object.fromEntries(kept.concat([[d, by.concat([slot])]])), fc: { r: room.round, n: { ...fc, [slot]: used + 1 } } });
+    if (mod) return hideDrawing(game, item, 'admin') || true;
     checkFlag(game, item);
     return true;
   }
@@ -1975,6 +2022,8 @@ export function createEngine(opts) {
   function flag(d) {
     const room = read(ROOM);
     if (destroyed || !room || room.phase !== 'game' || !validDrawing(d) || !isJoined(meId())) return false;
+    const own = slotOf(meId());
+    if (own !== null && !adminOk(meId()) && flagsUsed(room, own) >= FLAG_CAP) return false;
     const msg = { t: 'flag', g: room.game, d };
     if (isHost()) {
       handleIntent(meId(), msg);
@@ -2175,7 +2224,7 @@ export function createEngine(opts) {
   }
 
   function freshFunMem() {
-    return { hits: {}, worst: {}, behind: {}, fast: {}, re: {}, streak: {}, bestStreak: {}, frozen: {}, scored: new Set(), lead: null, changes: 0, quiet: new Set(), roasts: 0, lastRoast: null, round: null, events: 0 };
+    return { hits: {}, worst: {}, behind: {}, fast: {}, re: {}, streak: {}, bestStreak: {}, frozen: {}, scored: new Set(), lead: null, changes: 0, quiet: new Set(), roasts: 0, lastRoast: null, round: null, events: 0, half: null };
   }
 
   function stopFunTimers() {
@@ -2398,11 +2447,22 @@ export function createEngine(opts) {
     queueLine('roast', { a: nameAt(last.slot) });
   }
 
+  function halfwayLast() {
+    const pts = (read(SCORES) || newScores()).g;
+    const slots = activePlayers().map((p) => p.slot).filter(Number.isInteger);
+    if (slots.length < 2) return [];
+    const vals = slots.map((s) => Number(pts[s]) || 0);
+    const low = Math.min(...vals);
+    if (low === Math.max(...vals)) return [];
+    return slots.filter((s, i) => vals[i] === low);
+  }
+
   function roundReport(n, total) {
     if (!hostOnly()) return;
     const at = Math.floor(Number(n));
     const of = Math.floor(Number(total));
     if (!Number.isFinite(at) || at < 1) return;
+    if (!fm.half && Number.isFinite(of) && of >= 2 && at > of / 2) fm.half = halfwayLast();
     const f = funState();
     if (!f || fm.round === at) return;
     if (fm.round !== null && at > fm.round) closeRound();

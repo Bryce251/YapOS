@@ -40,6 +40,11 @@
 [data-game="story"] { --fx-b: #f472b6; }
 [data-game="hangman"] { --fx-b: #c084fc; }
 [data-game="musicquiz"] { --fx-b: #22d3ee; }
+[data-game="closest"] { --fx-b: #fbbf24; }
+[data-game="namefive"] { --fx-b: #60a5fa; }
+[data-game="typerace"] { --fx-b: #facc15; }
+[data-game="memory"] { --fx-b: #60a5fa; }
+[data-game="beatdrop"] { --fx-b: #a78bfa; }
 
 .fx-backdrop {
   position: fixed;
@@ -126,7 +131,8 @@
 
 [data-game="chain"] .fx-motif,
 [data-game="scramble"] .fx-motif,
-[data-game="hangman"] .fx-motif {
+[data-game="hangman"] .fx-motif,
+[data-game="namefive"] .fx-motif {
   opacity: 1;
   background-image: repeating-linear-gradient(45deg, var(--fx-line) 0 1px, transparent 1px 32px), repeating-linear-gradient(-45deg, var(--fx-line) 0 1px, transparent 1px 32px);
   animation: fx-pan-diag 50s linear infinite;
@@ -143,7 +149,8 @@
 [data-game="trivia"] .fx-motif,
 [data-game="emoji"] .fx-motif,
 [data-game="bluff"] .fx-motif,
-[data-game="musicquiz"] .fx-motif {
+[data-game="musicquiz"] .fx-motif,
+[data-game="closest"] .fx-motif {
   opacity: 0.8;
   inset: -10% -30% 20%;
   transform-origin: 50% 0;
@@ -163,7 +170,10 @@
 }
 
 [data-game="reflex"] .fx-motif,
-[data-game="higherlower"] .fx-motif {
+[data-game="higherlower"] .fx-motif,
+[data-game="typerace"] .fx-motif,
+[data-game="memory"] .fx-motif,
+[data-game="beatdrop"] .fx-motif {
   opacity: 1;
   inset: 0 -120px;
   background-image: repeating-linear-gradient(100deg, color-mix(in srgb, var(--game) 10%, transparent) 0 2px, transparent 2px 60px);
@@ -405,10 +415,14 @@
   position: relative;
 }
 
-.fx-acting::after {
+.fx-acting::after,
+.avatar-btn[role="button"].fx-acting::after {
   content: "";
   position: absolute;
   inset: -5px;
+  width: auto;
+  height: auto;
+  transform: none;
   border-radius: 50%;
   background: conic-gradient(var(--game, var(--glow-a)), var(--fx-b), transparent 70%, var(--game, var(--glow-a)));
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
@@ -465,7 +479,8 @@
 [data-fx="lite"] .fx-loop,
 [data-fx="lite"] .fx-loop::before,
 [data-fx="lite"] .fx-loop::after,
-[data-fx="lite"] .fx-acting::after {
+[data-fx="lite"] .fx-acting::after,
+[data-fx="lite"] .avatar-btn[role="button"].fx-acting::after {
   animation: none !important;
 }
 
@@ -505,6 +520,7 @@
 [data-fx="static"] .fx-right,
 [data-fx="static"] .fx-wrong,
 [data-fx="static"] .fx-acting::after,
+[data-fx="static"] .avatar-btn[role="button"].fx-acting::after,
 [data-fx="static"] .fx-right::after,
 [data-fx="static"] .fx-spotlight::before,
 [data-fx="static"] .timer.is-low .timer-num,
@@ -543,6 +559,7 @@
   .fx-right,
   .fx-wrong,
   .fx-acting::after,
+  .avatar-btn[role="button"].fx-acting::after,
   .fx-spotlight::before,
   .timer.is-low .timer-num,
   .countdown.is-low .countdown-num {

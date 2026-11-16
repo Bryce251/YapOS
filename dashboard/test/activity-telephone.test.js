@@ -14,6 +14,8 @@ import telephone, {
   SETTLE_MS,
   AWARDS_MS,
   LOST_MS,
+  RECOVER_MS,
+  RESUME_MIN_MS,
   END_SHOW_MS,
   NEXT_MIN_MS,
   REACT_POINTS,
@@ -469,18 +471,39 @@ test('admins can skip a step or add time', async () => {
   assert.deepEqual(r.hub.violations, []);
 });
 
-test('if the host leaves mid-game the chains are lost, so everyone is told and sent to the results', async () => {
+test('if the host leaves mid-game the chains are reconnected and the game carries on', async () => {
   const r = await start(4);
   await writeAll(r, ['One', 'Two', 'Three', 'Four']);
   assert.equal(st(r, 1).phase, 'draw');
+  const step = st(r, 1).step;
+  const k = st(r, 1).k;
   r.hub.leave(person(1).id);
   await r.clock.advance(800);
+  let s = st(r, 1);
+  assert.equal(s.phase, 'recover');
+  assert.equal(s.was, 'draw');
+  assert.ok(r.hub.state[IN_KEY]);
+  assert.equal(telephone.model(r.engines[1].snapshot()).phase, 'recover');
+  await r.clock.advance(RECOVER_MS + 400);
+  s = st(r, 1);
+  assert.equal(s.phase, 'draw');
+  assert.equal(s.step, step);
+  assert.equal(s.k, k);
+  assert.ok(s.ends - r.engines[1].snapshot().now >= RESUME_MIN_MS - 1000);
+  assert.deepEqual(r.hub.violations, []);
+});
+
+test('if nobody can send their part back after the host leaves, the game ends kindly', async () => {
+  const r = await start(3, { draw: 50 });
+  await writeAll(r, ['One', 'Two', 'Three']);
+  await r.clock.advance(50000 + GRACE_MS + 800);
+  assert.equal(st(r, 1).phase, 'text');
+  r.hub.leave(person(1).id);
+  await r.clock.advance(RECOVER_MS + 800);
   const s = st(r, 1);
   assert.equal(s.phase, 'lost');
   assert.equal(s.note, 'host');
   assert.equal(r.hub.state[IN_KEY], undefined);
-  const m = telephone.model(r.engines[1].snapshot());
-  assert.equal(m.phase, 'lost');
   await r.clock.advance(LOST_MS + 400);
   const snap = r.engines[1].snapshot();
   assert.equal(snap.room.phase, 'results');
@@ -669,7 +692,7 @@ test('the view walks through every phase with no inline styles', async () => {
   assert.deepEqual(r.hub.violations, []);
 });
 
-test('the view explains a lost game and shows watchers what is going on', async () => {
+test('the view carries on after the host leaves before anyone wrote, and shows watchers what is going on', async () => {
   installDom({ url: 'https://yapos.dev/activity/' });
   const r = await start(4);
   const win = { setTimeout: r.clock.setTimeout, clearTimeout: r.clock.clearTimeout, setInterval: () => 0, clearInterval() {} };
@@ -683,7 +706,8 @@ test('the view explains a lost game and shows watchers what is going on', async 
   await r.clock.advance(800);
   const v = createTelephoneView({ engine: r.engines[1], fx: { confetti() {} }, toast() {}, win });
   v.update(r.engines[1].snapshot());
-  assert.match(text(v.el), /host left/);
+  assert.equal(v.el.dataset.phase, 'write');
+  assert.match(text(v.el), /Start a chain/);
   noInlineStyle(v.el);
   v.destroy();
   watch.destroy();
@@ -1069,7 +1093,7 @@ test('after a host change the new host and everyone else still see the right dra
   for (const v of views) v.destroy();
 });
 
-test('when the host leaves mid-drawing nobody is left looking at a drawing', async () => {
+test('when the host leaves mid-drawing the board pauses, then everyone gets their own drawing back', async () => {
   installDom({ url: 'https://yapos.dev/activity/' });
   const r = await start(4, { draw: 50 });
   const { canvases, views } = await telephoneTable(r, r.engines);
@@ -1082,13 +1106,23 @@ test('when the host leaves mid-drawing nobody is left looking at a drawing', asy
   await r.clock.advance(800);
   r.hub.leave(r.engines[0].snapshot().me);
   r.engines[0].destroy();
-  await r.clock.advance(800);
+  let paused = false;
+  for (let guard = 0; guard < 60 && !paused; guard += 1) {
+    await r.clock.advance(10);
+    paused = views.slice(1).every((v) => v.el.dataset.phase === 'recover');
+  }
+  assert.equal(paused, true);
   cv.dispatchEvent(pen('pointermove', 400, 300, 3));
   cv.dispatchEvent(pen('pointerup', 400, 300, 3));
   for (const v of views.slice(1)) {
-    assert.equal(v.el.dataset.phase, 'lost');
     assert.equal(boardOn(v), false);
-    assert.deepEqual(canvases.get(mainCanvas(v)).scene, []);
+    assert.match(text(v.el), /Reconnecting the chains/);
+  }
+  await r.clock.advance(RECOVER_MS + 800);
+  for (const v of views.slice(1)) {
+    assert.equal(v.el.dataset.phase, 'draw');
+    assert.equal(boardOn(v), true);
+    assert.ok(canvases.get(mainCanvas(v)).scene.length > 0);
   }
   for (const v of views) v.destroy();
 });

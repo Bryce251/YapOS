@@ -400,3 +400,163 @@
     transition: none;
   }
 }
+
+.report-who-open,
+.report-who-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.report-who-link {
+  font-weight: 600;
+  text-align: left;
+}
+
+.report-who-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.report-who-open:focus-visible,
+.report-who-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.person-panel,
+.person-history {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.person-history-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.person-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.person-names {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.person-names p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.person-name {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.person-handle {
+  color: var(--text-2);
+}
+
+.person-id code {
+  font-size: 12px;
+}
+
+.person-tags,
+.person-games,
+.person-filters,
+.person-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.person-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.person-stat {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.person-stat dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.person-badges,
+.person-bans {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.person-badge {
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.person-bans {
+  display: grid;
+}
+
+.person-ban {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.person-ban-why {
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.person-section-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.person-reason-field {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.person-empty,
+.person-more {
+  margin: 0;
+}
+
+.replay-artist-profile {
+  flex: none;
+}

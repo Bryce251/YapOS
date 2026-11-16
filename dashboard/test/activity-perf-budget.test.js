@@ -9,7 +9,7 @@ const activity = path.join(here, '..', 'web', 'activity');
 const cssDir = path.join(activity, 'css');
 const jsDir = path.join(activity, 'js');
 
-const TOTAL_CSS_BUDGET = 440000;
+const TOTAL_CSS_BUDGET = 455000;
 const FX_CSS_BUDGET = 20000;
 
 const CHEAP_PROPS = new Set(['transform', 'opacity', 'translate', 'scale', 'rotate', 'visibility', 'animation-timing-function']);

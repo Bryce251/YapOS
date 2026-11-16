@@ -19,6 +19,11 @@ import { createSketchduelView } from './sketchduel.js';
 import { createStoryView } from './story.js';
 import { createHangmanView } from './hangman.js';
 import { createMusicquizView } from './musicquiz.js';
+import { createClosestView } from './closest.js';
+import { createName5View } from './name5.js';
+import { createBeatdropView } from './beatdrop.js';
+import { createTyperaceView } from './typerace.js';
+import { createMemoryView } from './memory.js';
 
 function soundOf(over) {
   if (over && typeof over.play === 'function') return over;
@@ -92,6 +97,11 @@ export const VIEWS = Object.freeze({
   story: cued(createStoryView),
   hangman: cued(createHangmanView),
   musicquiz: cued(createMusicquizView),
+  closest: cued(createClosestView),
+  namefive: cued(createName5View),
+  beatdrop: cued(createBeatdropView),
+  typerace: cued(createTyperaceView),
+  memory: cued(createMemoryView),
 });
 
 export function viewFor(id) {

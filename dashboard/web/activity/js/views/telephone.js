@@ -1,4 +1,4 @@
-import telephone, { KEY as TEL_KEY, REACTS, REACT_NAMES, NEXT_MIN_MS, TEXT_MAX, fitText, entryInk, inkKey as telInkKey, seatInk, textRef, promptRef, isStarterText } from '../games/telephone.js';
+import telephone, { KEY as TEL_KEY, REACTS, REACT_NAMES, NEXT_MIN_MS, TEXT_MAX, GONE_TEXT, fitText, entryInk, inkKey as telInkKey, seatInk, textRef, promptRef, isStarterText, createKeeper } from '../games/telephone.js';
 import { GRID_W, GRID_H, SIZES, SIZE_NAMES, CUSTOM, FILL, SEAT_CHUNKS, G_MAX, encodeParts, decodeStroke, quantise, fitSeat, strokeOn as inkStroke, fillOn, paintInk, createPainter } from '../games/ink.js';
 import { fillTool, markTool, flagModel, flagButton, flagDrawing, tintOfPen, pickTint } from './draw.js';
 import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
@@ -15,18 +15,20 @@ export const TICK_MS = 400;
 
 const QUIET = { play() {}, burst() {}, float() {} };
 
-export const STEP_LABEL = Object.freeze({ write: 'Write', draw: 'Draw', text: 'Describe', reveal: 'The reveal', awards: 'Awards', lost: 'Hung up' });
+export const STEP_LABEL = Object.freeze({ write: 'Write', draw: 'Draw', text: 'Describe', reveal: 'The reveal', awards: 'Awards', lost: 'Hung up', recover: 'Reconnecting' });
 
 export function headline(m, sent) {
   if (m.phase === 'write') return sent ? 'Your phrase is on its way!' : 'Start a chain! Write something silly for someone to draw.';
   if (m.phase === 'draw') return sent ? 'Nice drawing! Hold tight.' : 'Draw this phrase. No letters or numbers!';
   if (m.phase === 'text') return sent ? 'Description sent!' : 'What is this drawing? Describe it in a few words.';
   if (m.phase === 'awards') return 'And the awards go to…';
-  if (m.phase === 'lost') return m.note === 'few' ? 'Not enough players to keep the chains going.' : 'The host left, so the chains got lost.';
+  if (m.phase === 'recover') return 'Reconnecting the chains…';
+  if (m.phase === 'lost') return m.note === 'few' ? 'Not enough players to keep the chains going.' : "The chains couldn't be put back together.";
   return '';
 }
 
 export function footText(m, sent) {
+  if (m.phase === 'recover') return 'The host left the call. Hang tight while everyone sends their part back in.';
   if (m.phase === 'lost') return 'Heading to the results in a moment.';
   if (m.phase === 'awards') return 'Thanks for playing! Results are up next.';
   if (m.phase === 'reveal') {
@@ -47,7 +49,7 @@ export function footText(m, sent) {
 }
 
 export const BLANK_TEXT = 'Blank page! Make up what it might be.';
-export const HIDDEN_SRC_TEXT = 'This drawing was hidden. Make up what it might be.';
+export const HIDDEN_SRC_TEXT = 'Hidden after a report. Make up what it might be.';
 
 export function verbOf(e) {
   if (e.i === 0) return 'started with';
@@ -241,6 +243,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   el.append(head, track, task, board, entry, waitBox, revealBox, flagShow, awardBox, foot);
 
   const mine = newSheet();
+  const keeper = createKeeper();
   let redoStack = [];
   const local = { stepKey: null, sent: null, reacted: new Set() };
   let cur = null;
@@ -519,7 +522,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     }
     local.sent = local.stepKey;
     cue.play('send');
-    engine.act({ type: 'text', step: model.step, text });
+    keeper.act(engine, snap, { type: 'text', step: model.step, text });
     if (hidesWords(input.value)) say(HIDDEN_NOTE);
     refresh();
     return true;
@@ -529,7 +532,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     if (!model || model.phase !== 'write' || !model.playing || sentNow()) return;
     local.sent = local.stepKey;
     cue.play('send');
-    engine.act({ type: 'pick', step: model.step, i });
+    keeper.act(engine, snap, { type: 'pick', step: model.step, i });
     refresh();
   }
 
@@ -667,9 +670,9 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
           h(
             'li',
             { class: ['telephone-entry-item', `telephone-kind-${e.k === 'd' ? 'draw' : 'text'}`, e.i === r.at ? 'telephone-new' : null], dataset: { entry: e.i } },
-            h('div', { class: 'telephone-entry-who' }, faceRow(e.by, verbOf(e), 'xs'), e.miss ? h('span', { class: 'telephone-miss muted', text: e.k === 'd' ? '(ran out of time)' : '(no answer, so it carried over)' }) : null),
+            h('div', { class: 'telephone-entry-who' }, faceRow(e.by, verbOf(e), 'xs'), e.gone ? null : e.miss ? h('span', { class: 'telephone-miss muted', text: e.k === 'd' ? '(ran out of time)' : '(no answer, so it carried over)' }) : null),
             e.k === 'd'
-              ? h('div', { class: ['paper', 'telephone-mini', e.hidden ? 'is-hidden' : null] }, h('canvas', { class: 'ink-canvas', dataset: { draw: e.i }, attrs: { width: GRID_W * SCALE, height: GRID_H * SCALE, role: 'img', 'aria-label': e.hidden ? 'Hidden drawing' : `Drawing by ${e.by.isMe ? 'you' : e.by.name}` } }), e.hidden ? h('p', { class: 'telephone-blank telephone-hidden', text: 'Hidden' }) : e.strokes ? null : h('p', { class: 'telephone-blank', text: 'Blank page!' }))
+              ? h('div', { class: ['paper', 'telephone-mini', e.hidden ? 'is-hidden' : null] }, h('canvas', { class: 'ink-canvas', dataset: { draw: e.i }, attrs: { width: GRID_W * SCALE, height: GRID_H * SCALE, role: 'img', 'aria-label': e.hidden ? 'Hidden drawing' : `Drawing by ${e.by.isMe ? 'you' : e.by.name}` } }), e.hidden ? h('p', { class: 'telephone-blank telephone-hidden', text: 'Hidden after a report' }) : e.gone ? h('p', { class: 'telephone-blank', text: GONE_TEXT }) : e.strokes ? null : h('p', { class: 'telephone-blank', text: 'Blank page!' }))
               : e.ref
               ? h('div', { class: 'telephone-said has-flag' }, h('p', { class: 'telephone-bubble', text: e.t }), textFlag(engine, e.ref, { toast }))
               : h('p', { class: 'telephone-bubble', text: e.t }),
@@ -704,7 +707,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
 
   const paintAwards = memo((m) => {
     if (m.phase !== 'awards' && m.phase !== 'lost') return null;
-    if (m.phase === 'lost') return h('div', { class: 'card glass telephone-lost' }, h('span', { class: 'trophy', text: '📵', attrs: { 'aria-hidden': 'true' } }), h('p', { class: 'muted', text: m.note === 'few' ? 'Too many people left, so this game is over. Start a new one from the lobby!' : 'Only the host keeps the hidden chains, and the host left. Start a new game from the lobby to play again!' }));
+    if (m.phase === 'lost') return h('div', { class: 'card glass telephone-lost' }, h('span', { class: 'trophy', text: '📵', attrs: { 'aria-hidden': 'true' } }), h('p', { class: 'muted', text: m.note === 'few' ? 'Too many people left, so this game is over. Start a new one from the lobby!' : 'Everyone who had a piece of the chains left the call, so this game is over. Start a new one from the lobby!' }));
     if (!m.awards.length) return h('p', { class: 'muted telephone-no-awards', text: 'No awards this time. Everyone was a winner in spirit!' });
     return h(
       'ul',
@@ -842,6 +845,11 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       paintTask(task, { text: 'Getting the chains ready…', prompt: null, from: null });
       return;
     }
+    keeper.observe(next);
+    if (m.phase === 'recover') {
+      local.sent = null;
+      keeper.resend(next, engine);
+    }
     const key = `${m.run}:${m.phase}:${m.step}:${m.k}`;
     if (key !== local.stepKey) {
       local.stepKey = key;
@@ -854,7 +862,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     const stepping = m.phase === 'write' || m.phase === 'draw' || m.phase === 'text';
     const sent = stepping && sentNow();
     const count = stepping ? `Step ${m.step + 1} of ${m.steps}` : m.reveal ? `Chain ${m.reveal.pos + 1} of ${m.reveal.total}` : '';
-    const label = m.phase === 'draw' ? 'Time left to draw' : m.phase === 'reveal' ? 'Next one in' : m.phase === 'awards' ? 'Results in' : m.phase === 'lost' ? 'Results in' : 'Time left to write';
+    const label = m.phase === 'draw' ? 'Time left to draw' : m.phase === 'reveal' ? 'Next one in' : m.phase === 'awards' ? 'Results in' : m.phase === 'lost' ? 'Results in' : m.phase === 'recover' ? 'Back in' : 'Time left to write';
     paintHead(head, { phase: m.phase, count, pass: m.pass, starts: m.starts, ends: m.ends, label });
     paintTrack(track, { kinds: m.kinds, step: m.step, stepping });
     const fromName = m.from ? (m.from.isMe ? 'you' : m.from.name) : null;
@@ -872,7 +880,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     syncBoard(m);
     paintWait(waitBox, { show: stepping && (sent || !m.playing || m.pass), sent, working: m.working.map((p) => ({ id: p.id, name: p.name, initials: p.initials, hue: p.hue, avatar: p.avatar })) });
     const r = m.reveal
-      ? { ...m.reveal, entries: m.reveal.entries.map((e) => ({ ...e, did: REACTS.map((_, x) => local.reacted.has(`${m.run}.${m.reveal.c}.${e.i}.${x}`)), ref: e.k !== 'd' && !e.mine && !e.miss && e.t && !isStarterText(e.t) ? textRef(m.run, m.reveal.c, e.i) : null })) }
+      ? { ...m.reveal, entries: m.reveal.entries.map((e) => ({ ...e, did: REACTS.map((_, x) => local.reacted.has(`${m.run}.${m.reveal.c}.${e.i}.${x}`)), ref: e.k !== 'd' && !e.mine && !e.miss && !e.gone && e.t && !isStarterText(e.t) ? textRef(m.run, m.reveal.c, e.i) : null })) }
       : null;
     if (paintReveal(revealBox, r)) drawEntries(next.state);
     paintAwards(awardBox, { phase: m.phase, note: m.note, awards: m.awards });

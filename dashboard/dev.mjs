@@ -14,6 +14,7 @@ import { createLogger } from '../engine/log.js';
 import { monthKey, shiftMonth } from '../apps/wrapped.js';
 import { encodeStroke } from './web/activity/js/games/ink.js';
 import { cleanReplay } from './worker/reports.js';
+import { monthOf, prevMonth } from './worker/party-leaderboard.js';
 import { dayKey } from './web/activity/js/daily.js';
 import { seedOwnerPanel, createOwnerSim, botHandlesOwner } from './dev/owner-sim.js';
 
@@ -325,7 +326,18 @@ export function seedPartyReport(db, t = Date.now()) {
   const top = artists[0];
   insert.run(DEV_PIXEL_REPORT_ID, 'pixel', top.id, top.display_name, top.username, mila.id, mila.display_name, '[]', 'a heart with wings', t - 3 * 60_000, t - 3 * 60_000);
   keep.run(DEV_PIXEL_REPORT_ID, JSON.stringify(cleanReplay(pixel, 'pixel', top.id)), t - 3 * 60_000);
+  const DAY = 86_400_000;
+  const past = db.raw.prepare("INSERT INTO party_reports (id, game, drawer_id, drawer_name, drawer_username, reporter_id, reporter_name, ink, word, at, created, ip_hash, status, dismissed_at, dismissed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dev', 'dismissed', ?, ?) ON CONFLICT (id) DO NOTHING");
+  const ink = devReportInk();
+  past.run(DEV_PAST_REPORT_IDS[0], 'draw', rex.id, rex.display_name, rex.username, artists[1].id, artists[1].display_name, JSON.stringify(ink), 'rainbow', t - 6 * DAY, t - 6 * DAY, t - 6 * DAY + 3_600_000, IDS.owner);
+  keep.run(DEV_PAST_REPORT_IDS[0], JSON.stringify(cleanReplay({ v: 1, kind: 'ink', authors: [{ id: rex.id, name: rex.display_name }], events: ink.map((s, i) => [0, 1500 + i * 2600, s]) }, 'draw', rex.id)), t - 6 * DAY);
+  past.run(DEV_PAST_REPORT_IDS[1], 'sketchduel', rex.id, rex.display_name, rex.username, artists[2].id, artists[2].display_name, JSON.stringify(ink.slice(0, 3)), 'snowman', t - 12 * DAY, t - 12 * DAY, t - 11 * DAY, IDS.owner);
+  const log = db.raw.prepare('INSERT INTO party_ban_log (id, user_id, action, reason, by_id, at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING');
+  log.run('devbanlog0001', rex.id, 'ban', 'Rude drawings in Sketch Duel', IDS.owner, t - 11 * DAY);
+  log.run('devbanlog0002', rex.id, 'unban', null, IDS.owner, t - 9 * DAY);
 }
+
+export const DEV_PAST_REPORT_IDS = Object.freeze(['devreport0005', 'devreport0006']);
 
 export const DEV_ODD_REPORT_ID = 'devreport0003';
 export const DEV_PIXEL_REPORT_ID = 'devreport0004';
@@ -432,6 +444,8 @@ function upsertProfile(db, id, username, displayName, t) {
   db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, ?, NULL, 0, ?) ON CONFLICT (id) DO UPDATE SET username = excluded.username, display_name = excluded.display_name, missing = 0, fetched = excluded.fetched').run(id, username, displayName, t);
 }
 
+export const DEV_SKILL_COUNTERS = Object.freeze({ winStreak: 1, bestWinStreak: 4, steals: 12, perfect: 1, comeback: 2, lightning: 9 });
+
 export function seedPublicProfile(db, t = Date.now()) {
   const last = new Date(t);
   const month = (back) => {
@@ -441,8 +455,8 @@ export function seedPublicProfile(db, t = Date.now()) {
   const season = [{ month: month(1), rank: 2, kind: 'xp' }, { month: month(1), rank: 1, kind: 'shards' }, { month: month(2), rank: 4, kind: 'xp' }];
   db.raw.prepare("INSERT INTO public_profiles (user_id, username, username_key, name, level, xp, shards, badges, achievements, season, clan, hidden, updated) VALUES (?, 'jolli', 'jolli', 'Jolli', 27, 18450, NULL, ?, ?, ?, ?, 0, ?) ON CONFLICT (user_id) DO NOTHING")
     .run(IDS.owner, JSON.stringify(['first-game', 'games-10', 'wins-10']), JSON.stringify(['messages-10k', 'casino-50', 'tickets-100']), JSON.stringify(season), JSON.stringify({ name: 'Test Town Owls', tag: 'OWL', colour: '#7c5cff' }), t);
-  db.raw.prepare("INSERT INTO party_stats (user_id, games, wins, by_game, counters, updated) VALUES (?, 64, 21, ?, '{}', ?) ON CONFLICT (user_id) DO NOTHING")
-    .run(IDS.owner, JSON.stringify({ draw: { p: 22, w: 9 }, trivia: { p: 18, w: 7 }, bluff: { p: 12, w: 3 }, hive: { p: 12, w: 2 } }), t);
+  db.raw.prepare('INSERT INTO party_stats (user_id, games, wins, by_game, counters, updated) VALUES (?, 64, 21, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING')
+    .run(IDS.owner, JSON.stringify({ draw: { p: 22, w: 9 }, trivia: { p: 18, w: 7 }, bluff: { p: 12, w: 3 }, hive: { p: 12, w: 2 } }), JSON.stringify(DEV_SKILL_COUNTERS), t);
   upsertProfile(db, IDS.owner, 'jolli', 'Jolli', t);
 }
 
@@ -483,7 +497,7 @@ export function seedSeason(db, t = Date.now()) {
   db.raw.prepare('INSERT INTO season_history (month, boards, updated) VALUES (?, ?, ?) ON CONFLICT (month) DO NOTHING').run(month, JSON.stringify({ xp, shards }), t);
 }
 
-export const DEV_LEADERBOARD_GAMES = ['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel'];
+export const DEV_LEADERBOARD_GAMES = ['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel', 'typerace', 'memory', 'beatdrop', 'closest', 'namefive'];
 
 export function seedPartyLeaderboard(db, t = Date.now()) {
   const rand = devRandom(4242);
@@ -523,6 +537,20 @@ export function seedPartyLeaderboard(db, t = Date.now()) {
       }
     }
     total.run(id, name, username, points, games, wins, best, bestGame, t - i * 60_000);
+  });
+  const month = monthOf(t);
+  const monthRow = db.raw.prepare('INSERT INTO party_points_month (user_id, month, points, games, wins, best, best_game, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id, month) DO NOTHING');
+  people.slice(0, 24).forEach(([id], i) => {
+    const games = 2 + Math.floor(rand() * 18);
+    const best = 400 + Math.floor(rand() * 4000);
+    const game = DEV_LEADERBOARD_GAMES[Math.floor(rand() * DEV_LEADERBOARD_GAMES.length)];
+    monthRow.run(id, month, Math.max(100, 42_000 - i * 1650 - Math.floor(rand() * 900)), games, Math.floor(games * rand() * 0.5), best, game, t - i * 60_000);
+  });
+  const award = db.raw.prepare('INSERT INTO party_season_awards (month, rank, user_id, name, username, points, awarded) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (month, rank) DO NOTHING');
+  const last = prevMonth(month);
+  [[1, 1, 51_200], [2, 0, 47_850], [3, 3, 39_400]].forEach(([rank, k, pts]) => {
+    const [id, name, username] = people[k];
+    award.run(last, rank, id, name, username, pts, t);
   });
 }
 
@@ -1001,7 +1029,8 @@ async function main() {
     `Fake Yapin' sign-in is at ${dev.oauthUrl}`,
     `YapOS Party test call is at ${dev.url}/activity-dev/`,
     `Test server: Test Town (${dev.serverId})`,
-    'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party and see a sample flagged drawing and a flagged Hot Takes answer at /party/reports.',
+    'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party and see a sample flagged drawing and a flagged Hot Takes answer at /party/reports. Click Rex there to open his profile panel with every report, a past replay and his ban history.',
+    'Party leaderboard: the This month tab is filled in, and last month\'s top 3 have Party badges (Jolli is #2, with the new skill badges too).',
     `Word packs: sign in as Jolli and open /packs to edit the sample pack. Type the code ${DEV_PACK_CODE} into Draw & Guess or Trivia settings to play with it.`,
     "Daily puzzle: today's Letter Hive and Scramble already have a few scores on the leaderboard (/api/activity/daily/top?kind=hive).",
     `Owner panel: sign in as Jolli and open /owner to give people Shards, XP, achievements and badges. ${dev.ownerSimulated ? 'A stand-in bot finishes each change about 2 seconds later.' : 'The test bot applies each change for real.'}`,

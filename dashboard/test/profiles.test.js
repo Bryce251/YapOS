@@ -182,6 +182,19 @@ test('turning Shards on stays on after the bot picks it up, before its next snap
   assert.equal((await (await h.api('GET', '/api/me/profile-visibility', cookie)).json()).showShards, false, 'a newer choice made in the bot wins');
 });
 
+test('a real display name wins over a name that is just the username', async () => {
+  const h = createHarness();
+  await push(h, [snap({ name: 'Alice', username: 'Alice' })]);
+  h.db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, ?, NULL, 0, 0)').run(ALICE.id, 'Alice', 'Ally Cat');
+  const page = (await (await view(h, 'alice')).json()).profile;
+  assert.equal(page.name, 'Ally Cat');
+  assert.equal(page.username, 'Alice');
+  const card = await (await h.request('GET', `/api/activity/profile/${ALICE.id}`)).json();
+  assert.equal(card.name || (card.profile && card.profile.name), 'Ally Cat');
+  await push(h, [snap({ name: 'Queen Alice', username: 'Alice' })]);
+  assert.equal((await (await view(h, 'alice', '203.0.113.51')).json()).profile.name, 'Queen Alice');
+});
+
 test('someone with no profile yet gets the defaults', async () => {
   const h = createHarness();
   const { cookie } = await h.login(BOB);

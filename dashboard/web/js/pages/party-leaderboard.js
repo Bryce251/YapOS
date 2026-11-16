@@ -13,6 +13,7 @@ export const LEADERBOARD_PATH = '/party/leaderboard';
 
 export const BOARDS = Object.freeze([
   { id: 'points', label: 'Points', unit: ['point', 'points'], blurb: 'Every point scored in YapOS Party games, all time.' },
+  { id: 'month', label: 'This month', unit: ['point', 'points'], blurb: 'Points scored this month across every game. The top 3 when the month ends win a profile badge.' },
   { id: 'wins', label: 'Wins', unit: ['win', 'wins'], blurb: 'Games won, all time.' },
   { id: 'games', label: 'Games', unit: ['game', 'games'], blurb: 'Games played to the end, all time.' },
   { id: 'best', label: 'Best game', unit: ['point', 'points'], blurb: 'The highest score anyone got in a single game.' },
@@ -33,7 +34,9 @@ export function readQuery(search) {
 }
 
 export function leaderboardUrl({ board, game, me = null }) {
-  const q = new URLSearchParams({ board, game, limit: '20' });
+  const monthly = board === 'month';
+  const q = new URLSearchParams({ board: monthly ? 'points' : board, game: monthly ? 'all' : game, limit: '20' });
+  if (monthly) q.set('period', 'month');
   if (me) q.set('me', me);
   return `${LEADERBOARD_API}?${q}`;
 }
@@ -63,7 +66,14 @@ export function normalizeLeaderboard(data) {
     };
   });
   const me = raw.me && typeof raw.me === 'object' && num(raw.me.rank) > 0 ? { rank: num(raw.me.rank), value: num(raw.me.value) } : null;
-  return { rows, me, total: num(raw.total) };
+  const m = raw.month && typeof raw.month === 'object' && /^\d{4}-\d{2}$/.test(str(raw.month.month)) ? { month: str(raw.month.month), daysLeft: num(raw.month.daysLeft), prizes: num(raw.month.prizes) || 3 } : null;
+  return { rows, me, total: num(raw.total), month: m };
+}
+
+export function monthText(month) {
+  const prizes = month && month.prizes ? month.prizes : 3;
+  const days = month ? month.daysLeft : 0;
+  return `🏅 Top ${prizes} win a badge · ${days <= 1 ? 'Last day' : `${formatNumber(days)} days left`}`;
 }
 
 export function valueText(board, value) {
@@ -125,6 +135,8 @@ export function renderPartyLeaderboard(root, ctx) {
     ...GAME_IDS.map((id) => h('option', { value: id, text: `${PARTY_GAMES[id].emoji} ${PARTY_GAMES[id].name}` })));
   gamePick.value = game;
   const lead = h('p', { class: 'plb-blurb muted' });
+  const prize = h('p', { class: 'plb-prize' });
+  prize.hidden = true;
   const list = h('div', { class: 'plb-wrap' });
   const mine = h('div', { class: 'plb-me', attrs: { 'aria-live': 'polite' } });
 
@@ -139,6 +151,7 @@ export function renderPartyLeaderboard(root, ctx) {
     h('div', { class: 'public-card plb-card' },
       h('div', { class: 'plb-tools' }, boardBar, gamePick),
       lead,
+      prize,
       list,
       mine));
 
@@ -174,15 +187,22 @@ export function renderPartyLeaderboard(root, ctx) {
   async function load() {
     const mineToken = ++token;
     const info = boardInfo(board);
-    lead.textContent = game === 'all' ? info.blurb : `${info.blurb.replace(/\.$/, '')} in ${gameInfo(game).emoji} ${gameInfo(game).name}.`;
+    const monthly = board === 'month';
+    gamePick.disabled = monthly;
+    prize.hidden = true;
+    lead.textContent = monthly || game === 'all' ? info.blurb : `${info.blurb.replace(/\.$/, '')} in ${gameInfo(game).emoji} ${gameInfo(game).name}.`;
     replace(list, boardSkeleton());
     replace(mine);
     try {
       const data = await api.get(leaderboardUrl({ board, game, me: user?.id || null }), { signal, allow401: true });
       if (signal.aborted || mineToken !== token) return;
       const view = normalizeLeaderboard(data);
+      if (monthly) {
+        prize.textContent = monthText(view.month);
+        prize.hidden = false;
+      }
       if (!view.rows.length) {
-        replace(list, emptyState({ icon: 'trophy', title: 'Nobody here yet', body: game === 'all' ? 'Finish a YapOS Party game with at least one friend to be the first on the board.' : `Nobody has scored in ${gameInfo(game).name} yet. Be the first!` }));
+        replace(list, emptyState({ icon: 'trophy', title: 'Nobody here yet', body: monthly ? 'Nobody has scored this month yet. Win a game now to grab the top spot!' : game === 'all' ? 'Finish a YapOS Party game with at least one friend to be the first on the board.' : `Nobody has scored in ${gameInfo(game).name} yet. Be the first!` }));
         return;
       }
       replace(list, boardRows(board, view.rows, user?.id ? String(user.id).toLowerCase() : null), h('p', { class: 'plb-total muted', text: `${formatNumber(view.total)} ${view.total === 1 ? 'player' : 'players'} on this board` }));

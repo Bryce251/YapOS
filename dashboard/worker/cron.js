@@ -10,6 +10,7 @@ import { packReportsCleanupStatements } from './pack-browse.js';
 import { statsCleanupStatements } from './server-stats.js';
 import { ownerCleanupStatements } from './owner.js';
 import { linkCleanupStatements } from './activity-auth.js';
+import { awardMonth, monthCleanup } from './party-leaderboard.js';
 
 export const PUBLIC_STALE = 2 * HOUR;
 export const SNAPSHOT_STALE = DAY;
@@ -42,5 +43,8 @@ export async function cleanup(db, t) {
   results.forEach((r, i) => {
     removed[names[i]] = Number((r && r.meta && r.meta.changes) || 0);
   });
+  const season = await awardMonth(db, t).catch(() => ({ awarded: 0 }));
+  removed.partySeasonAwards = season.awarded;
+  removed.partyPointsMonth = await monthCleanup(db, t).catch(() => 0);
   return removed;
 }

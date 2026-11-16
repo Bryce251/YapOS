@@ -2,7 +2,7 @@ import { ID_RE, json, fail, isPlainObject, parseJsonSafe, clientIp } from './uti
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanAvatar, cleanUsername } from './profiles.js';
 import { safeName } from './public-profiles.js';
-import { badgesFor } from './party-badges.js';
+import { badgesFor, partySeasonBadges, seasonBadgeInfo } from './party-badges.js';
 import { readCatalog } from './owner.js';
 import { LEADERBOARD_GAMES } from './party-leaderboard.js';
 import { findBlocked } from '../web/activity/js/filter.js';
@@ -70,7 +70,7 @@ function pretty(id) {
 }
 
 function label(list, id) {
-  const hit = list.find((x) => x && x.id === id);
+  const hit = list.find((x) => x && x.id === id) || seasonBadgeInfo(id);
   const text = hit && typeof hit.label === 'string' && hit.label.trim() ? safeName(hit.label, 48, pretty(id)) : pretty(id);
   const emoji = hit && typeof hit.emoji === 'string' && hit.emoji.length <= 16 ? hit.emoji : null;
   return { id, label: text, emoji };
@@ -105,7 +105,7 @@ async function rankOf(db, id, points) {
 export async function buildCard(db, rawId) {
   const id = rawId.toLowerCase();
   const pair = id === rawId ? [id, id] : [id, rawId];
-  const [pub, settings, prof, stats, streak, pts, catalog] = await Promise.all([
+  const [pub, settings, prof, stats, streak, pts, catalog, partySeason] = await Promise.all([
     db.prepare('SELECT username, name, level, xp, shards, badges, achievements, clan, hidden, updated FROM public_profiles WHERE user_id IN (?, ?) ORDER BY updated DESC LIMIT 1').bind(...pair).first(),
     db.prepare('SELECT hidden, show_shards, claimed, updated FROM profile_settings WHERE user_id IN (?, ?) ORDER BY updated DESC LIMIT 1').bind(...pair).first(),
     db.prepare('SELECT username, display_name, avatar_url, missing FROM profiles WHERE id IN (?, ?) ORDER BY fetched DESC LIMIT 1').bind(...pair).first(),
@@ -113,6 +113,7 @@ export async function buildCard(db, rawId) {
     db.prepare('SELECT best FROM party_daily_streaks WHERE user_id IN (?, ?) ORDER BY best DESC LIMIT 1').bind(...pair).first(),
     db.prepare('SELECT user_id, name, username, points FROM party_points WHERE user_id IN (?, ?) ORDER BY points DESC LIMIT 1').bind(...pair).first(),
     readCatalog(db).catch(() => ({ achievements: [], badges: [] })),
+    partySeasonBadges(db, pair).catch(() => []),
   ]);
   if (!pub && !prof && !stats && !pts) return null;
   const known = prof && !Number(prof.missing) ? prof : null;
@@ -121,13 +122,15 @@ export async function buildCard(db, rawId) {
   const view = visible(pub, settings);
   if (view.hidden) return { hidden: true, name: callName, avatar };
   const username = handle(pub && pub.username) || handle(known && known.username) || handle(pts && pts.username);
-  const name = (pub && safeName(pub.name, NAME_MAX, null)) || callName || (pts && safeName(pts.name, NAME_MAX, null)) || username || 'Player';
+  const names = [pub && safeName(pub.name, NAME_MAX, null), callName, pts && safeName(pts.name, NAME_MAX, null)].filter(Boolean);
+  const real = names.find((n) => !username || n.replace(/^@+/, '').toLowerCase() !== username.toLowerCase());
+  const name = real || names[0] || username || 'Player';
   const games = Math.max(0, Math.floor(Number(stats && stats.games) || 0));
   const wins = Math.max(0, Math.floor(Number(stats && stats.wins) || 0));
   const counters = parseJsonSafe(stats && stats.counters, {});
   const bestStreak = Math.max(0, Math.floor(Number(streak && streak.best) || 0));
   const earned = badgesFor({ games, wins, counters: isPlainObject(counters) ? counters : {}, dailyBest: bestStreak });
-  const badgeIds = [...new Set([...earned, ...ids(parseJsonSafe(pub && pub.badges, []), 64)])];
+  const badgeIds = [...new Set([...earned, ...partySeason, ...ids(parseJsonSafe(pub && pub.badges, []), 64)])];
   const achievementIds = ids(parseJsonSafe(pub && pub.achievements, []), CARD_ACHIEVEMENTS);
   const badgeList = Array.isArray(catalog.badges) ? catalog.badges : [];
   const achList = Array.isArray(catalog.achievements) ? catalog.achievements : [];

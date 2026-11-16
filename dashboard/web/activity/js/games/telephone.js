@@ -1,9 +1,10 @@
 import { STARTERS, starterById } from '../../data/telephone.js';
 import { shuffle } from '../engine.js';
-import { pack, seatBudget, seatKey, seatOf, validChunk, readSeat, seatRoom, SEAT_CHUNKS } from './ink.js';
+import { pack, seatBudget, seatKey, seatOf, validChunk, readSeat, seatRoom, decodeStroke, SEAT_CHUNKS } from './ink.js';
 import { mask, unmask } from './draw.js';
 import { cleanShared, plainKey } from '../text.js';
 import { timeSetting, addPts, roundOf, say } from './drawfun.js';
+import { jsonBytes } from '../limits.js';
 
 export const KEY = 'tel';
 export const IN_KEY = 'tel.in';
@@ -32,6 +33,11 @@ export const REACTS = Object.freeze(['😂', '😍', '🤯', '👏', '🔥']);
 export const REACT_NAMES = Object.freeze(['Funny', 'Love it', 'Mind blown', 'Nice one', 'On fire']);
 export const STEP_PHASES = Object.freeze(['write', 'draw', 'text']);
 export const HID_MAX = 40;
+export const RECOVER_MS = 6000;
+export const RESUME_MIN_MS = 10000;
+export const RC_CHUNK_BYTES = 3000;
+export const RC_PARTS = 16;
+export const GONE_TEXT = '📵 This link left the call';
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const B64_VAL = new Map(Array.from(B64).map((c, i) => [c, i]));
@@ -234,7 +240,12 @@ function liveSeats(api, st) {
   return st.seats.map((slot, i) => (here.has(slot) ? i : -1)).filter((i) => i >= 0);
 }
 
-function fillSeats(api, st) {
+export function sinceOf(st, seat) {
+  const at = st && Array.isArray(st.since) ? st.since[seat] : 0;
+  return Number.isInteger(at) && at > 0 ? at : 0;
+}
+
+function fillSeats(api, st, step = st.step) {
   const here = presentSet(api);
   let moved = false;
   st.wait = (st.wait || []).filter((s) => here.has(s) || !st.seats.includes(s));
@@ -244,6 +255,7 @@ function fillSeats(api, st) {
     if (i < 0) break;
     st.seats[p] = st.wait[i];
     st.wait.splice(i, 1);
+    st.since = st.seats.map((_, q) => (q === p ? step || 0 : sinceOf(st, q)));
     if (Array.isArray(st.done)) st.done = st.done.filter((d) => d !== p);
     moved = true;
   }
@@ -289,7 +301,7 @@ function openStep(api, st, step) {
   const n = st.seats.length;
   const kind = kindOf(step);
   const k = nonce(api);
-  fillSeats(api, st);
+  fillSeats(api, st, step);
   const secs = kind === 'draw' ? api.settings.draw : api.settings.write;
   const starts = api.now();
   const ends = starts + secs * 1000;
@@ -378,6 +390,7 @@ function putEntry(api, chain, c, i) {
   }
   if (e.miss) out.miss = 1;
   if (e.hid) out.hid = 1;
+  if (e.gone) out.gone = 1;
   for (const k of api.keys()) {
     const m = k.startsWith(`${ENTRY_PREFIX}${i}.`) ? Number(k.slice(`${ENTRY_PREFIX}${i}.`.length)) : 0;
     if (Number.isInteger(m) && m > rest.length) api.put(k, null);
@@ -482,7 +495,7 @@ export function pickAwards(mem, slots) {
   add('clown', '😂', 'Class clown', 'Got the most laughs', best(people, (p) => p.got.r0 || 0, taken));
   add('art', '🎨', 'Gallery star', 'Most loved drawings', best(people, (p) => p.got.d || 0, taken));
   add('pen', '✍️', 'Wordsmith', 'Most loved writing', best(people, (p) => p.got.w || 0, taken));
-  const chains = (mem.chains || []).filter((c) => c.length >= 3 && c[0].t);
+  const chains = (mem.chains || []).filter((c) => c.length >= 3 && c[0].t && Number.isInteger(c[0].by) && !c[0].gone);
   const ends = chains.map((c) => ({ slot: c[0].by, score: likeness(c[0].t, lastText(c.slice(1))) }));
   const wild = best(ends, (x) => 1 - x.score, taken);
   if (wild && wild.v > 0) add('wild', '🌀', 'Wildest ride', 'Their chain changed the most', wild);
@@ -497,7 +510,7 @@ export function pickAwards(mem, slots) {
 function showAwards(api, st) {
   clearPrefix(api, ENTRY_PREFIX);
   const mem = api.memory;
-  const slots = [...new Set((mem.chains || []).flat().map((e) => e.by))];
+  const slots = [...new Set((mem.chains || []).flat().map((e) => e.by))].filter((s) => Number.isInteger(s));
   const aw = pickAwards(mem, slots);
   for (const a of aw) addPts(api, a.slot, AWARD_POINTS, { raw: true });
   const starts = api.now();
@@ -549,6 +562,208 @@ function owned(api, st) {
   return Boolean(api.memory && api.memory.run && api.memory.run === st.run && Array.isArray(api.memory.chains));
 }
 
+function lengthOf(st, was = st.was) {
+  if (was === 'reveal') return st.rv && Number.isInteger(st.rv.len) ? st.rv.len : 0;
+  return Number.isInteger(st.step) ? st.step : 0;
+}
+
+function recoverable(st) {
+  const was = st.phase === 'recover' ? st.was : st.phase;
+  if (!Array.isArray(st.seats) || !st.seats.length) return null;
+  if (STEP_PHASES.includes(was)) return was;
+  if (was === 'reveal' && st.rv && Number.isInteger(st.rv.c) && Number.isInteger(st.rv.at)) return was;
+  return null;
+}
+
+function beginRecover(api) {
+  const st = api.get(KEY);
+  const was = st ? recoverable(st) : null;
+  if (!was) return lose(api, 'host');
+  const now = api.now();
+  const again = st.phase === 'recover';
+  const left = again ? Math.max(0, st.left || 0) : Math.max(0, (st.ends || now) - now);
+  const dur = again ? Math.max(0, st.dur || 0) : Math.max(0, (st.ends || now) - (st.starts || now));
+  let rk = nonce(api);
+  if (rk === st.rk) rk = (rk % 65534) + 1;
+  const m = api.memory;
+  for (const k of Object.keys(m)) delete m[k];
+  m.rec = { rk, run: st.run, e: {}, d: {}, cur: {}, end: {} };
+  const ends = now + RECOVER_MS;
+  api.put(KEY, { ...st, phase: 'recover', was, rk, left, dur, pass: 0, starts: now, ends });
+  api.setDeadline(ends);
+  const done = Array.isArray(st.done) ? st.done : [];
+  if (lengthOf(st, was) === 0 && (was === 'draw' || !done.length)) return finishRecover(api);
+  return undefined;
+}
+
+function recoverIntent(api, st, slot, a) {
+  if (st.phase !== 'recover' || a.r !== st.rk || a.run !== st.run) return;
+  const rec = api.memory.rec;
+  if (!rec || rec.rk !== st.rk) return;
+  const n = st.seats.length;
+  const seat = st.seats.indexOf(slot);
+  if (seat < 0) return;
+  if (a.type === 'rcend') {
+    rec.end[slot] = 1;
+    maybeFinishRecover(api, st);
+    return;
+  }
+  const { c, i } = a;
+  if (!Number.isInteger(c) || !Number.isInteger(i) || c < 0 || c >= n || i < 0 || i >= st.steps) return;
+  if (seatFor(c, i, n) !== seat || i < sinceOf(st, seat)) return;
+  const upto = lengthOf(st);
+  const kind = kindOf(i);
+  const key = `${c}.${i}`;
+  const current = i === upto && st.was !== 'reveal' && st.was !== 'draw' && Array.isArray(st.done) && st.done.includes(seat);
+  if (i >= upto && !current) return;
+  if (kind !== 'draw') {
+    if (typeof a.t !== 'string' || a.t.length > TEXT_MAX * 4) return;
+    const t = fitText(a.t);
+    if (!t || t !== a.t) return;
+    if (current) {
+      if (rec.cur[seat] === undefined) rec.cur[seat] = t;
+      return;
+    }
+    if (rec.e[key]) return;
+    rec.e[key] = { k: kind === 'write' ? 'w' : 't', by: slot, t };
+    return;
+  }
+  const { j, s } = a;
+  const parts = a.n;
+  if (!Number.isInteger(parts) || parts < 1 || parts > RC_PARTS || !Number.isInteger(j) || j < 0 || j >= parts) return;
+  if (!Array.isArray(s) || !s.length || s.length > 400) return;
+  if (!s.every((x) => typeof x === 'string' && x.length <= 4096)) return;
+  const bytes = jsonBytes(s);
+  if (bytes > RC_CHUNK_BYTES) return;
+  if (!s.every((x) => decodeStroke(x) !== null)) return;
+  let d = rec.d[key];
+  if (!d) d = rec.d[key] = { by: slot, n: parts, got: Array.from({ length: parts }, () => null), bytes: 0 };
+  if (d.by !== slot || d.n !== parts || d.got[j] || d.bytes + bytes > budgetOf(st)) return;
+  d.got[j] = s.slice();
+  d.bytes += bytes;
+}
+
+function maybeFinishRecover(api, st) {
+  const rec = api.memory.rec;
+  if (!rec || rec.rk !== st.rk) return;
+  const live = liveSeats(api, st).map((p) => st.seats[p]);
+  if (live.every((slot) => rec.end[slot])) finishRecover(api);
+}
+
+function sharedEntries(api) {
+  const out = {};
+  for (const k of api.keys()) if (k.startsWith(ENTRY_PREFIX)) out[k] = api.get(k);
+  return out;
+}
+
+function placeholder(st, mem, chain, c, i, author, here) {
+  const kind = kindOf(i);
+  const e = kind === 'draw' ? { k: 'd', by: author, s: [] } : { k: kind === 'write' ? 'w' : 't', by: author, t: '' };
+  if (kind === 'write') {
+    const p = seatFor(c, i, st.seats.length);
+    const sug = starterById((mem.sugs[p] || [])[0]);
+    e.t = sug ? sug.text : STARTERS[c % STARTERS.length].text;
+  } else if (kind === 'text') {
+    e.t = lastText(chain) || STARTERS[c % STARTERS.length].text;
+  }
+  e.miss = 1;
+  if (!Number.isInteger(author) || !here.has(author)) e.gone = 1;
+  return e;
+}
+
+function rebuild(api, st, rec, mem) {
+  const n = st.seats.length;
+  const was = st.was;
+  const upto = lengthOf(st);
+  const here = presentSet(api);
+  const hid = hiddenSet(st);
+  const inp = was === 'draw' ? api.get(IN_KEY) : null;
+  const prompts = inp && inp.k === st.k && Array.isArray(inp.t) ? inp.t : null;
+  const shown = was === 'reveal' ? sharedEntries(api) : null;
+  const get = (key) => api.get(key);
+  const chains = [];
+  let real = 0;
+  for (let c = 0; c < n; c += 1) {
+    const chain = [];
+    for (let i = 0; i < upto; i += 1) {
+      const p = seatFor(c, i, n);
+      const kind = kindOf(i);
+      const author = i >= sinceOf(st, p) ? st.seats[p] : null;
+      const key = `${c}.${i}`;
+      let e = null;
+      if (shown && c === st.rv.c && i <= st.rv.at) {
+        const x = shown[entryKey(i)];
+        if (x && x.c === c && x.i === i && (x.k === 'd' || typeof x.t === 'string')) {
+          e = x.k === 'd' ? { k: 'd', by: x.by, s: entryInk(shown, i) } : { k: x.k, by: x.by, t: x.t };
+          if (x.miss) e.miss = 1;
+          if (x.hid) e.hid = 1;
+          if (x.gone) e.gone = 1;
+        }
+      }
+      if (!e && was === 'text' && i === st.step - 1 && st.dk && Array.isArray(st.dby) && Number.isInteger(st.dby[p])) {
+        const s = seatInk(get, p, st.dk).s;
+        e = s.length ? { k: 'd', by: st.dby[p], s } : { k: 'd', by: st.dby[p], s: [], miss: 1 };
+      }
+      if (!e && kind !== 'draw' && rec.e[key]) e = { ...rec.e[key] };
+      if (!e && prompts && i === st.step - 1) {
+        const t = uncover(prompts[seatFor(c, st.step, n)], st.k);
+        if (t) e = { k: kind === 'write' ? 'w' : 't', by: author, t };
+      }
+      if (!e && kind === 'draw' && rec.d[key] && rec.d[key].got.every(Boolean)) e = { k: 'd', by: rec.d[key].by, s: rec.d[key].got.flat() };
+      if (e && !e.gone && !e.miss) real += 1;
+      if (!e) e = placeholder(st, mem, chain, c, i, author, here);
+      if (e.k === 'd' && !e.hid && hid.has(drawingId(st.run, c, i))) e = { k: 'd', by: e.by, s: [], hid: 1 };
+      chain.push(e);
+    }
+    chains.push(chain);
+  }
+  return { chains, real, upto };
+}
+
+function finishRecover(api) {
+  const st = api.get(KEY);
+  if (!st || st.phase !== 'recover' || !recoverable(st)) return undefined;
+  const held = api.memory.rec;
+  const rec = held && held.rk === st.rk ? held : { e: {}, d: {}, cur: {}, end: {} };
+  const n = st.seats.length;
+  const mem = freshMemory(api, st.run, n);
+  if (st.was === 'write' && Array.isArray(st.sug)) mem.sugs = st.sug.map((codes) => (Array.isArray(codes) ? codes.map((code) => unmask(code, st.k)) : []));
+  const { chains, real, upto } = rebuild(api, st, rec, mem);
+  if (upto > 0 && real === 0) {
+    for (const k of Object.keys(mem)) delete mem[k];
+    return lose(api, 'host');
+  }
+  mem.chains = chains;
+  for (const e of chains.flat()) if (e.k === 'd' && Number.isInteger(e.by) && Array.isArray(e.s) && e.s.length) mem.ink[e.by] = (mem.ink[e.by] || 0) + inkChars(e.s);
+  const base = { ...st, phase: st.was, pass: 0 };
+  for (const k of ['was', 'rk', 'left', 'dur']) delete base[k];
+  const now = api.now();
+  if (st.was === 'reveal') {
+    mem.order = chains.map((c, i) => (c.length ? i : -1)).filter((i) => i >= 0);
+    const chain = chains[st.rv.c];
+    if (!chain || !chain.length || mem.order[st.rv.pos] !== st.rv.c) return lose(api, 'host');
+    const at = Math.min(st.rv.at, chain.length - 1);
+    const ends = now + showFor(chain, at);
+    api.put(KEY, { ...base, rv: { ...st.rv, at }, starts: now, ends });
+    api.setDeadline(ends);
+    return undefined;
+  }
+  if (st.was !== 'draw') for (const [seat, t] of Object.entries(rec.cur)) mem.texts[Number(seat)] = t;
+  const done = (Array.isArray(st.done) ? st.done : []).filter((p) => st.was === 'draw' || mem.texts[p] !== undefined);
+  const remaining = Math.max(RESUME_MIN_MS, st.left || 0);
+  const ends = now + remaining;
+  const next = { ...base, done, starts: ends - Math.max(st.dur || 0, remaining), ends };
+  fillSeats(api, next);
+  api.put(KEY, next);
+  api.setDeadline(ends + GRACE_MS);
+  if (liveSeats(api, next).length < 2) {
+    if (next.step >= 2) return startReveal(api, next);
+    return lose(api, 'few');
+  }
+  settle(api, next);
+  return undefined;
+}
+
 function seenDrawing(snap, st) {
   const hid = hiddenSet(st);
   if (st.phase === 'text' && st.step > 0) {
@@ -588,7 +803,7 @@ function react(api, st, slot, action) {
   const { c, i, e } = action;
   if (c !== st.rv.c || !Number.isInteger(i) || i < 0 || i > st.rv.at || !Number.isInteger(e) || e < 0 || e >= REACTS.length) return;
   const entry = api.memory.chains[c][i];
-  if (!entry || entry.by === slot) return;
+  if (!entry || entry.gone || !Number.isInteger(entry.by) || entry.by === slot) return;
   const mark = `${c}.${i}.${slot}.${e}`;
   if (api.memory.seen[mark]) return;
   api.memory.seen[mark] = 1;
@@ -634,6 +849,138 @@ export function telephoneAwards(st) {
   return list
     .filter((a) => a && Number.isInteger(a.slot) && typeof a.title === 'string')
     .map((a) => ({ emoji: a.e || '🏅', title: a.title, who: a.slot, why: typeof a.why === 'string' ? a.why : '' }));
+}
+
+export function rcChunks(parts) {
+  const out = [];
+  let cur = [];
+  for (const s of Array.isArray(parts) ? parts : []) {
+    if (typeof s !== 'string') continue;
+    if (cur.length && jsonBytes(cur.concat([s])) > RC_CHUNK_BYTES) {
+      out.push(cur);
+      cur = [];
+    }
+    cur.push(s);
+  }
+  if (cur.length) out.push(cur);
+  return out.filter((c) => jsonBytes(c) <= RC_CHUNK_BYTES).slice(0, RC_PARTS);
+}
+
+function inkSigOf(state, seat, k) {
+  let sig = `${k}`;
+  for (let i = 0; i < SEAT_CHUNKS; i += 1) {
+    const v = state ? state[inkKey(seat, i)] : null;
+    if (!v || !Array.isArray(v.s)) break;
+    sig += `|${v.k}.${v.g}.${v.s.length}.${v.s.reduce((a, s) => a + (typeof s === 'string' ? s.length : 0), 0)}`;
+  }
+  return sig;
+}
+
+export function createKeeper() {
+  let run = null;
+  let handled = null;
+  const texts = new Map();
+  const inks = new Map();
+  const sigs = new Map();
+  const cap = MAX_STEPS + 2;
+
+  function reset(r) {
+    run = r;
+    handled = null;
+    texts.clear();
+    inks.clear();
+    sigs.clear();
+  }
+
+  function where(snap) {
+    const st = snap && snap.state ? snap.state[KEY] : null;
+    if (!st || !Array.isArray(st.seats) || !st.seats.length) return null;
+    if (st.run !== run) reset(st.run);
+    const me = snap.meSlot;
+    const seat = me === null || me === undefined ? -1 : st.seats.indexOf(me);
+    return { st, me, seat, n: st.seats.length };
+  }
+
+  function keepText(c, i, t) {
+    const key = `${c}.${i}`;
+    if (!t || (!texts.has(key) && texts.size >= cap)) return;
+    texts.set(key, { c, i, t });
+  }
+
+  function keepInk(state, seat, c, i, k) {
+    const key = `${c}.${i}`;
+    const sig = inkSigOf(state, seat, k);
+    if (sigs.get(key) === sig) return;
+    sigs.set(key, sig);
+    const s = seatInk(state, seat, k).s;
+    if (!s.length || (!inks.has(key) && inks.size >= cap)) return;
+    inks.set(key, { c, i, s });
+  }
+
+  function note(snap, action) {
+    const at = where(snap);
+    if (!at || at.seat < 0 || !action) return;
+    const { st, seat, n } = at;
+    if ((st.phase !== 'write' && st.phase !== 'text') || action.step !== st.step) return;
+    let t = null;
+    if (action.type === 'text') t = fitText(action.text);
+    else if (action.type === 'pick' && st.phase === 'write' && Array.isArray(st.sug) && Array.isArray(st.sug[seat]) && Number.isInteger(action.i)) {
+      const s = starterById(unmask(st.sug[seat][action.i], st.k));
+      t = s ? s.text : null;
+    }
+    if (t) keepText(chainAt(seat, st.step, n), st.step, t);
+  }
+
+  function observe(snap) {
+    const at = where(snap);
+    if (!at || at.seat < 0) return;
+    const { st, me, seat, n } = at;
+    const state = snap.state;
+    if (st.phase === 'draw' && Number.isInteger(st.step) && st.step > 0) {
+      const prev = st.step - 1;
+      const c = chainAt(seat, prev, n);
+      const inp = state[IN_KEY];
+      if (!texts.has(`${c}.${prev}`) && prev >= sinceOf(st, seat) && inp && inp.k === st.k && Array.isArray(inp.t)) keepText(c, prev, uncover(inp.t[seatFor(c, st.step, n)], st.k));
+      keepInk(state, seat, chainAt(seat, st.step, n), st.step, st.k);
+    }
+    if (st.phase === 'text' && Number.isInteger(st.step) && st.step > 0 && st.dk && Array.isArray(st.dby) && st.dby[seat] === me) {
+      keepInk(state, seat, chainAt(seat, st.step - 1, n), st.step - 1, st.dk);
+    }
+  }
+
+  function resend(snap, engine) {
+    const at = where(snap);
+    if (!at || at.st.phase !== 'recover' || !at.st.rk) return 0;
+    const { st, seat } = at;
+    const mark = `${st.run}.${st.rk}`;
+    if (handled === mark) return 0;
+    handled = mark;
+    if (seat < 0 || !engine || typeof engine.act !== 'function') return 0;
+    const base = { run: st.run, r: st.rk };
+    const list = [];
+    for (const x of texts.values()) list.push({ type: 'rc', ...base, c: x.c, i: x.i, t: x.t });
+    for (const x of inks.values()) {
+      const pieces = rcChunks(x.s);
+      pieces.forEach((s, j) => list.push({ type: 'rc', ...base, c: x.c, i: x.i, j, n: pieces.length, s }));
+    }
+    let sent = 0;
+    for (const a of list) if (engine.act(a) !== false) sent += 1;
+    engine.act({ type: 'rcend', ...base });
+    return sent;
+  }
+
+  return {
+    note,
+    observe,
+    resend,
+    act(engine, snap, action) {
+      note(snap, action);
+      return engine.act(action);
+    },
+    get size() {
+      return texts.size + inks.size;
+    },
+  };
 }
 
 const telephone = {
@@ -685,6 +1032,7 @@ const telephone = {
     const st = api.get(KEY);
     if (!st || !action || typeof action.type !== 'string') return;
     if (action.type === 'react') return react(api, st, slot, action);
+    if (action.type === 'rc' || action.type === 'rcend') return recoverIntent(api, st, slot, action);
     if (action.type === 'next') {
       if (st.phase !== 'reveal' || !st.rv || action.c !== st.rv.c || action.at !== st.rv.at) return;
       const here = presentSet(api);
@@ -722,12 +1070,13 @@ const telephone = {
   deadline(api) {
     const st = api.get(KEY);
     if (!st) return api.finish([]);
+    if (st.phase === 'recover') return finishRecover(api);
     if (STEP_PHASES.includes(st.phase)) {
-      if (!owned(api, st)) return lose(api, 'host');
+      if (!owned(api, st)) return beginRecover(api);
       return closeStep(api);
     }
     if (st.phase === 'reveal') {
-      if (!owned(api, st)) return lose(api, 'host');
+      if (!owned(api, st)) return beginRecover(api);
       return advance(api);
     }
     if (st.phase === 'lost') return api.finish([]);
@@ -772,6 +1121,7 @@ const telephone = {
       return true;
     }
     if (action.type === 'time') {
+      if (st.phase === 'recover') return false;
       const ends = api.shift(st.ends, action.ms);
       api.put(KEY, { ...st, ends, pass: 0 });
       api.setDeadline(STEP_PHASES.includes(st.phase) ? ends + GRACE_MS : ends);
@@ -787,7 +1137,7 @@ const telephone = {
       if (api.deadline === null) api.setDeadline(Math.max(api.now(), st.ends || api.now()));
       return undefined;
     }
-    if (!owned(api, st)) return lose(api, 'host');
+    if (st.phase === 'recover' || !owned(api, st)) return beginRecover(api);
     return undefined;
   },
 
@@ -801,8 +1151,9 @@ const telephone = {
 
   roster(api) {
     const st = api.get(KEY);
+    if (st && st.phase === 'recover') return maybeFinishRecover(api, st);
     if (!st || !STEP_PHASES.includes(st.phase)) return;
-    if (!owned(api, st)) return lose(api, 'host');
+    if (!owned(api, st)) return beginRecover(api);
     const moved = fillSeats(api, st);
     if (liveSeats(api, st).length < 2) {
       if (st.step >= 2) return startReveal(api, st);
@@ -834,6 +1185,7 @@ const telephone = {
       playing: seat >= 0,
       waiting: seat < 0 && mine !== null && mine !== undefined && (st.wait || []).includes(mine),
       note: st.note || null,
+      was: st.phase === 'recover' && typeof st.was === 'string' ? st.was : null,
       pass: Boolean(st.pass),
       mineDone: seat >= 0 && done.includes(seat),
       doneCount: done.filter((p) => here.has(st.seats[p])).length,
@@ -882,9 +1234,10 @@ const telephone = {
           i,
           k: e.k,
           by,
-          t: e.k === 'd' ? null : typeof e.t === 'string' ? e.t : '',
+          t: e.k === 'd' ? null : e.gone ? GONE_TEXT : typeof e.t === 'string' ? e.t : '',
           strokes: e.k === 'd' && Array.isArray(e.s) ? e.s.length : 0,
-          miss: Boolean(e.miss),
+          miss: Boolean(e.miss) && !e.gone,
+          gone: Boolean(e.gone),
           hidden: Boolean(e.hid),
           rx: (st.rx && st.rx[i]) || REACTS.map(() => 0),
           mine: by.isMe,

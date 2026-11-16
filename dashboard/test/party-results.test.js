@@ -138,8 +138,11 @@ test('extra counters only count for their own game and only for listed players',
   const h = party();
   const odd = result(h, { game: 'odd', extra: { fakerCaught: [uid(1), uid(1).toUpperCase(), uid(9), 42], pangram: [uid(2)] } });
   assert.equal((await send(h, odd)).status, 201);
-  assert.deepEqual(JSON.parse(statRow(h, uid(1)).counters), { fakerCaught: 1 });
-  assert.deepEqual(JSON.parse(statRow(h, uid(2)).counters), {});
+  const one = JSON.parse(statRow(h, uid(1)).counters);
+  const two = JSON.parse(statRow(h, uid(2)).counters);
+  assert.equal(one.fakerCaught, 1);
+  assert.equal(two.fakerCaught, undefined);
+  assert.equal(two.pangram, undefined);
 });
 
 test('the bot poll carries Party XP and open reports, and ack marks them claimed', async () => {
@@ -186,7 +189,7 @@ test('the bot can read Party stats with favourite game and badges', async () => 
   assert.equal(a.wins, 10);
   assert.equal(a.fav, 'odd');
   assert.deepEqual(a.byGame, { odd: { p: 6, w: 6 }, draw: { p: 4, w: 4 } });
-  assert.deepEqual(a.badges, ['first-game', 'games-10', 'wins-10', 'daily-7']);
+  assert.deepEqual(a.badges, ['first-game', 'games-10', 'wins-10', 'daily-7', 'streak-3', 'streak-5']);
   assert.deepEqual(body.stats[uid(2)].badges, ['first-game', 'games-10']);
   assert.equal(body.badges.length, PARTY_BADGES.length);
   assert.equal((await h.bot('GET', '/bot/party/stats?ids=')).status, 400);
@@ -202,10 +205,10 @@ test('badge rules and the favourite game are worked out from the counters', () =
   }
   assert.deepEqual(badgesFor({ games: 0, wins: 0, counters: {} }), []);
   assert.deepEqual(
-    badgesFor({ games: 100, wins: 50, counters: { fakerCaught: 10, pangram: 5, topTake: 3, fastest: 5 }, dailyBest: 7 }),
+    badgesFor({ games: 100, wins: 50, counters: { fakerCaught: 10, pangram: 5, topTake: 3, fastest: 5, bestWinStreak: 5, steals: 10, perfect: 1, comeback: 1, lightning: 25 }, dailyBest: 7 }),
     BADGE_IDS.slice(),
   );
-  assert.deepEqual(badgesFor({ games: 9, wins: 9, counters: { fakerCaught: 9, pangram: 4, topTake: 2, fastest: 4 }, dailyBest: 6 }), ['first-game']);
+  assert.deepEqual(badgesFor({ games: 9, wins: 9, counters: { fakerCaught: 9, pangram: 4, topTake: 2, fastest: 4, bestWinStreak: 2, steals: 9, perfect: 0, comeback: 0, lightning: 24 }, dailyBest: 6 }), ['first-game']);
   assert.equal(favouriteGame({}), null);
   assert.equal(favouriteGame({ hive: { p: 3, w: 0 }, draw: { p: 3, w: 1 } }), 'draw');
   assert.equal(favouriteGame({ hive: { p: 3, w: 1 }, draw: { p: 3, w: 1 } }), 'draw');

@@ -1,0 +1,182 @@
+:root {
+  --game-memory: #e879f9;
+}
+
+[data-game="memory"],
+.game.game-memory,
+[data-key="pick-memory"] {
+  --game: var(--game-memory);
+}
+
+.game-memory {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.memory-headwrap:empty,
+.memory-people-wrap:empty {
+  display: none;
+}
+
+.memory-hearts {
+  display: inline-flex;
+  gap: 2px;
+  font-size: var(--text-sm);
+}
+
+.memory-heart.is-lost {
+  opacity: 0.4;
+}
+
+.memory-board {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  width: min(100%, 360px);
+  margin: 0 auto;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: radial-gradient(60% 80% at 50% 0%, var(--game-soft), transparent 70%), var(--surface);
+  box-shadow: var(--fx-depth-2), var(--inset-hi);
+}
+
+.memory-board.is-turn {
+  border-color: var(--game-line);
+}
+
+.memory-board.is-gone {
+  opacity: 0.5;
+}
+
+.memory-pad {
+  --pad: #ef4444;
+  aspect-ratio: 1;
+  border: 2px solid color-mix(in srgb, var(--pad) 60%, transparent);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--pad) 28%, var(--surface-2));
+  opacity: 0.7;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+.memory-pad-1 {
+  --pad: #3b82f6;
+}
+
+.memory-pad-2 {
+  --pad: #eab308;
+}
+
+.memory-pad-3 {
+  --pad: #22c55e;
+}
+
+.memory-pad:disabled {
+  cursor: default;
+}
+
+.memory-board.is-turn .memory-pad {
+  opacity: 0.9;
+}
+
+.memory-pad.is-lit {
+  background: var(--pad);
+  opacity: 1;
+  transform: scale(1.04);
+}
+
+.memory-dots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.memory-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--bar-zero);
+}
+
+.memory-dot.is-on {
+  background: var(--game);
+}
+
+.memory-dots.is-sent .memory-dot {
+  opacity: 0.5;
+}
+
+.memory-people {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-person {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.memory-person.is-me {
+  border-color: var(--game-line);
+}
+
+.memory-person.is-out {
+  opacity: 0.5;
+}
+
+.memory-person.is-hurt {
+  border-color: var(--danger-line);
+}
+
+.memory-name {
+  max-width: 120px;
+  overflow: hidden;
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-lives {
+  font-size: var(--text-xs);
+}
+
+.memory-gain {
+  color: var(--success);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+}
+
+.game-memory .game-foot {
+  justify-content: center;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-pad {
+    transition: none;
+  }
+
+  .memory-pad.is-lit {
+    transform: none;
+  }
+}
+
+[data-fx="static"] .memory-pad.is-lit {
+  transform: none;
+}

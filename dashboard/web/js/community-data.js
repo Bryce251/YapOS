@@ -21,6 +21,11 @@ export const PARTY_GAMES = Object.freeze({
   story: { name: 'Story Builder', emoji: '📖' },
   hangman: { name: 'Hangman Royale', emoji: '🪢' },
   musicquiz: { name: 'Music Quiz', emoji: '🎵' },
+  closest: { name: 'Closest Guess', emoji: '🎯' },
+  namefive: { name: 'Name 5', emoji: '🖐️' },
+  beatdrop: { name: 'Beat Drop', emoji: '🥁' },
+  typerace: { name: 'Typing Race', emoji: '⌨️' },
+  memory: { name: 'Memory Chain', emoji: '💡' },
 });
 
 export const BADGES = Object.freeze({
@@ -35,6 +40,12 @@ export const BADGES = Object.freeze({
   'hottest-take-3': { label: 'Hottest take', emoji: '🌶️' },
   'reflex-5': { label: 'Lightning reflexes', emoji: '⚡' },
   'daily-7': { label: 'Daily devotee', emoji: '📅' },
+  'streak-3': { label: 'Hot streak', emoji: '🔥' },
+  'streak-5': { label: 'Unstoppable', emoji: '☄️' },
+  'steals-10': { label: 'Master thief', emoji: '😈' },
+  'perfect-trivia': { label: 'Perfect Trivia', emoji: '💯' },
+  comeback: { label: 'Comeback kid', emoji: '🔄' },
+  'lightning-25': { label: 'Speed demon', emoji: '🌩️' },
   'yapos-team': { label: 'YapOS team', emoji: '🛠️' },
   supporter: { label: 'Supporter', emoji: '💖' },
   'early-bird': { label: 'Early bird', emoji: '🐣' },
@@ -101,7 +112,8 @@ function catalogFrom(list, base) {
   return out;
 }
 
-const SEASON_BADGE_RE = /^season-(xp|shards)-(\d{1,2})-(\d{4}-\d{2})$/;
+const SEASON_BADGE_RE = /^season-(xp|shards|party)-(\d{1,2})-(\d{4}-\d{2})$/;
+const SEASON_BADGE_KINDS = Object.freeze({ xp: 'XP', shards: 'Shards', party: 'Party' });
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 export function seasonBadge(id) {
@@ -111,7 +123,7 @@ export function seasonBadge(id) {
   const [y, mo] = m[3].split('-').map(Number);
   if (!rank || mo < 1 || mo > 12) return null;
   const medal = ['🥇', '🥈', '🥉'][rank - 1] || '🎖️';
-  return { label: `#${rank} ${m[1] === 'xp' ? 'XP' : 'Shards'} · ${MONTHS[mo - 1]} ${y}`, emoji: medal };
+  return { label: `#${rank} ${SEASON_BADGE_KINDS[m[1]]} · ${MONTHS[mo - 1]} ${y}`, emoji: medal };
 }
 
 function catalogItem(entry, catalog, fallbackEmoji) {

@@ -38,7 +38,7 @@ export const PARTY_GAMES = Object.freeze({
   telephone: '☎️ Draw Telephone', scramble: '🔀 Scramble Race', hive: '🐝 Letter Hive', emoji: '🧩 Emoji Decode',
   hottakes: '🌶️ Hot Takes', truths: '🤥 Two Truths and a Lie', reflex: '⚡ Reflex', bluff: '🃏 Bluff', pixel: '🟪 Pixel Art',
   pixelart: '🟪 Pixel Art', higherlower: '📈 Higher or Lower', sketchduel: '⚔️ Sketch Duel', story: '📖 Story Builder',
-  hangman: '🪢 Hangman Royale', musicquiz: '🎵 Music Quiz',
+  hangman: '🪢 Hangman Royale', musicquiz: '🎵 Music Quiz', typerace: '⌨️ Typing Race', memory: '💡 Memory Chain',
 });
 export const PARTY_BADGES = Object.freeze({
   'first-game': '🎈 First game', 'games-10': '🎲 Party regular', 'games-50': '🥳 Party animal', 'games-100': '🏟️ Party legend',

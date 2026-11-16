@@ -1,0 +1,242 @@
+:root {
+  --game-closest: #fb7185;
+}
+
+[data-game="closest"],
+.game.game-closest,
+[data-key="pick-closest"] {
+  --game: var(--game-closest);
+}
+
+.game-closest {
+  --game-soft: color-mix(in srgb, var(--game) 14%, transparent);
+  --game-line: color-mix(in srgb, var(--game) 55%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.closest-question {
+  margin: var(--space-2) auto;
+  max-width: 26ch;
+  font-size: var(--text-xl);
+  text-align: center;
+  text-wrap: balance;
+}
+
+.closest-entry.is-hidden {
+  display: none;
+}
+
+.closest-entry .entry-row {
+  align-items: center;
+}
+
+.closest-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.closest-unit {
+  flex: 0 0 auto;
+  max-width: 9ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
+.closest-entry.is-locked .closest-input {
+  border-color: var(--game-line);
+  background: var(--game-soft);
+}
+
+.closest-answer.card.glass {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border-color: var(--game-line);
+  border-radius: var(--radius-xl);
+  background: radial-gradient(80% 100% at 50% 0%, var(--game-soft), transparent 70%), var(--surface-2);
+  text-align: center;
+  animation: closest-in 360ms var(--pop) both;
+}
+
+.closest-answer-kicker {
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.closest-answer-num {
+  font-size: var(--text-hero);
+  line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
+}
+
+.closest-fact {
+  max-width: 44ch;
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  text-wrap: balance;
+}
+
+.closest-line {
+  position: relative;
+  height: 44px;
+  margin: 0 var(--space-4);
+}
+
+.closest-track {
+  position: absolute;
+  inset: 20px 0 auto;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(90deg, var(--surface-3), var(--game-line), var(--surface-3));
+}
+
+.closest-pin,
+.closest-mark {
+  position: absolute;
+  left: var(--x, 50%);
+  transform: translateX(-50%);
+}
+
+.closest-pin {
+  top: 8px;
+  width: 4px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  background: var(--success);
+}
+
+.closest-pin-label {
+  display: none;
+}
+
+.closest-mark {
+  top: 15px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: closest-drop 420ms var(--pop) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+.closest-mark.is-me {
+  background: var(--accent);
+}
+
+.closest-mark.is-top {
+  background: var(--game);
+}
+
+.closest-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.closest-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  animation: closest-in 300ms var(--pop) both;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+
+.closest-row.is-top {
+  border-color: var(--game-line);
+  background: var(--game-soft);
+}
+
+.closest-row.is-me {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.closest-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.closest-row-guess {
+  font-weight: var(--weight-bold);
+}
+
+.closest-row-off {
+  min-width: 5ch;
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+.closest-row-pts {
+  min-width: 5ch;
+  color: var(--game);
+  font-weight: var(--weight-bold);
+  text-align: right;
+}
+
+.closest-entry .btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@keyframes closest-in {
+  0% {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes closest-drop {
+  0% {
+    transform: translate(-50%, -14px) scale(0.6);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(-50%, 0) scale(1);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 420px) {
+  .closest-row-off {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .closest-answer.card.glass,
+  .closest-row,
+  .closest-mark {
+    animation: none;
+  }
+}
+
+[data-fx="static"] .closest-answer.card.glass,
+[data-fx="static"] .closest-row,
+[data-fx="static"] .closest-mark {
+  animation: none;
+}

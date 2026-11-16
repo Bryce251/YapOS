@@ -17,8 +17,13 @@ import sketchduel from './sketchduel.js';
 import story from './story.js';
 import hangman from './hangman.js';
 import musicquiz from './musicquiz.js';
+import closest from './closest.js';
+import name5 from './name5.js';
+import beatdrop from './beatdrop.js';
+import typerace from './typerace.js';
+import memory from './memory.js';
 
-export const GAMES = Object.freeze([trivia, draw, chain, wyr, odd, telephone, scramble, hive, emoji, hottakes, truths, reflex, bluff, pixel, higherlower, sketchduel, story, hangman, musicquiz]);
+export const GAMES = Object.freeze([trivia, draw, chain, wyr, odd, telephone, scramble, hive, emoji, hottakes, truths, reflex, bluff, pixel, higherlower, sketchduel, story, hangman, musicquiz, typerace, memory, beatdrop, closest, name5]);
 
 export const CATEGORIES = Object.freeze([
   Object.freeze({ id: 'drawing', name: 'Drawing', emoji: '🎨' }),

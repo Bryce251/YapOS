@@ -18,6 +18,7 @@ export const WAGER_FLOOR = 300;
 export const WAGER_STEPS = Object.freeze([0, 25, 50, 100]);
 export const STEAL_POINTS = 150;
 export const FAST_MS = 2500;
+export const PERFECT_MIN = 8;
 export const BOLT_COUNT = 5;
 export const BOLT_MS = 30000;
 export const BOLT_POINTS = 150;
@@ -205,8 +206,8 @@ function swapIn(api, deck) {
 
 function fxOf(api) {
   const fx = api.get(FX_KEY);
-  if (!fx || typeof fx !== 'object') return { s: {}, b: {}, w: {}, hl: [] };
-  return { s: { ...(fx.s || {}) }, b: { ...(fx.b || {}) }, w: { ...(fx.w || {}) }, hl: Array.isArray(fx.hl) ? fx.hl.slice() : [] };
+  if (!fx || typeof fx !== 'object') return { s: {}, b: {}, w: {}, r: {}, hl: [] };
+  return { s: { ...(fx.s || {}) }, b: { ...(fx.b || {}) }, w: { ...(fx.w || {}) }, r: { ...(fx.r || {}) }, hl: Array.isArray(fx.hl) ? fx.hl.slice() : [] };
 }
 
 function noteFx(api, fn) {
@@ -511,9 +512,11 @@ function reveal(api, skipped) {
       const amt = st.wg[slot];
       hl.push({ x: n > 0 ? `💰 ${api.nameOf(s)} bet ${amt.toLocaleString('en-US')} and won it!` : `💸 ${api.nameOf(s)} bet ${amt.toLocaleString('en-US')} and it did not go to plan`, s, w: 2 + Math.min(4, amt / 500) });
     }
-    if (hl.length || sl) {
+    const tally = right.length > 0 && st.total >= PERFECT_MIN;
+    if (hl.length || sl || tally) {
       noteFx(api, (fx) => {
         if (sl) fx.s[sl.by] = (fx.s[sl.by] || 0) + 1;
+        if (tally) for (const s of right) fx.r[s] = (fx.r[s] || 0) + 1;
         for (const [slot, n] of Object.entries(net)) fx.w[slot] = (fx.w[slot] || 0) + n;
         for (const x of hl) addHl(fx, x.x, x.s, x.w);
       });
@@ -690,6 +693,18 @@ function boltModel(st, mine, bySlot, local) {
   };
 }
 
+export function skillsOf(fx, total) {
+  const out = {};
+  const add = (slot, key, n) => {
+    if (!(n > 0)) return;
+    out[slot] = { ...(out[slot] || {}), [key]: Math.floor(n) };
+  };
+  for (const [slot, n] of Object.entries(fx.s || {})) add(slot, 's', Number(n));
+  for (const [slot, n] of Object.entries(fx.b || {})) add(slot, 'l', Number(n));
+  if (total >= PERFECT_MIN) for (const [slot, n] of Object.entries(fx.r || {})) if (Number(n) >= total) add(slot, 'p', 1);
+  return out;
+}
+
 const trivia = {
   id: 'trivia',
   name: 'Trivia',
@@ -723,7 +738,13 @@ const trivia = {
 
   results(api) {
     const st = api.get(KEY);
-    return st && st.tm ? { teams: teamNames(st.tm), tm: { ...st.tm } } : {};
+    const out = st && st.tm ? { teams: teamNames(st.tm), tm: { ...st.tm } } : {};
+    const skills = skillsOf(fxOf(api), st && Number.isInteger(st.total) ? st.total : 0);
+    if (Object.keys(skills).length) {
+      out.skills = skills;
+      out.questions = st && Number.isInteger(st.total) ? st.total : 0;
+    }
+    return out;
   },
 
   hint(api, slot) {

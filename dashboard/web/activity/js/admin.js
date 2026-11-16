@@ -366,7 +366,7 @@ export async function sendTextReport(input) {
 }
 
 export const RESULTS_ENDPOINT = '/api/activity/results';
-export const RESULT_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'sketchduel', 'story', 'hangman', 'musicquiz']);
+export const RESULT_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'sketchduel', 'story', 'hangman', 'musicquiz', 'typerace', 'memory', 'beatdrop', 'closest', 'namefive']);
 export const RESULT_PLAYERS_MAX = 16;
 export const RESULT_SCORE_MAX = 1000000;
 export const RESULT_EXTRA_KEYS = 8;
@@ -492,6 +492,25 @@ function cleanPredictions(list, players) {
   return out;
 }
 
+const SKILL_QUESTIONS_OUT = 50;
+const SKILL_OUT_CAPS = Object.freeze({ s: 20, l: 10, p: 1, c: 1 });
+
+function cleanSkillsOut(raw, seen) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const [rawId, v] of Object.entries(raw)) {
+    const id = idOf(rawId);
+    if (!validId(id) || !seen.has(id) || !v || typeof v !== 'object' || Array.isArray(v)) continue;
+    const skill = {};
+    for (const [key, cap] of Object.entries(SKILL_OUT_CAPS)) {
+      const n = Math.floor(Number(v[key]) || 0);
+      if (n > 0) skill[key] = Math.min(n, cap);
+    }
+    if (Object.keys(skill).length) out[id] = skill;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export function resultsBody(input) {
   const x = input && typeof input === 'object' ? input : {};
   if (!resultGame(x.game)) return null;
@@ -517,6 +536,12 @@ export function resultsBody(input) {
     if (!EXTRA_RE.test(k) || !Array.isArray(v)) continue;
     const ids = [...new Set(v.map(idOf).filter((id) => validId(id) && seen.has(id)))].slice(0, RESULT_PLAYERS_MAX);
     if (ids.length) extra[k] = ids;
+  }
+  const skills = cleanSkillsOut(src.skills, seen);
+  if (skills) {
+    extra.skills = skills;
+    const qn = Math.floor(Number(src.questions) || 0);
+    if (qn > 0) extra.questions = Math.min(qn, SKILL_QUESTIONS_OUT);
   }
   const out = { game: x.game, at: Number.isFinite(x.at) ? Math.round(x.at) : env.now(), players, extra };
   const predictions = cleanPredictions(x.predictions, seen);

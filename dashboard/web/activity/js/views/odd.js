@@ -397,7 +397,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
           s.lines ? h('span', { class: 'odd-seat-lines', text: `✏️${s.lines}`, attrs: { 'aria-label': plural(s.lines, 'line', 'lines') } }) : null,
           s.voted ? h('span', { class: 'got-tick', text: '✓', attrs: { 'aria-label': 'Voted' } }) : null,
           s.isOdd ? h('span', { class: 'odd-seat-badge', text: '🕵️', attrs: { 'aria-label': 'The Odd One Out' } }) : null,
-          s.hidden ? h('span', { class: 'odd-seat-flag', text: FLAG_ICON, attrs: { 'aria-label': 'Lines hidden', title: 'Lines hidden' } }) : null,
+          s.hidden ? h('span', { class: 'odd-seat-flag', text: FLAG_ICON, attrs: { 'aria-label': 'Lines hidden after a report', title: 'Lines hidden after a report' } }) : null,
         ),
       ),
     ),

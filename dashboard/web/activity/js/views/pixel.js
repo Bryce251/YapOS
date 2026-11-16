@@ -7,8 +7,8 @@ import { pixelReport } from '../games/replaylog.js';
 const QUIET = { play() {}, burst() {}, float() {} };
 export const PAINT_MS = 250;
 export const OVERLAY_MS = 4000;
-export const FLAG_HELP = 'Flag this picture if it breaks the rules. If half the players flag it, the canvas gets wiped.';
-export const FLAG_SENT = 'Thanks for flagging. If half the players agree, the canvas gets wiped.';
+export const FLAG_HELP = 'Flag this picture if it breaks the rules. Two flags (one in a small group, or one from a Party mod) wipe the canvas.';
+export const FLAG_SENT = 'Thanks for flagging. If enough players agree, the canvas gets wiped.';
 export const FLAG_FAIL = "That didn't go through. Try again in a moment.";
 export const ERASER = EMPTY;
 
@@ -248,7 +248,7 @@ export function createPixelView({ engine, fx, cues, toast, win }) {
     return [
       h('span', { class: 'eyebrow', text: m.phase === 'paint' ? 'Paint together' : 'You all made' }),
       h('h2', { class: 'question pixel-theme fx-display is-lit', text: m.theme }),
-      m.note === 'wiped' ? h('p', { class: 'notice', text: 'Enough players flagged the picture, so the canvas was wiped. Start fresh!' }) : null,
+      m.note === 'wiped' ? h('p', { class: 'notice', text: 'The picture was hidden after a report, so the canvas was wiped. Start fresh!' }) : null,
     ];
   });
 
@@ -290,7 +290,7 @@ export function createPixelView({ engine, fx, cues, toast, win }) {
           variant: 'ghost',
           size: 'sm',
           key: 'pixel-flag',
-          disabled: f.mine,
+          disabled: f.mine || Boolean(f.capped),
           on: () => flag(f),
           attrs: { title: FLAG_HELP, 'aria-label': f.mine ? flagLabel(f) : `${flagLabel(f)}: report this picture`, 'aria-pressed': f.mine ? 'true' : 'false' },
           kids: h('span', { class: 'btn-icon flag-icon', text: FLAG_ICON, attrs: { 'aria-hidden': 'true' } }),

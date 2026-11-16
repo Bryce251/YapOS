@@ -5,7 +5,7 @@ import { board as scoreBoard, standings } from '../ui/board.js';
 import { person } from '../players.js';
 import { hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
-import { flagInfo } from '../engine.js';
+import { flagInfo, flagsLeft } from '../engine.js';
 import { sendReport } from '../admin.js';
 import { textFlag } from '../ui/report.js';
 import { replayLog } from '../games/replaylog.js';
@@ -35,7 +35,9 @@ export const FLAG_ICON = '🚩';
 export const FLAG_TITLE = 'Flag this drawing if it breaks the rules. When enough players flag it, it gets hidden.';
 export const FLAG_THANKS = 'Thanks for flagging. The drawing was also sent to the YapOS team.';
 export const FLAG_FAIL = "That didn't go through. Try again in a moment.";
-export const HIDDEN_TEXT = 'This drawing was hidden.';
+export const HIDDEN_TEXT = 'Hidden after a report.';
+export const FLAG_CAPPED = 'Flag limit reached';
+export const FLAG_CAPPED_TITLE = 'You can flag up to 2 drawings each game. Thanks for helping keep it fun.';
 
 export function flagModel(snap, item, local = null) {
   if (!snap || !item || !snap.meJoined) return null;
@@ -43,10 +45,13 @@ export function flagModel(snap, item, local = null) {
   if (!Number.isInteger(me) || me === item.drawer) return null;
   const info = flagInfo(snap, item.d, item.drawer, Array.isArray(item.viewers) ? item.viewers : null);
   const mine = info.mine || Boolean(local && local.has(item.d));
-  return { d: item.d, count: Math.max(info.count, mine ? 1 : 0), need: info.need, mine };
+  const meRow = Array.isArray(snap.players) ? snap.players.find((p) => p.isMe) : null;
+  const capped = !mine && !(meRow && meRow.isAdmin) && flagsLeft(snap) <= 0;
+  return { d: item.d, count: Math.max(info.count, mine ? 1 : 0), need: info.need, mine, capped };
 }
 
 export function flagLabel(f) {
+  if (f.capped) return FLAG_CAPPED;
   if (f.mine) return `Flagged (${Math.min(f.count, f.need)} of ${f.need})`;
   return f.count ? `Flag (${Math.min(f.count, f.need)} of ${f.need})` : 'Flag';
 }
@@ -61,9 +66,9 @@ export function flagButton(f, onFlag, note = null) {
       variant: 'ghost',
       size: 'sm',
       key: 'flag',
-      disabled: f.mine,
+      disabled: f.mine || Boolean(f.capped),
       on: () => onFlag(f.d),
-      attrs: { title: FLAG_TITLE, 'aria-label': f.mine ? flagLabel(f) : `${flagLabel(f)}: report this drawing`, 'aria-pressed': f.mine ? 'true' : 'false' },
+      attrs: { title: f.capped ? FLAG_CAPPED_TITLE : FLAG_TITLE, 'aria-label': f.mine ? flagLabel(f) : `${flagLabel(f)}: report this drawing`, 'aria-pressed': f.mine ? 'true' : 'false' },
       kids: h('span', { class: 'btn-icon flag-icon', text: FLAG_ICON, attrs: { 'aria-hidden': 'true' } }),
     }),
   );

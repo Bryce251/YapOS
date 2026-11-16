@@ -1,7 +1,7 @@
 import { DAY, ID_RE, USER_BODY_LIMIT, HttpError, json, fail, readJson, isPlainObject, parseJsonSafe, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanText, cleanUsername, cleanAvatar } from './profiles.js';
-import { PARTY_BADGES, badgesFor } from './party-badges.js';
+import { PARTY_BADGES, badgesFor, partySeasonBadges } from './party-badges.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 import { readCatalog } from './owner.js';
 
@@ -145,6 +145,14 @@ function applySettings(row, settings) {
   return { hidden: Boolean(Number(settings.hidden)), showShards: Boolean(Number(settings.show_shards)) };
 }
 
+function displayNameOf(row, prof) {
+  const username = typeof row.username === 'string' ? row.username.replace(/^@+/, '').toLowerCase() : '';
+  const saved = safeName(row.name, NAME_MAX, null);
+  const looked = prof && !Number(prof.missing) ? safeName(prof.display_name, NAME_MAX, null) : null;
+  const isHandle = (n) => Boolean(username) && n.replace(/^@+/, '').toLowerCase() === username;
+  return [saved, looked].find((n) => n && !isHandle(n)) || saved || looked || row.username || 'Player';
+}
+
 export async function getPublicProfile(request, env, raw, t) {
   if (request.method !== 'GET' && request.method !== 'HEAD') return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   const limit = await hit(env.DB, await ipKey('publicProfile', clientIp(request)), LIMITS.publicProfile, t);
@@ -157,12 +165,13 @@ export async function getPublicProfile(request, env, raw, t) {
     .bind(name.toLowerCase())
     .first();
   if (!row) return missing();
-  const [settings, stats, streak, prof, catalog] = await Promise.all([
+  const [settings, stats, streak, prof, catalog, partySeason] = await Promise.all([
     env.DB.prepare('SELECT hidden, show_shards, claimed, updated FROM profile_settings WHERE user_id = ?').bind(row.user_id).first(),
     env.DB.prepare('SELECT games, wins, by_game, counters FROM party_stats WHERE user_id = ?').bind(row.user_id).first(),
     env.DB.prepare('SELECT best FROM party_daily_streaks WHERE user_id = ?').bind(row.user_id).first(),
-    env.DB.prepare('SELECT avatar_url, missing FROM profiles WHERE id = ?').bind(row.user_id).first(),
+    env.DB.prepare('SELECT avatar_url, display_name, missing FROM profiles WHERE id = ?').bind(row.user_id).first(),
     readCatalog(env.DB).catch(() => ({ achievements: [], badges: [] })),
+    partySeasonBadges(env.DB, row.user_id).catch(() => []),
   ]);
   const view = applySettings(row, settings);
   if (view.hidden) return missing();
@@ -174,11 +183,11 @@ export async function getPublicProfile(request, env, raw, t) {
     favourites: favourites(byGame),
   };
   const earned = badgesFor({ games: party.games, wins: party.wins, counters: isPlainObject(counters) ? counters : {}, dailyBest: Number(streak && streak.best) || 0 });
-  const badges = [...new Set([...earned, ...idList(parseJsonSafe(row.badges, []), MAX_BADGES)])];
+  const badges = [...new Set([...earned, ...partySeason, ...idList(parseJsonSafe(row.badges, []), MAX_BADGES)])];
   const clan = cleanClan(parseJsonSafe(row.clan, null));
   const profile = {
     username: row.username,
-    name: safeName(row.name, NAME_MAX, row.username || 'Player'),
+    name: displayNameOf(row, prof),
     avatar: prof && !Number(prof.missing) ? cleanAvatar(prof.avatar_url) : null,
     level: Number(row.level) || 0,
     xp: Number(row.xp) || 0,

@@ -48,7 +48,7 @@ test('the Party profile card shows level, badges, Party stats, rank and clan by 
   assert.equal(res.headers.get('Cache-Control'), 'public, max-age=30');
   const { profile } = await res.json();
   assert.equal(profile.hidden, false);
-  assert.equal(profile.name, 'Alice');
+  assert.equal(profile.name, 'Alice Call', 'a real display name beats a saved name that is just the username');
   assert.equal(profile.username, 'alice');
   assert.equal(profile.avatar, ALICE.avatar_url);
   assert.equal(profile.level, 3);

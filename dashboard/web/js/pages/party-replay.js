@@ -26,7 +26,7 @@ function artistName(a) {
   return a.name || a.profile?.display_name || a.profile?.username || 'Player';
 }
 
-export function createReplayPlayer({ replay, drawerId = '', label = 'drawing', win = globalThis, onBan = null, canBan = null } = {}) {
+export function createReplayPlayer({ replay, drawerId = '', label = 'drawing', win = globalThis, onBan = null, canBan = null, onPerson = null } = {}) {
   const r = replay;
   const pixel = r.kind === 'pixel';
   const ratio = ratioOf(win);
@@ -329,7 +329,10 @@ export function createReplayPlayer({ replay, drawerId = '', label = 'drawing', w
       const extra = typeof onBan === 'function' && (!canBan || canBan(a)) && a.id && a.id.toLowerCase() !== String(drawerId).toLowerCase()
         ? button({ label: 'Ban', icon: 'ban', size: 'sm', variant: 'ghost', className: 'replay-artist-ban', ariaLabel: `Ban ${artistName(a)} from YapOS Party`, onClick: (e) => onBan(a, e.currentTarget) })
         : a.banned ? h('span', { class: 'replay-artist-flag', text: 'Banned' }) : null;
-      return h('li', { class: 'replay-artist-row', dataset: { a: i } }, chip, extra);
+      const who = typeof onPerson === 'function' && a.id
+        ? button({ label: 'Profile', icon: 'user', size: 'sm', variant: 'ghost', className: 'replay-artist-profile', ariaLabel: `Open ${artistName(a)}'s profile`, onClick: () => onPerson(a) })
+        : null;
+      return h('li', { class: 'replay-artist-row', dataset: { a: i } }, chip, who, extra);
     }));
     legendNote.textContent = filterText(filter, r.authors.map((a) => ({ name: artistName(a) })));
     shownWho = -2;

@@ -74,7 +74,7 @@ test('the activity page works under the strict activity CSP', () => {
     if (f.endsWith('.js')) {
       assert.equal(/\.style\.(?!setProperty)[a-zA-Z]+\s*=/.test(src), false, `${f} sets inline styles`);
       const fetches = [path.join('ui', 'app.js'), path.join('js', 'dictionary.js'), path.join('js', 'profiles.js'), path.join('js', 'admin.js'), path.join('ui', 'leaderboard.js'), path.join('ui', 'profilecard.js'), path.join('js', 'account.js')].some((x) => f.endsWith(x));
-      const remembers = { [path.join('ui', 'sfx.js')]: 'SOUND_KEY', [path.join('ui', 'lobby.js')]: 'TAB_KEY', [path.join('views', 'palette.js')]: 'RECENT_KEY', [path.join('ui', 'fullscreen.js')]: 'FOCUS_KEY', [path.join('js', 'account.js')]: 'AUTH_KEY', [path.join('ui', 'fxmode.js')]: 'FX_STORE_KEY' };
+      const remembers = { [path.join('ui', 'sfx.js')]: 'SOUND_KEY', [path.join('ui', 'lobby.js')]: 'TAB_KEY', [path.join('views', 'palette.js')]: 'RECENT_KEY', [path.join('ui', 'fullscreen.js')]: 'FOCUS_KEY', [path.join('js', 'account.js')]: 'AUTH_KEY', [path.join('ui', 'fxmode.js')]: 'FX_STORE_KEY', [path.join('views', 'beatdrop.js')]: 'OFFSET_KEY' };
       const memoryKey = Object.entries(remembers).find(([x]) => f.endsWith(x));
       assert.equal(/sessionStorage|XMLHttpRequest|WebSocket/.test(src), false, f);
       if (memoryKey) assert.deepEqual([...src.matchAll(/setItem\(([^,]+),/g)].map((m) => m[1]), [memoryKey[1]], f);
@@ -212,7 +212,8 @@ test('every game sits in one of the picker categories', async () => {
   const { GAMES, CATEGORIES } = await import('../web/activity/js/games/index.js');
   const ids = CATEGORIES.map((c) => c.id);
   assert.deepEqual(ids, ['drawing', 'words', 'quiz', 'party', 'quick']);
-  assert.equal(GAMES.length, 19);
+  assert.ok(GAMES.length >= 21);
+  for (const id of ['typerace', 'memory']) assert.equal(GAMES.find((g) => g.id === id).category, 'quick', id);
   for (const g of GAMES) assert.ok(ids.includes(g.category), `${g.id} has category ${g.category}`);
   assert.deepEqual(GAMES.slice(0, 4).map((g) => g.id), ['trivia', 'draw', 'chain', 'wyr']);
   const { VIEWS } = await import('../web/activity/js/views/index.js');
@@ -235,13 +236,15 @@ test('pickerTabs counts each category and keeps existing games first', async () 
   const list = GAMES.map((g) => ({ id: g.id, category: g.category }));
   const tabs = pickerTabs(list);
   assert.deepEqual(tabs.map((t) => t.id), ['all', 'drawing', 'words', 'quiz', 'party', 'quick']);
-  assert.equal(tabs[0].count, 19);
-  assert.equal(tabs.slice(1).reduce((n, t) => n + t.count, 0), 19);
+  assert.equal(tabs[0].count, GAMES.length);
+  assert.equal(tabs.slice(1).reduce((n, t) => n + t.count, 0), GAMES.length);
   assert.deepEqual(gamesInTab(list, 'drawing').map((g) => g.id), ['draw', 'odd', 'telephone', 'pixel', 'sketchduel']);
-  assert.deepEqual(gamesInTab(list, 'words').map((g) => g.id), ['chain', 'scramble', 'hive', 'hangman']);
-  assert.deepEqual(gamesInTab(list, 'quiz').map((g) => g.id), ['trivia', 'emoji', 'bluff', 'musicquiz']);
+  assert.deepEqual(gamesInTab(list, 'words').map((g) => g.id), ['chain', 'scramble', 'hive', 'hangman', 'namefive']);
+  assert.deepEqual(gamesInTab(list, 'quiz').map((g) => g.id), ['trivia', 'emoji', 'bluff', 'musicquiz', 'closest']);
   assert.deepEqual(gamesInTab(list, 'party').map((g) => g.id), ['wyr', 'hottakes', 'truths', 'story']);
-  assert.deepEqual(gamesInTab(list, 'quick').map((g) => g.id), ['reflex', 'higherlower']);
+  const quick = gamesInTab(list, 'quick').map((g) => g.id);
+  assert.deepEqual(quick.slice(0, 2), ['reflex', 'higherlower']);
+  for (const id of ['typerace', 'memory']) assert.ok(quick.includes(id), id);
   assert.deepEqual(pickerTabs([{ id: 'x', category: null }]).map((t) => t.id), ['all']);
   installDom({ url: 'https://yapos.dev/activity/' });
   const r = room(1, { join: false });
@@ -260,13 +263,14 @@ test('the picker shows category tabs with counts, arrow keys move between them a
   assert.ok(list);
   const tabs = all(list).filter((n) => n.getAttribute && n.getAttribute('role') === 'tab');
   assert.deepEqual(tabs.map((t) => t.dataset.key), ['tab-all', 'tab-drawing', 'tab-words', 'tab-quiz', 'tab-party', 'tab-quick']);
-  assert.match(text(byKey(el, 'tab-all')), /All\s+19/);
+  const { GAMES: ALL_GAMES } = await import('../web/activity/js/games/index.js');
+  assert.match(text(byKey(el, 'tab-all')), new RegExp(`All\\s+${ALL_GAMES.length}`));
   assert.match(text(byKey(el, 'tab-drawing')), /Drawing\s+5/);
-  assert.match(text(byKey(el, 'tab-quick')), /Quick\s+2/);
+  assert.match(text(byKey(el, 'tab-quick')), new RegExp(`Quick\\s+${ALL_GAMES.filter((g) => g.category === 'quick').length}`));
   assert.equal(selectedTab(el).dataset.key, 'tab-quiz');
   assert.equal(byKey(el, 'tab-quiz').getAttribute('tabindex'), '0');
   assert.equal(byKey(el, 'tab-words').getAttribute('tabindex'), '-1');
-  assert.deepEqual(pickKeys(el), ['pick-trivia', 'pick-emoji', 'pick-bluff', 'pick-musicquiz']);
+  assert.deepEqual(pickKeys(el), ['pick-trivia', 'pick-emoji', 'pick-bluff', 'pick-musicquiz', 'pick-closest']);
   assert.equal(byKey(el, 'pick-trivia').getAttribute('aria-checked'), 'true');
   const key = (k) => {
     selectedTab(el).dispatchEvent(new FakeEvent('keydown', { bubbles: true, key: k }));
@@ -282,7 +286,7 @@ test('the picker shows category tabs with counts, arrow keys move between them a
   assert.equal(selectedTab(el).dataset.key, 'tab-quick');
   key('Home');
   assert.equal(selectedTab(el).dataset.key, 'tab-all');
-  assert.equal(pickKeys(el).length, 19);
+  assert.equal(pickKeys(el).length, ALL_GAMES.length);
   key('End');
   assert.equal(selectedTab(el).dataset.key, 'tab-quick');
   byKey(el, 'tab-words').click();

@@ -148,6 +148,17 @@ CREATE TABLE IF NOT EXISTS party_bans (
 );
 CREATE INDEX IF NOT EXISTS party_bans_at ON party_bans (banned_at);
 
+CREATE TABLE IF NOT EXISTS party_ban_log (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason TEXT,
+  by_id TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_ban_log_user ON party_ban_log (user_id, at);
+CREATE INDEX IF NOT EXISTS party_reports_drawer ON party_reports (drawer_id, created);
+
 CREATE TABLE IF NOT EXISTS party_stats (
   user_id TEXT PRIMARY KEY,
   games INTEGER NOT NULL DEFAULT 0,
@@ -388,6 +399,31 @@ CREATE TABLE IF NOT EXISTS party_games_day (
   PRIMARY KEY (user_id, day)
 );
 CREATE INDEX IF NOT EXISTS party_games_day_day ON party_games_day (day);
+
+CREATE TABLE IF NOT EXISTS party_points_month (
+  user_id TEXT NOT NULL,
+  month TEXT NOT NULL,
+  points INTEGER NOT NULL DEFAULT 0,
+  games INTEGER NOT NULL DEFAULT 0,
+  wins INTEGER NOT NULL DEFAULT 0,
+  best INTEGER NOT NULL DEFAULT 0,
+  best_game TEXT,
+  updated INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, month)
+);
+CREATE INDEX IF NOT EXISTS party_points_month_rank ON party_points_month (month, points DESC, updated, user_id);
+
+CREATE TABLE IF NOT EXISTS party_season_awards (
+  month TEXT NOT NULL,
+  rank INTEGER NOT NULL,
+  user_id TEXT NOT NULL,
+  name TEXT,
+  username TEXT,
+  points INTEGER NOT NULL DEFAULT 0,
+  awarded INTEGER NOT NULL,
+  PRIMARY KEY (month, rank)
+);
+CREATE INDEX IF NOT EXISTS party_season_awards_user ON party_season_awards (user_id, month);
 
 CREATE TABLE IF NOT EXISTS activity_links (
   code_hash TEXT PRIMARY KEY,

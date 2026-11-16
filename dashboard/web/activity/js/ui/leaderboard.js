@@ -8,6 +8,7 @@ export const LEADERBOARD_SHOW = 20;
 export const LEADERBOARD_CACHE_MS = 30000;
 export const LEADERBOARD_TABS = Object.freeze([
   Object.freeze({ id: 'points', label: 'Points', unit: ['point', 'points'] }),
+  Object.freeze({ id: 'month', label: 'This month', unit: ['point', 'points'] }),
   Object.freeze({ id: 'wins', label: 'Wins', unit: ['win', 'wins'] }),
   Object.freeze({ id: 'games', label: 'Games', unit: ['game', 'games'] }),
   Object.freeze({ id: 'best', label: 'Best game', unit: ['point', 'points'] }),
@@ -110,11 +111,21 @@ export function readBoard(data) {
     };
   });
   const me = raw.me && typeof raw.me === 'object' && count(raw.me.rank) > 0 ? { rank: count(raw.me.rank), value: count(raw.me.value) } : null;
-  return { rows, me, total: count(raw.total) };
+  const m = raw.month && typeof raw.month === 'object' && /^\d{4}-\d{2}$/.test(raw.month.month) ? { month: raw.month.month, daysLeft: count(raw.month.daysLeft), prizes: count(raw.month.prizes) || 3 } : null;
+  return { rows, me, total: count(raw.total), month: m };
+}
+
+export function monthLine(month) {
+  const prizes = month && month.prizes ? month.prizes : 3;
+  const days = month ? month.daysLeft : 0;
+  const left = days <= 1 ? 'Last day' : `${fmt(days)} days left`;
+  return `🏅 Top ${prizes} win a profile badge · ${left}`;
 }
 
 export function boardUrl(board, game, me) {
-  const q = new URLSearchParams({ board, game, limit: String(LEADERBOARD_SHOW) });
+  const monthly = board === 'month';
+  const q = new URLSearchParams({ board: monthly ? 'points' : board, game: monthly ? 'all' : game, limit: String(LEADERBOARD_SHOW) });
+  if (monthly) q.set('period', 'month');
   if (me && ID_RE.test(me)) q.set('me', me);
   return `${LEADERBOARD_ENDPOINT}?${q}`;
 }
@@ -186,6 +197,8 @@ export function openLeaderboard(container, { engine = null, me = null } = {}) {
     h('option', { attrs: { value: 'all' }, text: '🎮 All games' }),
     leaderboardGames().map((g) => h('option', { attrs: { value: g.id }, text: `${g.emoji} ${g.name}` })));
   const body = h('div', { class: 'lb-body', attrs: { role: 'tabpanel', 'aria-live': 'polite' } });
+  const prize = h('p', { class: 'lb-prize' });
+  prize.hidden = true;
   const mine = h('div', { class: 'lb-me' });
   const card = h('div', { class: 'lb-card', attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId } },
     h('span', { class: 'lb-grab', attrs: { 'aria-hidden': 'true' } }),
@@ -196,6 +209,7 @@ export function openLeaderboard(container, { engine = null, me = null } = {}) {
         h('h2', { class: 'lb-title', attrs: { id: titleId }, text: 'Party leaderboard' })),
       closeBtn),
     h('div', { class: 'lb-tools' }, tabs, select),
+    prize,
     body,
     mine);
   const backdrop = h('div', { class: 'lb-backdrop', attrs: { 'aria-hidden': 'true' }, on: { click: () => close() } });
@@ -218,6 +232,13 @@ export function openLeaderboard(container, { engine = null, me = null } = {}) {
     load();
   }
 
+  function syncMonth(data) {
+    const monthly = board === 'month';
+    select.disabled = monthly;
+    prize.hidden = !monthly;
+    if (monthly) prize.textContent = monthLine(data ? data.month : null);
+  }
+
   function loading() {
     swap(body, h('ol', { class: 'lb-list is-loading', attrs: { 'aria-busy': 'true', 'aria-label': 'Loading the leaderboard' } },
       Array.from({ length: 6 }, () => h('li', { class: 'lb-row lb-ghost' }, h('span', { class: 'lb-ghost-bar' })))));
@@ -227,15 +248,17 @@ export function openLeaderboard(container, { engine = null, me = null } = {}) {
   async function load() {
     const mineToken = ++token;
     loading();
+    syncMonth(null);
     try {
       const data = await fetchBoard(board, game, meId);
       if (closed || mineToken !== token) return;
+      syncMonth(data);
       if (!data.rows.length) {
         const g = game === 'all' ? null : gameMeta(game);
         swap(body, h('div', { class: 'lb-state' },
           h('span', { class: 'lb-state-icon', attrs: { 'aria-hidden': 'true' }, text: '🌱' }),
           h('strong', { text: 'Nobody here yet' }),
-          h('span', { text: g ? `Nobody has scored in ${g.name} yet. Be the first!` : 'Finish a game with at least one friend to be first on the board.' })));
+          h('span', { text: board === 'month' ? 'Nobody has scored this month yet. Win a game now to grab the top spot!' : g ? `Nobody has scored in ${g.name} yet. Be the first!` : 'Finish a game with at least one friend to be first on the board.' })));
       } else {
         swap(body, h('ol', { class: 'lb-list', attrs: { 'aria-label': `${tabMeta(board).label} leaderboard` } }, data.rows.map((r) => rowEl(board, r, meId))),
           data.total ? h('p', { class: 'lb-total', text: `${fmt(data.total)} ${data.total === 1 ? 'player' : 'players'} on this board` }) : null);
