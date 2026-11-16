@@ -1,5 +1,5 @@
 import { h, nextId, replace } from '../dom.js';
-import { button, card, confirmDialog, copyText, emptyState, loadingRegion, pageHeader, setBusy, skeleton, toast } from '../ui.js';
+import { badge, button, card, confirmDialog, copyText, emptyState, linkButton, loadingRegion, pageHeader, setBusy, skeleton, switchControl, toast } from '../ui.js';
 import { ApiError } from '../api.js';
 import { mountAsync } from './common.js';
 
@@ -26,6 +26,9 @@ function readSummary(p) {
     name: typeof p.name === 'string' ? p.name : 'Word pack',
     wordCount: Number.isInteger(p.wordCount) ? p.wordCount : 0,
     triviaCount: Number.isInteger(p.triviaCount) ? p.triviaCount : 0,
+    public: p.public === true,
+    blocked: p.blocked === true,
+    likes: Number.isInteger(p.likes) && p.likes > 0 ? p.likes : 0,
   };
 }
 
@@ -69,7 +72,8 @@ function howTo() {
   return h('ol', { class: 'pack-steps' },
     h('li', { text: 'Make a pack with your own Draw & Guess words, trivia questions or both.' }),
     h('li', { text: 'Copy its code.' }),
-    h('li', { text: 'In a YapOS Party call, the host opens the game settings and types the code in.' }));
+    h('li', { text: 'In a YapOS Party call, the host opens the game settings and types the code in.' }),
+    h('li', { text: 'Switch on Public to let anyone find your pack on the browse page.' }));
 }
 
 export function renderPacks(ctx) {
@@ -86,7 +90,7 @@ export function renderPacks(ctx) {
     pageHeader({
       title: 'Word packs',
       description: 'Make your own words and trivia questions for YapOS Party. Every pack gets a short code that anyone can use in a call.',
-      actions: newBtn,
+      actions: h('div', { class: 'page-actions-row' }, linkButton({ label: 'Browse public packs', href: '/packs/browse', icon: 'globe', size: 'sm' }), newBtn),
     }),
     card({ title: 'How it works', icon: 'info' }, howTo()),
     card({ title: 'Your packs', icon: 'folder', actions: countEl }, listBody));
@@ -133,8 +137,8 @@ export function renderPacks(ctx) {
   function packRow(p) {
     return h('li', { class: 'pack-row', dataset: { code: p.code } },
       h('span', { class: 'pack-row-main' },
-        h('span', { class: 'pack-row-title', text: p.name }),
-        h('span', { class: 'pack-row-sub', text: packSummary(p) })),
+        h('span', { class: 'pack-row-title' }, h('span', { text: p.name }), p.blocked ? badge('Hidden by the YapOS team', 'danger', 'eye-off') : p.public ? badge('Public', 'accent', 'globe') : null),
+        h('span', { class: 'pack-row-sub', text: p.public ? `${packSummary(p)} · ${plural(p.likes, 'like', 'likes')}` : packSummary(p) })),
       codeChip(p.code),
       h('span', { class: 'pack-row-actions' },
         button({ label: 'Edit', icon: 'sliders', size: 'sm', ariaLabel: `Edit ${p.name}`, onClick: (e) => edit(p, e.currentTarget) }),
@@ -161,6 +165,9 @@ export function renderPacks(ctx) {
     const startName = pack?.name || '';
     const startWords = Array.isArray(pack?.words) ? pack.words.join('\n') : '';
     const startTrivia = JSON.stringify(Array.isArray(pack?.trivia) ? pack.trivia : []);
+    const startPublic = pack?.public === true;
+    const publicId = nextId('pack-public');
+    const publicSwitch = switchControl({ id: publicId, checked: startPublic, label: 'Public pack' });
 
     const nameInput = h('input', { type: 'text', id: nameId, class: 'input', maxLength: limits.name, placeholder: 'Movie night', autocomplete: 'off', value: startName });
     const wordsInput = h('textarea', { id: wordsId, class: 'input textarea pack-words', rows: 10, spellcheck: true, placeholder: 'popcorn\nred carpet\nmovie ticket', value: startWords, attrs: { 'aria-describedby': wordsHelpId } });
@@ -222,9 +229,9 @@ export function renderPacks(ctx) {
     }
 
     function snapshot() {
-      return JSON.stringify([nameInput.value.trim(), parseWords(wordsInput.value), readTrivia()]);
+      return JSON.stringify([nameInput.value.trim(), parseWords(wordsInput.value), readTrivia(), publicSwitch.checked]);
     }
-    const start = JSON.stringify([startName.trim(), parseWords(startWords), JSON.parse(startTrivia)]);
+    const start = JSON.stringify([startName.trim(), parseWords(startWords), JSON.parse(startTrivia), startPublic]);
     const isDirty = () => snapshot() !== start;
     ctx.setLeaveGuard?.({ isDirty });
 
@@ -251,7 +258,12 @@ export function renderPacks(ctx) {
       card({ title: 'Name', icon: 'tag' },
         h('label', { class: 'field-label', htmlFor: nameId, text: 'Pack name' }),
         nameInput,
-        pack ? h('div', { class: 'pack-code-row' }, h('span', { class: 'muted', text: 'Code' }), codeChip(pack.code)) : h('p', { class: 'field-help', text: 'You get a code to share once you create the pack.' })),
+        pack ? h('div', { class: 'pack-code-row' }, h('span', { class: 'muted', text: 'Code' }), codeChip(pack.code)) : h('p', { class: 'field-help', text: 'You get a code to share once you create the pack.' }),
+        h('div', { class: 'setting-row pack-public-row' },
+          h('div', { class: 'setting-text' },
+            h('label', { class: 'setting-title', htmlFor: publicId, text: 'Public' }),
+            h('p', { class: 'setting-body', text: 'Anyone can find this pack on the browse page, like it and copy its code. Your name shows next to it.' })),
+          publicSwitch.el)),
       card({ title: 'Draw & Guess words', icon: 'palette', actions: wordCount },
         h('label', { class: 'sr-only', htmlFor: wordsId, text: 'Draw & Guess words' }),
         wordsInput,
@@ -280,6 +292,7 @@ export function renderPacks(ctx) {
       setBusy(saveBtn, true, 'Saving');
       try {
         const body = { name, words, trivia };
+        if (publicSwitch.checked !== startPublic) body.public = publicSwitch.checked;
         const data = editing
           ? await api.request('PUT', `${PACKS_PATH}/${encodeURIComponent(editing.code)}`, { body, signal: ctx.signal })
           : await api.post(PACKS_PATH, body, { signal: ctx.signal });

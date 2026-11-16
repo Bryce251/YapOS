@@ -143,7 +143,7 @@ test('wrapped: server card ranks the top chatters, channels, emojis and member o
   assert.match(text, /Saturdays/);
   assert.match(text, new RegExp(`Member of the month[\\s\\S]*<@${IDS.member2}>`));
   assert.match(text, /1 reaction · \[jump to it\]/);
-  const viaYap = await h.slash('yap', 'recap server', { user: IDS.member });
+  const viaYap = await h.slash('yap', 'wrapped server', { user: IDS.member });
   assert.match(lastText(h, viaYap), /Test Town Wrapped/);
 });
 

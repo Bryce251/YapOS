@@ -3,7 +3,10 @@ import { joinButton } from './lobby.js';
 import { board, standings } from './board.js';
 import { burstFrom } from './juice.js';
 import { createDailyBox, finishDaily } from './daily.js';
-import { partyXp, PARTY_XP_DAY } from '../admin.js';
+import { partyXp, PARTY_XP_DAY, partyShards, PARTY_SHARDS_PREDICTION, PARTY_SHARDS_DAY } from '../admin.js';
+import { tourModel, tourCard } from './tournament.js';
+import { predictResultsModel, predictResults } from './predict.js';
+import { createReplayStrip, REPLAY_GAMES } from './replay.js';
 
 export const WIN_EMOJI = ['🏆', '⭐', '✨', '🎉', '👑'];
 export const BURST_DELAY_MS = 640;
@@ -20,6 +23,25 @@ export function xpEarned(last, players) {
 
 export function xpText(n) {
   return n > 0 ? `+${n} Party XP` : '';
+}
+
+export const SHARDS_TITLE = `Shards go to your YapOS wallet, up to ${PARTY_SHARDS_DAY} a day from YapOS Party.`;
+
+export function shardsEarned(last, players, predict = null) {
+  if (!last || !Array.isArray(last.ps) || last.ps.length < 2) return 0;
+  const me = (players || []).find((p) => p.isMe);
+  if (!me) return 0;
+  if (Number.isInteger(me.slot) && last.ps.includes(me.slot)) {
+    return partyShards(Array.isArray(last.winners) && last.winners.includes(me.slot), Number.isInteger(last.champ) && last.champ === me.slot);
+  }
+  if (!predict || !Array.isArray(predict.picks)) return 0;
+  const mine = predict.picks.find((x) => x.id === me.id);
+  const wins = Array.isArray(predict.winners) ? predict.winners : Array.isArray(last.winners) ? last.winners : [];
+  return mine && wins.includes(mine.slot) && last.ps.includes(mine.slot) ? PARTY_SHARDS_PREDICTION : 0;
+}
+
+export function shardsText(n) {
+  return n > 0 ? `+${n} 💎` : '';
 }
 
 export function resultsModel(snap, games) {
@@ -40,6 +62,9 @@ export function resultsModel(snap, games) {
     round: standings(snap.players, 'game').map(keep),
     totals: standings(snap.players, 'total').map(keep),
     xp: xpEarned(last, snap.players),
+    shards: shardsEarned(last, snap.players, snap.predict),
+    tour: tourModel(snap, games),
+    picks: predictResultsModel(snap),
     daily: last && typeof last.daily === 'string' && (last.game === 'hive' || last.game === 'scramble') ? { kind: last.game, date: last.daily } : null,
   };
 }
@@ -52,13 +77,14 @@ export function headline(m) {
   return `${m.winners.length}-way tie!`;
 }
 
-export function createResults({ engine, fx }) {
+export function createResults({ engine, fx, replays = null, win = globalThis }) {
   const el = h('section', { class: 'screen results', attrs: { 'aria-label': 'Results' } });
   const paint = memo(render);
   let celebrated = 0;
   let podium = 0;
   let pending = 0;
   const daily = createDailyBox();
+  const strip = createReplayStrip({ win });
 
   function cheerWinner(iWon) {
     const spot = el.querySelector('.board-top .place-1') || el.querySelector('.trophy');
@@ -79,14 +105,22 @@ export function createResults({ engine, fx }) {
     podium = m.at;
     const join = m.meJoined ? null : joinButton(m, { size: 'lg', key: 'join' });
     if (join) join.addEventListener('click', onJoinTap);
-    const actions = m.isHost
-      ? h(
-          'div',
-          { class: 'start-row' },
-          button('Play again', { variant: 'primary', size: 'xl', key: 'again', on: () => engine.lobby.start() }),
-          button('Back to lobby', { variant: 'secondary', size: 'lg', key: 'lobby', on: () => engine.lobby.toLobby() }),
-        )
-      : h('p', { class: 'waiting', attrs: { role: 'status' } }, h('span', { class: 'pulse-dot', attrs: { 'aria-hidden': 'true' } }), `Waiting for ${m.hostName} to pick what's next`);
+    const midTour = m.tour && !m.tour.done && m.tour.next;
+    let hostButtons = null;
+    if (m.isHost && midTour) {
+      hostButtons = [
+        button(`Next: ${m.tour.next.emoji} ${m.tour.next.name}`, { variant: 'primary', size: 'xl', key: 'next', on: () => engine.lobby.next() }),
+        button('End tournament', { variant: 'secondary', size: 'lg', key: 'lobby', on: () => engine.lobby.toLobby() }),
+      ];
+    } else if (m.isHost) {
+      hostButtons = [
+        button(m.tour ? 'New tournament' : 'Play again', { variant: 'primary', size: 'xl', key: 'again', on: () => engine.lobby.start() }),
+        button('Back to lobby', { variant: 'secondary', size: 'lg', key: 'lobby', on: () => engine.lobby.toLobby() }),
+      ];
+    }
+    const actions = hostButtons
+      ? h('div', { class: 'start-row' }, hostButtons)
+      : h('p', { class: 'waiting', attrs: { role: 'status' } }, h('span', { class: 'pulse-dot', attrs: { 'aria-hidden': 'true' } }), midTour ? `Waiting for ${m.hostName} to start the next game` : `Waiting for ${m.hostName} to pick what's next`);
     return h(
       'div',
       { class: ['results-wrap', fresh ? 'juice-podium' : null] },
@@ -96,11 +130,22 @@ export function createResults({ engine, fx }) {
         h('span', { class: 'trophy', text: m.winners.length ? '🏆' : '🤝', attrs: { 'aria-hidden': 'true' } }),
         m.game ? h('span', { class: 'eyebrow', text: `${m.game.emoji} ${m.game.name}` }) : null,
         h('h2', { class: 'winner-title', text: headline(m) }),
-        m.xp ? h('span', { class: 'xp-chip', text: xpText(m.xp), attrs: { title: XP_TITLE } }) : null,
+        m.xp || m.shards
+          ? h(
+              'div',
+              { class: 'earn-row' },
+              m.xp ? h('span', { class: 'xp-chip', text: xpText(m.xp), attrs: { title: XP_TITLE } }) : null,
+              m.shards ? h('span', { class: 'shard-chip', text: shardsText(m.shards), attrs: { title: SHARDS_TITLE } }) : null,
+            )
+          : null,
         actions,
         join ? h('div', { class: 'join-row is-results' }, join, h('p', { class: 'join-hint', text: 'Join to play in the next game.' })) : null,
       ),
+      m.tour && m.tour.done ? tourCard(m.tour) : null,
       m.daily ? h('div', { class: 'card glass daily-card' }, daily.el) : null,
+      m.tour && !m.tour.done ? tourCard(m.tour) : null,
+      predictResults(m.picks),
+      m.replays ? h('div', { class: 'card glass replay-card' }, strip.el) : null,
       h('div', { class: 'card glass' }, h('div', { class: 'card-head' }, h('h3', { class: 'card-title', text: 'This game' })), board(m.round, { empty: 'Nobody scored this time.', label: 'This game' })),
       h('div', { class: 'card glass' }, h('div', { class: 'card-head' }, h('h3', { class: 'card-title', text: 'All games' })), board(m.totals, { empty: 'No points yet.', label: 'All games' })),
     );
@@ -110,6 +155,10 @@ export function createResults({ engine, fx }) {
     el,
     update(snap) {
       const m = resultsModel(snap, engine.games);
+      const last = snap.room.last;
+      const list = replays && last && REPLAY_GAMES.includes(last.game) ? replays.list(snap.room.round, last.game) : [];
+      strip.show(list);
+      m.replays = list.length;
       if (m.daily) finishDaily(m.daily.kind, m.daily.date);
       daily.show(m.daily ? m.daily.kind : null, { date: m.daily ? m.daily.date : null });
       paint(el, m);
@@ -128,6 +177,7 @@ export function createResults({ engine, fx }) {
     destroy() {
       if (pending) globalThis.clearTimeout(pending);
       pending = 0;
+      strip.destroy();
       daily.destroy();
     },
   };

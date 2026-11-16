@@ -7,6 +7,10 @@ import { postActivityReport, partyStaffRoute, partyRole } from './reports.js';
 import { postResults } from './party-results.js';
 import { dailyRoute } from './party-daily.js';
 import { packsRoute, getPublicPack } from './party-packs.js';
+import { browsePacks, packReportsRoute } from './pack-browse.js';
+import { getPublicProfile, visibilityRoute } from './public-profiles.js';
+import { getSeasons } from './seasons.js';
+import { parseDays, readStats } from './server-stats.js';
 import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
 
 const SERVERS_TTL = 2 * MINUTE;
@@ -180,6 +184,15 @@ async function getCases(env, session, sid, url, t) {
   const pages = Math.max(1, Math.ceil(total / CASES_PAGE_SIZE));
   const start = (page - 1) * CASES_PAGE_SIZE;
   return json({ cases: list.slice(start, start + CASES_PAGE_SIZE), total, page, pages, pageSize: CASES_PAGE_SIZE, updatedAt });
+}
+
+async function getServerStats(env, session, sid, url, t) {
+  const days = parseDays(url.searchParams.get('days'));
+  const g = await requireGrant(env, session, sid, t);
+  if (g.response) return g.response;
+  const limit = await hit(env.DB, `stats:u:${session.user_id}`, LIMITS.stats, t);
+  if (!limit.ok) return tooMany(limit.retryAfter);
+  return json(await readStats(env.DB, sid, days, t), 200, { 'Cache-Control': 'private, max-age=60' });
 }
 
 async function getMember(env, session, sid, uid, t) {
@@ -425,6 +438,15 @@ export async function handleApi(request, env, deps, url) {
     return profileRoute(request, env, segs, url, t);
   }
 
+  if (segs[1] === 'u') {
+    if (segs.length !== 3) return fail(404, 'not_found', "This profile is private or doesn't exist.");
+    return getPublicProfile(request, env, segs[2], t);
+  }
+
+  if (segs[1] === 'seasons' && segs.length === 2) return getSeasons(request, env, t);
+
+  if (segs[1] === 'packs' && segs[2] === 'browse' && segs.length === 3) return browsePacks(request, env, url, t);
+
   if (segs[1] === 'public') {
     if (!readOnly) return fail(405, 'method_not_allowed', 'That action is not allowed here.');
     if (segs.length !== 3) return fail(404, 'not_found', "This page isn't public or doesn't exist.");
@@ -459,6 +481,8 @@ export async function handleApi(request, env, deps, url) {
     const role = await partyRole(env, session.user_id);
     return json({ user: publicUser(session), partyOwner: role === 'owner', partyAdmin: Boolean(role) });
   }
+  if (n === 2 && route[0] === 'me' && route[1] === 'profile-visibility') return visibilityRoute(request, env, session, t);
+  if (route[0] === 'party' && route[1] === 'pack-reports') return packReportsRoute(request, env, session, route, url, t);
   if (route[0] === 'party' && (route[1] === 'reports' || route[1] === 'bans')) return partyStaffRoute(request, env, session, route, url, t);
   if (route[0] === 'party') return partyRoute(request, env, session, route, t);
   if (route[0] === 'packs') return packsRoute(request, env, session, route, t);
@@ -469,6 +493,7 @@ export async function handleApi(request, env, deps, url) {
     const sid = checkId(route[1], 'server', SERVER_ID_RE);
     if (n === 2 && readOnly) return getServer(env, session, sid, t);
     if (n === 3 && route[2] === 'cases' && readOnly) return getCases(env, session, sid, url, t);
+    if (n === 3 && route[2] === 'stats' && readOnly) return getServerStats(env, session, sid, url, t);
     if (n === 3 && route[2] === 'members' && readOnly) return getMembers(env, session, sid, url, t);
     if (n === 4 && route[2] === 'members' && readOnly) return getMember(env, session, sid, route[3], t);
     if (n === 5 && route[2] === 'members' && route[4] === 'actions' && method === 'POST') return postMemberAction(request, env, session, sid, route[3], t);

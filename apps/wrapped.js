@@ -737,7 +737,7 @@ export const { setup, teardown, check } = defineApp({
   },
 
   yap: [
-    { words: ['wrapped', 'recap'], run: runWrapped },
+    { words: ['wrapped'], run: runWrapped },
   ],
 
   panel: async (ctx) => ctx.ephemeral(await personalView(ctx.engine, ctx.serverId, ctx.userId, ctx.userId, monthKey(nowOf(ctx.engine)))),

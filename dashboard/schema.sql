@@ -202,3 +202,104 @@ CREATE TABLE IF NOT EXISTS party_packs (
   updated INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS party_packs_owner ON party_packs (owner_id, created);
+
+CREATE TABLE IF NOT EXISTS party_shards (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  shards INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  game TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  claimed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS party_shards_claimed ON party_shards (claimed, at, id);
+CREATE INDEX IF NOT EXISTS party_shards_user_day ON party_shards (user_id, day);
+
+CREATE TABLE IF NOT EXISTS party_rates (
+  id TEXT PRIMARY KEY,
+  play INTEGER NOT NULL,
+  win INTEGER NOT NULL,
+  tournament INTEGER NOT NULL,
+  prediction INTEGER NOT NULL,
+  cap INTEGER NOT NULL,
+  updated INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public_profiles (
+  user_id TEXT PRIMARY KEY,
+  username TEXT,
+  username_key TEXT,
+  name TEXT NOT NULL,
+  level INTEGER NOT NULL DEFAULT 0,
+  xp INTEGER NOT NULL DEFAULT 0,
+  shards INTEGER,
+  badges TEXT NOT NULL DEFAULT '[]',
+  achievements TEXT NOT NULL DEFAULT '[]',
+  season TEXT NOT NULL DEFAULT '[]',
+  clan TEXT,
+  hidden INTEGER NOT NULL DEFAULT 0,
+  updated INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS public_profiles_username ON public_profiles (username_key);
+CREATE INDEX IF NOT EXISTS public_profiles_updated ON public_profiles (updated);
+
+CREATE TABLE IF NOT EXISTS profile_settings (
+  user_id TEXT PRIMARY KEY,
+  hidden INTEGER NOT NULL DEFAULT 0,
+  show_shards INTEGER NOT NULL DEFAULT 0,
+  updated INTEGER NOT NULL,
+  given INTEGER NOT NULL DEFAULT 0,
+  claimed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS profile_settings_claimed ON profile_settings (claimed, updated);
+
+CREATE TABLE IF NOT EXISTS pack_public (
+  code TEXT PRIMARY KEY,
+  public INTEGER NOT NULL DEFAULT 0,
+  blocked INTEGER NOT NULL DEFAULT 0,
+  published INTEGER,
+  updated INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pack_public_listed ON pack_public (public, blocked, published);
+
+CREATE TABLE IF NOT EXISTS pack_likes (
+  code TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (code, user_id)
+);
+CREATE INDEX IF NOT EXISTS pack_likes_user ON pack_likes (user_id, at);
+
+CREATE TABLE IF NOT EXISTS pack_reports (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL,
+  reporter_id TEXT NOT NULL,
+  reporter_name TEXT,
+  reason TEXT,
+  created INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  dismissed_at INTEGER,
+  dismissed_by TEXT
+);
+CREATE INDEX IF NOT EXISTS pack_reports_status ON pack_reports (status, created, id);
+CREATE INDEX IF NOT EXISTS pack_reports_pair ON pack_reports (code, reporter_id, status);
+
+CREATE TABLE IF NOT EXISTS season_history (
+  month TEXT PRIMARY KEY,
+  boards TEXT NOT NULL,
+  updated INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS server_stats (
+  server_id TEXT NOT NULL,
+  hour INTEGER NOT NULL,
+  messages INTEGER NOT NULL DEFAULT 0,
+  joins INTEGER NOT NULL DEFAULT 0,
+  leaves INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 0,
+  updated INTEGER NOT NULL,
+  PRIMARY KEY (server_id, hour)
+);
+CREATE INDEX IF NOT EXISTS server_stats_hour ON server_stats (hour);
+CREATE INDEX IF NOT EXISTS pack_reports_reporter ON pack_reports (reporter_id, status);

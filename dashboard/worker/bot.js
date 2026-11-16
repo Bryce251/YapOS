@@ -1,9 +1,14 @@
 import { SERVER_ID_RE, SLUG_RE, PART_LIMIT, HttpError, json, fail, readJson, isPlainObject, safeEqual, isLocalHost, byteLength, clipString, safeHttpsUrl } from './util.js';
 import { expireJobs, claimJobs, isHot, DENIED, SERVER_JOB_TYPES } from './jobs.js';
-import { claimWanted, hasWanted, putProfiles } from './profiles.js';
+import { claimWanted, hasWanted, storeProfiles, UPLOAD_LIMIT } from './profiles.js';
 import { partyPoll, ackParty, partyStats } from './party-results.js';
+import { postRates, getRates } from './party-shards.js';
+import { MAX_SNAPSHOTS, isSnapshot, cleanSnapshot, snapshotStatements, settingsPoll } from './public-profiles.js';
+import { postSeason } from './seasons.js';
+import { postStats } from './server-stats.js';
 
 const RESULTS_LIMIT = 2 * 1024 * 1024;
+const PROFILE_UPLOAD_LIMIT = 256 * 1024;
 const SNAPSHOT_LIMIT = 4 * PART_LIMIT + 64 * 1024;
 const PUBLIC_LIMIT = 3 * PART_LIMIT + 64 * 1024;
 const MAX_RESULTS = 100;
@@ -62,7 +67,8 @@ async function poll(env, t) {
   const wanted = await claimWanted(env.DB, t);
   const hot = wanted.length > 0 || (await isHot(env.DB, t)) || (await hasWanted(env.DB, t));
   const party = await partyPoll(env.DB);
-  return json({ jobs, hot, wanted, party });
+  const profileSettings = await settingsPoll(env.DB, t);
+  return json({ jobs, hot, wanted, party, profileSettings });
 }
 
 async function results(request, env, t) {
@@ -139,6 +145,27 @@ async function results(request, env, t) {
     stored += 1;
   }
   return json({ ok: true, stored, ignored });
+}
+
+async function putProfileUpload(request, env, t) {
+  const body = await readJson(request, PROFILE_UPLOAD_LIMIT);
+  const list = Array.isArray(body.profiles) ? body.profiles : [];
+  const snaps = list.filter(isSnapshot);
+  if (!snaps.length && byteLength(JSON.stringify(body)) > UPLOAD_LIMIT) throw new HttpError(413, 'too_large', 'That request is too big.');
+  if (snaps.length > MAX_SNAPSHOTS) throw new HttpError(413, 'too_many', `Send at most ${MAX_SNAPSHOTS} public profiles at once.`);
+  const seen = new Set();
+  const cleaned = [];
+  let skipped = 0;
+  for (const p of snaps) {
+    const c = cleanSnapshot(p);
+    if (!c || seen.has(c.id)) {
+      skipped += 1;
+      continue;
+    }
+    seen.add(c.id);
+    cleaned.push(c);
+  }
+  return storeProfiles(env, body, t, { stmts: snapshotStatements(env.DB, cleaned, t), skip: isSnapshot, out: { snapshots: cleaned.length, snapshotsIgnored: skipped } });
 }
 
 async function putSnapshot(request, env, sid, t) {
@@ -261,12 +288,25 @@ export async function handleBot(request, env, deps, url) {
     if (method === 'POST') return ackParty(request, env, t);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   }
+  if (segs.length === 3 && segs[1] === 'party' && segs[2] === 'rates') {
+    if (method === 'POST') return postRates(request, env, t);
+    if (method === 'GET') return getRates(env);
+    return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  }
+  if (segs.length === 2 && segs[1] === 'seasons') {
+    if (method === 'POST') return postSeason(request, env, t);
+    return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  }
+  if (segs.length === 2 && segs[1] === 'stats') {
+    if (method === 'POST') return postStats(request, env, t);
+    return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  }
   if (segs.length === 3 && segs[1] === 'party' && segs[2] === 'stats') {
     if (method === 'GET') return partyStats(env, url);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   }
   if (segs.length === 2 && segs[1] === 'profiles') {
-    if (method === 'POST') return putProfiles(request, env, t);
+    if (method === 'POST') return putProfileUpload(request, env, t);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   }
   if (segs.length === 2 && segs[1] === 'global') {

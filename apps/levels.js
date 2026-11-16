@@ -37,7 +37,8 @@ export const PARTY_GAMES = Object.freeze({
   trivia: '🧠 Trivia', draw: '🎨 Draw & Guess', chain: '🔗 Word Chain', wyr: '🤔 Would You Rather', odd: '🕵️ Odd One Out',
   telephone: '☎️ Draw Telephone', scramble: '🔀 Scramble Race', hive: '🐝 Letter Hive', emoji: '🧩 Emoji Decode',
   hottakes: '🌶️ Hot Takes', truths: '🤥 Two Truths and a Lie', reflex: '⚡ Reflex', bluff: '🃏 Bluff', pixel: '🟪 Pixel Art',
-  pixelart: '🟪 Pixel Art', higherlower: '📈 Higher or Lower',
+  pixelart: '🟪 Pixel Art', higherlower: '📈 Higher or Lower', sketchduel: '⚔️ Sketch Duel', story: '📖 Story Builder',
+  hangman: '🪢 Hangman Royale', musicquiz: '🎵 Music Quiz',
 });
 export const PARTY_BADGES = Object.freeze({
   'first-game': '🎈 First game', 'games-10': '🎲 Party regular', 'games-50': '🥳 Party animal', 'games-100': '🏟️ Party legend',
@@ -314,6 +315,39 @@ function applyGain(engine, uid, { xp = 0, voiceSeconds = 0, messages = 0 }) {
   return { before, level: after, xp: total, leveledUp: after > before };
 }
 
+function boostOf(engine, sid, uid) {
+  let mult = 1;
+  try {
+    const m = Number(engine.service('economy')?.eventMultiplier?.(sid, 'xp'));
+    if (Number.isFinite(m) && m > 1) mult *= Math.min(5, m);
+  } catch (e) {
+    engine.log.debug('[levels] event boost lookup failed', e?.message);
+  }
+  try {
+    const b = Number(engine.service('clans')?.xpBoost?.(uid));
+    if (Number.isFinite(b) && b > 0) mult *= 1 + Math.min(0.5, b);
+  } catch (e) {
+    engine.log.debug('[levels] clan boost lookup failed', e?.message);
+  }
+  return mult;
+}
+
+export function boostXp(engine, sid, uid, amount) {
+  const n = Number(amount) || 0;
+  if (n <= 0 || !sid) return n;
+  const mult = boostOf(engine, sid, uid);
+  return mult > 1 ? Math.round(n * mult) : n;
+}
+
+function eventLine(engine, sid) {
+  if (!sid) return null;
+  try {
+    return engine.service('economy')?.eventBanner?.(sid) || null;
+  } catch {
+    return null;
+  }
+}
+
 async function addXp(engine, sid, uid, amount, extra = {}) {
   const xp = Number(amount) || 0;
   const res = applyGain(engine, uid, { xp, voiceSeconds: extra.voiceSeconds, messages: extra.messages });
@@ -367,7 +401,7 @@ async function onMessage(ctx, msg) {
       return;
     }
   }
-  const amount = Math.round((15 + Math.floor(Math.random() * 11)) * rate);
+  const amount = boostXp(engine, sid, uid, Math.round((15 + Math.floor(Math.random() * 11)) * rate));
   await addXp(engine, sid, uid, amount, { channelId: msg.channel_id, messages });
 }
 
@@ -408,7 +442,7 @@ async function awardVoice(engine, sid, uid, s) {
   }
   if (!company) return null;
   const perMinute = Math.max(0, Number(earn.voiceXpPerMinute ?? 5));
-  return addXp(engine, sid, uid, Math.max(0, newMinutes) * perMinute, { voiceSeconds: newSeconds });
+  return addXp(engine, sid, uid, boostXp(engine, sid, uid, Math.max(0, newMinutes) * perMinute), { voiceSeconds: newSeconds });
 }
 
 async function onVoiceJoin(ctx, ev) {
@@ -652,6 +686,8 @@ async function rankView(ctx, target) {
       since ? { name: '📅 Member since', value: since, inline: true } : null,
     ];
   }
+  const banner = eventLine(engine, ctx.serverId);
+  if (banner) body = `${body}\n${banner}`;
   if (season) fields.push({ name: '🗓️ Season', value: season, inline: false });
   if (party) fields.push({ name: '🎉 YapOS Party', value: party, inline: false });
   const embed = withAuthor(card({ body, fields, color: tier.color, footer: tipFor(earn), thumbnail: icon || undefined }), name, icon);

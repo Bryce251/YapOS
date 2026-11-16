@@ -8,6 +8,7 @@ import { ADD_BOT_URL } from './links.js';
 
 const NAV = [
   { id: 'overview', label: 'Overview', icon: 'overview', sub: '' },
+  { id: 'stats', label: 'Stats', icon: 'chart', sub: 'stats' },
   { id: 'members', label: 'Members', icon: 'users', sub: 'members' },
   { id: 'mod', label: 'Moderation', icon: 'shield', sub: 'mod' },
   { id: 'tickets', label: 'Tickets', icon: 'ticket', sub: 'tickets' },
@@ -66,6 +67,16 @@ export function packsLink(active = false) {
   }, icon('folder', { size: 16 }));
 }
 
+export function accountLink(active = false) {
+  return h('a', {
+    href: '/account',
+    class: ['icon-btn', 'party-link', active ? 'is-active' : ''],
+    title: 'Your account',
+    dataset: { link: '' },
+    attrs: { 'aria-label': 'Your account', 'aria-current': active ? 'page' : null },
+  }, icon('user', { size: 16 }));
+}
+
 function userBlock(user, onLogout, { partyOwner = false, partyAdmin = false, section = '' } = {}) {
   const name = user?.display_name || user?.username || 'You';
   return h('div', { class: 'user-block' },
@@ -73,7 +84,8 @@ function userBlock(user, onLogout, { partyOwner = false, partyAdmin = false, sec
     h('div', { class: 'user-text' },
       h('span', { class: 'user-name', text: name }),
       user?.username && user.username !== name ? h('span', { class: 'user-handle', text: `@${user.username}` }) : null),
-    packsLink(section === 'packs'),
+    accountLink(section === 'account'),
+    packsLink(section === 'packs' || section === 'packs-browse'),
     partyOwner ? partyLink(section === 'party') : null,
     partyOwner || partyAdmin ? reportsLink(section === 'party-reports') : null,
     h('button', { type: 'button', class: 'icon-btn', title: 'Log out', attrs: { 'aria-label': 'Log out' }, on: { click: onLogout } }, icon('logout', { size: 16 })));

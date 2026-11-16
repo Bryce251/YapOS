@@ -287,6 +287,96 @@ export function seedPartyReport(db, t = Date.now()) {
     .run(DEV_TEXT_REPORT_ID, 'Pineapple on pizza people should be kicked out of every call, no exceptions', 'What is the worst food opinion?', t - 2 * 60_000);
 }
 
+export const DEV_PUBLIC_PACKS = Object.freeze([
+  Object.freeze({ code: 'DEVSPACE', owner: 'admin', name: 'Space adventure', words: ['rocket', 'astronaut', 'black hole', 'comet', 'moon base', 'satellite', 'alien', 'telescope'], likes: 5, daysAgo: 6 }),
+  Object.freeze({ code: 'DEVSNACK', owner: 'member', name: 'Snack attack', words: ['popcorn', 'pretzel', 'nachos', 'cupcake', 'donut', 'milkshake', 'waffle', 'pizza slice'], likes: 3, daysAgo: 2 }),
+  Object.freeze({ code: 'DEVBEACH', owner: 'owner', name: 'Beach day', words: ['sandcastle', 'seashell', 'surfboard', 'beach ball', 'sunscreen', 'crab', 'lifeguard', 'flip flops'], likes: 1, daysAgo: 0 }),
+]);
+
+function devRandom(seed) {
+  let x = seed >>> 0 || 1;
+  return () => {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    return (x >>> 0) / 4294967296;
+  };
+}
+
+function upsertProfile(db, id, username, displayName, t) {
+  db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, ?, NULL, 0, ?) ON CONFLICT (id) DO UPDATE SET username = excluded.username, display_name = excluded.display_name, missing = 0, fetched = excluded.fetched').run(id, username, displayName, t);
+}
+
+export function seedPublicProfile(db, t = Date.now()) {
+  const last = new Date(t);
+  const month = (back) => {
+    const d = new Date(Date.UTC(last.getUTCFullYear(), last.getUTCMonth() - back, 1));
+    return d.toISOString().slice(0, 7);
+  };
+  const season = [{ month: month(1), rank: 2, kind: 'xp' }, { month: month(1), rank: 1, kind: 'shards' }, { month: month(2), rank: 4, kind: 'xp' }];
+  db.raw.prepare("INSERT INTO public_profiles (user_id, username, username_key, name, level, xp, shards, badges, achievements, season, clan, hidden, updated) VALUES (?, 'jolli', 'jolli', 'Jolli', 27, 18450, NULL, ?, ?, ?, ?, 0, ?) ON CONFLICT (user_id) DO NOTHING")
+    .run(IDS.owner, JSON.stringify(['first-game', 'games-10', 'wins-10']), JSON.stringify(['messages-10k', 'casino-50', 'tickets-100']), JSON.stringify(season), JSON.stringify({ name: 'Test Town Owls', tag: 'OWL', colour: '#7c5cff' }), t);
+  db.raw.prepare("INSERT INTO party_stats (user_id, games, wins, by_game, counters, updated) VALUES (?, 64, 21, ?, '{}', ?) ON CONFLICT (user_id) DO NOTHING")
+    .run(IDS.owner, JSON.stringify({ draw: { p: 22, w: 9 }, trivia: { p: 18, w: 7 }, bluff: { p: 12, w: 3 }, hive: { p: 12, w: 2 } }), t);
+  upsertProfile(db, IDS.owner, 'jolli', 'Jolli', t);
+}
+
+export function seedPublicPacks(db, t = Date.now()) {
+  const owners = { admin: IDS.admin, member: IDS.member, owner: IDS.owner };
+  for (const u of TEST_USERS) upsertProfile(db, u.id, u.username, u.display_name, t);
+  const pack = db.raw.prepare("INSERT INTO party_packs (code, owner_id, name, words, trivia, created, updated) VALUES (?, ?, ?, ?, '[]', ?, ?) ON CONFLICT (code) DO NOTHING");
+  const flag = db.raw.prepare('INSERT INTO pack_public (code, public, blocked, published, updated) VALUES (?, 1, 0, ?, ?) ON CONFLICT (code) DO NOTHING');
+  const like = db.raw.prepare('INSERT INTO pack_likes (code, user_id, at) VALUES (?, ?, ?) ON CONFLICT (code, user_id) DO NOTHING');
+  for (const p of DEV_PUBLIC_PACKS) {
+    const at = t - p.daysAgo * 86_400_000 - 3_600_000;
+    pack.run(p.code, owners[p.owner], p.name, JSON.stringify(p.words), at, at);
+    flag.run(p.code, at, at);
+    for (let i = 1; i <= p.likes; i += 1) like.run(p.code, `de7e0000-0000-4000-8000-${String(10 + i).padStart(12, '0')}`, at + i * 60_000);
+  }
+}
+
+export function seedSeason(db, t = Date.now()) {
+  const now = new Date(t);
+  const month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+  const people = [
+    [IDS.member, 'Sam', 'sam'],
+    [IDS.owner, 'Jolli', 'jolli'],
+    [IDS.member2, 'Riley', 'riley'],
+    [IDS.admin, 'Alex', 'alex'],
+    ...Array.from({ length: 8 }, (_, i) => {
+      const id = `de7e0000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`;
+      const f = fakeProfile(id);
+      return [id, f.display_name, f.username];
+    }),
+  ];
+  const xp = people.slice(0, 10).map(([id, name, username], i) => ({ rank: i + 1, id, name, username, value: 9200 - i * 740 }));
+  const order = [1, 0, 3, 2, 5, 4, 7, 6, 9, 8];
+  const shards = order.map((k, i) => {
+    const [id, name, username] = people[k];
+    return { rank: i + 1, id, name, username, value: 15400 - i * 1210 };
+  });
+  db.raw.prepare('INSERT INTO season_history (month, boards, updated) VALUES (?, ?, ?) ON CONFLICT (month) DO NOTHING').run(month, JSON.stringify({ xp, shards }), t);
+}
+
+export function seedServerStats(db, serverId, t = Date.now()) {
+  const HOUR = 3_600_000;
+  const end = Math.floor(t / HOUR) * HOUR;
+  const rand = devRandom(20261115);
+  const curve = [3, 2, 1, 1, 1, 1, 2, 3, 5, 6, 7, 8, 9, 9, 10, 11, 13, 16, 22, 28, 30, 24, 14, 7];
+  const stmt = db.raw.prepare('INSERT INTO server_stats (server_id, hour, messages, joins, leaves, active, updated) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (server_id, hour) DO NOTHING');
+  for (let i = 30 * 24 - 1; i >= 0; i -= 1) {
+    const hour = end - i * HOUR;
+    const d = new Date(hour);
+    const weekend = d.getUTCDay() === 0 || d.getUTCDay() === 6 ? 1.5 : 1;
+    const base = curve[d.getUTCHours()] * weekend;
+    const messages = Math.round(base * (0.6 + rand() * 0.8));
+    const joins = rand() < 0.08 ? 1 + Math.floor(rand() * 2) : 0;
+    const leaves = rand() < 0.04 ? 1 : 0;
+    const active = Math.max(messages ? 1 : 0, Math.round(messages / 3));
+    stmt.run(serverId, hour, messages, joins, leaves, active, t);
+  }
+}
+
 async function activityDev(request) {
   const url = new URL(request.url);
   if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Method not allowed', { status: 405, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
@@ -620,6 +710,10 @@ export async function startDev({
   seedPartyReport(db);
   seedPartyPack(db, IDS.owner);
   seedDailyScores(db);
+  seedPublicProfile(db);
+  seedPublicPacks(db);
+  seedSeason(db);
+  seedServerStats(db, IDS.server);
 
   const oauth = createFakeOAuth({
     users: TEST_USERS,
@@ -723,6 +817,7 @@ async function main() {
     'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party and see a sample flagged drawing and a flagged Hot Takes answer at /party/reports.',
     `Word packs: sign in as Jolli and open /packs to edit the sample pack. Type the code ${DEV_PACK_CODE} into Draw & Guess or Trivia settings to play with it.`,
     "Daily puzzle: today's Letter Hive and Scramble already have a few scores on the leaderboard (/api/activity/daily/top?kind=hive).",
+    'Community: /u/jolli is a sample public profile, /packs/browse lists 3 public packs with likes, /seasons shows last month, and Test Town has 30 days of stats on its Stats page.',
     '',
     'Test users (pick one on the sign-in page):',
     ...dev.users.map((u) => `  ${u.display_name.padEnd(8)} @${u.username.padEnd(8)} ${u.role}`),

@@ -491,6 +491,13 @@ const draw = {
       .map(([id, slot, text]) => ({ r: guessRef(st, id), author: slot, text, context: word ? `Word to draw: ${word}` : null }));
   },
 
+  replays: true,
+
+  hiddenDrawings(snap) {
+    const st = snap && snap.state ? snap.state[KEY] : null;
+    return st && st.hid && Number.isInteger(st.nonce) ? [drawingId(st)] : [];
+  },
+
   drawingOf(snap) {
     const st = snap && snap.state ? snap.state[KEY] : null;
     if (!showsInk(st)) return null;

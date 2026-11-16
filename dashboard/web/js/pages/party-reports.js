@@ -8,6 +8,7 @@ import { decodeStroke, paintInk, GRID_W, GRID_H } from '../../activity/js/games/
 
 export const REPORTS_PATH = '/api/party/reports';
 export const BANS_PATH = '/api/party/bans';
+export const PACK_REPORTS_PATH = '/api/party/pack-reports';
 export const GAME_NAMES = Object.freeze({
   draw: 'Draw & Guess',
   odd: 'Odd One Out',
@@ -21,10 +22,13 @@ export const GAME_NAMES = Object.freeze({
   wyr: 'Would You Rather',
   hive: 'Letter Hive',
   bluff: 'Bluff',
+  sketchduel: 'Sketch Duel',
+  story: 'Story Builder',
+  hangman: 'Hangman Royale',
 });
 export const ART_SCALE = 2;
 const FILTERS = [['open', 'Open'], ['dismissed', 'Dismissed'], ['all', 'All']];
-const KINDS = [['all', 'All'], ['drawing', 'Drawings'], ['text', 'Text']];
+const KINDS = [['all', 'All'], ['drawing', 'Drawings'], ['text', 'Text'], ['pack', 'Packs']];
 const SNIPPET_MAX = 80;
 
 const str = (v) => (typeof v === 'string' && v ? v : '');
@@ -32,6 +36,34 @@ const str = (v) => (typeof v === 'string' && v ? v : '');
 function readProfile(p) {
   if (!p || typeof p !== 'object') return null;
   return { username: str(p.username), display_name: str(p.display_name), avatar: str(p.avatar) };
+}
+
+function readPackReport(r) {
+  if (!r || typeof r !== 'object' || typeof r.id !== 'string') return null;
+  const pk = r.pack && typeof r.pack === 'object' ? r.pack : null;
+  const owner = pk && pk.owner && typeof pk.owner === 'object' ? pk.owner : {};
+  const p = r.reporter && typeof r.reporter === 'object' ? r.reporter : {};
+  return {
+    id: r.id,
+    kind: 'pack',
+    game: '',
+    word: '',
+    text: str(r.reason),
+    context: '',
+    created: Number(r.created) || 0,
+    status: r.status === 'dismissed' ? 'dismissed' : 'open',
+    ink: [],
+    pack: {
+      code: str(pk?.code) || str(r.code),
+      name: str(pk?.name),
+      gone: !pk,
+      words: Array.isArray(pk?.words) ? pk.words.filter((w) => typeof w === 'string').slice(0, 60) : [],
+      public: pk?.public === true,
+      blocked: pk?.blocked === true,
+    },
+    drawer: { id: str(owner.id), name: '', username: str(owner.username), profile: null, banned: false, role: '' },
+    reporter: { id: str(p.id), name: str(p.name), profile: null },
+  };
 }
 
 function readReport(r) {
@@ -61,9 +93,10 @@ function readReport(r) {
   };
 }
 
-export function readReports(data) {
+export function readReports(data, kind = 'all') {
+  const read = kind === 'pack' ? readPackReport : readReport;
   return {
-    reports: Array.isArray(data?.reports) ? data.reports.map(readReport).filter(Boolean) : [],
+    reports: Array.isArray(data?.reports) ? data.reports.map(read).filter(Boolean) : [],
     next: typeof data?.next === 'string' && data.next ? data.next : null,
     open: Number.isInteger(data?.open) && data.open >= 0 ? data.open : 0,
     role: data?.role === 'owner' ? 'owner' : 'admin',
@@ -88,6 +121,7 @@ export function decodeInk(list) {
 }
 
 export function gameName(id, kind = 'drawing') {
+  if (kind === 'pack') return 'Word pack';
   return GAME_NAMES[id] || (kind === 'text' ? 'YapOS Party' : 'Drawing game');
 }
 
@@ -97,6 +131,7 @@ export function snippet(text, max = SNIPPET_MAX) {
 }
 
 export function banReason(r) {
+  if (r.kind === 'pack') return `Reported word pack${r.pack?.name ? ` ${r.pack.name}` : ''}${r.pack?.code ? ` (${r.pack.code})` : ''}`;
   if (r.kind === 'text') return `Reported text in ${gameName(r.game, 'text')}${r.text ? `: "${snippet(r.text)}"` : ''}`;
   return `Reported drawing in ${gameName(r.game)}${r.word ? ` (word: ${r.word})` : ''}`;
 }
@@ -160,7 +195,7 @@ export function renderPartyReports(ctx) {
   const page = h('div', { class: 'page page-narrow party-page report-page' },
     pageHeader({
       title: 'Party reports',
-      description: 'When players flag a drawing or something another player wrote in YapOS Party, a copy lands here with the name of whoever made it. Ban someone to stop them joining games in every server. They can still watch.',
+      description: 'When players flag a drawing, something another player wrote or a public word pack in YapOS Party, a copy lands here with the name of whoever made it. Ban someone to stop them joining games in every server. They can still watch.',
       actions: state.partyOwner ? linkButton({ label: 'Party admins', href: '/party', icon: 'crown', size: 'sm' }) : null,
     }),
     card({ title: 'Reports', icon: 'flag', actions: h('div', { class: 'report-tools' }, openCount, kindBar, filterBar) }, listBody),
@@ -203,8 +238,16 @@ export function renderPartyReports(ctx) {
   function reportItem(r) {
     const d = r.drawer;
     const isText = r.kind === 'text';
+    const isPack = r.kind === 'pack';
     let art;
-    if (isText) {
+    if (isPack) {
+      art = h('figure', { class: 'report-quote report-pack' },
+        h('blockquote', { class: 'report-quote-text' },
+          h('span', { class: 'report-pack-name', text: r.pack.gone ? 'This pack was deleted' : r.pack.name || 'Word pack' }),
+          r.pack.code ? h('code', { class: 'pack-code-text', text: r.pack.code }) : null),
+        r.pack.words.length ? h('p', { class: 'report-pack-words', text: r.pack.words.join(', ') }) : null,
+        h('figcaption', { class: 'report-quote-context' }, h('span', { class: 'report-label', text: 'Why' }), h('span', { text: r.text || 'No reason given.' })));
+    } else if (isText) {
       art = h('figure', { class: 'report-quote' },
         h('blockquote', { class: 'report-quote-text', text: r.text || 'No text was sent with this report.' }),
         r.context ? h('figcaption', { class: 'report-quote-context' }, h('span', { class: 'report-label', text: 'Context' }), h('span', { text: r.context })) : null);
@@ -213,27 +256,33 @@ export function renderPartyReports(ctx) {
       art = r.ink.length ? h('div', { class: 'report-art' }, canvas) : h('div', { class: 'report-art is-empty' }, h('span', { class: 'muted', text: 'No drawing was sent with this report.' }));
       if (r.ink.length) paintReport(canvas, r.ink);
     }
-    const tags = [badge(gameName(r.game, r.kind), 'accent'), badge(isText ? 'Text' : 'Drawing', 'neutral', isText ? 'message' : 'palette')];
+    const tags = isPack
+      ? [badge('Word pack', 'accent', 'folder'), r.pack.blocked ? badge('Hidden from browser', 'danger', 'eye-off') : r.pack.public ? badge('Public', 'neutral', 'globe') : badge('Not public', 'neutral')]
+      : [badge(gameName(r.game, r.kind), 'accent'), badge(isText ? 'Text' : 'Drawing', 'neutral', isText ? 'message' : 'palette')];
     if (r.status === 'dismissed') tags.push(badge('Dismissed', 'neutral'));
     if (d.banned) tags.push(badge('Banned', 'danger', 'ban'));
     if (d.role === 'owner') tags.push(badge('Owner', 'neutral', 'crown'));
     else if (d.role === 'admin') tags.push(badge('Party admin', 'neutral', 'crown'));
     const actions = [];
     if (canBan(d)) actions.push(button({ label: 'Ban from Party', icon: 'ban', variant: 'danger', size: 'sm', ariaLabel: `Ban ${drawerName(d)} from YapOS Party`, onClick: (e) => ban(r, e.currentTarget) }));
+    if (isPack && !r.pack.gone && !r.pack.blocked) actions.push(button({ label: 'Hide from browser', icon: 'eye-off', variant: 'danger', size: 'sm', onClick: (e) => packAction(r, 'hide', e.currentTarget) }));
+    if (isPack && !r.pack.gone && r.pack.blocked) actions.push(button({ label: 'Put back', icon: 'refresh', size: 'sm', onClick: (e) => packAction(r, 'restore', e.currentTarget) }));
     if (r.status === 'open') actions.push(button({ label: 'Dismiss', icon: 'check', size: 'sm', onClick: (e) => dismiss(r, e.currentTarget) }));
-    actions.push(button({ label: 'Delete', icon: 'trash', size: 'sm', onClick: (e) => remove(r, e.currentTarget) }));
+    if (!isPack) actions.push(button({ label: 'Delete', icon: 'trash', size: 'sm', onClick: (e) => remove(r, e.currentTarget) }));
     const note = d.role === 'admin' && view.role !== 'owner'
       ? h('p', { class: 'report-note', text: 'Only the owner can ban a party admin.' })
       : null;
-    return h('li', { class: ['report-item', isText ? 'is-text' : '', r.status === 'dismissed' ? 'is-dismissed' : ''], dataset: { id: r.id, kind: r.kind } },
+    return h('li', { class: ['report-item', isText || isPack ? 'is-text' : '', r.status === 'dismissed' ? 'is-dismissed' : ''], dataset: { id: r.id, kind: r.kind } },
       art,
       h('div', { class: 'report-info' },
         h('div', { class: 'report-head' }, ...tags, h('time', { class: 'report-time', attrs: { datetime: new Date(r.created || 0).toISOString(), title: formatDate(r.created) }, text: relativeTime(r.created) })),
         h('dl', { class: 'report-facts' },
-          person(isText ? 'Wrote it' : 'Drew it', d),
+          person(isPack ? 'Made it' : isText ? 'Wrote it' : 'Drew it', d),
           person('Reported by', r.reporter),
           !isText && r.word ? h('div', { class: 'report-person' }, h('dt', { class: 'report-label', text: 'Word' }), h('dd', { class: 'report-word', text: r.word })) : null),
-        h('p', { class: 'report-note', text: isText
+        h('p', { class: 'report-note', text: isPack
+          ? 'A signed-in player reported this public pack. Hiding it takes it off the pack browser for everyone, and its code keeps working in games.'
+          : isText
           ? "The game that saw these words sent this report, so treat names and ids as claims. The line under an id shows what Yapin' says, when we know it."
           : "Names and ids come from the reporter's game, so treat them as claims. The line under an id shows what Yapin' says, when we know it." }),
         note,
@@ -246,7 +295,7 @@ export function renderPartyReports(ctx) {
       replace(listBody, emptyState({
         icon: 'flag',
         title: filter === 'open' ? 'No open reports' : 'No reports here',
-        body: filter === 'open' ? `Nothing needs a look right now. ${kind === 'text' ? 'Flagged guesses, answers and other words' : kind === 'drawing' ? 'Flagged drawings' : 'Flagged drawings and words'} show up here.` : 'Reports you dismiss stay here for 30 days.',
+        body: filter === 'open' ? `Nothing needs a look right now. ${kind === 'pack' ? 'Reported public word packs' : kind === 'text' ? 'Flagged guesses, answers and other words' : kind === 'drawing' ? 'Flagged drawings' : 'Flagged drawings and words'} show up here.` : 'Reports you dismiss stay here for 30 days.',
         compact: true,
       }));
       return;
@@ -257,6 +306,7 @@ export function renderPartyReports(ctx) {
 
   function reportsUrl(before) {
     const q = new URLSearchParams({ status: filter });
+    if (kind === 'pack') return `${PACK_REPORTS_PATH}?${q}`;
     if (kind !== 'all') q.set('kind', kind);
     if (before) q.set('before', before);
     return `${REPORTS_PATH}?${q}`;
@@ -265,7 +315,7 @@ export function renderPartyReports(ctx) {
   async function loadMore(btn) {
     setBusy(btn, true, 'Loading');
     try {
-      const data = readReports(await api.get(reportsUrl(view.next), { signal: ctx.signal }));
+      const data = readReports(await api.get(reportsUrl(view.next), { signal: ctx.signal }), kind);
       if (ctx.signal?.aborted) return;
       const seen = new Set(view.reports.map((r) => r.id));
       view = { ...data, reports: view.reports.concat(data.reports.filter((r) => !seen.has(r.id))) };
@@ -319,7 +369,7 @@ export function renderPartyReports(ctx) {
     if (!ok || ctx.signal?.aborted) return;
     if (btn?.isConnected) setBusy(btn, true, 'Dismissing');
     try {
-      const data = await api.post(`${REPORTS_PATH}/${encodeURIComponent(r.id)}/dismiss`, {}, { signal: ctx.signal });
+      const data = await api.post(`${r.kind === 'pack' ? PACK_REPORTS_PATH : REPORTS_PATH}/${encodeURIComponent(r.id)}/dismiss`, {}, { signal: ctx.signal });
       if (ctx.signal?.aborted) return;
       if (data?.dismissed) view.open = Math.max(0, view.open - 1);
       if (filter === 'open') view.reports = view.reports.filter((x) => x.id !== r.id);
@@ -334,6 +384,39 @@ export function renderPartyReports(ctx) {
         drawReports();
       }
       failToast(err, "Couldn't dismiss it");
+    }
+  }
+
+  async function packAction(r, action, btn) {
+    const hide = action === 'hide';
+    const name = r.pack.name || r.pack.code || 'this pack';
+    const ok = await confirmDialog({
+      title: hide ? `Hide ${name} from the pack browser?` : `Put ${name} back on the pack browser?`,
+      body: hide ? 'Nobody can find or like it on the browse page. Its code still works in games. Every open report for this pack is dismissed.' : 'If its maker still has it set to public, it shows on the browse page again.',
+      confirmLabel: hide ? 'Hide pack' : 'Put back',
+      tone: hide ? 'danger' : 'primary',
+    });
+    if (!ok || ctx.signal?.aborted) return;
+    if (btn?.isConnected) setBusy(btn, true, hide ? 'Hiding' : 'Saving');
+    try {
+      await api.post(`${PACK_REPORTS_PATH}/${encodeURIComponent(r.id)}/${hide ? 'hide' : 'restore'}`, {}, { signal: ctx.signal });
+      if (ctx.signal?.aborted) return;
+      for (const x of view.reports) {
+        if (x.kind !== 'pack' || x.pack.code !== r.pack.code) continue;
+        x.pack.blocked = hide;
+        if (hide && x.status === 'open') {
+          x.status = 'dismissed';
+          view.open = Math.max(0, view.open - 1);
+        }
+      }
+      if (hide && filter === 'open') view.reports = view.reports.filter((x) => x.kind !== 'pack' || x.pack.code !== r.pack.code);
+      drawReports();
+      toast(hide ? `${name} is hidden from the pack browser.` : `${name} can show on the pack browser again.`);
+    } catch (err) {
+      if (ctx.signal?.aborted) return;
+      if (btn?.isConnected) setBusy(btn, false);
+      if (err instanceof ApiError && err.status === 403) return denied();
+      failToast(err, hide ? "Couldn't hide it" : "Couldn't put it back");
     }
   }
 
@@ -425,7 +508,7 @@ export function renderPartyReports(ctx) {
       render: (data) => {
         if (mine !== gen) return;
         if (data?.staffOnly) return denied();
-        view = readReports(data);
+        view = readReports(data, kind);
         drawReports();
       },
     });

@@ -565,7 +565,14 @@ test('results posted by the activity land in the Worker’s Party stats and XP q
     await r.clock.advance(REVEAL_MS + 400);
   }
   assert.equal(host.snapshot().room.phase, 'results');
-  for (let i = 0; i < 5; i += 1) await new Promise((done) => setImmediate(done));
+  const settle = async (sql, want) => {
+    for (let i = 0; i < 400; i += 1) {
+      if (h.db.raw.prepare(sql).all().length >= want) return;
+      await new Promise((done) => setTimeout(done, 5));
+    }
+  };
+  await settle('SELECT user_id FROM party_stats', 3);
+  await settle('SELECT user_id FROM party_xp', 3);
   const rows = h.db.raw.prepare('SELECT user_id, games, wins FROM party_stats').all();
   assert.equal(rows.length, 3);
   const winner = bySlot(r, slotsOf(r)[0]).snapshot().me;

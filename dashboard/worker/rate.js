@@ -18,6 +18,12 @@ export const LIMITS = {
   daily: 120,
   dailyPost: 20,
   packs: 60,
+  publicProfile: 120,
+  browse: 120,
+  packLikes: 30,
+  packReports: 5,
+  seasons: 120,
+  stats: 30,
 };
 
 export async function hit(db, key, limit, t, weight = 1) {

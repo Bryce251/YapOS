@@ -663,6 +663,21 @@ const telephone = {
     return textList(api, api.get(KEY));
   },
 
+  replays: true,
+
+  hiddenDrawings(snap) {
+    const st = snap && snap.state ? snap.state[KEY] : null;
+    if (!st) return [];
+    const out = [...hiddenSet(st)].filter((d) => typeof d === 'string');
+    if (st.phase === 'reveal' && st.rv) {
+      for (let i = 0; i <= st.rv.at; i += 1) {
+        const e = snap.state[entryKey(i)];
+        if (e && e.c === st.rv.c && e.i === i && e.k === 'd' && e.hid) out.push(drawingId(st.run, e.c, i));
+      }
+    }
+    return out;
+  },
+
   drawingOf(snap) {
     const st = snap && snap.state ? snap.state[KEY] : null;
     if (!st || !Array.isArray(st.seats)) return null;

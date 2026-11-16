@@ -13,6 +13,7 @@ import { createFreshness } from './freshness.js';
 import { createScheduler } from './scheduler.js';
 import { createAppRegistry, createYap } from './apps.js';
 import { createDashboard } from './dashboard.js';
+import { ensureStats } from './stats.js';
 import { dialog } from './ui.js';
 import { normalizeName } from './parse.js';
 
@@ -133,6 +134,7 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
       if (only) for (const id of only) await bot.load(path.join(appsDir, `${id}.js`));
       else await bot.loadCogs(appsDir);
       log.info(`${VERSION.full}: ${apps.size} apps loaded (${apps.list().map((a) => a.meta.id).join(', ')})`);
+      ensureStats(engine);
       engine.scheduler.start();
       engine.dashboard.start();
     },

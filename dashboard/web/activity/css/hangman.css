@@ -1,0 +1,287 @@
+:root {
+  --game-hangman: #38bdf8;
+}
+
+[data-game="hangman"],
+.game.game-hangman,
+[data-key="pick-hangman"] {
+  --game: var(--game-hangman);
+}
+
+.game-hangman {
+  --game-soft: color-mix(in srgb, var(--game) 14%, transparent);
+  --game-line: color-mix(in srgb, var(--game) 55%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.hangman-off {
+  display: none !important;
+}
+
+.hangman-headwrap:empty,
+.hangman-others-wrap:empty {
+  display: none;
+}
+
+.hangman-board {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.hangman-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.hangman-hearts {
+  display: inline-flex;
+  gap: 2px;
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+
+.hangman-hearts-xs {
+  font-size: var(--text-2xs);
+}
+
+.hangman-heart.is-lost {
+  opacity: 0.35;
+  transform: scale(0.85);
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.hangman-badge {
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-heavy);
+}
+
+.hangman-badge.is-solved {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.hangman-badge.is-out {
+  background: var(--danger-soft, var(--surface-3));
+  color: var(--danger);
+}
+
+.hangman-word {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hangman-tile {
+  display: grid;
+  place-items: center;
+  width: clamp(28px, 7vw, 44px);
+  height: clamp(36px, 9vw, 54px);
+  border-bottom: 3px solid var(--border-strong);
+  color: var(--text);
+  font-size: clamp(20px, 4.5vw, 30px);
+  font-weight: var(--weight-heavy);
+  text-transform: uppercase;
+}
+
+.hangman-tile.is-shown {
+  border-color: var(--game);
+  animation: hangman-flip 320ms var(--pop) both;
+}
+
+.hangman-tile.is-missed {
+  border-color: var(--danger);
+  color: var(--danger);
+  animation: hangman-flip 320ms var(--pop) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+.hangman-word.is-solved .hangman-tile {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.hangman-keys {
+  display: grid;
+  grid-template-columns: repeat(13, minmax(0, 1fr));
+  gap: var(--space-1);
+}
+
+.hangman-key {
+  min-height: 40px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: var(--weight-bold);
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+.hangman-key:disabled {
+  cursor: default;
+}
+
+.hangman-key.is-hit {
+  border-color: var(--success);
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.hangman-key.is-miss {
+  border-color: transparent;
+  background: var(--surface-3);
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+.hangman-key.is-wait {
+  opacity: 0.6;
+}
+
+.hangman-solve {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.hangman-solve-note {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.hangman-others {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hangman-other {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "face name rank gain" "face bar bar bar";
+  align-items: center;
+  column-gap: var(--space-2);
+  row-gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.hangman-other > .avatar {
+  grid-area: face;
+}
+
+.hangman-other.is-me {
+  border-color: var(--game-line);
+}
+
+.hangman-other.is-out {
+  opacity: 0.6;
+}
+
+.hangman-other-name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hangman-other-rank,
+.hangman-other > .hangman-hearts {
+  grid-area: rank;
+}
+
+.hangman-other-bar {
+  grid-area: bar;
+  position: relative;
+  display: block;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.hangman-other-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  border-radius: inherit;
+  background: var(--game);
+  transform-origin: left center;
+  transform: scaleX(var(--found, 0));
+  transition: transform 300ms var(--ease);
+}
+
+.hangman-other.is-solved .hangman-other-fill {
+  background: var(--success);
+}
+
+.hangman-gain {
+  grid-area: gain;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-heavy);
+}
+
+@keyframes hangman-flip {
+  0% {
+    transform: rotateX(80deg);
+    opacity: 0;
+  }
+  100% {
+    transform: rotateX(0);
+    opacity: 1;
+  }
+}
+
+@media (hover: hover) {
+  .hangman-key:hover:not(:disabled) {
+    border-color: var(--game);
+    background: var(--game-soft);
+  }
+}
+
+@media (max-width: 520px) {
+  .hangman-keys {
+    grid-template-columns: repeat(9, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hangman-tile.is-shown,
+  .hangman-tile.is-missed {
+    animation: none;
+  }
+
+  .hangman-key,
+  .hangman-heart.is-lost,
+  .hangman-other-fill {
+    transition: none;
+  }
+}

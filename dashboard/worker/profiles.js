@@ -10,7 +10,7 @@ export const WANTED_RETRY = MINUTE;
 export const WANTED_TTL = 10 * MINUTE;
 export const AVATAR_HOSTS = new Set(['files.yapper.website', 'www.yapin.gg']);
 const MAX_UPLOAD = 100;
-const UPLOAD_LIMIT = 64 * 1024;
+export const UPLOAD_LIMIT = 64 * 1024;
 const USERNAME_MAX = 64;
 const DISPLAY_MAX = 64;
 const AVATAR_MAX = 1024;
@@ -36,7 +36,7 @@ export function cleanText(value, max) {
   return chars.length > max ? chars.slice(0, max).join('') : text;
 }
 
-function cleanUsername(value) {
+export function cleanUsername(value) {
   const text = cleanText(value, USERNAME_MAX + 1);
   if (!text) return null;
   const bare = text.replace(/^@+/, '').replace(/\s+/g, '');
@@ -145,7 +145,10 @@ export async function hasWanted(db, t) {
 }
 
 export async function putProfiles(request, env, t) {
-  const body = await readJson(request, UPLOAD_LIMIT);
+  return storeProfiles(env, await readJson(request, UPLOAD_LIMIT), t);
+}
+
+export async function storeProfiles(env, body, t, extra = {}) {
   const list = body.profiles === undefined ? [] : body.profiles;
   const gone = body.missing === undefined ? [] : body.missing;
   if (!Array.isArray(list)) throw new HttpError(400, 'bad_profiles', '"profiles" must be a list.');
@@ -154,12 +157,13 @@ export async function putProfiles(request, env, t) {
     throw new HttpError(413, 'too_many', `Send at most ${MAX_UPLOAD} profiles at once.`);
   }
   const db = env.DB;
-  const stmts = [];
+  const stmts = [...(extra.stmts || [])];
   const done = new Set();
   const ignored = [];
   let stored = 0;
   let missing = 0;
   for (const p of list) {
+    if (extra.skip && extra.skip(p)) continue;
     if (!isPlainObject(p) || typeof p.id !== 'string' || !ID_RE.test(p.id) || done.has(p.id)) {
       ignored.push(isPlainObject(p) && typeof p.id === 'string' ? p.id.slice(0, 64) : null);
       continue;
@@ -191,7 +195,7 @@ export async function putProfiles(request, env, t) {
   }
   for (const id of done) stmts.push(db.prepare('DELETE FROM profile_wanted WHERE id = ?').bind(id));
   if (stmts.length) await db.batch(stmts);
-  return json({ ok: true, stored, missing, ignored });
+  return json({ ok: true, stored, missing, ignored, ...(extra.out || {}) });
 }
 
 export function profileRoute(request, env, segs, url, t) {

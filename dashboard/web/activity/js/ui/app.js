@@ -7,6 +7,10 @@ import { viewFor } from '../views/index.js';
 import { createAdminPanel } from './admin-panel.js';
 import { createTrolls, ALL_FX, seesFx } from './trolls.js';
 import { sfx as defaultSfx } from './sfx.js';
+import { createRecorder } from './replay.js';
+import { predictModel, predictBox, predictWaitModel, predictWait } from './predict.js';
+import { hostBarModel, hostBar, REMOVED_TEXT, LATE_LOCKED_TEXT } from './hosttools.js';
+import { tourStatus } from './tournament.js';
 
 export const ANNOUNCE_MS = 10000;
 export const LEAVE_GRACE_MS = 6000;
@@ -76,6 +80,8 @@ export function headerModel(snap, { alone = false, adminOpen = false, sound = tr
   let status = alone ? 'Not in a call' : 'Connecting';
   if (phase === 'lobby') status = 'Lobby';
   else if (phase === 'game') status = game ? `${game.emoji} ${game.name}` : 'Playing';
+  const live = snap.ready && snap.tour ? snap.tour.live : null;
+  if (live && phase === 'game') status = `🏆 ${tourStatus(live)} · ${status}`;
   else if (phase === 'results') status = 'Results';
   return {
     phase,
@@ -114,7 +120,11 @@ export function gameTint(snap, phase) {
 
 export function spectateModel(snap) {
   if (!snap.ready || snap.room.phase !== 'game' || snap.meJoined) return null;
-  return { meJoined: false, joining: snap.joining || null, banned: partyBanned(snap) };
+  const tools = snap.hostTools || {};
+  const out = { meJoined: false, joining: snap.joining || null, banned: partyBanned(snap) };
+  if (tools.removed) out.removed = true;
+  else if (tools.lateLocked) out.locked = true;
+  return out;
 }
 
 export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, juice = null }) {
@@ -158,12 +168,17 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   const trolls = createTrolls({ shell, layer: fxLayer, marks: root, win, engine, fx, sfx: sound });
   const lobby = createLobby({ engine, toast });
-  const results = createResults({ engine, fx });
+  const replays = createRecorder();
+  const results = createResults({ engine, fx, replays, win });
   const gameWrap = h('div', { class: 'screen play' });
+  const hostSlot = h('div', { class: 'host-slot' });
   const spectate = h('div', { class: 'spectate-slot' });
+  const predictSlot = h('div', { class: 'predict-slot' });
   const gameCard = h('div', { class: 'card glass play-card' });
   const strip = h('div', { class: 'strip' });
-  gameWrap.append(spectate, gameCard, strip);
+  gameWrap.append(hostSlot, spectate, predictSlot, gameCard, strip);
+  let hostOpen = false;
+  let predictUntil = 0;
   const now = () => (typeof engine.now === 'function' ? engine.now() : Date.now());
   let renders = 0;
   let profileTimer = null;
@@ -360,12 +375,12 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   const paintSpectate = memo((m) => {
     if (!m) return null;
-    if (m.banned) {
+    if (m.banned || m.removed || m.locked) {
       return h(
         'div',
         { class: 'spectate', attrs: { role: 'status' } },
         h('span', { class: 'spectate-label' }, h('span', { text: 'Watching' })),
-        h('span', { class: 'spectate-hint', text: PARTY_BANNED_TEXT }),
+        h('span', { class: 'spectate-hint', text: m.banned ? PARTY_BANNED_TEXT : m.removed ? REMOVED_TEXT : LATE_LOCKED_TEXT }),
       );
     }
     const btn = joinButton(m, { size: 'sm', key: 'join-late' });
@@ -378,6 +393,33 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       btn,
     );
   });
+
+  const paintPredict = memo((m) => (m ? (m.pick ? predictBox(m.pick, onPredict) : predictWait(m.wait)) : null));
+
+  const paintHostBar = memo((m) =>
+    hostBar(m, {
+      onOpen: () => {
+        hostOpen = !hostOpen;
+        render(engine.snapshot());
+      },
+      onLate: (on) => {
+        engine.lobby.lateLock(on);
+        toast(on ? 'Late joins are locked for now.' : 'Late joins are open again.');
+      },
+      onRemove: (slot) => {
+        if (engine.lobby.remove(slot)) toast('Moved to watching for this game.');
+        else toast("That player can't be removed.");
+      },
+    }),
+  );
+
+  function onPredict(slot) {
+    if (!engine.predict(slot)) {
+      toast('Picks are closed for this round.');
+      return;
+    }
+    cue('toggle');
+  }
 
   const paintAnnounce = memo((m) =>
     m
@@ -545,6 +587,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   function paintBody(snap, hm) {
     if (screen === 'results' && hm.phase !== 'results') fx.clear();
+    if (hm.phase === 'game') replays.record(snap, snap.game);
     if (hm.phase === 'connecting') {
       screen = 'connecting';
       paintConnect(stage, connectModel(snap));
@@ -574,6 +617,11 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     if (screen !== 'game') swap(stage, gameWrap);
     screen = 'game';
     if (view) view.update(snap);
+    const pick = predictModel(snap);
+    predictUntil = pick ? pick.until : 0;
+    const wait = pick ? null : predictWaitModel(snap);
+    paintPredict(predictSlot, pick || wait ? { pick, wait } : null);
+    paintHostBar(hostSlot, hostBarModel(snap, hostOpen));
     paintSpectate(spectate, spectateModel(snap));
     paintStrip(strip, ownsBoard() ? null : stripModel(snap, viewBoard(snap)));
     tickTimers(stage, now(), timerHooks);
@@ -592,7 +640,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const ticker = win.setInterval(() => {
     tickTimers(stage, now(), timerHooks);
     tickAnnounce(now());
-    if (screen === 'connecting') render(engine.snapshot());
+    if (screen === 'connecting' || (predictUntil && now() >= predictUntil)) render(engine.snapshot());
   }, 200);
   render(engine.snapshot());
 

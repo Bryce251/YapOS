@@ -2584,3 +2584,762 @@
     align-items: stretch;
   }
 }
+
+.public-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.public-nav-link {
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
+}
+
+.public-nav-link:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.public-nav-link.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.public-account {
+  display: inline-flex;
+}
+
+.profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-md);
+}
+
+.profile-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.profile-avatar-wrap {
+  flex: none;
+}
+
+.profile-who {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.profile-name {
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.profile-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-handle {
+  color: var(--text-3);
+  font-size: 14px;
+}
+
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.clan-tag {
+  --clan: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--clan) 45%, var(--border));
+  background: color-mix(in srgb, var(--clan) 12%, var(--surface));
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.clan-tag-code {
+  color: color-mix(in srgb, var(--clan) 70%, var(--text));
+  font-family: var(--mono);
+}
+
+.profile-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.profile-stats > .profile-stat {
+  flex: 1 1 140px;
+}
+
+.level-ring {
+  position: relative;
+  width: 112px;
+  height: 112px;
+}
+
+.level-ring-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.level-ring-track,
+.level-ring-fill {
+  fill: none;
+  stroke-width: 8;
+}
+
+.level-ring-track {
+  stroke: var(--surface-3);
+}
+
+.level-ring-fill {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-dasharray: var(--p, 0) 100;
+  transition: stroke-dasharray 700ms var(--ease);
+}
+
+.level-ring-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.level-ring-num {
+  font-size: 28px;
+  line-height: 30px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.level-ring-cap {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.profile-stat {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+
+.profile-stat-icon {
+  grid-row: span 2;
+  display: inline-flex;
+  color: var(--accent-text);
+}
+
+.profile-stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-stat-label {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.profile-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.profile-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.profile-section:first-child {
+  grid-column: 1 / -1;
+}
+
+.profile-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.badge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+  list-style: none;
+}
+
+.badge-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: radial-gradient(120% 120% at 50% 0%, var(--accent-soft), transparent 70%), var(--surface);
+  text-align: center;
+}
+
+.badge-tile-emoji {
+  font-size: 28px;
+  line-height: 32px;
+}
+
+.badge-tile-label {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.fav-list,
+.placing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+
+.fav-row,
+.placing-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fav-emoji {
+  font-size: 20px;
+}
+
+.fav-name,
+.placing-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.fav-plays {
+  color: var(--text-3);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.season-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.season-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-md);
+}
+
+.season-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.season-boards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.season-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.season-col-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.season-board {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+}
+
+.season-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+}
+
+.season-row:hover {
+  background: var(--surface-2);
+}
+
+.season-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+a.season-name:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.season-value {
+  color: var(--text-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.browse-card {
+  overflow: visible;
+}
+
+.browse-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.browse-search {
+  flex: 1;
+  min-width: 200px;
+}
+
+.browse-wrap {
+  padding: 8px 16px 16px;
+}
+
+.browse-list {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+}
+
+.browse-list > li + li {
+  border-top: 1px solid var(--border);
+}
+
+.browse-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 12px 0;
+}
+
+.browse-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.browse-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.browse-meta {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.browse-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.browse-code .btn-label {
+  font-family: var(--mono);
+  letter-spacing: 0.08em;
+}
+
+.browse-more {
+  display: flex;
+  justify-content: center;
+  padding-top: 12px;
+}
+
+.like-btn .like-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.like-btn.is-liked {
+  border-color: color-mix(in srgb, var(--glow-b) 50%, var(--border));
+  background: color-mix(in srgb, var(--glow-b) 12%, var(--surface));
+  color: var(--text);
+}
+
+.like-btn.is-liked .icon {
+  fill: var(--glow-b);
+  stroke: var(--glow-b);
+}
+
+.report-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.report-reason {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.report-pack-name {
+  margin-right: 8px;
+  font-weight: 600;
+}
+
+.report-pack-words {
+  margin: 8px 0;
+  color: var(--text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.flow-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.flow-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.flow-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.flow-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.flow-key.is-join .flow-swatch,
+.flow-bar.is-join {
+  background: var(--success);
+}
+
+.flow-key.is-leave .flow-swatch,
+.flow-bar.is-leave {
+  background: var(--danger);
+}
+
+.flow-bars {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  align-items: end;
+  gap: 6px;
+  height: 128px;
+  padding: 8px 0 0;
+  border-bottom: 1px solid var(--border);
+  list-style: none;
+}
+
+.flow-col {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  height: 100%;
+  min-width: 0;
+}
+
+.flow-bar {
+  display: block;
+  flex: 1;
+  max-width: 14px;
+  height: max(var(--h, 0%), 3px);
+  border-radius: 4px 4px 1px 1px;
+  transform-origin: bottom;
+  animation: bar-grow 700ms var(--ease) backwards;
+  animation-delay: calc(var(--i, 0) * 35ms);
+}
+
+.flow-bar.is-zero {
+  height: 3px;
+  background: var(--bar-zero);
+}
+
+.heat-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.heat {
+  display: grid;
+  grid-template-columns: 36px repeat(24, minmax(12px, 1fr));
+  gap: 3px;
+  min-width: 420px;
+}
+
+.heat-hour,
+.heat-day {
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.heat-day {
+  display: flex;
+  align-items: center;
+}
+
+.heat-cell {
+  display: block;
+  aspect-ratio: 1;
+  min-width: 12px;
+  border-radius: 3px;
+  background: var(--surface-2);
+}
+
+.heat-0 {
+  background: var(--surface-2);
+}
+
+.heat-1 {
+  background: color-mix(in srgb, var(--accent) 25%, var(--surface-2));
+}
+
+.heat-2 {
+  background: color-mix(in srgb, var(--accent) 50%, var(--surface-2));
+}
+
+.heat-3 {
+  background: color-mix(in srgb, var(--accent) 75%, var(--surface-2));
+}
+
+.heat-4 {
+  background: var(--accent);
+}
+
+.heat-scale {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.heat-scale .heat-cell {
+  width: 12px;
+  min-width: 12px;
+}
+
+.stat-success .stat-value {
+  color: var(--success);
+}
+
+.stat-danger .stat-value {
+  color: var(--danger);
+}
+
+.setting-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.setting-list > .setting-row + .setting-row {
+  border-top: 1px solid var(--border);
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+}
+
+.setting-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.setting-title {
+  font-weight: 600;
+}
+
+.setting-body {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.pack-public-row {
+  margin-top: 12px;
+  padding-bottom: 0;
+  border-top: 1px solid var(--border);
+}
+
+.pack-row-title .badge {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.account-page > .card + .card {
+  margin-top: 16px;
+}
+
+.account-who {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-who-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.account-name {
+  font-weight: 600;
+}
+
+.account-handle {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.account-note {
+  margin-top: 8px;
+}
+
+@media (max-width: 720px) {
+  .public-nav {
+    display: none;
+  }
+
+  .profile-card {
+    padding: 16px;
+  }
+
+  .profile-hero {
+    flex-wrap: wrap;
+  }
+
+  .profile-stats {
+    justify-content: center;
+  }
+
+  .level-ring {
+    flex-basis: 100%;
+    max-width: 112px;
+  }
+
+  .profile-sections,
+  .season-boards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .setting-row {
+    align-items: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-bar,
+  .level-ring-fill {
+    animation: none;
+    transition: none;
+  }
+}

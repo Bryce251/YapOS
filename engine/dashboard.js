@@ -3,6 +3,7 @@ import { parseBool, parseDuration } from './parse.js';
 import { avatarUrl } from './links.js';
 import { HARD_CAP } from './limits.js';
 import { canGiveCurrency, CURRENCY, GLOBAL_KEY } from './global.js';
+import { profileSync } from './profiles-sync.js';
 
 const IDLE_MS = 15_000;
 const HOT_MS = 2_000;
@@ -76,6 +77,9 @@ const PARTY_REASON = 'YapOS Party';
 const PARTY_NS = 'party';
 const PARTY_GAME_RE = /^[a-z0-9_-]{1,32}$/;
 const PARTY_BADGE_RE = /^[A-Za-z0-9_.:-]{1,48}$/;
+const PARTY_SHARDS_MAX = 1000;
+const PARTY_SHARDS_CAP = 150;
+const PARTY_SHARD_REASONS = new Set(['play', 'win', 'tournament', 'prediction']);
 
 export const SLUG_RE = /^[a-z0-9-]{3,32}$/;
 
@@ -286,7 +290,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     timer: null, stopped: true, busy: false, failures: 0, delay: null, hot: false,
     used: new Map(), snapped: new Map(), published: new Map(), pending: [],
     gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity, profileRun: null,
-    reportsOpen: 0, partyStats: new Map(), partyAcks: [],
+    reportsOpen: 0, partyStats: new Map(), partyAcks: [], shardAcks: [], ratesDirty: true, ratesRun: null,
   };
 
   async function request(method, path, body) {
@@ -1133,8 +1137,104 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     }, []);
   }
 
+  function shardRow(raw) {
+    if (!plainObject(raw)) return null;
+    const id = typeof raw.id === 'string' || typeof raw.id === 'number' ? String(raw.id).trim() : '';
+    if (!SAFE_ID.test(id)) return null;
+    const user = typeof raw.user === 'string' ? raw.user.trim() : '';
+    const shards = Number(raw.shards);
+    const reason = typeof raw.reason === 'string' ? raw.reason.trim().toLowerCase() : '';
+    const game = typeof raw.game === 'string' && PARTY_GAME_RE.test(raw.game.trim().toLowerCase()) ? raw.game.trim().toLowerCase() : null;
+    if (!SAFE_ID.test(user) || !Number.isInteger(shards) || shards < 1 || shards > PARTY_SHARDS_MAX || !PARTY_SHARD_REASONS.has(reason)) return { id, bad: true };
+    return { id, user, shards, reason, game };
+  }
+
+  function appliedShards() {
+    const list = engine.store.get(PARTY_NS, 'appliedShards', []);
+    return Array.isArray(list) ? list : [];
+  }
+
+  function editShards(add, drop) {
+    engine.store.update(PARTY_NS, 'appliedShards', (cur) => {
+      const list = Array.isArray(cur) ? cur.filter((x) => typeof x === 'string' && x !== drop) : [];
+      if (add && !list.includes(add)) list.push(add);
+      if (list.length > PARTY_APPLIED_KEEP) list.splice(0, list.length - PARTY_APPLIED_KEEP);
+      return list;
+    }, []);
+  }
+
+  function shardCap(eco) {
+    try {
+      const n = Number(eco?.partyRates?.()?.cap);
+      if (Number.isInteger(n) && n >= 0) return Math.min(n, PARTY_SHARDS_MAX);
+    } catch (e) {
+      log.debug('[dashboard] reading the Party Shards cap failed', e?.message);
+    }
+    return PARTY_SHARDS_CAP;
+  }
+
+  function reserveShards(user, want, cap) {
+    const day = new Date(now()).toISOString().slice(0, 10);
+    let got = 0;
+    engine.store.update(PARTY_NS, 'shardDay', (cur) => {
+      const doc = plainObject(cur) && cur.day === day && plainObject(cur.users) ? cur : { day, users: {} };
+      const used = Math.max(0, Math.floor(Number(doc.users[user]) || 0));
+      got = Math.max(0, Math.min(want, cap - used));
+      if (got) doc.users[user] = used + got;
+      return doc;
+    }, null);
+    return { day, got };
+  }
+
+  function releaseShards(user, day, n) {
+    engine.store.update(PARTY_NS, 'shardDay', (cur) => {
+      if (!plainObject(cur) || cur.day !== day || !plainObject(cur.users)) return cur;
+      const left = Math.max(0, (Math.floor(Number(cur.users[user]) || 0)) - n);
+      if (left) cur.users[user] = left;
+      else delete cur.users[user];
+      return cur;
+    }, null);
+  }
+
+  async function applyShards(rows) {
+    const eco = engine.service('economy');
+    const done = new Set(appliedShards());
+    const cap = shardCap(eco);
+    const ack = [];
+    let paid = 0;
+    for (const raw of rows) {
+      const r = shardRow(raw);
+      if (!r || ack.includes(r.id)) continue;
+      if (r.bad || done.has(r.id)) { ack.push(r.id); continue; }
+      if (!eco || typeof eco.add !== 'function') continue;
+      let hold;
+      try {
+        hold = reserveShards(r.user, r.shards, cap);
+        editShards(r.id, null);
+      } catch (e) {
+        log.warn(`[dashboard] couldn't save which Party Shards were paid, so I'll try again later: ${e?.message}`);
+        if (hold?.got) { try { releaseShards(r.user, hold.day, hold.got); } catch (err) { log.debug('[dashboard] undoing a Party Shards hold failed', err?.message); } }
+        continue;
+      }
+      done.add(r.id);
+      if (!hold.got) { ack.push(r.id); continue; }
+      try {
+        await eco.add(GLOBAL_KEY, r.user, hold.got, PARTY_REASON);
+      } catch (e) {
+        log.debug('[dashboard] paying Party Shards failed', e?.message);
+        done.delete(r.id);
+        try { editShards(null, r.id); } catch (err) { log.debug('[dashboard] undoing a Party Shards mark failed', err?.message); }
+        try { releaseShards(r.user, hold.day, hold.got); } catch (err) { log.debug('[dashboard] undoing a Party Shards hold failed', err?.message); }
+        continue;
+      }
+      ack.push(r.id);
+      paid++;
+    }
+    return { ack, paid };
+  }
+
   async function applyParty(party) {
-    if (!plainObject(party)) return { applied: 0, acked: 0 };
+    if (!plainObject(party)) return { applied: 0, acked: 0, paid: 0 };
     const open = Number(party.reportsOpen);
     if (Number.isInteger(open) && open >= 0) state.reportsOpen = Math.min(open, HARD_CAP);
     const rows = Array.isArray(party.xp) ? party.xp.slice(0, PARTY_ROWS) : [];
@@ -1167,13 +1267,56 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
         log.debug('[dashboard] party:played listener failed', e?.message);
       }
     }
+    const shardRows = Array.isArray(party.shards) ? party.shards.slice(0, PARTY_ROWS) : [];
+    const shards = shardRows.length ? await applyShards(shardRows) : { ack: [], paid: 0 };
     const pending = [...new Set([...state.partyAcks, ...ack])].slice(-PARTY_APPLIED_KEEP);
+    const pendingShards = [...new Set([...state.shardAcks, ...shards.ack])].slice(-PARTY_APPLIED_KEEP);
     state.partyAcks = pending;
-    if (!pending.length) return { applied, acked: 0 };
-    const res = await request('POST', '/bot/party/ack', { ids: pending.slice(0, PARTY_ROWS) }).catch((e) => ({ ok: false, status: 0, error: e }));
-    if (res.ok) state.partyAcks = pending.slice(PARTY_ROWS);
-    else log.debug('[dashboard] Party XP ack failed', res.status);
-    return { applied, acked: res.ok ? Math.min(pending.length, PARTY_ROWS) : 0 };
+    state.shardAcks = pendingShards;
+    if (!pending.length && !pendingShards.length) return { applied, acked: 0, paid: shards.paid, shardsAcked: 0 };
+    const body = { ids: pending.slice(0, PARTY_ROWS) };
+    if (pendingShards.length) body.shardIds = pendingShards.slice(0, PARTY_ROWS);
+    const res = await request('POST', '/bot/party/ack', body).catch((e) => ({ ok: false, status: 0, error: e }));
+    if (res.ok) {
+      state.partyAcks = pending.slice(PARTY_ROWS);
+      state.shardAcks = pendingShards.slice(PARTY_ROWS);
+    } else log.debug('[dashboard] Party ack failed', res.status);
+    return {
+      applied,
+      acked: res.ok ? Math.min(pending.length, PARTY_ROWS) : 0,
+      paid: shards.paid,
+      shardsAcked: res.ok ? Math.min(pendingShards.length, PARTY_ROWS) : 0,
+    };
+  }
+
+  function partyRatesBody() {
+    const eco = engine.service('economy');
+    if (!eco || typeof eco.partyRates !== 'function') return null;
+    const r = eco.partyRates();
+    if (!plainObject(r)) return null;
+    const out = {};
+    for (const k of ['play', 'win', 'tournament', 'prediction', 'cap']) {
+      const n = Number(r[k]);
+      if (!Number.isInteger(n) || n < 0) return null;
+      out[k] = Math.min(n, PARTY_SHARDS_MAX);
+    }
+    return out;
+  }
+
+  async function sendPartyRates() {
+    const body = partyRatesBody();
+    if (!body) { state.ratesDirty = false; return false; }
+    state.ratesDirty = true;
+    const r = await request('POST', '/bot/party/rates', body).catch((e) => ({ ok: false, status: 0, error: e }));
+    if (r.ok) state.ratesDirty = false;
+    else log.debug('[dashboard] Party rates push failed', r.status);
+    return r.ok;
+  }
+
+  async function pushPartyRates() {
+    state.ratesDirty = true;
+    if (!enabled || state.stopped) return false;
+    return sendPartyRates();
   }
 
   function cleanPartyStats(raw) {
@@ -1235,6 +1378,8 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       for (const job of jobs) results.push(await runJob(job));
       await postResults(results);
       if (r.data?.party !== undefined) await applyParty(r.data.party).catch((e) => log.debug('[dashboard] Party sync failed', e?.message));
+      if (Array.isArray(r.data?.profileSettings) && r.data.profileSettings.length) await profileSync(engine, { fetch: fetchImpl }).applySettings(r.data.profileSettings).catch((e) => log.debug('[dashboard] profile settings sync failed', e?.message));
+      if (state.ratesDirty && !state.ratesRun) state.ratesRun = sendPartyRates().catch((e) => log.debug('[dashboard] Party rates push failed', e?.message)).finally(() => { state.ratesRun = null; });
       await pushDirty();
       await refresh();
       if (state.failures) log.info('[dashboard] connected again');
@@ -1291,6 +1436,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       state.timer = null;
     },
     get profileWork() { return state.profileRun; },
+    get ratesWork() { return state.ratesRun; },
     tick,
     runJob,
     lookupProfiles,
@@ -1304,5 +1450,6 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     pushSnapshot,
     applyParty,
     partyStats,
+    pushPartyRates,
   };
 }

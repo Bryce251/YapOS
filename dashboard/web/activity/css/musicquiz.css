@@ -1,0 +1,130 @@
+:root {
+  --game-musicquiz: #e879f9;
+}
+
+[data-game="musicquiz"],
+.game.game-musicquiz,
+[data-key="pick-musicquiz"] {
+  --game: var(--game-musicquiz);
+}
+
+.game-musicquiz {
+  --game-soft: color-mix(in srgb, var(--game) 14%, transparent);
+  --game-line: color-mix(in srgb, var(--game) 55%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.musicquiz-off {
+  display: none !important;
+}
+
+.musicquiz-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.musicquiz-stage.is-playing {
+  border-color: var(--game-line);
+  background: var(--game-soft);
+}
+
+.musicquiz-bars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 6px;
+  height: 56px;
+}
+
+.musicquiz-bar {
+  display: block;
+  width: 10px;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--game);
+  transform-origin: bottom center;
+  transform: scaleY(0.18);
+  opacity: 0.6;
+}
+
+.musicquiz-stage.is-playing .musicquiz-bar {
+  opacity: 1;
+  animation: musicquiz-bounce 720ms ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * -110ms);
+}
+
+.musicquiz-controls {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.musicquiz-note {
+  margin: 0;
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.musicquiz-question {
+  text-align: center;
+}
+
+.musicquiz-answer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  text-align: center;
+  animation: musicquiz-in 360ms var(--pop) both;
+}
+
+.musicquiz-title {
+  font-size: clamp(20px, 3.6vw, 28px);
+  font-weight: var(--weight-heavy);
+  text-wrap: balance;
+}
+
+.musicquiz-by {
+  font-size: var(--text-sm);
+}
+
+@keyframes musicquiz-bounce {
+  0%,
+  100% {
+    transform: scaleY(0.2);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes musicquiz-in {
+  0% {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .musicquiz-stage.is-playing .musicquiz-bar {
+    animation: none;
+    transform: scaleY(0.7);
+  }
+
+  .musicquiz-answer {
+    animation: none;
+  }
+}

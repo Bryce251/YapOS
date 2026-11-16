@@ -15,6 +15,10 @@ import { createReflexView } from './reflex.js';
 import { createBluffView } from './bluff.js';
 import { createPixelView } from './pixel.js';
 import { createHigherlowerView } from './higherlower.js';
+import { createSketchduelView } from './sketchduel.js';
+import { createStoryView } from './story.js';
+import { createHangmanView } from './hangman.js';
+import { createMusicquizView } from './musicquiz.js';
 
 function soundOf(over) {
   if (over && typeof over.play === 'function') return over;
@@ -84,6 +88,10 @@ export const VIEWS = Object.freeze({
   bluff: cued(createBluffView),
   pixel: cued(createPixelView),
   higherlower: cued(createHigherlowerView),
+  sketchduel: cued(createSketchduelView),
+  story: cued(createStoryView),
+  hangman: cued(createHangmanView),
+  musicquiz: cued(createMusicquizView),
 });
 
 export function viewFor(id) {

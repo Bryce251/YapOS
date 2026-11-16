@@ -1,7 +1,7 @@
 import { OpBudget, OPS_WINDOW_MS, MAX_VALUE_BYTES, checkSet, jsonBytes, validKey } from './limits.js';
 import { idOf, people, person, cleanName, initials, hueOf } from './players.js';
 import { censor } from './filter.js';
-import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins, sendTextReport, sendResults } from './admin.js';
+import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins, sendTextReport, sendResults, allowResultGames } from './admin.js';
 
 export const FLUSH_MS = 120;
 export const SOFT_OPS = 60;
@@ -45,6 +45,12 @@ export const CODE_MAX = 12;
 export const RESULT_MIN_PLAYERS = 2;
 export const RESULT_MAX_PLAYERS = 16;
 export const RESULT_EXTRA_KEYS = 8;
+export const PRED = 'pred';
+export const PREDICT_MS = 20000;
+export const PREDICT_MAX = 16;
+export const TOUR_GAMES = 3;
+export const PLACE_POINTS = Object.freeze([10, 7, 5, 3, 2, 1]);
+export const OUT_MAX = 36;
 const EXTRA_KEY_RE = /^[A-Za-z][A-Za-z0-9]{0,23}$/;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const USER_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -260,10 +266,64 @@ export function storedName(name) {
   return out || 'Player';
 }
 
+export function placementPoints(rows) {
+  const list = (Array.isArray(rows) ? rows : [])
+    .filter((r) => r && Number.isInteger(r.slot))
+    .map((r) => ({ slot: r.slot, won: r.won ? 1 : 0, score: Number(r.score) || 0 }))
+    .sort((a, b) => b.won - a.won || b.score - a.score || a.slot - b.slot);
+  const out = {};
+  let place = 0;
+  let prev = null;
+  list.forEach((r, i) => {
+    const sig = `${r.won}|${r.score}`;
+    if (sig !== prev) {
+      place = i;
+      prev = sig;
+    }
+    out[r.slot] = PLACE_POINTS[place] || 0;
+  });
+  return out;
+}
+
+export function championOf(pts, firsts = {}, lastPlace = {}) {
+  const slots = Object.keys(pts || {}).map(Number).filter(Number.isInteger);
+  if (!slots.length) return null;
+  slots.sort((a, b) => (pts[b] || 0) - (pts[a] || 0) || (firsts[b] || 0) - (firsts[a] || 0) || (lastPlace[b] || 0) - (lastPlace[a] || 0) || a - b);
+  return (pts[slots[0]] || 0) > 0 ? slots[0] : null;
+}
+
+export function cleanTour(raw, games) {
+  if (!raw || typeof raw !== 'object') return null;
+  const known = games instanceof Map ? (id) => games.has(id) : (id) => (Array.isArray(games) ? games.some((g) => g && g.id === id) : false);
+  const list = Array.isArray(raw.g) ? raw.g : [];
+  const g = [];
+  for (const id of list) {
+    if (g.length >= TOUR_GAMES) break;
+    if (typeof id === 'string' && known(id) && !g.includes(id)) g.push(id);
+  }
+  return { g };
+}
+
+export function pickTourGames(list, chosen, players, random = Math.random) {
+  const games = Array.isArray(list) ? list : [];
+  const fits = (g) => g && (g.minPlayers || 1) <= players;
+  const out = (Array.isArray(chosen) ? chosen : []).filter((id) => games.some((g) => g.id === id)).slice(0, TOUR_GAMES);
+  const pool = shuffle(games.filter((g) => fits(g) && !out.includes(g.id)), random);
+  while (out.length < TOUR_GAMES && pool.length) out.push(pool.shift().id);
+  return out.length === TOUR_GAMES ? out : null;
+}
+
+export function tourOf(room) {
+  const t = room && room.trn;
+  if (!t || typeof t !== 'object' || !Array.isArray(t.g) || !Number.isInteger(t.i)) return null;
+  return t;
+}
+
 export function createEngine(opts) {
   const t = opts.transport;
   const gameList = opts.games || [];
   const games = new Map(gameList.map((g) => [g.id, g]));
+  allowResultGames(gameList.map((g) => g && g.id));
   const now = opts.now || (() => Date.now());
   let skew = 0;
   const sharedNow = () => (isHost() ? now() : now() + skew);
@@ -301,6 +361,7 @@ export function createEngine(opts) {
   let hosting = false;
   let destroyed = false;
   let readySeen = false;
+  let myPick = null;
 
   const meId = () => idOf(t.me);
   const hostId = () => idOf(t.host);
@@ -875,30 +936,111 @@ export function createEngine(opts) {
     return out;
   }
 
-  function postParty(game, points, win, info, at) {
-    const players = partyPlayers(points, win, info.teams);
-    if (players.length < RESULT_MIN_PLAYERS) return players;
-    const body = { game: game.id, at, players: players.map(({ slot, ...p }) => p), extra: partyExtra(info.extra, players) };
+  function postParty(game, players, info, at, trn, preds) {
+    if (players.length < RESULT_MIN_PLAYERS) return false;
+    const extra = partyExtra(info.extra, players);
+    if (trn && trn.done && Number.isInteger(trn.champ)) {
+      const champ = players.find((p) => p.slot === trn.champ);
+      if (champ) extra.tournament = { winner: champ.id };
+    }
+    const body = { game: game.id, at, players: players.map(({ slot, ...p }) => p), extra };
+    const ids = new Set(players.map((p) => p.id));
+    const picks = [];
+    for (const x of preds) {
+      if (picks.length >= PREDICT_MAX) break;
+      const pick = idOfSlot(x.slot);
+      if (!pick || !ids.has(pick) || ids.has(x.id)) continue;
+      const who = personFor(x.id);
+      picks.push({ id: x.id, name: who.name, username: who.username, pick, right: x.right });
+    }
+    if (picks.length) body.predictions = picks;
     try {
       Promise.resolve(postResults(body)).catch(() => false);
     } catch {}
-    return players;
+    return true;
+  }
+
+  function tourStep(room, game, players) {
+    const trn = tourOf(room);
+    if (!trn || trn.done || trn.g[trn.i] !== game.id) return null;
+    const place = placementPoints(players);
+    const pts = { ...(trn.pts || {}) };
+    const f = { ...(trn.f || {}) };
+    for (const [slot, n] of Object.entries(place)) {
+      pts[slot] = (pts[slot] || 0) + n;
+      if (n === PLACE_POINTS[0]) f[slot] = (f[slot] || 0) + 1;
+    }
+    const next = { ...trn, pts, f, lp: place };
+    if (trn.i >= trn.g.length - 1) {
+      next.done = 1;
+      next.champ = championOf(pts, f, place);
+    }
+    return next;
+  }
+
+  function settlePicks(room, game, players, win, at) {
+    const pr = read(PRED);
+    if (!pr || typeof pr !== 'object' || pr.r !== room.round || pr.g !== game.id) return [];
+    const playing = new Set(players.map((p) => p.id).concat(activePlayers().map((p) => p.id)));
+    const kept = Object.entries(pr.p && typeof pr.p === 'object' ? pr.p : {}).filter(([id, slot]) => USER_RE.test(id) && Number.isInteger(slot) && !playing.has(id));
+    if (!kept.length && !Object.keys(pr.p && typeof pr.p === 'object' ? pr.p : {}).length) return [];
+    write(PRED, { ...pr, until: Math.min(Number(pr.until) || at, at), p: Object.fromEntries(kept), w: win, x: 1 });
+    return kept.map(([id, slot]) => ({ id, slot, right: win.includes(slot) }));
+  }
+
+  function openPicks(round, game) {
+    const playing = activePlayers();
+    const ids = new Set(playing.map((p) => p.id));
+    const watchers = presentList().filter((p) => !ids.has(p.id));
+    if (playing.length < RESULT_MIN_PLAYERS || !watchers.length) {
+      if (read(PRED) !== null) write(PRED, null);
+      return;
+    }
+    const at = now();
+    write(PRED, { r: round, g: game.id, from: at, until: at + PREDICT_MS, p: {} });
+  }
+
+  function predictPick(from, data) {
+    const room = read(ROOM);
+    const pr = read(PRED);
+    if (!room || room.phase !== 'game' || !pr || pr.x || pr.r !== room.round || data.r !== room.round) return false;
+    if (now() >= pr.until || !USER_RE.test(from)) return false;
+    if (!presentIds().has(from) || isJoined(from) || isBanned(from) || partyBanned(from)) return false;
+    const own = slotOf(from);
+    if (own !== null && outSlots(room).includes(own)) return false;
+    const slot = data.p;
+    if (!Number.isInteger(slot) || !activePlayers().some((p) => p.slot === slot)) return false;
+    const picks = { ...(pr.p && typeof pr.p === 'object' ? pr.p : {}) };
+    if (!(from in picks) && Object.keys(picks).length >= PREDICT_MAX) return false;
+    if (picks[from] === slot) return true;
+    picks[from] = slot;
+    write(PRED, { ...pr, p: picks });
+    return true;
   }
 
   function finishGame(game, winners) {
     const s = clone(read(SCORES)) || newScores();
-    const win = Array.isArray(winners) ? winners.filter((x) => Number.isInteger(x)) : topSlots(s.g);
+    const room = read(ROOM) || {};
+    const out = outSlots(room);
+    for (const slot of out) delete s.g[slot];
+    const win = (Array.isArray(winners) ? winners.filter((x) => Number.isInteger(x)) : topSlots(s.g)).filter((x) => !out.includes(x));
     const info = gameResults(game);
     const at = now();
-    const counted = postParty(game, s.g, win, info, at);
+    const players = partyPlayers(s.g, win, info.teams);
+    const trn = tourStep(room, game, players);
+    const preds = settlePicks(room, game, players, win, at);
+    const counted = postParty(game, players, info, at, trn, preds);
     for (const [slot, pts] of Object.entries(s.g)) s.t[slot] = (s.t[slot] || 0) + pts;
     for (const slot of win) s.w[slot] = (s.w[slot] || 0) + 1;
     fitScores(s);
     write(SCORES, s);
     const last = { game: game.id, winners: win, at };
-    if (counted.length >= RESULT_MIN_PLAYERS) last.ps = counted.map((p) => p.slot);
+    if (counted) last.ps = players.map((p) => p.slot);
+    if (counted && trn && trn.done && Number.isInteger(trn.champ) && last.ps.includes(trn.champ)) last.champ = trn.champ;
     if (typeof info.daily === 'string' && DAY_RE.test(info.daily)) last.daily = info.daily;
-    patchRoom({ phase: 'results', deadline: null, flags: null, last });
+    const patch = { phase: 'results', deadline: null, flags: null, last };
+    if (trn) patch.trn = trn;
+    patchRoom(patch);
   }
 
   function handleIntent(from, data, depth = 0) {
@@ -920,6 +1062,8 @@ export function createEngine(opts) {
         flagDrawing(games.get(room.game), data.d, slot);
       } else if (data.t === 'rpt') {
         reportText(from, data);
+      } else if (data.t === 'pick') {
+        predictPick(from, data);
       } else if (data.t === 'in') {
         if (!presentIds().has(from) || isBanned(from) || partyBanned(from)) return;
         const room = read(ROOM);
@@ -961,10 +1105,23 @@ export function createEngine(opts) {
 
   function joinNow(id) {
     if (!isHost() || destroyed || !presentIds().has(id) || isBanned(id) || partyBanned(id)) return;
+    if (!joinOpen(id)) return;
     if (setJoined(id, true)) {
       lateJoin(id);
       checkAuto();
     }
+  }
+
+  function outSlots(room) {
+    return room && Array.isArray(room.out) ? room.out.filter((s) => Number.isInteger(s)) : [];
+  }
+
+  function joinOpen(id) {
+    const room = read(ROOM);
+    if (!room || room.phase !== 'game' || isJoined(id)) return true;
+    if (room.nolate) return false;
+    const slot = slotOf(id);
+    return slot === null || !outSlots(room).includes(slot);
   }
 
   function isBanned(id) {
@@ -1490,6 +1647,52 @@ export function createEngine(opts) {
     return isHost() && !destroyed;
   }
 
+  function startGame(game, patch = {}) {
+    const room = read(ROOM);
+    if (!game) return { ok: false, reason: 'no_game' };
+    const min = game.minPlayers || 1;
+    if (activePlayers().length < min) return { ok: false, reason: 'players', need: min };
+    try {
+      for (const g of gameList) clearGameKeys(g);
+      const s = clone(read(SCORES)) || newScores();
+      s.g = {};
+      write(SCORES, s);
+      memory[game.id] = {};
+      const round = (room.round || 0) + 1;
+      patchRoom({ phase: 'game', game: game.id, pick: game.id, deadline: null, round, last: null, auto: null, flags: null, out: null, ...patch });
+      openPicks(round, game);
+      game.start(gameApi(game));
+    } catch (e) {
+      fail(e);
+      return { ok: false, reason: 'error' };
+    }
+    return { ok: true };
+  }
+
+  function nextTour(trn) {
+    const i = trn.i + 1;
+    const count = activePlayers().length;
+    let game = games.get(trn.g[i]);
+    const list = trn.g.slice();
+    if (game && (game.minPlayers || 1) > count) {
+      const spare = shuffle(gameList.filter((g) => g && (g.minPlayers || 1) <= count && !list.includes(g.id)), random)[0];
+      if (spare) {
+        list[i] = spare.id;
+        game = spare;
+      }
+    }
+    if (!game) {
+      patchRoom({ trn: null });
+      return { ok: false, reason: 'no_game' };
+    }
+    return startGame(game, { trn: { ...trn, g: list, i, lp: null } });
+  }
+
+  function clearPicks() {
+    myPick = null;
+    if (read(PRED) !== null) write(PRED, null);
+  }
+
   const lobby = {
     pick(id) {
       if (!hostOnly() || !games.has(id)) return false;
@@ -1516,23 +1719,67 @@ export function createEngine(opts) {
       if (!hostOnly()) return { ok: false, reason: 'not_host' };
       const room = read(ROOM);
       if (!room || room.phase === 'game') return { ok: false, reason: 'busy' };
+      const trn = tourOf(room);
+      if (trn && !trn.done && room.phase === 'results') return nextTour(trn);
+      const cfg = cleanTour(room.tour, games);
+      if (cfg) {
+        const list = pickTourGames(gameList, cfg.g, activePlayers().length, random);
+        if (!list) return { ok: false, reason: 'tour' };
+        const first = games.get(list[0]);
+        return startGame(first, { trn: { g: list, i: 0, pts: {}, f: {} } });
+      }
       const game = games.get(room.pick);
       if (!game) return { ok: false, reason: 'no_game' };
-      const min = game.minPlayers || 1;
-      if (activePlayers().length < min) return { ok: false, reason: 'players', need: min };
-      try {
-        for (const g of gameList) clearGameKeys(g);
-        const s = clone(read(SCORES)) || newScores();
-        s.g = {};
-        write(SCORES, s);
-        memory[game.id] = {};
-        patchRoom({ phase: 'game', game: game.id, deadline: null, round: (room.round || 0) + 1, last: null, auto: null, flags: null });
-        game.start(gameApi(game));
-      } catch (e) {
-        fail(e);
-        return { ok: false, reason: 'error' };
+      return startGame(game, { trn: null });
+    },
+    next() {
+      if (!hostOnly()) return { ok: false, reason: 'not_host' };
+      const room = read(ROOM);
+      const trn = tourOf(room);
+      if (!room || room.phase !== 'results' || !trn || trn.done) return { ok: false, reason: 'busy' };
+      return nextTour(trn);
+    },
+    tournament(cfg) {
+      if (!hostOnly()) return false;
+      const room = read(ROOM);
+      if (!room || room.phase === 'game') return false;
+      const tour = cfg ? cleanTour(cfg === true ? { g: [] } : cfg, games) : null;
+      patchRoom({ tour });
+      checkAuto();
+      return true;
+    },
+    remove(x) {
+      if (!hostOnly()) return false;
+      const room = read(ROOM);
+      if (!room || room.phase !== 'game') return false;
+      const id = typeof x === 'string' ? x : Number.isInteger(x) ? idOfSlot(x) : null;
+      if (!id || id === meId() || !isJoined(id) || shielded(meId(), id)) return false;
+      const slot = slotOf(id);
+      patchRoom({ out: outSlots(room).filter((s) => s !== slot).concat([slot]).slice(-OUT_MAX) });
+      return kick(id);
+    },
+    lateLock(on) {
+      if (!hostOnly()) return false;
+      patchRoom({ nolate: on ? 1 : null });
+      return true;
+    },
+    applyPreset(p) {
+      if (!hostOnly() || !p || typeof p !== 'object') return false;
+      const room = clone(read(ROOM));
+      if (!room || room.phase === 'game') return false;
+      const game = games.get(p.game);
+      if (!game) return false;
+      const set = settingsFor(game, room);
+      const src = p.settings && typeof p.settings === 'object' ? p.settings : {};
+      for (const spec of game.settings || []) {
+        const v = cleanSetting(spec, src[spec.id]);
+        if (v !== undefined) set[spec.id] = v;
       }
-      return { ok: true };
+      const patch = { pick: game.id, opts: { ...(room.opts || {}), [game.id]: set } };
+      if (p.tour !== undefined) patch.tour = p.tour ? cleanTour(p.tour, games) : null;
+      patchRoom(patch);
+      checkAuto();
+      return true;
     },
     end() {
       if (!hostOnly()) return false;
@@ -1545,15 +1792,17 @@ export function createEngine(opts) {
     toLobby() {
       if (!hostOnly()) return false;
       for (const g of gameList) clearGameKeys(g);
-      patchRoom({ phase: 'lobby', game: null, deadline: null, auto: null, flags: null });
+      clearPicks();
+      patchRoom({ phase: 'lobby', game: null, deadline: null, auto: null, flags: null, trn: null, out: null });
       checkAuto();
       return true;
     },
     reset() {
       if (!hostOnly()) return false;
       for (const g of gameList) clearGameKeys(g);
+      clearPicks();
       write(SCORES, newScores());
-      patchRoom({ phase: 'lobby', game: null, deadline: null, last: null, auto: null, flags: null });
+      patchRoom({ phase: 'lobby', game: null, deadline: null, last: null, auto: null, flags: null, trn: null, out: null });
       checkAuto();
       return true;
     },
@@ -1648,6 +1897,57 @@ export function createEngine(opts) {
     return setWant('out');
   }
 
+  function predict(slot) {
+    const room = read(ROOM);
+    const pr = read(PRED);
+    const id = meId();
+    if (destroyed || !id || !room || room.phase !== 'game' || !pr || pr.x || pr.r !== room.round || !Number.isInteger(slot)) return false;
+    if (isJoined(id) || sharedNow() >= pr.until) return false;
+    const own = slotOf(id);
+    if (own !== null && outSlots(room).includes(own)) return false;
+    const msg = { t: 'pick', r: room.round, p: slot };
+    if (isHost()) return predictPick(id, msg);
+    if (!broadcast(msg)) return false;
+    myPick = { r: room.round, p: slot };
+    changed();
+    return true;
+  }
+
+  function predictView(room, list, me) {
+    const pr = read(PRED);
+    if (!pr || typeof pr !== 'object' || pr.r !== room.round || (room.phase !== 'game' && room.phase !== 'results')) return null;
+    const picks = pr.p && typeof pr.p === 'object' ? pr.p : {};
+    const own = Number.isInteger(picks[me]) ? picks[me] : myPick && myPick.r === pr.r ? myPick.p : null;
+    const meRow = list.find((p) => p.isMe);
+    const closed = Boolean(pr.x) || room.phase !== 'game';
+    const open = !closed && sharedNow() < pr.until;
+    return {
+      open,
+      closed,
+      from: Number(pr.from) || 0,
+      until: Number(pr.until) || 0,
+      mine: own,
+      count: Object.keys(picks).length,
+      canPick: open && Boolean(meRow && meRow.present && !meRow.joined && !meRow.out) && !partyBanned(me) && Object.keys(picks).length < PREDICT_MAX + (own !== null ? 1 : 0),
+      picks: Object.entries(picks)
+        .filter(([, slot]) => Number.isInteger(slot))
+        .map(([id, slot]) => ({ id, slot })),
+      winners: Array.isArray(pr.w) ? pr.w.filter(Number.isInteger) : null,
+    };
+  }
+
+  function tourView(room) {
+    const trn = tourOf(room);
+    const cfg = cleanTour(room.tour, games);
+    const live = trn && (room.phase === 'game' || room.phase === 'results') ? trn : null;
+    return {
+      setup: cfg,
+      live: live
+        ? { g: live.g.slice(), i: live.i, pts: { ...(live.pts || {}) }, f: { ...(live.f || {}) }, lp: live.lp ? { ...live.lp } : null, done: Boolean(live.done), champ: Number.isInteger(live.champ) ? live.champ : null }
+        : null,
+    };
+  }
+
   function act(action) {
     const room = read(ROOM);
     if (!room || room.phase !== 'game' || !action || typeof action !== 'object' || !isJoined(meId())) return false;
@@ -1723,7 +2023,12 @@ export function createEngine(opts) {
     const state = merged();
     const pick = games.get(room.pick) || gameList[0] || null;
     const mine = list.find((p) => p.isMe);
+    const out = outSlots(room);
+    for (const p of list) p.out = room.phase === 'game' && p.slot !== null && out.includes(p.slot);
     return {
+      tour: tourView(room),
+      predict: predictView(room, list, me),
+      hostTools: { lateLocked: Boolean(room.nolate), out: room.phase === 'game' ? out : [], removed: Boolean(mine && mine.out) },
       ready: Boolean(t.ready),
       me,
       meSlot: slotOf(me),
@@ -1799,6 +2104,7 @@ export function createEngine(opts) {
     ready,
     join,
     leave,
+    predict,
     act,
     flag,
     report,

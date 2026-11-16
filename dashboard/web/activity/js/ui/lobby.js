@@ -5,6 +5,8 @@ import { burstFrom } from './juice.js';
 import { CATEGORIES } from '../games/index.js';
 import { createDailyBox } from './daily.js';
 import { cleanCode, CODE_MAX } from '../engine.js';
+import { tourSetupModel, tourSetup, togglePick } from './tournament.js';
+import { readPresets, savePreset, deletePreset, presetsBlock, lateLockChip } from './hosttools.js';
 
 export const TAB_KEY = 'yapos.party.tab';
 export const DAILY_INTRO = 'Everyone everywhere gets the same puzzle today. Your best score goes on the daily board and keeps your streak going.';
@@ -41,6 +43,8 @@ export function lobbyModel(snap, games) {
     totals: standings(snap.players, 'total').map((p) => ({ id: p.id, name: p.name, username: p.username || null, initials: p.initials, hue: p.hue, avatar: p.avatar || null, pts: p.pts, place: p.place, isMe: p.isMe, present: p.present, slot: p.slot })),
     games: games.map((g) => ({ id: g.id, name: g.name, emoji: g.emoji, blurb: g.blurb, min: g.minPlayers || 1, category: g.category || null })),
     rounds: snap.room.round || 0,
+    tour: tourSetupModel(snap, games),
+    lateLocked: Boolean(snap.hostTools && snap.hostTools.lateLocked),
   };
 }
 
@@ -257,6 +261,48 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
   const drafts = new Map();
   const daily = createDailyBox();
   let draftPick = null;
+  let presets = readPresets(store);
+  let presetDraft = '';
+
+  function repaint() {
+    if (last) paint(el, { ...last, tab, presets });
+  }
+
+  function onSavePreset(raw) {
+    if (!last) return;
+    const res = savePreset(store, { name: raw, game: last.pick, settings: last.settings, tour: last.tour.on ? { g: last.tour.picks.map((p) => p.id) } : null });
+    if (!res.ok) {
+      cue(sfx, 'error');
+      if (toast) toast(res.reason === 'full' ? 'You can keep 5 presets. Delete one to save a new one.' : res.reason === 'name' ? 'Give the preset a name first.' : "That preset couldn't be saved on this device.");
+      return;
+    }
+    presets = res.list;
+    presetDraft = '';
+    cue(sfx, 'pop');
+    if (toast) toast('Preset saved.');
+    repaint();
+  }
+
+  function onLoadPreset(p) {
+    if (!engine.lobby.applyPreset(p)) {
+      if (toast) toast("That preset's game isn't here any more.");
+      return;
+    }
+    cue(sfx, 'toggle');
+  }
+
+  function onDeletePreset(i) {
+    presets = deletePreset(store, i);
+    repaint();
+  }
+
+  function setTour(on) {
+    engine.lobby.tournament(on ? { g: last && last.tour.on ? last.tour.picks.map((p) => p.id) : [] } : null);
+  }
+
+  function pickTour(id) {
+    engine.lobby.tournament({ g: togglePick(last ? last.tour.picks : [], id) });
+  }
 
   function catOf(m, id) {
     const g = m.games.find((x) => x.id === id);
@@ -282,7 +328,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     tab = id;
     saveTab(store, id);
     cue(sfx, 'toggle');
-    paint(el, { ...last, tab });
+    paint(el, { ...last, tab, presets });
     if (focus) {
       const btn = el.querySelector(`[data-key="tab-${id}"]`);
       if (btn && typeof btn.focus === 'function') btn.focus();
@@ -334,6 +380,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     if (!res.ok) cue(sfx, 'error');
     if (!res.ok && toast) {
       if (res.reason === 'players') toast(`This game needs at least ${plural(res.need, 'player', 'players')}. Ask people to tap Join game.`);
+      else if (res.reason === 'tour') toast("There aren't enough games for this many players. Pick the games yourself.");
       else toast('That did not start. Try again in a moment.');
     }
   }
@@ -375,8 +422,8 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       );
     }
     if (m.auto && m.need > 0) return waiting(needText(m.need));
-    if (m.isHost) return button(`Start ${gameMeta.name}`, { variant: 'primary', size: 'xl', key: 'start', on: start });
-    return waiting(`Waiting for ${m.hostName} to start`);
+    if (m.isHost) return button(m.tour.on ? 'Start tournament' : `Start ${gameMeta.name}`, { variant: 'primary', size: 'xl', key: 'start', on: start });
+    return waiting(m.tour.on ? `Waiting for ${m.hostName} to start the tournament` : `Waiting for ${m.hostName} to start`);
   }
 
   function render(m) {
@@ -462,6 +509,8 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       panel,
       settings,
       dailyKind ? daily.el : null,
+      tourSetup(m.tour, { isHost: m.isHost, games: m.games, onToggle: setTour, onPick: pickTour, onRandom: () => engine.lobby.tournament({ g: [] }) }),
+      m.isHost ? h('div', { class: 'host-lobby-tools' }, lateLockChip(m.lateLocked, (on) => engine.lobby.lateLock(on)), presetsBlock(m.presets || [], { games: m.games, onSave: onSavePreset, onLoad: onLoadPreset, onDelete: onDeletePreset, draft: presetDraft, onDraft: (v) => { presetDraft = v; } })) : null,
       h('div', { class: 'start-row' }, actionRow(m, gameMeta)),
     );
     const scoreCard = h(
@@ -486,7 +535,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       if (draftPick !== last.pick || !last.isHost) drafts.clear();
       draftPick = last.pick;
       settleTab(last);
-      paint(el, { ...last, tab });
+      paint(el, { ...last, tab, presets });
       if (!popPending) return;
       popPending = false;
       const tile = el.querySelector('.game-tile.juice-pick');

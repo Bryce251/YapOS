@@ -13,8 +13,12 @@ import reflex from './reflex.js';
 import bluff from './bluff.js';
 import pixel from './pixel.js';
 import higherlower from './higherlower.js';
+import sketchduel from './sketchduel.js';
+import story from './story.js';
+import hangman from './hangman.js';
+import musicquiz from './musicquiz.js';
 
-export const GAMES = Object.freeze([trivia, draw, chain, wyr, odd, telephone, scramble, hive, emoji, hottakes, truths, reflex, bluff, pixel, higherlower]);
+export const GAMES = Object.freeze([trivia, draw, chain, wyr, odd, telephone, scramble, hive, emoji, hottakes, truths, reflex, bluff, pixel, higherlower, sketchduel, story, hangman, musicquiz]);
 
 export const CATEGORIES = Object.freeze([
   Object.freeze({ id: 'drawing', name: 'Drawing', emoji: '🎨' }),

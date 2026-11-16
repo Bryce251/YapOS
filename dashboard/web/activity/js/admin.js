@@ -6,13 +6,13 @@ export const ADMIN_REFRESH_MS = 60000;
 export const ADMIN_RETRY_MS = 5000;
 export const ADMIN_TRACK_MAX = 400;
 export const REPORTS_ENDPOINT = '/api/activity/reports';
-export const REPORT_GAMES = Object.freeze(['draw', 'odd', 'telephone']);
+export const REPORT_GAMES = Object.freeze(['draw', 'odd', 'telephone', 'sketchduel']);
 export const REPORT_STROKES = 200;
 export const REPORT_INK_CHARS = 16000;
 export const REPORT_NAME_MAX = 64;
 export const REPORT_WORD_MAX = 80;
 export const REPORT_SENT_MAX = 200;
-export const TEXT_REPORT_GAMES = Object.freeze(['draw', 'hottakes', 'truths', 'telephone', 'chain', 'bluff']);
+export const TEXT_REPORT_GAMES = Object.freeze(['draw', 'hottakes', 'truths', 'telephone', 'chain', 'bluff', 'story']);
 export const REPORT_TEXT_MAX = 300;
 export const REPORT_CONTEXT_MAX = 200;
 const INK_RE = /^[A-Za-z0-9_-]{6,4096}$/;
@@ -347,7 +347,7 @@ export async function sendTextReport(input) {
 }
 
 export const RESULTS_ENDPOINT = '/api/activity/results';
-export const RESULT_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower']);
+export const RESULT_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'sketchduel', 'story', 'hangman', 'musicquiz']);
 export const RESULT_PLAYERS_MAX = 16;
 export const RESULT_SCORE_MAX = 1000000;
 export const RESULT_EXTRA_KEYS = 8;
@@ -355,6 +355,12 @@ export const RESULT_TEAM_MAX = 24;
 export const PARTY_XP_PLAY = 10;
 export const PARTY_XP_WIN = 15;
 export const PARTY_XP_DAY = 200;
+export const PARTY_SHARDS_PLAY = 5;
+export const PARTY_SHARDS_WIN = 15;
+export const PARTY_SHARDS_TOURNAMENT = 25;
+export const PARTY_SHARDS_PREDICTION = 5;
+export const PARTY_SHARDS_DAY = 150;
+export const PREDICTIONS_MAX = 16;
 export const DAILY_ENDPOINT = '/api/activity/daily';
 export const DAILY_TOP_ENDPOINT = '/api/activity/daily/top';
 export const DAILY_KINDS = Object.freeze(['hive', 'scramble']);
@@ -379,6 +385,15 @@ let dailyFailed = new Map();
 let topCache = new Map();
 let packCache = new Map();
 let packBusy = new Map();
+const moreGames = new Set();
+
+export function allowResultGames(ids) {
+  for (const id of Array.isArray(ids) ? ids : []) if (typeof id === 'string' && GAME_RE.test(id)) moreGames.add(id);
+}
+
+export function resultGame(id) {
+  return typeof id === 'string' && GAME_RE.test(id) && (RESULT_GAMES.includes(id) || moreGames.has(id));
+}
 
 export function resetParty() {
   dailyCache = new Map();
@@ -439,9 +454,28 @@ export function partyXp(won) {
   return PARTY_XP_PLAY + (won ? PARTY_XP_WIN : 0);
 }
 
+export function partyShards(won, champ = false) {
+  return PARTY_SHARDS_PLAY + (won ? PARTY_SHARDS_WIN : 0) + (champ ? PARTY_SHARDS_TOURNAMENT : 0);
+}
+
+function cleanPredictions(list, players) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(list) ? list : []) {
+    if (out.length >= PREDICTIONS_MAX) break;
+    const u = cleanUser(raw);
+    if (!u || seen.has(u.id) || players.has(u.id)) continue;
+    const pick = idOf(raw.pick);
+    if (!validId(pick) || !players.has(pick)) continue;
+    seen.add(u.id);
+    out.push({ id: u.id, name: u.name, username: u.username, pick, right: raw.right === true });
+  }
+  return out;
+}
+
 export function resultsBody(input) {
   const x = input && typeof input === 'object' ? input : {};
-  if (typeof x.game !== 'string' || !GAME_RE.test(x.game) || !RESULT_GAMES.includes(x.game)) return null;
+  if (!resultGame(x.game)) return null;
   const seen = new Set();
   const players = [];
   for (const raw of Array.isArray(x.players) ? x.players : []) {
@@ -457,13 +491,18 @@ export function resultsBody(input) {
   if (players.length < 2) return null;
   const extra = {};
   const src = x.extra && typeof x.extra === 'object' && !Array.isArray(x.extra) ? x.extra : {};
+  const tour = src.tournament && typeof src.tournament === 'object' && !Array.isArray(src.tournament) ? idOf(src.tournament.winner) : null;
+  if (validId(tour) && seen.has(tour)) extra.tournament = { winner: tour };
   for (const [k, v] of Object.entries(src)) {
     if (Object.keys(extra).length >= RESULT_EXTRA_KEYS) break;
     if (!EXTRA_RE.test(k) || !Array.isArray(v)) continue;
     const ids = [...new Set(v.map(idOf).filter((id) => validId(id) && seen.has(id)))].slice(0, RESULT_PLAYERS_MAX);
     if (ids.length) extra[k] = ids;
   }
-  return { game: x.game, at: Number.isFinite(x.at) ? Math.round(x.at) : env.now(), players, extra };
+  const out = { game: x.game, at: Number.isFinite(x.at) ? Math.round(x.at) : env.now(), players, extra };
+  const predictions = cleanPredictions(x.predictions, seen);
+  if (predictions.length) out.predictions = predictions;
+  return out;
 }
 
 export async function sendResults(input) {

@@ -5,6 +5,9 @@ import { PROFILE_KEEP, WANTED_TTL } from './profiles.js';
 import { cleanupStatements } from './reports.js';
 import { resultsCleanupStatements } from './party-results.js';
 import { dailyCleanupStatements } from './party-daily.js';
+import { profileCleanupStatements } from './public-profiles.js';
+import { packReportsCleanupStatements } from './pack-browse.js';
+import { statsCleanupStatements } from './server-stats.js';
 
 export const PUBLIC_STALE = 2 * HOUR;
 export const SNAPSHOT_STALE = DAY;
@@ -26,8 +29,11 @@ export async function cleanup(db, t) {
     ...cleanupStatements(db, t),
     ...resultsCleanupStatements(db, t),
     ...dailyCleanupStatements(db, t),
+    ...profileCleanupStatements(db, t),
+    ...packReportsCleanupStatements(db, t),
+    ...statsCleanupStatements(db, t),
   ]);
-  const names = ['sessions', 'states', 'jobs', 'rate', 'grants', 'userServers', 'publicPages', 'snapshots', 'profileWanted', 'profiles', 'dismissedReports', 'extraReports', 'orphanReportTexts', 'partyResults', 'partyXp', 'dailyScores'];
+  const names = ['sessions', 'states', 'jobs', 'rate', 'grants', 'userServers', 'publicPages', 'snapshots', 'profileWanted', 'profiles', 'dismissedReports', 'extraReports', 'orphanReportTexts', 'partyResults', 'partyXp', 'partyShards', 'dailyScores', 'publicProfiles', 'profileSettings', 'packReports', 'serverStats'];
   const removed = {};
   results.forEach((r, i) => {
     removed[names[i]] = Number((r && r.meta && r.meta.changes) || 0);

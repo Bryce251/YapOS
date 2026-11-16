@@ -145,22 +145,36 @@ function rollIn(d, now) {
   return closed;
 }
 
+function announceSeason(engine, closed) {
+  if (!closed?.month || typeof engine?.bot?.emit !== 'function') return;
+  try {
+    Promise.resolve(engine.bot.emit('season:closed', { month: closed.month, boards: closed.tops })).catch((e) => engine.log?.debug?.('[season] closing listeners failed', e?.message));
+  } catch (e) {
+    engine.log?.debug?.('[season] closing listeners failed', e?.message);
+  }
+}
+
 export function rollSeason(engine, now = clockOf(engine)) {
   const doc = fixSeason(globalDoc(engine, SEASON_NS, null));
   if (doc.month && doc.month >= seasonMonth(now)) return null;
-  return mutateGlobal(engine, SEASON_NS, (d) => rollIn(d, now), blankSeason());
+  const closed = mutateGlobal(engine, SEASON_NS, (d) => rollIn(d, now), blankSeason());
+  announceSeason(engine, closed);
+  return closed;
 }
 
 export function addSeason(engine, kind, uid, amount, now = clockOf(engine)) {
   const id = asId(uid);
   const n = Math.floor(Number(amount) || 0);
   if (!id || n <= 0 || !SEASON_KINDS.includes(kind)) return 0;
-  return mutateGlobal(engine, SEASON_NS, (d) => {
-    rollIn(d, now);
+  let closed = null;
+  const total = mutateGlobal(engine, SEASON_NS, (d) => {
+    closed = rollIn(d, now);
     const next = Math.max(0, Math.floor(Number(d[kind][id]) || 0)) + n;
     d[kind][id] = Math.min(Number.MAX_SAFE_INTEGER, next);
     return d[kind][id];
   }, blankSeason());
+  announceSeason(engine, closed);
+  return total;
 }
 
 export function seasonBoard(engine, kind, now = clockOf(engine)) {

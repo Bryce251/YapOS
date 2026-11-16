@@ -1,7 +1,7 @@
 import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row, rows, select, onOff, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
-import { tokenize, didYouMean, clip, formatDuration, fuzzyFind, fillTemplate, roleId as roleMention } from '../engine/parse.js';
+import { tokenize, didYouMean, clip, formatDuration, fuzzyFind, fillTemplate, parseDuration, roleId as roleMention } from '../engine/parse.js';
 import { permName, friendly } from '../engine/errors.js';
 import { accept, reject, boolField } from '../engine/dashboard.js';
 import { HARD_CAP, parseLimit, readLimit, isUnlimited } from '../engine/limits.js';
@@ -38,6 +38,19 @@ const MEDALS = ['🥇', '🥈', '🥉'];
 const CASINO_WIN = /^(?:Coinflip|Dice|Slots|Blackjack|Roulette|Crash|Casino) win$/i;
 const SEASON_REASON = /^(?:Trivia win|Daily quest\b.*|YapOS Party\b.*)$/i;
 const QUEST_REASON = /^Daily quest\b/i;
+const PARTY_KEYS = Object.freeze(['play', 'win', 'tournament', 'prediction', 'cap']);
+export const PARTY_DEFAULTS = Object.freeze({ play: 5, win: 15, tournament: 25, prediction: 5, cap: 150 });
+const PARTY_BOUNDS = Object.freeze({ play: 50, win: 200, tournament: 500, prediction: 50, cap: 1000 });
+const PARTY_LABELS = Object.freeze({ play: 'a game played', win: 'a win', tournament: 'a tournament win', prediction: 'a right prediction', cap: 'a day at most' });
+const STREAK_DAYS = Object.freeze([7, 30, 100]);
+export const STREAK_DEFAULTS = Object.freeze({ 7: 50, 30: 100, 100: 200 });
+const STREAK_PCT_MAX = 500;
+export const EVENT_DEFAULTS = Object.freeze({ mult: 2, hours: 48, cooldownDays: 30 });
+const EVENT_MULT_MAX = 5;
+const EVENT_HOURS_MAX = 168;
+const EVENT_DAYS_MAX = 365;
+const EVENT_KINDS = Object.freeze({ xp: { name: 'XP', icon: '⚡' }, shards: { name: CURRENCY.name, icon: CURRENCY.emoji } });
+const BOOSTED_REASON = /^(?:Trivia win|Daily quest\b.*)$/i;
 const OWNER_ONLY_EARN = `Only the bot owner can change how many ${CURRENCY.name} people earn.`;
 const OWNER_ONLY_MOVE = `Only the bot owner can hand out or take ${CURRENCY.name}.`;
 
@@ -113,6 +126,14 @@ function waitText(ms) {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
+function spanText(ms) {
+  const mins = Math.max(1, Math.ceil(ms / 60_000));
+  const d = Math.floor(mins / 1440);
+  if (!d) return waitText(ms);
+  const h = Math.floor((mins % 1440) / 60);
+  return h ? `${d}d ${h}h` : `${d}d`;
+}
+
 function agoText(ms) {
   if (ms < 60_000) return 'just now';
   return `${formatDuration(ms)} ago`;
@@ -130,6 +151,57 @@ export function parseAmount(token) {
 
 export function streakBonus(streak) {
   return Math.min(STREAK_MAX, Math.max(0, Math.floor(Number(streak) || 0) * STREAK_STEP));
+}
+
+const clampInt = (v, lo, hi, fallback) => {
+  const n = Number(v);
+  return v !== null && v !== '' && Number.isFinite(n) ? Math.max(lo, Math.min(hi, Math.round(n))) : fallback;
+};
+
+export function partyRates(cfg = {}) {
+  const raw = cfg && cfg.partyRates && typeof cfg.partyRates === 'object' ? cfg.partyRates : {};
+  const out = {};
+  for (const k of PARTY_KEYS) out[k] = clampInt(raw[k], 0, PARTY_BOUNDS[k], PARTY_DEFAULTS[k]);
+  return out;
+}
+
+export function streakTable(cfg = {}) {
+  const raw = cfg && cfg.streakRewards && typeof cfg.streakRewards === 'object' ? cfg.streakRewards : {};
+  const out = {};
+  for (const d of STREAK_DAYS) out[d] = clampInt(raw[d], 0, STREAK_PCT_MAX, STREAK_DEFAULTS[d]);
+  return out;
+}
+
+export function streakMilestone(streak, table = STREAK_DEFAULTS) {
+  const s = Math.floor(Number(streak) || 0);
+  let day = null;
+  if (s >= 100) day = s % 100 === 0 ? 100 : null;
+  else if (STREAK_DAYS.includes(s)) day = s;
+  if (!day) return null;
+  const pct = Math.max(0, Math.floor(Number(table[day]) || 0));
+  return pct ? { day, pct } : null;
+}
+
+export function nextMilestone(streak) {
+  const s = Math.floor(Number(streak) || 0);
+  const next = STREAK_DAYS.find((d) => d > s);
+  return next || (Math.floor(s / 100) + 1) * 100;
+}
+
+export function eventLimits(cfg = {}) {
+  const raw = cfg && cfg.eventLimits && typeof cfg.eventLimits === 'object' ? cfg.eventLimits : {};
+  const m = Number(raw.mult);
+  return {
+    mult: raw.mult !== undefined && raw.mult !== null && Number.isFinite(m) ? Math.max(1, Math.min(EVENT_MULT_MAX, Math.round(m * 10) / 10)) : EVENT_DEFAULTS.mult,
+    hours: clampInt(raw.hours, 1, EVENT_HOURS_MAX, EVENT_DEFAULTS.hours),
+    cooldownDays: clampInt(raw.cooldownDays, 0, EVENT_DAYS_MAX, EVENT_DEFAULTS.cooldownDays),
+  };
+}
+
+export function boostName(kind, mult) {
+  const m = Number(mult) || 1;
+  const word = m === 2 ? 'Double' : m === 3 ? 'Triple' : `${m}x`;
+  return `${word} ${EVENT_KINDS[kind]?.name || kind}`;
 }
 
 const validAmount = (n) => Number.isInteger(n) && n > 0 && n <= MAX_AMOUNT;
@@ -245,6 +317,28 @@ function balanceOf(engine, uid) {
   return clampSetting(cfgOf(engine).startBalance, 0);
 }
 
+function activeEvent(engine, sid, t = clock(engine)) {
+  if (!sid || sid === GLOBAL_KEY) return null;
+  const ev = readDoc(engine, sid).event;
+  if (!ev || typeof ev !== 'object' || !EVENT_KINDS[ev.kind] || !(Number(ev.endsAt) > t)) return null;
+  return ev;
+}
+
+function eventMultiplier(engine, sid, kind, t = clock(engine)) {
+  const ev = activeEvent(engine, sid, t);
+  if (!ev || ev.kind !== kind) return 1;
+  const m = Number(ev.mult);
+  return Number.isFinite(m) && m > 1 ? Math.min(EVENT_MULT_MAX, m) : 1;
+}
+
+function eventBanner(engine, sid, t = clock(engine)) {
+  const ev = activeEvent(engine, sid, t);
+  if (!ev) return null;
+  return `${EVENT_KINDS[ev.kind].icon} **${boostName(ev.kind, ev.mult)}** is on in this server for ${spanText(ev.endsAt - t)} more.`;
+}
+
+const boosted = (n, mult) => (mult > 1 ? Math.min(MAX_AMOUNT, Math.round(n * mult)) : n);
+
 function needIds(sid, uid) {
   if (!sid || !uid) throw new TypeError('economy: serverId and userId are required');
 }
@@ -280,12 +374,14 @@ function serviceAdd(engine, sid, uid, amount, reason) {
   const t = clock(engine);
   const cfg = cfgOf(engine);
   let real = 0;
+  const source = earnSource(reason);
+  const mult = BOOSTED_REASON.test(String(reason || '')) ? eventMultiplier(engine, sid, 'shards', t) : 1;
   const bal = mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, uid, cfg, t);
-    real = change(u, amount, reason || 'Added', t);
+    real = change(u, boosted(amount, mult), reason || 'Added', t);
     return u.bal;
   });
-  earned(engine, uid, real, earnSource(reason), reason, SEASON_REASON.test(String(reason || '')));
+  earned(engine, uid, real, source, reason, SEASON_REASON.test(String(reason || '')));
   return bal;
 }
 
@@ -553,6 +649,8 @@ async function claimDaily(ctx) {
   const base = clampSetting(cfg.dailyAmount, 100);
   if (base <= 0) return ctx.info('Daily is off', 'The daily reward is switched off right now.');
   const t = clock(engine);
+  const mult = eventMultiplier(engine, ctx.serverId, 'shards', t);
+  const table = streakTable(cfg);
   const res = mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, ctx.userId, cfg, t);
     if (u.lastDaily && t - u.lastDaily < DAY) return { wait: u.lastDaily + DAY - t, streak: u.streak || 0 };
@@ -561,9 +659,11 @@ async function claimDaily(ctx) {
     u.streak = kept ? (u.streak || 0) + 1 : 1;
     u.lastDaily = t;
     const bonus = streakBonus(u.streak);
-    const amount = Math.round(base * (100 + bonus) / 100);
+    const amount = boosted(Math.round(base * (100 + bonus) / 100), mult);
     const got = change(u, amount, `Daily (day ${u.streak})`, t);
-    return { got, bonus, streak: u.streak, bal: u.bal, lost };
+    const milestone = streakMilestone(u.streak, table);
+    const reward = milestone ? change(u, boosted(Math.max(1, Math.round(base * milestone.pct / 100)), mult), `Streak reward (day ${u.streak})`, t) : 0;
+    return { got: got + reward, reward, milestone, bonus, streak: u.streak, bal: u.bal, lost };
   });
   if (!res.wait) {
     earned(engine, ctx.userId, res.got, 'daily', 'Daily', true);
@@ -578,7 +678,16 @@ async function claimDaily(ctx) {
   const extra = [];
   if (res.bonus) extra.push(`Streak bonus +${res.bonus}%${res.bonus >= STREAK_MAX ? ' (max)' : ''}.`);
   if (res.lost) extra.push(`Your ${res.lost}-day streak ended, so this is a fresh start.`);
-  const body = `Balance **${fmt(res.bal)}** · next daily in ${waitText(DAY)}${extra.length ? `\n-# ${extra.join(' ')}` : ''}`;
+  if (mult > 1) extra.push(`Boosted ×${mult} by this server's event.`);
+  const lines = [];
+  if (res.reward) lines.push(`🎉 **${res.streak}-day streak reward!** +${fmt(res.reward)} bonus ${plural(res.reward, cur.name)} on top.`);
+  lines.push(`Balance **${fmt(res.bal)}** · next daily in ${waitText(DAY)}`);
+  const upcoming = nextMilestone(res.streak);
+  const upcomingPct = streakMilestone(upcoming, table)?.pct;
+  if (!res.reward && upcomingPct && upcoming - res.streak <= 3) extra.push(`Streak reward in ${upcoming - res.streak} day${upcoming - res.streak === 1 ? '' : 's'} (day ${upcoming}).`);
+  const banner = eventBanner(engine, ctx.serverId, t);
+  if (banner) lines.push(banner);
+  const body = `${lines.join('\n')}${extra.length ? `\n-# ${extra.join(' ')}` : ''}`;
   return ctx.reply({ embeds: [card({ title: `${cur.emoji} +${fmt(res.got)} ${plural(res.got, cur.name)} (${streakText})`, body, color: 'economy', footer: false })] });
 }
 
@@ -589,7 +698,7 @@ async function doBeg(ctx) {
   const cur = currencyOf();
   const t = clock(engine);
   const miss = Math.random() < BEG_MISS;
-  const pay = miss ? 0 : BEG_MIN + Math.floor(Math.random() * (BEG_MAX - BEG_MIN + 1));
+  const pay = miss ? 0 : boosted(BEG_MIN + Math.floor(Math.random() * (BEG_MAX - BEG_MIN + 1)), eventMultiplier(engine, ctx.serverId, 'shards', t));
   const res = mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, ctx.userId, cfg, t);
     if (u.lastBeg && t - u.lastBeg < BEG_COOLDOWN_MS) return { wait: u.lastBeg + BEG_COOLDOWN_MS - t };
@@ -612,7 +721,7 @@ async function doWork(ctx) {
   const lo = Math.max(1, clampSetting(cfg.workMin, 20));
   const hi = Math.max(lo, clampSetting(cfg.workMax, 80));
   const t = clock(engine);
-  const pay = lo + Math.floor(Math.random() * (hi - lo + 1));
+  const pay = boosted(lo + Math.floor(Math.random() * (hi - lo + 1)), eventMultiplier(engine, ctx.serverId, 'shards', t));
   const res = mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, ctx.userId, cfg, t);
     if (u.lastWork && t - u.lastWork < WORK_COOLDOWN_MS) return { wait: u.lastWork + WORK_COOLDOWN_MS - t };
@@ -1054,9 +1163,12 @@ async function settingsView(ctx) {
     { name: 'Starting balance', value: price(cur, clampSetting(cfg.startBalance, 0)), inline: true },
     { name: 'Shop', value: `${items.length}/${MAX_ITEMS} items here`, inline: true },
     { name: `People with ${cur.name}`, value: `${fmt(list.length)} · ${price(cur, total)} in total`, inline: true },
+    { name: 'YapOS Party', value: partyText(partyRates(cfg)), inline: false },
+    { name: 'Streak rewards', value: streakText(streakTable(cfg)), inline: false },
+    { name: 'Server events', value: limitsText(eventLimits(cfg)), inline: false },
   ];
   const body = `Wallets are shared across every server. Earn rates are set once for the whole bot, so only the bot owner can change them. Your shop stays yours.
-Typed settings: \`/economy give @sam 100\` · \`/economy take @sam 50\` · \`/economy reset @sam\` · \`/economy daily 150\` · \`/economy work 20 80\` · \`/economy allow @sam\``;
+Typed settings: \`/economy give @sam 100\` · \`/economy take @sam 50\` · \`/economy reset @sam\` · \`/economy daily 150\` · \`/economy work 20 80\` · \`/economy allow @sam\` · \`/economy party 5 15 25 5 150\` · \`/economy streak 50 100 200\` · \`/economy events 2 48 30\``;
   const rate = [
     button('Daily amount', cid('dailyform'), 'secondary', '📅'),
     button(work ? 'Work: on' : 'Work: off', cid('twork'), work ? 'success' : 'secondary', '💼'),
@@ -1068,9 +1180,14 @@ Typed settings: \`/economy give @sam 100\` · \`/economy take @sam 50\` · \`/ec
     button(`Take ${cur.name}`, cid('takeform'), 'secondary', '➖'),
     button('Reset someone', cid('resetform'), 'danger', '🧽'),
   ];
+  const more = [
+    button('Party pay', cid('partyform'), 'secondary', '🎉'),
+    button('Streak rewards', cid('streakform'), 'secondary', '🔥'),
+    button('Event limits', cid('evlimitform'), 'secondary', '🎪'),
+  ];
   return {
     embeds: [card({ title: `${ICONS.economy} Economy settings`, body, fields, color: 'economy' })],
-    components: canGiveCurrency(engine, ctx.userId) ? [row(rate), row(move)] : [],
+    components: canGiveCurrency(engine, ctx.userId) ? [row(rate), row(more), row(move)] : [],
   };
 }
 
@@ -1218,7 +1335,205 @@ async function changeGiver(ctx, query, on) {
   return ctx.ok('Taken back', `**${name}** can't hand out ${CURRENCY.name} anymore.`);
 }
 
-const ECON_SUBS = ['give', 'take', 'reset', 'daily', 'work', 'start', 'allow', 'deny', 'givers', 'settings'];
+const PARTY_HELP = `Try \`/economy party 5 15 25 5 150\` (a game, a win, a tournament win, a right prediction, the daily cap) or \`/economy party win 20\`.`;
+const STREAK_HELP = 'Try `/economy streak 50 100 200` (bonus % at day 7, 30 and 100) or `/economy streak 30 150`.';
+const LIMITS_HELP = 'Try `/economy events 2 48 30` (highest boost, longest hours, days between events). A highest boost of 1 turns server events off.';
+
+function partyText(r) {
+  return `${fmt(r.play)} a game · ${fmt(r.win)} a win · ${fmt(r.tournament)} a tournament win · ${fmt(r.prediction)} a right pick · up to ${fmt(r.cap)} a day`;
+}
+
+function streakText(table) {
+  return STREAK_DAYS.map((d) => `day ${d}${d === 100 ? ' (and every 100)' : ''} +${table[d]}%`).join(' · ');
+}
+
+function limitsText(l) {
+  if (l.mult <= 1) return 'Off';
+  return `up to ×${l.mult} for ${l.hours}h, once every ${l.cooldownDays} day${l.cooldownDays === 1 ? '' : 's'} per server`;
+}
+
+function pushRates(engine) {
+  try {
+    Promise.resolve(engine.dashboard?.pushPartyRates?.()).catch((e) => engine.log.debug('[economy] Party rates push failed', e?.message));
+  } catch (e) {
+    engine.log.debug('[economy] Party rates push failed', e?.message);
+  }
+}
+
+async function saveParty(ctx, tokens) {
+  if (!(await needGiver(ctx, OWNER_ONLY_EARN))) return undefined;
+  const cur = currencyOf();
+  const now = partyRates(cfgOf(ctx.engine));
+  const next = { ...now };
+  const list = tokens.map((x) => String(x ?? '').trim()).filter(Boolean);
+  if (!list.length) return ctx.info(`${CURRENCY.emoji} YapOS Party ${cur.name}`, `${partyText(now)}\n${PARTY_HELP}`);
+  const named = PARTY_KEYS.includes(list[0].toLowerCase());
+  if (named) {
+    for (let i = 0; i < list.length; i += 2) {
+      const key = list[i].toLowerCase();
+      const n = numberIn(list[i + 1], { min: 0, max: PARTY_BOUNDS[key] ?? 0 });
+      if (!PARTY_KEYS.includes(key) || n === null) return ctx.warn("That didn't work", `${key && PARTY_BOUNDS[key] !== undefined ? `**${key}** can be 0 to ${fmt(PARTY_BOUNDS[key])}. ` : ''}${PARTY_HELP}`);
+      next[key] = n;
+    }
+  } else {
+    for (let i = 0; i < Math.min(list.length, PARTY_KEYS.length); i++) {
+      const key = PARTY_KEYS[i];
+      const n = numberIn(list[i], { min: 0, max: PARTY_BOUNDS[key] });
+      if (n === null) return ctx.warn("That didn't work", `**${key}** can be 0 to ${fmt(PARTY_BOUNDS[key])}. ${PARTY_HELP}`);
+      next[key] = n;
+    }
+  }
+  patchCfg(ctx, { partyRates: next });
+  pushRates(ctx.engine);
+  return ctx.ok('Party rates saved', `YapOS Party now pays ${partyText(next)} ${cur.emoji}, for games with 2 or more players.`);
+}
+
+async function saveStreak(ctx, tokens) {
+  if (!(await needGiver(ctx, OWNER_ONLY_EARN))) return undefined;
+  const now = streakTable(cfgOf(ctx.engine));
+  const list = tokens.map((x) => String(x ?? '').trim()).filter(Boolean);
+  if (!list.length) return ctx.info('Streak rewards', `${streakText(now)}\n${STREAK_HELP}`);
+  const next = { ...now };
+  if (list.length === 2 && STREAK_DAYS.includes(Number(list[0]))) {
+    const n = numberIn(list[1].replace(/%$/, ''), { min: 0, max: STREAK_PCT_MAX });
+    if (n === null) return ctx.warn("That didn't work", `Use 0 to ${STREAK_PCT_MAX} percent. ${STREAK_HELP}`);
+    next[Number(list[0])] = n;
+  } else {
+    for (let i = 0; i < Math.min(list.length, STREAK_DAYS.length); i++) {
+      const n = numberIn(list[i].replace(/%$/, ''), { min: 0, max: STREAK_PCT_MAX });
+      if (n === null) return ctx.warn("That didn't work", `Use 0 to ${STREAK_PCT_MAX} percent. ${STREAK_HELP}`);
+      next[STREAK_DAYS[i]] = n;
+    }
+  }
+  patchCfg(ctx, { streakRewards: next });
+  return ctx.ok('Streak rewards saved', `${streakText(next)}. The bonus is a share of the daily amount, paid once on that day.`);
+}
+
+function multIn(text) {
+  const n = Number(String(text ?? '').trim().toLowerCase().replace(/^x|x$/g, ''));
+  return Number.isFinite(n) ? Math.round(n * 10) / 10 : null;
+}
+
+async function saveLimits(ctx, tokens) {
+  if (!(await needGiver(ctx, OWNER_ONLY_EARN))) return undefined;
+  const now = eventLimits(cfgOf(ctx.engine));
+  const list = tokens.map((x) => String(x ?? '').trim()).filter(Boolean);
+  if (!list.length) return ctx.info('Server event limits', `${limitsText(now)}\n${LIMITS_HELP}`);
+  const mult = multIn(list[0]);
+  const hours = list[1] === undefined ? now.hours : Number(String(list[1]).replace(/h$/i, ''));
+  const days = list[2] === undefined ? now.cooldownDays : Number(String(list[2]).replace(/d$/i, ''));
+  if (mult === null || mult < 1 || mult > EVENT_MULT_MAX) return ctx.warn("That boost didn't work", `Use 1 to ${EVENT_MULT_MAX}, like 2. ${LIMITS_HELP}`);
+  if (!Number.isInteger(hours) || hours < 1 || hours > EVENT_HOURS_MAX) return ctx.warn("Those hours didn't work", `Use whole hours from 1 to ${EVENT_HOURS_MAX}. ${LIMITS_HELP}`);
+  if (!Number.isInteger(days) || days < 0 || days > EVENT_DAYS_MAX) return ctx.warn("Those days didn't work", `Use whole days from 0 to ${EVENT_DAYS_MAX}. ${LIMITS_HELP}`);
+  const next = { mult, hours, cooldownDays: days };
+  patchCfg(ctx, { eventLimits: next });
+  return ctx.ok('Event limits saved', next.mult <= 1 ? 'Server events are off everywhere. Events already running finish on time.' : `Admins can run events ${limitsText(next)}.`);
+}
+
+function eventState(engine, sid, t = clock(engine)) {
+  const doc = readDoc(engine, sid);
+  const limits = eventLimits(cfgOf(engine));
+  const ev = activeEvent(engine, sid, t);
+  const last = Number(doc.lastEventAt) || 0;
+  const readyAt = last ? last + limits.cooldownDays * DAY : 0;
+  return { ev, limits, last, readyAt, waiting: !ev && readyAt > t };
+}
+
+async function eventView(ctx) {
+  const { engine, serverId: sid } = ctx;
+  const t = clock(engine);
+  const st = eventState(engine, sid, t);
+  const isAdmin = engine.perms.atLeast(await ctx.level(), 'admin');
+  const fields = [
+    { name: 'Right now', value: st.ev ? `${EVENT_KINDS[st.ev.kind].icon} **${boostName(st.ev.kind, st.ev.mult)}** · ends in ${spanText(st.ev.endsAt - t)}` : 'No event running', inline: false },
+    { name: 'Limits from the bot owner', value: limitsText(st.limits), inline: false },
+  ];
+  if (!st.ev && st.limits.mult > 1) fields.push({ name: 'Next event', value: st.waiting ? `in ${spanText(st.readyAt - t)}` : 'Ready to start', inline: true });
+  const body = `A server event boosts what people earn **in this server** for a while: XP from chatting and voice, or ${CURRENCY.name} from /daily, work, begging, quests and trivia wins. Casino winnings never change.`;
+  const btns = [];
+  if (isAdmin && st.ev) btns.push(button('End event', cid('evstop'), 'danger', '⏹️'));
+  if (isAdmin && !st.ev && !st.waiting && st.limits.mult > 1) {
+    btns.push(button(`Start ${boostName('xp', st.limits.mult)}`, cid('evform', 'xp'), 'primary', EVENT_KINDS.xp.icon));
+    btns.push(button(`Start ${boostName('shards', st.limits.mult)}`, cid('evform', 'shards'), 'primary', EVENT_KINDS.shards.icon));
+  }
+  if (canGiveCurrency(engine, ctx.userId)) btns.push(button('Limits', cid('evlimitform'), 'secondary', '⚙️'));
+  return { embeds: [card({ title: '🎪 Server events', body, fields, color: 'economy' })], components: btns.length ? [row(btns)] : [] };
+}
+
+const KIND_WORDS = { xp: 'xp', exp: 'xp', level: 'xp', levels: 'xp', shards: 'shards', shard: 'shards', coins: 'shards', money: 'shards', currency: 'shards' };
+
+async function startEvent(ctx, kindWord, rest) {
+  const { engine, serverId: sid } = ctx;
+  await ctx.require('admin');
+  const kind = KIND_WORDS[String(kindWord || '').toLowerCase()];
+  if (!kind) return ctx.warn('Which event?', 'Try `/event xp 48h` for Double XP or `/event shards 24h` for Double Shards.');
+  if (kind === 'xp' && !engine.apps?.has?.('levels')) return ctx.warn("Levels isn't running", 'A Double XP event needs the Levels app.');
+  const t = clock(engine);
+  const st = eventState(engine, sid, t);
+  if (st.limits.mult <= 1) return ctx.info('Server events are off', 'The bot owner has switched server events off for now.');
+  if (st.ev) return ctx.warn('An event is already running', `**${boostName(st.ev.kind, st.ev.mult)}** ends in ${spanText(st.ev.endsAt - t)}. End it with \`/event stop\` first.`);
+  if (st.waiting) return ctx.warn('Not yet', `Each server gets one event every ${st.limits.cooldownDays} days. The next one can start in **${spanText(st.readyAt - t)}**.`);
+  const tokens = rest.map((x) => String(x ?? '').trim()).filter(Boolean);
+  let ms = st.limits.hours * HOUR;
+  let mult = st.limits.mult;
+  for (const tok of tokens) {
+    if (/^x?\d+(?:\.\d+)?x$|^x\d+(?:\.\d+)?$/i.test(tok)) {
+      const m = multIn(tok);
+      if (m === null || m <= 1 || m > st.limits.mult) return ctx.warn("That boost didn't work", `The bot owner allows up to ×${st.limits.mult}. Try \`2x\`.`);
+      mult = m;
+      continue;
+    }
+    const d = parseDuration(tok, { bareUnit: 'h' });
+    if (d === null) return ctx.warn("I couldn't read that length", 'Try something like `24h`, `2d` or `36`.');
+    ms = d;
+  }
+  if (ms < HOUR || ms > st.limits.hours * HOUR) return ctx.warn('That length is outside the limit', `Events can last from 1 hour up to **${st.limits.hours} hours** (the bot owner's limit).`);
+  const ev = { kind, mult, startedAt: t, endsAt: t + ms, by: ctx.userId };
+  const ok = mutate(engine, sid, (doc) => {
+    const cur = doc.event && Number(doc.event.endsAt) > t ? doc.event : null;
+    if (cur) return false;
+    doc.event = ev;
+    doc.lastEventAt = t;
+    return true;
+  });
+  if (!ok) return ctx.warn('An event is already running', 'Someone started one just now.');
+  const what = kind === 'xp' ? 'XP from chatting and voice' : `${CURRENCY.name} from /daily, work, begging, quests and trivia wins`;
+  const body = `For the next **${spanText(ms)}**, ${what} counts ×${mult} in this server.\nCheck it any time with **/event**.`;
+  return ctx.reply({ embeds: [card({ title: `${EVENT_KINDS[kind].icon} ${boostName(kind, mult)} is on!`, body, color: 'economy', footer: false })] });
+}
+
+async function stopEvent(ctx, how = 'reply') {
+  const { engine, serverId: sid } = ctx;
+  await ctx.require('admin');
+  const t = clock(engine);
+  const ended = mutate(engine, sid, (doc) => {
+    if (!doc.event || !(Number(doc.event.endsAt) > t)) return null;
+    const was = { ...doc.event };
+    doc.event.endsAt = t;
+    return was;
+  });
+  if (!ended) return ctx.info('No event running', 'There is nothing to end right now.');
+  const limits = eventLimits(cfgOf(engine));
+  const embed = dialog.ok('Event ended', `**${boostName(ended.kind, ended.mult)}** is over. The next event can start ${limits.cooldownDays ? `in ${spanText(ended.startedAt + limits.cooldownDays * DAY - t)}` : 'any time'}.`);
+  if (how === 'update') return ctx.update({ embeds: [embed], components: [] });
+  return ctx.ephemeral({ embeds: [embed] });
+}
+
+async function runEvent(ctx) {
+  const tokens = ctx.argv.length ? ctx.argv : tokenize(ctx.args);
+  const sub = (tokens[0] || '').toLowerCase();
+  const rest = tokens.slice(1);
+  if (!sub || ['status', 'info', 'panel'].includes(sub)) return ctx.panel(await eventView(ctx));
+  if (['stop', 'end', 'cancel'].includes(sub)) return stopEvent(ctx);
+  if (['limits', 'limit'].includes(sub)) return saveLimits(ctx, rest);
+  if (sub === 'start') return startEvent(ctx, rest[0], rest.slice(1));
+  if (KIND_WORDS[sub]) return startEvent(ctx, sub, rest);
+  if (['double', 'triple'].includes(sub) && KIND_WORDS[(rest[0] || '').toLowerCase()]) return startEvent(ctx, rest[0], [sub === 'triple' ? '3x' : '2x', ...rest.slice(1)]);
+  const guess = didYouMean(sub, ['xp', 'shards', 'stop', 'limits']);
+  return ctx.warn("I didn't get that", `I don't know **${plainName(clip(sub, 30))}**.${guess.length ? ` Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?` : ''}\nTry \`/event\`, \`/event xp 48h\`, \`/event shards 24h\` or \`/event stop\`.`);
+}
+
+const ECON_SUBS = ['give', 'take', 'reset', 'daily', 'work', 'start', 'allow', 'deny', 'givers', 'settings', 'party', 'streak', 'events'];
 
 const globalField = (field) => ({
   ...field,
@@ -1285,6 +1600,9 @@ async function runEconomy(ctx) {
     return saveWork(ctx, rest[0], rest[1]);
   }
   if (sub === 'start' || sub === 'starting') return saveStart(ctx, rest[0]);
+  if (sub === 'party') return saveParty(ctx, rest);
+  if (sub === 'streak' || sub === 'streaks') return saveStreak(ctx, rest);
+  if (sub === 'events' || sub === 'event') return saveLimits(ctx, rest);
   const guess = didYouMean(sub, ECON_SUBS);
   return ctx.warn("I didn't get that", `I don't know **${plainName(clip(sub, 30))}**.${guess.length ? ` Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?` : ''}
 Try \`/economy\` on its own for the settings panel.`);
@@ -1316,6 +1634,9 @@ export const { setup, teardown, check } = defineApp({
     workEnabled: true,
     begEnabled: true,
     startBalance: 0,
+    partyRates: { ...PARTY_DEFAULTS },
+    streakRewards: { ...STREAK_DEFAULTS },
+    eventLimits: { ...EVENT_DEFAULTS },
   },
 
   commands: {
@@ -1324,6 +1645,7 @@ export const { setup, teardown, check } = defineApp({
     balance: { description: 'Your wallet: /balance, /balance @sam, /balance pay @sam 50, work, top, history', run: (ctx) => runBalance(ctx) },
     shop: { description: 'The server shop: /shop, /shop buy Name. Admins: /shop add role @Supporter 500', run: runShop },
     economy: { description: 'Economy settings: /economy give @sam 100, take, reset @sam, daily 150, allow @sam', perm: 'admin', run: runEconomy },
+    event: { description: 'Server events: /event, admins: /event xp 48h (Double XP), /event shards 24h, /event stop', run: runEvent },
   },
 
   components: {
@@ -1386,10 +1708,43 @@ export const { setup, teardown, check } = defineApp({
       { id: 'user', label: 'Who? (@name or username)', style: 'short', placeholder: '@sam', max: 100 },
     ] })),
     resetsave: moveOwner((ctx) => resetUser(ctx, ctx.values?.user)),
+    partyform: rateOwner((ctx) => {
+      const r = partyRates(cfgOf(ctx.engine));
+      return ctx.form({ title: 'YapOS Party pay', action: 'partysave', fields: PARTY_KEYS.map((k) => (
+        { id: k, label: `${CURRENCY.name} for ${PARTY_LABELS[k]} (0 to ${fmt(PARTY_BOUNDS[k])})`, style: 'short', value: String(r[k]), max: 5 }
+      )) });
+    }),
+    partysave: rateOwner((ctx) => saveParty(ctx, PARTY_KEYS.flatMap((k) => [k, String(ctx.values?.[k] ?? '').trim() || 'x']))),
+    streakform: rateOwner((ctx) => {
+      const tb = streakTable(cfgOf(ctx.engine));
+      return ctx.form({ title: 'Streak rewards', action: 'streaksave', fields: STREAK_DAYS.map((d) => (
+        { id: `d${d}`, label: `Bonus % of the daily at day ${d}${d === 100 ? ' (and every 100)' : ''}`, style: 'short', value: String(tb[d]), max: 4 }
+      )) });
+    }),
+    streaksave: rateOwner((ctx) => saveStreak(ctx, STREAK_DAYS.map((d) => String(ctx.values?.[`d${d}`] ?? '').trim() || 'x'))),
+    evlimitform: rateOwner((ctx) => {
+      const l = eventLimits(cfgOf(ctx.engine));
+      return ctx.form({ title: 'Server event limits', action: 'evlimitsave', fields: [
+        { id: 'mult', label: `Highest boost (1 turns events off, up to ${EVENT_MULT_MAX})`, style: 'short', value: String(l.mult), max: 4 },
+        { id: 'hours', label: `Longest event in hours (1 to ${EVENT_HOURS_MAX})`, style: 'short', value: String(l.hours), max: 4 },
+        { id: 'days', label: 'Days between events per server', style: 'short', value: String(l.cooldownDays), max: 4 },
+      ] });
+    }),
+    evlimitsave: rateOwner((ctx) => saveLimits(ctx, [ctx.values?.mult, ctx.values?.hours, ctx.values?.days].map((v) => String(v ?? '').trim() || 'x'))),
+    evform: admin((ctx) => {
+      const kind = ctx.argv[0] === 'shards' ? 'shards' : 'xp';
+      const l = eventLimits(cfgOf(ctx.engine));
+      return ctx.form({ title: `Start ${boostName(kind, l.mult)}`, action: 'evsave', args: [kind], fields: [
+        { id: 'hours', label: `How long? (up to ${l.hours}h, like 24h or 2d)`, style: 'short', value: `${l.hours}h`, max: 10 },
+      ] });
+    }),
+    evsave: admin((ctx) => startEvent(ctx, ctx.argv[0], [String(ctx.values?.hours ?? '').trim()].filter(Boolean))),
+    evstop: admin((ctx) => stopEvent(ctx, 'update')),
   },
 
   yap: [
     { words: ['daily'], run: claimDaily },
+    { words: ['event', 'events', 'boost'], run: (ctx) => runEvent(ctx) },
     { words: ['beg', 'plead'], run: doBeg },
     { words: ['balance', 'bal', 'wallet', 'coins', 'shards', 'money'], run: (ctx) => runBalance(ctx, ctx.argv) },
     { words: ['pay', 'work', 'richest'], run: (ctx) => runBalance(ctx, [ctx.word, ...ctx.argv]) },
@@ -1424,6 +1779,18 @@ export const { setup, teardown, check } = defineApp({
     enabled: (sid) => engine.settings.isEnabled(sid, ID),
     seasonBoard: () => seasonBoard(engine, 'shards'),
     seasonScore: (uid) => seasonScore(engine, 'shards', uid),
+    partyRates: () => partyRates(cfgOf(engine)),
+    eventMultiplier: (sid, kind) => eventMultiplier(engine, sid, kind),
+    activeEvent: (sid) => {
+      const ev = activeEvent(engine, sid);
+      return ev ? { kind: ev.kind, mult: Number(ev.mult) || 1, startedAt: ev.startedAt, endsAt: ev.endsAt, name: boostName(ev.kind, Number(ev.mult) || 1) } : null;
+    },
+    eventBanner: (sid) => eventBanner(engine, sid),
+    streak: (uid) => {
+      const u = readUsers(engine).users[uid];
+      const t = clock(engine);
+      return u && u.lastDaily && t - u.lastDaily <= STREAK_GRACE_MS ? Math.max(0, Math.floor(Number(u.streak) || 0)) : 0;
+    },
   }),
 
   presets: {
@@ -1441,6 +1808,9 @@ export const { setup, teardown, check } = defineApp({
     `Seasons: ${CURRENCY.name} earned this month count toward /balance season. The top 10 at month end keep a badge on /rank. Wallets never reset.`,
     'Admins run the shop here: /shop add role @Supporter 500 · /shop add item "Golden ticket" 200 · /shop stock 1 10 · /shop price 1 750 · /shop remove 1',
     `Only the bot owner hands out ${CURRENCY.name} or changes earn rates: /economy give @sam 100 · /economy daily 150 · /economy allow @sam lets someone else help.`,
+    'Streak rewards: reaching a 7, 30 or 100-day streak (and every 100 after) pays a one-time bonus on top of that day\'s /daily (by default +50%, +100% and +200% of the daily amount).',
+    `Server events: admins start a Double XP or Double ${CURRENCY.name} event with /event xp 48h or /event shards 24h. It only counts in that server, ends on its own and, by default, can run once every 30 days (the bot owner sets the limits).`,
+    `YapOS Party pays ${CURRENCY.name} too: a few for every game with 2 or more players, more for wins, tournaments and right predictions, up to a daily cap.`,
   ],
 
   init: (engine) => {

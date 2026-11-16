@@ -2,6 +2,7 @@ import { HttpError, json, fail, readJson, isPlainObject, clientIp, parseJsonSafe
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanText } from './profiles.js';
 import { findBlocked, isBlockedGameWord } from '../web/activity/js/filter.js';
+import { publicInfo, setPublic, deletePackStatements, packSocialRoute } from './pack-browse.js';
 
 export const PACK_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const PACK_CODE_LENGTH = 8;
@@ -18,7 +19,7 @@ export const TRIVIA_WRONG = 3;
 export const PACK_BODY_LIMIT = 256 * 1024;
 
 const WORD_RE = /^[\p{L}\p{N}][\p{L}\p{N} '\-]*$/u;
-const FIELDS = new Set(['name', 'words', 'trivia']);
+const FIELDS = new Set(['name', 'words', 'trivia', 'public']);
 const NOT_YOURS = "We couldn't find that word pack. It may have been deleted.";
 const cache = new Map();
 
@@ -120,13 +121,16 @@ export function cleanPack(body) {
   if (!name) throw bad('bad_name', 'Give your pack a name.');
   if (Array.from(name).length > PACK_NAME_MAX) throw bad('bad_name', `Keep the name under ${PACK_NAME_MAX} characters.`);
   if (!textOk(name)) throw bad('blocked_name', "That name uses a word that isn't allowed in YapOS Party.");
+  if (body.public !== undefined && typeof body.public !== 'boolean') throw bad('bad_public', '"public" must be true or false.');
   const words = cleanPackWords(body.words);
   const trivia = cleanPackTrivia(body.trivia);
   if (!words.length && !trivia.length) throw bad('empty_pack', 'Add at least one word or one question.');
-  return { name, words, trivia };
+  const out = { name, words, trivia };
+  if (typeof body.public === 'boolean') out.public = body.public;
+  return out;
 }
 
-function packOut(row, full = true) {
+function packOut(row, full = true, info = null) {
   const words = parseJsonSafe(row.words, []);
   const trivia = parseJsonSafe(row.trivia, []);
   const out = {
@@ -136,6 +140,9 @@ function packOut(row, full = true) {
     triviaCount: Array.isArray(trivia) ? trivia.length : 0,
     created: Number(row.created),
     updated: Number(row.updated),
+    public: Boolean(info && info.public),
+    blocked: Boolean(info && info.blocked),
+    likes: info ? info.likes : 0,
   };
   if (full) {
     out.words = Array.isArray(words) ? words : [];
@@ -146,7 +153,9 @@ function packOut(row, full = true) {
 
 async function listPacks(env, session, extra = {}) {
   const res = await env.DB.prepare('SELECT code, name, words, trivia, created, updated FROM party_packs WHERE owner_id = ? ORDER BY created ASC, code ASC').bind(session.user_id).all();
-  const packs = ((res && res.results) || []).map((r) => packOut(r, false));
+  const rows = (res && res.results) || [];
+  const info = await publicInfo(env.DB, rows.map((r) => r.code));
+  const packs = rows.map((r) => packOut(r, false, info.get(r.code)));
   return json({ packs, max: MAX_PACKS, limits: { words: MAX_PACK_WORDS, trivia: MAX_PACK_TRIVIA, name: PACK_NAME_MAX }, ...extra });
 }
 
@@ -170,8 +179,8 @@ async function createPack(request, env, session, t) {
       if (Number(again && again.n) >= MAX_PACKS) return fail(409, 'too_many', `You already have ${MAX_PACKS} word packs. Delete one first.`);
     }
     if (res && res.meta && res.meta.changes) {
-      const row = await env.DB.prepare('SELECT code, name, words, trivia, created, updated FROM party_packs WHERE code = ?').bind(code).first();
-      return json({ pack: packOut(row) }, 201);
+      if (pack.public) await setPublic(env.DB, code, true, t);
+      return json({ pack: await fullPack(env, code) }, 201);
     }
   }
   return fail(503, 'busy', "We couldn't make a code for your pack. Try again.");
@@ -185,14 +194,36 @@ async function updatePack(request, env, session, raw, t) {
     .bind(pack.name, JSON.stringify(pack.words), JSON.stringify(pack.trivia), t, row.code, session.user_id)
     .run();
   cache.delete(row.code);
-  const fresh = await env.DB.prepare('SELECT code, name, words, trivia, created, updated FROM party_packs WHERE code = ?').bind(row.code).first();
-  return json({ pack: packOut(fresh) });
+  if (typeof pack.public === 'boolean') await setPublic(env.DB, row.code, pack.public, t);
+  return json({ pack: await fullPack(env, row.code) });
+}
+
+async function fullPack(env, code) {
+  const row = await env.DB.prepare('SELECT code, name, words, trivia, created, updated FROM party_packs WHERE code = ?').bind(code).first();
+  const info = await publicInfo(env.DB, [code]);
+  return packOut(row, true, info.get(code));
+}
+
+async function publishPack(request, env, session, raw, t) {
+  const row = await ownPack(env, session, raw);
+  if (!row) return fail(404, 'not_found', NOT_YOURS);
+  const body = await readJson(request, 4 * 1024);
+  for (const k of Object.keys(body)) {
+    if (k !== 'public') throw bad('bad_request', `Unknown field "${k.slice(0, 40)}".`);
+  }
+  if (typeof body.public !== 'boolean') throw bad('bad_public', '"public" must be true or false.');
+  if (body.public && !textOk(row.name)) return fail(400, 'blocked_name', "That name uses a word that isn't allowed in YapOS Party.");
+  await setPublic(env.DB, row.code, body.public, t);
+  return json({ pack: await fullPack(env, row.code) });
 }
 
 async function deletePack(env, session, raw) {
   const row = await ownPack(env, session, raw);
   if (!row) return fail(404, 'not_found', NOT_YOURS);
-  await env.DB.prepare('DELETE FROM party_packs WHERE code = ? AND owner_id = ?').bind(row.code, session.user_id).run();
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM party_packs WHERE code = ? AND owner_id = ?').bind(row.code, session.user_id),
+    ...deletePackStatements(env.DB, row.code),
+  ]);
   cache.delete(row.code);
   return listPacks(env, session, { deleted: true });
 }
@@ -208,12 +239,17 @@ export function packsRoute(request, env, session, route, t) {
   }
   if (route.length === 2) {
     if (read) {
-      return ownPack(env, session, route[1]).then((row) => (row ? json({ pack: packOut(row) }) : fail(404, 'not_found', NOT_YOURS)));
+      return ownPack(env, session, route[1]).then((row) => (row ? fullPack(env, row.code).then((pack) => json({ pack })) : fail(404, 'not_found', NOT_YOURS)));
     }
     if (method === 'PUT' || method === 'PATCH') return updatePack(request, env, session, route[1], t);
     if (method === 'DELETE') return deletePack(env, session, route[1]);
     return nope();
   }
+  if (route.length === 3 && route[2] === 'public') {
+    if (method === 'PUT' || method === 'PATCH' || method === 'POST') return publishPack(request, env, session, route[1], t);
+    return nope();
+  }
+  if (route.length === 3 && (route[2] === 'like' || route[2] === 'report')) return packSocialRoute(request, env, session, route, t);
   return fail(404, 'not_found', "That page of the dashboard doesn't exist.");
 }
 

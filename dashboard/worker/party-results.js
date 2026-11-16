@@ -3,8 +3,10 @@ import { hit, tooMany, LIMITS } from './rate.js';
 import { cleanText } from './profiles.js';
 import { reportIpHash } from './reports.js';
 import { PARTY_BADGES, COUNTER_GAMES, COUNTER_KEYS, badgesFor } from './party-badges.js';
+import { MAX_PREDICTIONS, REASON_DAILY_LIMIT, loadRates, shardWants, shardStatement, shardTotals, shardReasonCounts, shardsPoll, ackShards, shardsCleanupStatements } from './party-shards.js';
+import { ackSettings } from './public-profiles.js';
 
-export const PARTY_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower']);
+export const PARTY_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel']);
 export const MAX_PLAYERS = 16;
 export const MIN_COUNTED = 2;
 export const PLAY_XP = 10;
@@ -92,7 +94,34 @@ export function cleanResult(body, t) {
       if (ids.length) extra[key] = ids;
     }
   }
-  return { game: body.game, at: Math.floor(at), players, extra };
+  let tournament = null;
+  if (body.extra !== undefined && body.extra !== null && body.extra.tournament !== undefined && body.extra.tournament !== null) {
+    const tour = body.extra.tournament;
+    if (!isPlainObject(tour) || typeof tour.winner !== 'string') throw bad('bad_extra', "The tournament info doesn't look right.");
+    const winner = tour.winner.trim().toLowerCase();
+    if (seen.has(winner)) tournament = winner;
+  }
+  const predictions = cleanPredictions(body.predictions, seen);
+  return { game: body.game, at: Math.floor(at), players, extra, tournament, predictions };
+}
+
+function cleanPredictions(list, seen) {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list) || list.length > MAX_PREDICTIONS) throw bad('bad_predictions', `Send at most ${MAX_PREDICTIONS} predictions.`);
+  const watchers = new Set();
+  const out = [];
+  for (const p of list) {
+    if (!isPlainObject(p)) throw bad('bad_predictions', "A prediction doesn't look right.");
+    if (typeof p.id !== 'string' || !ID_RE.test(p.id.trim())) throw bad('bad_predictions', "A watcher id doesn't look right.");
+    if (typeof p.pick !== 'string') throw bad('bad_predictions', "A prediction pick doesn't look right.");
+    if (p.right !== undefined && typeof p.right !== 'boolean') throw bad('bad_predictions', "A prediction result doesn't look right.");
+    const id = p.id.trim().toLowerCase();
+    const pick = p.pick.trim().toLowerCase();
+    if (watchers.has(id) || seen.has(id) || !seen.has(pick)) continue;
+    watchers.add(id);
+    out.push({ id, name: cleanText(p.name, NAME_MAX) || 'Watcher', username: cleanHandle(p.username), pick, right: p.right === true });
+  }
+  return out;
 }
 
 async function resultHash(result) {
@@ -138,12 +167,16 @@ export async function postResults(request, env, t) {
     .run();
   if (!Number(claim && claim.meta && claim.meta.changes)) return json({ ok: true, counted: false, duplicate: true });
   const ids = result.players.map((p) => p.id);
+  const everyone = [...new Set([...ids, ...result.predictions.map((w) => w.id)])];
   const marks = ids.map(() => '?').join(', ');
   const day = utcDay(t);
-  const [statRes, xpRes, banned] = await Promise.all([
+  const [statRes, xpRes, banned, rates, shardSums, reasonCounts] = await Promise.all([
     db.prepare(`SELECT user_id, games, wins, by_game, counters FROM party_stats WHERE user_id IN (${marks})`).bind(...ids).all(),
     db.prepare(`SELECT user_id, SUM(xp) AS total FROM party_xp WHERE day = ? AND user_id IN (${marks}) GROUP BY user_id`).bind(day, ...ids).all(),
-    idSet(db, 'party_bans', ids),
+    idSet(db, 'party_bans', everyone),
+    loadRates(db),
+    shardTotals(db, everyone, day),
+    shardReasonCounts(db, everyone, day),
   ]);
   const stats = new Map(((statRes && statRes.results) || []).map((r) => [String(r.user_id), readStats(r)]));
   const earned = new Map(((xpRes && xpRes.results) || []).map((r) => [String(r.user_id), Number(r.total) || 0]));
@@ -173,13 +206,26 @@ export async function postResults(request, env, t) {
         .bind(randomToken(12), p.id, xp, DAILY_XP_CAP, result.game, p.won ? 1 : 0, day, t, p.id, day, DAILY_XP_CAP),
     );
   }
+  const shards = [];
+  for (const want of shardWants(result, rates, banned)) {
+    const room = Math.max(0, rates.cap - (shardSums.get(want.id) || 0));
+    const amount = Math.min(want.shards, room);
+    if (amount <= 0) continue;
+    const limit = REASON_DAILY_LIMIT[want.reason];
+    const key = `${want.id}|${want.reason}`;
+    if (limit && (reasonCounts.get(key) || 0) >= limit) continue;
+    if (limit) reasonCounts.set(key, (reasonCounts.get(key) || 0) + 1);
+    shardSums.set(want.id, (shardSums.get(want.id) || 0) + amount);
+    shards.push({ id: want.id, shards: amount, reason: want.reason });
+    stmts.push(shardStatement(db, { ...want, shards: amount }, result.game, day, t, rates.cap));
+  }
   try {
     await db.batch(stmts);
   } catch (err) {
     await db.prepare('DELETE FROM party_results WHERE hash = ? AND created = ?').bind(hash, t).run().catch(() => {});
     throw err;
   }
-  return json({ ok: true, counted: true, xp: given }, 201);
+  return json({ ok: true, counted: true, xp: given, shards }, 201);
 }
 
 export async function partyPoll(db) {
@@ -188,22 +234,37 @@ export async function partyPoll(db) {
     db.prepare("SELECT COUNT(*) AS n FROM party_reports WHERE status = 'open'").first(),
   ]);
   const xp = ((res && res.results) || []).map((r) => ({ id: r.id, user: r.user_id, xp: Number(r.xp), game: r.game, won: Boolean(r.won) }));
-  return { xp, reportsOpen: Number(open && open.n) || 0 };
+  const [shards, packOpen] = await Promise.all([
+    shardsPoll(db),
+    db.prepare("SELECT COUNT(*) AS n FROM pack_reports WHERE status = 'open'").first(),
+  ]);
+  return { xp, shards, reportsOpen: Number(open && open.n) || 0, packReportsOpen: Number(packOpen && packOpen.n) || 0 };
+}
+
+function ackList(body, key) {
+  const list = body[key];
+  if (list === undefined || list === null) return null;
+  if (!Array.isArray(list)) throw bad('bad_ids', `"${key}" must be a list.`);
+  if (list.length > MAX_ACK) throw new HttpError(413, 'too_many', `Send at most ${MAX_ACK} ids at once.`);
+  return [...new Set(list.filter((id) => typeof id === 'string' && XP_ID_RE.test(id)))];
 }
 
 export async function ackParty(request, env, t) {
-  const body = await readJson(request, 64 * 1024);
-  if (!Array.isArray(body.ids)) throw bad('bad_ids', '"ids" must be a list.');
-  if (body.ids.length > MAX_ACK) throw new HttpError(413, 'too_many', `Send at most ${MAX_ACK} ids at once.`);
-  const ids = [...new Set(body.ids.filter((id) => typeof id === 'string' && XP_ID_RE.test(id)))];
-  if (!ids.length) return json({ ok: true, acked: 0 });
+  const body = await readJson(request, 96 * 1024);
+  const ids = ackList(body, 'ids');
+  const shardIds = ackList(body, 'shardIds');
+  const profileIds = ackList(body, 'profileIds');
+  if (!ids && !shardIds && !profileIds) throw bad('bad_ids', '"ids" must be a list.');
   let acked = 0;
-  for (let i = 0; i < ids.length; i += 100) {
+  for (let i = 0; ids && i < ids.length; i += 100) {
     const part = ids.slice(i, i + 100);
     const res = await env.DB.prepare(`UPDATE party_xp SET claimed = ? WHERE claimed = 0 AND id IN (${part.map(() => '?').join(', ')})`).bind(t, ...part).run();
     acked += Number((res && res.meta && res.meta.changes) || 0);
   }
-  return json({ ok: true, acked });
+  const out = { ok: true, acked };
+  if (shardIds) out.shardsAcked = shardIds.length ? await ackShards(env.DB, shardIds, t) : 0;
+  if (profileIds) out.profilesAcked = profileIds.length ? await ackSettings(env.DB, profileIds.map((id) => id.toLowerCase())) : 0;
+  return json(out);
 }
 
 export function favouriteGame(byGame) {
@@ -262,5 +323,6 @@ export function resultsCleanupStatements(db, t) {
   return [
     db.prepare('DELETE FROM party_results WHERE created < ?').bind(t - 10 * MINUTE),
     db.prepare('DELETE FROM party_xp WHERE (claimed > 0 AND at < ?) OR at < ?').bind(t - XP_KEEP_CLAIMED, t - XP_KEEP_UNCLAIMED),
+    ...shardsCleanupStatements(db, t),
   ];
 }

@@ -19,6 +19,11 @@ import { renderPublic } from './pages/public.js';
 import { renderParty } from './pages/party.js';
 import { renderPartyReports } from './pages/party-reports.js';
 import { renderPacks } from './pages/packs.js';
+import { renderPacksBrowse } from './pages/packs-browse.js';
+import { renderProfile } from './pages/profile.js';
+import { renderSeasons } from './pages/seasons.js';
+import { renderStats } from './pages/stats.js';
+import { renderAccount } from './pages/account.js';
 import { spotlight } from './spotlight.js';
 
 const root = document.getElementById('app');
@@ -35,6 +40,11 @@ const TITLES = {
   party: 'Party admins',
   'party-reports': 'Party reports',
   packs: 'Word packs',
+  'packs-browse': 'Browse word packs',
+  account: 'Your account',
+  seasons: 'Past seasons',
+  profile: 'Profile',
+  stats: 'Stats',
   overview: 'Overview',
   apps: 'Apps',
   app: 'App settings',
@@ -52,6 +62,8 @@ const PAGES = {
   party: renderParty,
   'party-reports': renderPartyReports,
   packs: renderPacks,
+  account: renderAccount,
+  stats: renderStats,
   overview: renderOverview,
   apps: renderApps,
   app: renderAppSettings,
@@ -60,6 +72,12 @@ const PAGES = {
   tickets: renderTickets,
   cases: renderCases,
   'public-settings': renderPublicSettings,
+};
+
+const PUBLIC_PAGES = {
+  profile: renderProfile,
+  seasons: renderSeasons,
+  'packs-browse': renderPacksBrowse,
 };
 
 function onUnauthorized() {
@@ -150,6 +168,11 @@ async function render() {
   if (route.name === 'public') {
     shell = null;
     renderPublic(root, { api, params: route.params, signal, setTitle });
+    return;
+  }
+  if (PUBLIC_PAGES[route.name]) {
+    shell = null;
+    PUBLIC_PAGES[route.name](root, { api, params: route.params, signal, setTitle, getUser: () => ensureUser(signal).catch(() => null) });
     return;
   }
   if (route.name === 'not-found') {
