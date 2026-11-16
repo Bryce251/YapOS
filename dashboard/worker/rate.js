@@ -10,6 +10,8 @@ export const LIMITS = {
   profiles: 60,
   profileAsks: 200,
   partyAdmins: 60,
+  reports: 5,
+  reportsAll: 60,
 };
 
 export async function hit(db, key, limit, t, weight = 1) {

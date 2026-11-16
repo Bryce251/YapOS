@@ -32,6 +32,7 @@ export const SUGGESTIONS = 3;
 export const REACTS = Object.freeze(['😂', '😍', '🤯', '👏', '🔥']);
 export const REACT_NAMES = Object.freeze(['Funny', 'Love it', 'Mind blown', 'Nice one', 'On fire']);
 export const STEP_PHASES = Object.freeze(['write', 'draw', 'text']);
+export const HID_MAX = 40;
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const B64_VAL = new Map(Array.from(B64).map((c, i) => [c, i]));
@@ -138,6 +139,14 @@ export function entryKey(i) {
   return `${ENTRY_PREFIX}${i}`;
 }
 
+export function drawingId(run, c, i) {
+  return `tel.${run}.${c}.${i}`;
+}
+
+function hiddenSet(st) {
+  return new Set(Array.isArray(st && st.hid) ? st.hid : []);
+}
+
 function words(text) {
   return new Set(plainKey(text).split(' ').filter((w) => w.length > 2));
 }
@@ -224,7 +233,13 @@ function openStep(api, st, step) {
   const starts = api.now();
   const ends = starts + secs * 1000;
   mem.texts = {};
-  const next = { ...st, phase: kind, step, k, dk: kind === 'text' ? st.k : null, done: [], pass: 0, sug: null, starts, ends, rv: null, rx: null, aw: null };
+  const next = { ...st, phase: kind, step, k, dk: kind === 'text' ? st.k : null, dby: null, done: [], pass: 0, sug: null, starts, ends, rv: null, rx: null, aw: null };
+  if (kind === 'text') {
+    next.dby = st.seats.map((_, q) => {
+      const e = (mem.chains[chainAt(q, step - 1, n)] || [])[step - 1];
+      return e && e.k === 'd' ? e.by : null;
+    });
+  }
   if (kind === 'write') {
     mem.sugs = suggestionsFor(api, n);
     next.sug = mem.sugs.map((ids) => ids.map((id) => mask(id, k)));
@@ -294,7 +309,43 @@ function entryValue(chain, c, i) {
   if (e.k === 'd') out.s = e.s;
   else out.t = e.t;
   if (e.miss) out.miss = 1;
+  if (e.hid) out.hid = 1;
   return out;
+}
+
+function drawingList(api, st) {
+  if (!st || !Array.isArray(st.seats) || !owned(api, st)) return [];
+  const mem = api.memory;
+  const n = st.seats.length;
+  const hid = hiddenSet(st);
+  const out = [];
+  const add = (c, i, viewers = null) => {
+    const e = (mem.chains[c] || [])[i];
+    if (!e || e.k !== 'd' || e.hid || !Array.isArray(e.s) || !e.s.length) return;
+    const d = drawingId(st.run, c, i);
+    if (!hid.has(d)) out.push(viewers ? { d, drawer: e.by, c, i, viewers } : { d, drawer: e.by, c, i });
+  };
+  if (st.phase === 'text' && st.step > 0) for (let q = 0; q < n; q += 1) add(chainAt(q, st.step - 1, n), st.step - 1, [st.seats[(q + 1) % n]]);
+  else if (st.phase === 'reveal' && st.rv) for (let i = 0; i <= st.rv.at; i += 1) add(st.rv.c, i);
+  return out;
+}
+
+function hide(api, d) {
+  const st = api.get(KEY);
+  const item = drawingList(api, st).find((x) => x.d === d);
+  if (!item) return false;
+  const mem = api.memory;
+  const chain = mem.chains[item.c];
+  const e = chain[item.i];
+  mem.ink[e.by] = Math.max(0, (mem.ink[e.by] || 0) - inkChars(e.s));
+  chain[item.i] = { k: 'd', by: e.by, s: [], hid: 1 };
+  const n = st.seats.length;
+  if (st.phase === 'text') {
+    for (let q = 0; q < n; q += 1) if (chainAt(q, st.step - 1, n) === item.c && api.get(inkKey(q)) !== null) api.put(inkKey(q), null);
+  }
+  if (st.phase === 'reveal' && st.rv && st.rv.c === item.c && item.i <= st.rv.at) api.put(entryKey(item.i), entryValue(chain, item.c, item.i));
+  api.put(KEY, { ...st, hid: [...hiddenSet(st)].concat([d]).slice(-HID_MAX) });
+  return true;
 }
 
 function showFor(chain, at) {
@@ -423,6 +474,34 @@ function owned(api, st) {
   return Boolean(api.memory && api.memory.run && api.memory.run === st.run && Array.isArray(api.memory.chains));
 }
 
+function seenDrawing(snap, st) {
+  const hid = hiddenSet(st);
+  if (st.phase === 'text' && st.step > 0) {
+    const n = st.seats.length;
+    const seat = st.seats.indexOf(snap.meSlot);
+    if (seat < 0 || n < 2) return null;
+    const q = (seat - 1 + n) % n;
+    const by = Array.isArray(st.dby) ? st.dby[q] : null;
+    const v = snap.state[inkKey(q)];
+    if (!Number.isInteger(by) || !validInk(v, st.dk) || !v.s.length) return null;
+    const d = drawingId(st.run, chainAt(q, st.step - 1, n), st.step - 1);
+    return hid.has(d) ? null : { d, drawer: by, ink: v.s.slice(), word: null, viewers: [st.seats[seat]] };
+  }
+  if (st.phase === 'reveal' && st.rv) {
+    for (let i = st.rv.at; i >= 0; i -= 1) {
+      const e = snap.state[entryKey(i)];
+      if (!e || e.c !== st.rv.c || e.i !== i || e.k !== 'd') continue;
+      if (e.hid || !Array.isArray(e.s) || !e.s.length || !Number.isInteger(e.by)) return null;
+      const d = drawingId(st.run, e.c, i);
+      if (hid.has(d)) return null;
+      const before = snap.state[entryKey(i - 1)];
+      const word = before && before.c === e.c && before.i === i - 1 && typeof before.t === 'string' ? before.t : null;
+      return { d, drawer: e.by, ink: e.s.slice(), word };
+    }
+  }
+  return null;
+}
+
 function face(snap, slot) {
   const p = snap.players.find((x) => x.slot === slot);
   if (!p) return { slot, id: null, name: 'Player', initials: 'P', hue: 20, avatar: null, isMe: false, present: false };
@@ -536,7 +615,18 @@ const telephone = {
     return api.finish();
   },
 
+  drawings(api) {
+    return drawingList(api, api.get(KEY)).map((x) => (x.viewers ? { d: x.d, drawer: x.drawer, viewers: x.viewers } : { d: x.d, drawer: x.drawer }));
+  },
+
+  drawingOf(snap) {
+    const st = snap && snap.state ? snap.state[KEY] : null;
+    if (!st || !Array.isArray(st.seats)) return null;
+    return seenDrawing(snap, st);
+  },
+
   admin(api, action) {
+    if (action.type === 'hideDrawing') return hide(api, action.d);
     const st = api.get(KEY);
     if (!st) return false;
     if (action.type === 'skip') {
@@ -637,7 +727,9 @@ const telephone = {
       if (st.phase === 'text') {
         const key = inkKey((seat - 1 + n) % n);
         const v = snap.state[key];
-        out.src = { key, k: st.dk, blank: !validInk(v, st.dk) || !v.s.length };
+        const q = (seat - 1 + n) % n;
+        const hidden = st.step > 0 && hiddenSet(st).has(drawingId(st.run, chainAt(q, st.step - 1, n), st.step - 1));
+        out.src = { key, k: st.dk, blank: hidden || !validInk(v, st.dk) || !v.s.length, hidden };
       }
     }
     if (st.phase === 'reveal' && st.rv) {
@@ -654,6 +746,7 @@ const telephone = {
           t: e.k === 'd' ? null : typeof e.t === 'string' ? e.t : '',
           strokes: e.k === 'd' && Array.isArray(e.s) ? e.s.length : 0,
           miss: Boolean(e.miss),
+          hidden: Boolean(e.hid),
           rx: (st.rx && st.rx[i]) || REACTS.map(() => 0),
           mine: by.isMe,
         });

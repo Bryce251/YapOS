@@ -60,7 +60,7 @@ export function checkWord(text, letter, used, opts = {}) {
   const w = cleanWord(text);
   if (!w) return 'empty';
   if (!/^[a-z]+$/.test(w)) return 'letters';
-  if (isBlockedWord(w)) return 'blocked';
+  if (isBlockedWord(w, { strict: true })) return 'blocked';
   if (w.length < MIN_LETTERS) return 'short';
   if (w.length > MAX_LETTERS) return 'long';
   if (letter && w[0] !== letter) return 'start';

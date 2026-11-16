@@ -3,6 +3,7 @@ import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { getSession, touchSession, publicUser } from './sessions.js';
 import { profileRoute } from './profiles.js';
 import { activityAdminsRoute, partyRoute, isPartyOwner } from './party.js';
+import { postActivityReport, partyStaffRoute, partyRole } from './reports.js';
 import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
 
 const SERVERS_TTL = 2 * MINUTE;
@@ -414,6 +415,7 @@ export async function handleApi(request, env, deps, url) {
 
   if (segs[1] === 'activity') {
     if (segs.length === 3 && segs[2] === 'admins') return activityAdminsRoute(request, env, url, t);
+    if (segs.length === 3 && segs[2] === 'reports') return postActivityReport(request, env, t);
     return profileRoute(request, env, segs, url, t);
   }
 
@@ -447,7 +449,11 @@ export async function handleApi(request, env, deps, url) {
   const route = segs.slice(1);
   const n = route.length;
 
-  if (n === 1 && route[0] === 'me' && readOnly) return json({ user: publicUser(session), partyOwner: isPartyOwner(env, session.user_id) });
+  if (n === 1 && route[0] === 'me' && readOnly) {
+    const role = await partyRole(env, session.user_id);
+    return json({ user: publicUser(session), partyOwner: role === 'owner', partyAdmin: Boolean(role) });
+  }
+  if (route[0] === 'party' && (route[1] === 'reports' || route[1] === 'bans')) return partyStaffRoute(request, env, session, route, url, t);
   if (route[0] === 'party') return partyRoute(request, env, session, route, t);
   if (n === 1 && route[0] === 'servers' && readOnly) return getServers(env, session, t);
   if (n === 2 && route[0] === 'jobs' && readOnly) return getJob(env, session, route[1], t);

@@ -17,11 +17,49 @@ export const FILL = SIZES.length;
 export const FILL_CHARS = 6;
 export const FILL_TOLERANCE = 20;
 export const SNAPSHOTS = 3;
+export const CUSTOM = COLORS.length;
+export const RGB_CHARS = 4;
+export const CUSTOM_FILL_CHARS = FILL_CHARS + RGB_CHARS;
 
 const ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const VAL = new Map(Array.from(ABC).map((c, i) => [c, i]));
 const NEAR = 31;
 const REACH = 3;
+
+export function hexOf(v) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(typeof v === 'string' ? v.trim() : '');
+  return m ? `#${m[1].toLowerCase()}` : null;
+}
+
+export function paletteIndex(hex) {
+  const v = hexOf(hex);
+  return v ? COLORS.indexOf(v) : -1;
+}
+
+export function tintOf(hex) {
+  const v = hexOf(hex);
+  if (!v) return null;
+  const i = COLORS.indexOf(v);
+  return i >= 0 ? { c: i } : { c: CUSTOM, rgb: v };
+}
+
+export function colorOf(s) {
+  if (!s) return COLORS[1];
+  if (s.c === CUSTOM) return hexOf(s.rgb) || COLORS[1];
+  return COLORS[s.c] || COLORS[1];
+}
+
+function tintKey(s) {
+  if (s && s.c === CUSTOM) {
+    const t = tintOf(s.rgb);
+    if (t && t.c === CUSTOM) {
+      const n = parseInt(t.rgb.slice(1), 16);
+      return ABC[CUSTOM] + ABC[(n >> 18) & 63] + ABC[(n >> 12) & 63] + ABC[(n >> 6) & 63] + ABC[n & 63];
+    }
+    return ABC[t ? t.c : 1];
+  }
+  return ABC[clampInt(s ? s.c : 1, COLORS.length - 1)];
+}
 
 export function isFill(s) {
   return Boolean(s && s.z === FILL);
@@ -54,7 +92,7 @@ export function encodeStroke(stroke) {
   const pts = stroke.pts || [];
   if (!pts.length) return '';
   const fill = isFill(stroke);
-  let out = ABC[clampInt(stroke.c, COLORS.length - 1)] + ABC[fill ? FILL : clampInt(stroke.z, SIZES.length - 1)];
+  let out = tintKey(stroke) + ABC[fill ? FILL : clampInt(stroke.z, SIZES.length - 1)];
   let [px, py] = quantise(pts[0][0], pts[0][1]);
   out += big(px) + big(py);
   if (fill) return out;
@@ -71,19 +109,35 @@ export function decodeStroke(text) {
   if (typeof text !== 'string' || text.length < 6 || text.length > 4096) return null;
   const at = (i) => (i < text.length ? VAL.get(text[i]) : undefined);
   const c = at(0);
-  const z = at(1);
-  if (c === undefined || z === undefined || c >= COLORS.length || z > FILL) return null;
-  if (z === FILL && text.length !== FILL_CHARS) return null;
+  if (c === undefined || c > CUSTOM) return null;
+  let rgb = null;
+  let o = 0;
+  if (c === CUSTOM) {
+    let n = 0;
+    for (let k = 1; k <= RGB_CHARS; k += 1) {
+      const v = at(k);
+      if (v === undefined) return null;
+      n = n * 64 + v;
+    }
+    if (n > 0xffffff) return null;
+    rgb = `#${n.toString(16).padStart(6, '0')}`;
+    if (COLORS.includes(rgb)) return null;
+    o = RGB_CHARS;
+  }
+  const z = at(o + 1);
+  if (z === undefined || z > FILL) return null;
+  if (text.length < o + 6) return null;
+  if (z === FILL && text.length !== FILL_CHARS + o) return null;
   const read2 = (i) => {
     const a = at(i);
     const b = at(i + 1);
     return a === undefined || b === undefined ? null : a * 64 + b;
   };
-  let x = read2(2);
-  let y = read2(4);
+  let x = read2(o + 2);
+  let y = read2(o + 4);
   if (x === null || y === null || x > GRID_W || y > GRID_H) return null;
   const pts = [[x, y]];
-  let i = 6;
+  let i = o + 6;
   const step = () => {
     const v = at(i);
     if (v === undefined) return null;
@@ -105,7 +159,7 @@ export function decodeStroke(text) {
     if (x < 0 || y < 0 || x > GRID_W || y > GRID_H) return null;
     pts.push([x, y]);
   }
-  return { c, z, pts };
+  return rgb ? { c, rgb, z, pts } : { c, z, pts };
 }
 
 function segDist(p, a, b) {
@@ -155,7 +209,7 @@ export function dedupe(pts) {
 export function encodeParts(stroke, eps = LEVELS[0]) {
   if (isFill(stroke)) {
     const at = (stroke.pts || [])[0];
-    return at ? [encodeStroke({ c: stroke.c, z: FILL, pts: [at] })] : [];
+    return at ? [encodeStroke({ c: stroke.c, rgb: stroke.rgb, z: FILL, pts: [at] })] : [];
   }
   const pts = simplify(dedupe(stroke.pts || []), eps);
   if (!pts.length) return [];
@@ -163,7 +217,7 @@ export function encodeParts(stroke, eps = LEVELS[0]) {
   let start = 0;
   while (start < pts.length) {
     let end = start + 1;
-    let text = encodeStroke({ c: stroke.c, z: stroke.z, pts: pts.slice(start, end) });
+    let text = encodeStroke({ c: stroke.c, rgb: stroke.rgb, z: stroke.z, pts: pts.slice(start, end) });
     while (end < pts.length) {
       const next = text + encodeStroke({ c: 0, z: 0, pts: [pts[end - 1], pts[end]] }).slice(6);
       if (next.length > PIECE_CHARS) break;
@@ -229,7 +283,7 @@ export function readInk(state, k) {
 
 export function liveMessage(k, si, o, pts, stroke) {
   const from = Math.max(0, o - 1);
-  return { t: 'ink', k, si, o, s: encodeStroke({ c: stroke.c, z: stroke.z, pts: pts.slice(from) }) };
+  return { t: 'ink', k, si, o, s: encodeStroke({ c: stroke.c, rgb: stroke.rgb, z: stroke.z, pts: pts.slice(from) }) };
 }
 
 export function applyLive(live, msg) {
@@ -265,6 +319,17 @@ export function rgbaOf(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
   const n = m ? parseInt(m[1], 16) : 0;
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 255];
+}
+
+export function sameRegion(a, b, tolerance = FILL_TOLERANCE) {
+  if (!a || !b) return false;
+  const tol = Math.max(0, Number(tolerance) || 0);
+  for (let k = 0; k < 4; k += 1) {
+    const x = a[k] === undefined ? 255 : a[k];
+    const y = b[k] === undefined ? 255 : b[k];
+    if (Math.abs(x - y) > tol) return false;
+  }
+  return true;
 }
 
 export function floodFill(data, width, height, x, y, rgba, tolerance = FILL_TOLERANCE) {
@@ -413,7 +478,7 @@ function fillImage(ctx, s, scale) {
   if (!img || !img.data || img.data.length < w * h * 4) return null;
   const x = Math.min(w - 1, Math.max(0, Math.round(s.pts[0][0] * scale)));
   const y = Math.min(h - 1, Math.max(0, Math.round(s.pts[0][1] * scale)));
-  const n = floodFill(img.data, w, h, x, y, rgbaOf(COLORS[s.c] || COLORS[1]));
+  const n = floodFill(img.data, w, h, x, y, rgbaOf(colorOf(s)));
   if (n && typeof ctx.putImageData === 'function') ctx.putImageData(img, 0, 0);
   return { img, n };
 }
@@ -429,8 +494,9 @@ export function strokeOn(ctx, s, scale, from = 0) {
     fillImage(ctx, s, scale);
     return;
   }
-  ctx.strokeStyle = COLORS[s.c] || COLORS[1];
-  ctx.fillStyle = COLORS[s.c] || COLORS[1];
+  const col = colorOf(s);
+  ctx.strokeStyle = col;
+  ctx.fillStyle = col;
   ctx.lineWidth = (SIZES[s.z] || SIZES[1]) * scale;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';

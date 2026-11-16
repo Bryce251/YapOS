@@ -1,10 +1,13 @@
 import draw, { GUESS_CHARS, REVEAL_MS, PICK_MS } from '../games/draw.js';
-import { GRID_W, GRID_H, COLORS, COLOR_NAMES, SIZES, SIZE_NAMES, ERASER, MAX_CHUNKS, FILL, inkKey, fitInk, readInk, liveMessage, applyLive, pruneLive, quantise, decodeStroke, strokeOn as inkStroke, fillOn, createPainter } from '../games/ink.js';
+import { GRID_W, GRID_H, COLORS, SIZES, SIZE_NAMES, ERASER, CUSTOM, MAX_CHUNKS, FILL, inkKey, fitInk, readInk, liveMessage, applyLive, pruneLive, quantise, decodeStroke, strokeOn as inkStroke, fillOn, createPainter } from '../games/ink.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
 import { board as scoreBoard, standings } from '../ui/board.js';
 import { person } from '../players.js';
 import { hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
+import { flagInfo } from '../engine.js';
+import { sendReport } from '../admin.js';
+import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
 
 export const SCALE = 2;
 export const LIVE_MS = 250;
@@ -13,6 +16,76 @@ export const LIVE_CHARS = 3000;
 
 const TIER_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 
+export const FLAG_ICON = '🚩';
+export const FLAG_TITLE = 'Flag this drawing if it breaks the rules. When enough players flag it, it gets hidden.';
+export const FLAG_THANKS = 'Thanks for flagging. The drawing was also sent to the YapOS team.';
+export const FLAG_FAIL = "That didn't go through. Try again in a moment.";
+export const HIDDEN_TEXT = 'This drawing was hidden.';
+
+export function flagModel(snap, item, local = null) {
+  if (!snap || !item || !snap.meJoined) return null;
+  const me = snap.meSlot;
+  if (!Number.isInteger(me) || me === item.drawer) return null;
+  const info = flagInfo(snap, item.d, item.drawer, Array.isArray(item.viewers) ? item.viewers : null);
+  const mine = info.mine || Boolean(local && local.has(item.d));
+  return { d: item.d, count: Math.max(info.count, mine ? 1 : 0), need: info.need, mine };
+}
+
+export function flagLabel(f) {
+  if (f.mine) return `Flagged (${Math.min(f.count, f.need)} of ${f.need})`;
+  return f.count ? `Flag (${Math.min(f.count, f.need)} of ${f.need})` : 'Flag';
+}
+
+export function flagButton(f, onFlag, note = null) {
+  if (!f) return null;
+  return h(
+    'div',
+    { class: 'flag-row' },
+    note ? h('span', { class: 'flag-note', text: note }) : null,
+    button(flagLabel(f), {
+      variant: 'ghost',
+      size: 'sm',
+      key: 'flag',
+      disabled: f.mine,
+      on: () => onFlag(f.d),
+      attrs: { title: FLAG_TITLE, 'aria-label': f.mine ? flagLabel(f) : `${flagLabel(f)}: report this drawing`, 'aria-pressed': f.mine ? 'true' : 'false' },
+      kids: h('span', { class: 'btn-icon flag-icon', text: FLAG_ICON, attrs: { 'aria-hidden': 'true' } }),
+    }),
+  );
+}
+
+export function reportOf(snap, game, item) {
+  if (!snap || !item) return null;
+  const players = Array.isArray(snap.players) ? snap.players : [];
+  const drawer = players.find((p) => p.slot === item.drawer);
+  const me = players.find((p) => p.isMe);
+  if (!drawer || !drawer.id || !me) return null;
+  const prof = person({ id: drawer.id, name: drawer.name }) || {};
+  return {
+    game,
+    drawer: { id: drawer.id, name: drawer.name, username: drawer.username || prof.username || null },
+    reporter: { id: me.id, name: me.name },
+    ink: Array.isArray(item.ink) ? item.ink : [],
+    word: typeof item.word === 'string' && item.word ? item.word : null,
+    at: Date.now(),
+  };
+}
+
+export function flagDrawing({ engine, snap, game, item, local, toast }) {
+  const say = (t) => {
+    if (typeof toast === 'function') toast(t);
+  };
+  if (!item || !engine || typeof engine.flag !== 'function' || !engine.flag(item.d)) {
+    say(FLAG_FAIL);
+    return false;
+  }
+  if (local) local.add(item.d);
+  const body = reportOf(snap, game, item);
+  if (body) sendReport(item.d, body).catch(() => false);
+  say(FLAG_THANKS);
+  return true;
+}
+
 export function footText(m) {
   if (m.phase === 'pick') return m.amDrawer ? 'Pick the word you want to draw.' : 'Get ready to guess! The drawing starts in a moment.';
   if (m.phase === 'reveal') {
@@ -20,6 +93,7 @@ export function footText(m) {
     if (m.note === 'all') lead = 'Everyone got it!';
     if (m.note === 'left') lead = `${m.drawer.name} left, so this turn ended early.`;
     if (m.note === 'skip') lead = 'An admin skipped this turn.';
+    if (m.note === 'hidden') lead = `${HIDDEN_TEXT} No points for the drawer.`;
     if (m.amDrawer && m.drawerGain) return `${lead} +${m.drawerGain} for your drawing.`;
     if (m.gained) return `${lead} +${m.gained} for you.`;
     return lead;
@@ -124,6 +198,14 @@ export function fillTool(on, toggle) {
   );
 }
 
+export function tintOfPen(pen) {
+  return pen.c === CUSTOM && typeof pen.rgb === 'string' ? { c: CUSTOM, rgb: pen.rgb } : { c: pen.c };
+}
+
+export function pickTint(t) {
+  return t.c === CUSTOM ? { c: CUSTOM, rgb: t.rgb, drop: false } : { c: t.c, rgb: undefined, drop: false };
+}
+
 export function markTool(btn, on) {
   btn.classList.toggle('is-on', on);
   btn.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -179,17 +261,8 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   const paper = h('div', { class: 'paper' }, canvas);
   const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d', { willReadFrequently: true }) : null;
   const painter = createPainter(SCALE);
-  const pen = { c: 1, z: 1, fill: false };
-  const swatches = COLORS.map((col, i) =>
-    h('button', {
-      class: ['swatch', i === ERASER ? 'is-eraser' : null, i === pen.c ? 'is-on' : null],
-      type: 'button',
-      dataset: { key: i === ERASER ? 'eraser' : `color-${i}` },
-      vars: { '--sw': col },
-      attrs: { 'aria-label': COLOR_NAMES[i], 'aria-pressed': i === pen.c ? 'true' : 'false', title: COLOR_NAMES[i] },
-      on: { click: () => setPen({ c: i }) },
-    }, i === ERASER ? h('span', { class: 'swatch-icon', text: '🧽', attrs: { 'aria-hidden': 'true' } }) : null),
-  );
+  const pen = { c: 1, z: 1, fill: false, drop: false };
+  const palette = createPalette({ pen, onPick: (t) => setPen(pickTint(t)) });
   const sizes = SIZES.map((z, i) =>
     h('button', {
       class: ['size', i === pen.z ? 'is-on' : null],
@@ -197,17 +270,19 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
       dataset: { key: `size-${i}` },
       vars: { '--dot': `${Math.max(4, Math.min(26, z))}px` },
       attrs: { 'aria-label': `${SIZE_NAMES[i]} pen`, 'aria-pressed': i === pen.z ? 'true' : 'false', title: SIZE_NAMES[i] },
-      on: { click: () => setPen({ z: i, fill: false }) },
+      on: { click: () => setPen({ z: i, fill: false, drop: false }) },
     }, h('span', { class: 'size-dot', attrs: { 'aria-hidden': 'true' } })),
   );
-  const fillBtn = fillTool(pen.fill, () => setPen({ fill: !pen.fill }));
+  const fillBtn = fillTool(pen.fill, () => setPen({ fill: !pen.fill, drop: false }));
+  const dropBtn = dropTool(pen.drop, () => setPen({ drop: !pen.drop }));
   const undoBtn = button('Undo', { variant: 'ghost', size: 'sm', key: 'undo', on: () => undo() });
   const clearBtn = button('Clear', { variant: 'ghost', size: 'sm', key: 'clear', on: () => clearAll() });
   const tools = h(
     'div',
     { class: 'draw-tools', attrs: { role: 'toolbar', 'aria-label': 'Drawing tools' } },
-    h('div', { class: 'swatches' }, swatches),
-    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes, fillBtn), h('div', { class: 'tool-actions' }, undoBtn, clearBtn)),
+    palette.el,
+    palette.pop,
+    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes, fillBtn, dropBtn), h('div', { class: 'tool-actions' }, undoBtn, clearBtn)),
   );
   const board = h('div', { class: 'draw-board' }, paper, tools);
   const feedBox = h('div', { class: 'feed-wrap' });
@@ -222,7 +297,12 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
   const revealBox = h('div', { class: 'draw-reveal' });
   const boardBox = h('div', { class: 'draw-scores' });
+  const flagBox = h('div', { class: 'flag-slot' });
+  const hiddenTag = h('p', { class: 'paper-hidden', text: HIDDEN_TEXT, attrs: { 'aria-hidden': 'true' } });
+  paper.append(hiddenTag);
+  board.insertBefore(flagBox, tools);
   el.append(head, wordBar, revealBox, gotBox, pickBox, h('div', { class: 'draw-main' }, board, side), foot, boardBox);
+  const flagged = new Set();
 
   const mine = { k: null, strokes: [], shown: [], level: 0, count: 0, chunks: [] };
   const live = new Map();
@@ -256,13 +336,24 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
 
   function setPen(p) {
     Object.assign(pen, p);
-    swatches.forEach((b, i) => {
-      b.classList.toggle('is-on', i === pen.c);
-      b.setAttribute('aria-pressed', i === pen.c ? 'true' : 'false');
-    });
-    sizes.forEach((b, i) => markTool(b, !pen.fill && i === pen.z));
-    markTool(fillBtn, pen.fill);
-    board.classList.toggle('is-filling', pen.fill);
+    palette.mark(pen);
+    sizes.forEach((b, i) => markTool(b, !pen.fill && !pen.drop && i === pen.z));
+    markTool(fillBtn, pen.fill && !pen.drop);
+    markTool(dropBtn, pen.drop);
+    board.classList.toggle('is-filling', pen.fill && !pen.drop);
+    board.classList.toggle('is-dropping', pen.drop);
+  }
+
+  function sample(e) {
+    if (frame !== null) {
+      stopFrame();
+      paint();
+    }
+    const at = canvasPixel(canvas, e);
+    const hex = at ? pixelAt(ctx, at[0], at[1]) : null;
+    if (!hex) return;
+    palette.take(hex);
+    setPen({ drop: false, fill: false });
   }
 
   function blank() {
@@ -273,6 +364,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
 
   function paint() {
     blank();
+    if (model && model.hidden) return;
     if (shownMode === 'mine') {
       painter.paint(ctx, cur ? mine.shown.concat([cur]) : mine.shown);
       return;
@@ -319,7 +411,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   function fillAt(p) {
     stopFrame();
     paint();
-    const s = { c: pen.c, z: FILL, pts: [p] };
+    const s = { ...tintOfPen(pen), z: FILL, pts: [p] };
     if (fillOn(ctx, s, SCALE) === 0) return;
     const msg = liveMessage(mine.k, mine.count, 0, s.pts, s);
     engine.broadcast(msg);
@@ -329,6 +421,11 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
 
   function onDown(e) {
     if (!canDraw() || cur) return;
+    if (pen.drop) {
+      e.preventDefault();
+      sample(e);
+      return;
+    }
     const p = pointOf(e);
     if (!p) return;
     e.preventDefault();
@@ -343,7 +440,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
         sent = 0;
       }
     }
-    cur = { c: pen.c, z: pen.z, pts: [p], si: mine.count };
+    cur = { ...tintOfPen(pen), z: pen.z, pts: [p], si: mine.count };
     sent = 0;
     strokeOn(ctx, cur);
     queueLive();
@@ -367,7 +464,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     sendLive();
     cur = null;
     if (!canDraw()) return;
-    mine.strokes.push({ c: s.c, z: s.z, pts: s.pts });
+    mine.strokes.push(s.c === CUSTOM ? { c: s.c, rgb: s.rgb, z: s.z, pts: s.pts } : { c: s.c, z: s.z, pts: s.pts });
     commit(true);
   }
 
@@ -464,7 +561,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   canvas.addEventListener('lostpointercapture', onUp);
 
   const offMessage = engine.on('message', ({ data, by }) => {
-    if (!model || model.amDrawer || !data || by !== model.drawer.id) return;
+    if (!model || model.amDrawer || model.hidden || !data || by !== model.drawer.id) return;
     const list = data.t === 'many' && Array.isArray(data.m) ? data.m : [data];
     let hit = false;
     for (const msg of list) {
@@ -571,6 +668,20 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
 
   const paintFoot = memo((m) => h('span', { class: 'foot-text', text: footText(m) }));
 
+  const paintFlag = memo((f) => flagButton(f, () => flag()));
+
+  function flag() {
+    if (!snap) return;
+    flagDrawing({ engine, snap, game: 'draw', item: draw.drawingOf(snap), local: flagged, toast });
+    update(engine.snapshot());
+  }
+
+  function showHidden(on) {
+    paper.classList.toggle('is-hidden', on);
+    hiddenTag.setAttribute('aria-hidden', on ? 'false' : 'true');
+    if (on && live.size) live.clear();
+  }
+
   function dropStale(m) {
     if (mine.k === null || (m.amDrawer && m.phase === 'draw' && mine.k === m.k)) return;
     if (writeTimer !== null) {
@@ -637,10 +748,15 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     paintFoot(foot, m);
     el.dataset.phase = m.phase;
     board.classList.toggle('is-drawing', canDraw() || (m.amDrawer && m.phase === 'draw'));
+    if (!(m.amDrawer && m.phase === 'draw')) palette.close(false);
     side.classList.toggle('is-guessing', m.canGuess);
     input.disabled = !m.canGuess;
     sendBtn.disabled = !m.canGuess;
+    const wasHidden = paper.classList.contains('is-hidden');
+    showHidden(m.hidden);
     syncInk(m, next.state);
+    if (m.hidden !== wasHidden) repaint();
+    paintFlag(flagBox, flagModel(next, draw.drawingOf(next), flagged));
     undoBtn.disabled = !m.amDrawer || !mine.strokes.length;
     clearBtn.disabled = !m.amDrawer || !mine.strokes.length;
     if (feedTurn !== m.n) {

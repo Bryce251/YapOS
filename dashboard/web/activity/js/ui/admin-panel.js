@@ -51,6 +51,18 @@ export function parsePoints(value) {
   return n;
 }
 
+export function drawingTarget(snap) {
+  if (!snap || !snap.ready || !snap.room || snap.room.phase !== 'game') return null;
+  const game = snap.game;
+  if (!game || typeof game.drawingOf !== 'function') return null;
+  try {
+    const item = game.drawingOf(snap);
+    return item && typeof item.d === 'string' ? item.d : null;
+  } catch {
+    return null;
+  }
+}
+
 export function adminModel(snap, ui = {}) {
   const a = (snap && snap.admin) || {};
   const owner = a.owner || null;
@@ -88,6 +100,7 @@ export function adminModel(snap, ui = {}) {
     phase,
     gameName: snap && snap.game ? `${snap.game.emoji} ${snap.game.name}` : null,
     locked: Boolean(a.locked),
+    drawing: drawingTarget(snap),
     rows,
     tab: TABS.some((t) => t.id === ui.tab) ? ui.tab : 'game',
     emoji: RAIN_EMOJI.includes(ui.emoji) ? ui.emoji : RAIN_EMOJI[0],
@@ -233,6 +246,14 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
           button('Start now', { variant: 'primary', size: 'sm', key: 'adm-start', disabled: m.phase !== 'lobby', on: () => run({ type: 'start' }, 'Starting the game now.') }),
           button('End game', { variant: 'secondary', size: 'sm', key: 'adm-end', disabled: m.phase === 'lobby' || m.phase === 'connecting', on: () => run({ type: 'end' }, 'Ending the game.') }),
           button('Skip', { variant: 'secondary', size: 'sm', key: 'adm-skip', disabled: !inGame, on: () => run({ type: 'skip' }, 'Skipped ahead.') }),
+          button('Clear drawing', {
+            variant: 'secondary',
+            size: 'sm',
+            key: 'adm-clear-drawing',
+            disabled: !inGame || !m.drawing,
+            on: () => run({ type: 'clearDrawing', d: m.drawing }, 'Drawing cleared for everyone.'),
+            attrs: { title: 'Hide the drawing on screen for everyone. The drawer scores nothing for it.' },
+          }),
         ),
       ),
       section(

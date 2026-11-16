@@ -1,0 +1,335 @@
+import { MINUTE, DAY, ID_RE, USER_BODY_LIMIT, HttpError, json, fail, readJson, isPlainObject, clientIp, publicOrigin, randomToken, parseJsonSafe, sha256Hex } from './util.js';
+import { hit, tooMany, LIMITS } from './rate.js';
+import { lookupProfiles, cleanText, MAX_PROFILE_IDS } from './profiles.js';
+import { isPartyOwner } from './party.js';
+
+export const REPORT_GAMES = new Set(['draw', 'odd', 'telephone']);
+export const MAX_STROKES = 200;
+export const MAX_INK_CHARS = 16 * 1024;
+export const REPORT_BODY_LIMIT = 24 * 1024;
+export const REPORT_WINDOW = 10 * MINUTE;
+export const REPORTS_PER_WINDOW = 10;
+export const DEDUPE_WINDOW = 10 * MINUTE;
+export const MAX_REPORTS = 500;
+export const DISMISSED_KEEP = 30 * DAY;
+export const MAX_BANS = 1000;
+export const REPORTS_PAGE = 20;
+
+const INK_RE = /^[A-Za-z0-9_-]{6,4096}$/;
+const CURSOR_RE = /^(\d{1,16})\.([A-Za-z0-9_-]{1,64})$/;
+const STATUSES = new Set(['open', 'dismissed', 'all']);
+const NAME_MAX = 64;
+const WORD_MAX = 64;
+const REASON_MAX = 200;
+const STAFF_ONLY = 'Only the owner of YapOS Party and party admins can see reports.';
+const REPORT_COLUMNS = 'id, game, drawer_id, drawer_name, drawer_username, reporter_id, reporter_name, ink, word, at, created, status, dismissed_at, dismissed_by';
+
+function bad(code, message) {
+  return new HttpError(400, code, message);
+}
+
+function cleanId(value, what) {
+  if (typeof value !== 'string' || !ID_RE.test(value.trim())) throw bad('bad_id', `The ${what} id doesn't look right.`);
+  return value.trim().toLowerCase();
+}
+
+function cleanName(value) {
+  return cleanText(value, NAME_MAX) || 'Player';
+}
+
+function cleanHandle(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') throw bad('bad_username', "The drawer's username doesn't look right.");
+  const text = cleanText(value.replace(/^@+/, ''), NAME_MAX);
+  return text ? text.replace(/\s+/g, '') : null;
+}
+
+function cleanPerson(value, what, withHandle) {
+  if (!isPlainObject(value)) throw bad('bad_person', `Say who the ${what} is.`);
+  const out = { id: cleanId(value.id, what), name: cleanName(value.name) };
+  if (withHandle) out.username = cleanHandle(value.username);
+  return out;
+}
+
+export function cleanInk(value) {
+  if (!Array.isArray(value)) throw bad('bad_ink', 'The drawing is missing.');
+  if (value.length > MAX_STROKES) throw bad('bad_ink', 'That drawing is too big to report.');
+  let total = 0;
+  for (const s of value) {
+    if (typeof s !== 'string' || !INK_RE.test(s)) throw bad('bad_ink', "The drawing doesn't look right.");
+    total += s.length;
+    if (total > MAX_INK_CHARS) throw bad('bad_ink', 'That drawing is too big to report.');
+  }
+  return value.slice();
+}
+
+export function cleanReport(body) {
+  if (typeof body.game !== 'string' || !REPORT_GAMES.has(body.game)) throw bad('bad_game', 'Only drawings from the drawing games can be reported.');
+  const drawer = cleanPerson(body.drawer, 'drawer', true);
+  const reporter = cleanPerson(body.reporter, 'reporter', false);
+  if (drawer.id === reporter.id) throw bad('own_drawing', "You can't report your own drawing.");
+  const ink = cleanInk(body.ink);
+  let word = null;
+  if (body.word !== null && body.word !== undefined) {
+    if (typeof body.word !== 'string') throw bad('bad_word', "The word doesn't look right.");
+    word = cleanText(body.word, WORD_MAX);
+  }
+  const at = Number(body.at);
+  if (!Number.isFinite(at) || at < 0 || at > 1e15) throw bad('bad_time', "The report time doesn't look right.");
+  return { game: body.game, drawer, reporter, ink, word, at: Math.floor(at) };
+}
+
+export function ipBucket(ip) {
+  const raw = String(ip || '').trim().toLowerCase();
+  if (!raw.includes(':')) return raw || 'unknown';
+  if (raw.includes('.')) return raw.slice(raw.lastIndexOf(':') + 1);
+  const [head, tail] = raw.split('::');
+  const a = head ? head.split(':') : [];
+  const b = tail ? tail.split(':') : [];
+  const full = tail === undefined ? a : [...a, ...Array(Math.max(0, 8 - a.length - b.length)).fill('0'), ...b];
+  return `${full.slice(0, 4).map((x) => x.replace(/^0+(?=.)/, '') || '0').join(':')}::/64`;
+}
+
+export async function reportIpHash(env, ip) {
+  const salt = String(env.REPORT_SALT || env.BOT_SECRET || env.YAPIN_CLIENT_SECRET || '');
+  return (await sha256Hex(`report-ip:${salt}:${ipBucket(ip)}`)).slice(0, 32);
+}
+
+export async function postActivityReport(request, env, t) {
+  if (request.method !== 'POST') return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  const origin = request.headers.get('Origin');
+  const expected = publicOrigin(env);
+  if (!origin || !expected || origin !== expected) {
+    return fail(403, 'forbidden', 'This report was blocked for your safety. Reload the game and try again.');
+  }
+  const ipHash = await reportIpHash(env, clientIp(request));
+  const limit = await hit(env.DB, `reports:ip:${ipHash}`, LIMITS.reports, t);
+  if (!limit.ok) return tooMany(limit.retryAfter, "You've sent a lot of reports. Try again in a few minutes.");
+  const report = cleanReport(await readJson(request, REPORT_BODY_LIMIT));
+  const recent = await env.DB.prepare('SELECT COUNT(*) AS n, MIN(created) AS first FROM party_reports WHERE ip_hash = ? AND created > ?').bind(ipHash, t - REPORT_WINDOW).first();
+  if (Number(recent && recent.n) >= REPORTS_PER_WINDOW) {
+    const wait = Math.max(1, Math.ceil((Number(recent.first) + REPORT_WINDOW - t) / 1000));
+    return tooMany(wait, "You've sent a lot of reports. Try again in a few minutes.");
+  }
+  const dupe = await env.DB.prepare('SELECT id FROM party_reports WHERE reporter_id = ? AND drawer_id = ? AND created > ? LIMIT 1').bind(report.reporter.id, report.drawer.id, t - DEDUPE_WINDOW).first();
+  if (dupe) return json({ ok: true, duplicate: true }, 200);
+  const all = await hit(env.DB, 'reports:all', LIMITS.reportsAll, t);
+  if (!all.ok) return tooMany(all.retryAfter, 'Lots of reports are coming in right now. Try again in a minute.');
+  const id = randomToken(12);
+  await env.DB.prepare(
+    `INSERT INTO party_reports (id, game, drawer_id, drawer_name, drawer_username, reporter_id, reporter_name, ink, word, at, created, ip_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
+  ).bind(id, report.game, report.drawer.id, report.drawer.name, report.drawer.username, report.reporter.id, report.reporter.name, JSON.stringify(report.ink), report.word, report.at, t, ipHash).run();
+  await trimReports(env.DB);
+  return json({ ok: true }, 201);
+}
+
+export async function trimReports(db) {
+  const row = await db.prepare('SELECT COUNT(*) AS n FROM party_reports').first();
+  const extra = Number(row && row.n) - MAX_REPORTS;
+  if (extra <= 0) return 0;
+  const res = await db.prepare("DELETE FROM party_reports WHERE id IN (SELECT id FROM party_reports ORDER BY (status = 'open') ASC, created ASC, id ASC LIMIT ?)").bind(extra).run();
+  return Number((res && res.meta && res.meta.changes) || 0);
+}
+
+export function cleanupStatements(db, t) {
+  return [
+    db.prepare("DELETE FROM party_reports WHERE status = 'dismissed' AND dismissed_at < ?").bind(t - DISMISSED_KEEP),
+    db.prepare("DELETE FROM party_reports WHERE id IN (SELECT id FROM party_reports ORDER BY (status = 'open') DESC, created DESC, id DESC LIMIT -1 OFFSET ?)").bind(MAX_REPORTS),
+  ];
+}
+
+async function adminSet(db, ids) {
+  if (!ids.length) return new Set();
+  const marks = ids.map(() => '?').join(', ');
+  const res = await db.prepare(`SELECT id FROM party_admins WHERE id IN (${marks})`).bind(...ids).all();
+  return new Set(((res && res.results) || []).map((r) => String(r.id).toLowerCase()));
+}
+
+async function banSet(db, ids) {
+  if (!ids.length) return new Set();
+  const marks = ids.map(() => '?').join(', ');
+  const res = await db.prepare(`SELECT id FROM party_bans WHERE id IN (${marks})`).bind(...ids).all();
+  return new Set(((res && res.results) || []).map((r) => String(r.id).toLowerCase()));
+}
+
+export async function partyRole(env, userId) {
+  if (typeof userId !== 'string' || !userId) return null;
+  if (isPartyOwner(env, userId)) return 'owner';
+  const row = await env.DB.prepare('SELECT id FROM party_admins WHERE id = ?').bind(userId.toLowerCase()).first();
+  return row ? 'admin' : null;
+}
+
+function roleOf(env, admins, id) {
+  if (isPartyOwner(env, id)) return 'owner';
+  return admins.has(id.toLowerCase()) ? 'admin' : null;
+}
+
+function profileOut(p) {
+  return p ? { username: p.username, display_name: p.display_name, avatar: p.avatar } : null;
+}
+
+async function listReports(request, env, url, role, t) {
+  const status = url.searchParams.get('status') || 'open';
+  if (!STATUSES.has(status)) throw bad('bad_status', 'Pick open, dismissed or all reports.');
+  const before = url.searchParams.get('before');
+  let cursor = null;
+  if (before) {
+    const m = CURSOR_RE.exec(before);
+    if (!m) throw bad('bad_cursor', 'That page of reports does not exist.');
+    cursor = { created: Number(m[1]), id: m[2] };
+  }
+  const where = [];
+  const args = [];
+  if (status !== 'all') {
+    where.push('status = ?');
+    args.push(status);
+  }
+  if (cursor) {
+    where.push('(created < ? OR (created = ? AND id < ?))');
+    args.push(cursor.created, cursor.created, cursor.id);
+  }
+  const sql = `SELECT ${REPORT_COLUMNS} FROM party_reports${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created DESC, id DESC LIMIT ?`;
+  const res = await env.DB.prepare(sql).bind(...args, REPORTS_PAGE + 1).all();
+  const rows = (res && res.results) || [];
+  const more = rows.length > REPORTS_PAGE;
+  const page = rows.slice(0, REPORTS_PAGE);
+  const drawers = [...new Set(page.map((r) => String(r.drawer_id).toLowerCase()))];
+  const people = [...new Set(page.flatMap((r) => [r.drawer_id, r.reporter_id]))].slice(0, MAX_PROFILE_IDS);
+  const [admins, bans, found, open] = await Promise.all([
+    adminSet(env.DB, drawers),
+    banSet(env.DB, drawers),
+    lookupProfiles(env, people, t, clientIp(request)),
+    env.DB.prepare("SELECT COUNT(*) AS n FROM party_reports WHERE status = 'open'").first(),
+  ]);
+  const reports = [];
+  for (const r of page) {
+    const ink = parseJsonSafe(r.ink, []);
+    reports.push({
+      id: r.id,
+      game: r.game,
+      word: r.word || null,
+      at: Number(r.at),
+      created: Number(r.created),
+      status: r.status,
+      dismissed_at: r.dismissed_at === null || r.dismissed_at === undefined ? null : Number(r.dismissed_at),
+      dismissed_by: r.dismissed_by || null,
+      ink: Array.isArray(ink) ? ink.filter((s) => typeof s === 'string') : [],
+      drawer: {
+        id: r.drawer_id,
+        name: r.drawer_name,
+        username: r.drawer_username || null,
+        profile: profileOut(found.profiles.get(r.drawer_id)),
+        banned: bans.has(String(r.drawer_id).toLowerCase()),
+        role: roleOf(env, admins, String(r.drawer_id)),
+      },
+      reporter: { id: r.reporter_id, name: r.reporter_name, profile: profileOut(found.profiles.get(r.reporter_id)) },
+    });
+  }
+  const last = page[page.length - 1];
+  return json({
+    reports,
+    next: more && last ? `${Number(last.created)}.${last.id}` : null,
+    open: Number(open && open.n) || 0,
+    status,
+    role,
+    pending: found.pending,
+  });
+}
+
+function reportId(raw) {
+  if (typeof raw !== 'string' || !ID_RE.test(raw)) throw bad('bad_id', "That report id doesn't look right.");
+  return raw;
+}
+
+async function dismissReport(env, session, raw, t) {
+  const id = reportId(raw);
+  const row = await env.DB.prepare('SELECT id, status FROM party_reports WHERE id = ?').bind(id).first();
+  if (!row) return fail(404, 'not_found', 'That report is gone. Someone may have deleted it.');
+  if (row.status !== 'open') return json({ ok: true, dismissed: false });
+  await env.DB.prepare("UPDATE party_reports SET status = 'dismissed', dismissed_at = ?, dismissed_by = ? WHERE id = ? AND status = 'open'").bind(t, session.user_id, id).run();
+  return json({ ok: true, dismissed: true });
+}
+
+async function deleteReport(env, raw) {
+  const id = reportId(raw);
+  const res = await env.DB.prepare('DELETE FROM party_reports WHERE id = ?').bind(id).run();
+  return json({ ok: true, deleted: Boolean(res && res.meta && res.meta.changes) });
+}
+
+async function listBans(request, env, role, t, extra = {}) {
+  const res = await env.DB.prepare('SELECT id, name, username, reason, banned_by, banned_at FROM party_bans ORDER BY banned_at DESC, id ASC').all();
+  const rows = (res && res.results) || [];
+  const found = await lookupProfiles(env, rows.slice(0, MAX_PROFILE_IDS).map((r) => r.id), t, clientIp(request));
+  const bans = rows.map((r) => {
+    const p = found.profiles.get(r.id);
+    return {
+      id: r.id,
+      name: r.name || null,
+      username: (p && p.username) || r.username || null,
+      display_name: (p && p.display_name) || null,
+      avatar: (p && p.avatar) || null,
+      reason: r.reason || null,
+      banned_by: r.banned_by,
+      banned_at: Number(r.banned_at),
+    };
+  });
+  return json({ bans, max: MAX_BANS, role, pending: found.pending, ...extra });
+}
+
+const BAN_FIELDS = new Set(['id', 'reason', 'name', 'username']);
+
+async function addBan(request, env, session, role, t) {
+  const body = await readJson(request, USER_BODY_LIMIT);
+  for (const k of Object.keys(body)) {
+    if (!BAN_FIELDS.has(k)) throw bad('bad_request', `Unknown field "${k.slice(0, 40)}".`);
+  }
+  if (typeof body.id !== 'string' || !body.id.trim()) throw bad('bad_id', 'Say who to ban first.');
+  const id = cleanId(body.id, 'user');
+  if (body.reason !== undefined && body.reason !== null && typeof body.reason !== 'string') throw bad('bad_reason', "The reason doesn't look right.");
+  const reason = cleanText(body.reason, REASON_MAX);
+  const name = typeof body.name === 'string' ? cleanText(body.name, NAME_MAX) : null;
+  const username = typeof body.username === 'string' ? cleanHandle(body.username) : null;
+  if (isPartyOwner(env, id)) return fail(400, 'is_owner', "The owner of YapOS Party can't be banned.");
+  if (id === String(session.user_id).toLowerCase()) return fail(400, 'is_self', "You can't ban yourself.");
+  const isAdmin = (await adminSet(env.DB, [id])).has(id);
+  if (isAdmin && role !== 'owner') return fail(403, 'is_admin', "Party admins can't ban other party admins. Ask the owner.");
+  const existing = await env.DB.prepare('SELECT id FROM party_bans WHERE id = ?').bind(id).first();
+  if (existing) return listBans(request, env, role, t, { banned: false });
+  const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM party_bans').first();
+  if (Number(count && count.n) >= MAX_BANS) return fail(409, 'too_many', `There are already ${MAX_BANS} bans. Unban someone first.`);
+  const stmts = [
+    env.DB.prepare('INSERT INTO party_bans (id, name, username, reason, banned_by, banned_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING').bind(id, name, username, reason, session.user_id, t),
+  ];
+  if (isAdmin) stmts.push(env.DB.prepare('DELETE FROM party_admins WHERE id = ?').bind(id));
+  await env.DB.batch(stmts);
+  return listBans(request, env, role, t, { banned: true, removedAdmin: isAdmin });
+}
+
+async function removeBan(request, env, role, raw, t) {
+  if (typeof raw !== 'string' || !ID_RE.test(raw)) throw bad('bad_id', "That user id doesn't look right.");
+  const res = await env.DB.prepare('DELETE FROM party_bans WHERE id = ?').bind(raw.toLowerCase()).run();
+  return listBans(request, env, role, t, { unbanned: Boolean(res && res.meta && res.meta.changes) });
+}
+
+export async function partyStaffRoute(request, env, session, route, url, t) {
+  const role = await partyRole(env, session.user_id);
+  if (!role) return fail(403, 'staff_only', STAFF_ONLY);
+  const n = route.length;
+  const method = request.method;
+  const read = method === 'GET' || method === 'HEAD';
+  const nope = () => fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  if (route[1] === 'reports') {
+    if (n === 2) return read ? listReports(request, env, url, role, t) : nope();
+    if (n === 3) return method === 'DELETE' ? deleteReport(env, route[2]) : nope();
+    if (n === 4 && route[3] === 'dismiss') return method === 'POST' ? dismissReport(env, session, route[2], t) : nope();
+  }
+  if (route[1] === 'bans') {
+    if (n === 2) {
+      if (read) return listBans(request, env, role, t);
+      if (method === 'POST') return addBan(request, env, session, role, t);
+      return nope();
+    }
+    if (n === 3) return method === 'DELETE' ? removeBan(request, env, role, route[2], t) : nope();
+  }
+  return fail(404, 'not_found', "That page of the dashboard doesn't exist.");
+}

@@ -1,6 +1,7 @@
 import telephone, { REACTS, REACT_NAMES, NEXT_MIN_MS, TEXT_MAX, INK_CHARS, INK_PARTS, fitText, validInk, inkChars, entryKey } from '../games/telephone.js';
-import { GRID_W, GRID_H, COLORS, COLOR_NAMES, SIZES, SIZE_NAMES, ERASER, LEVELS, FILL, encodeParts, decodeStroke, quantise, strokeOn as inkStroke, fillOn, paintInk, createPainter } from '../games/ink.js';
-import { fillTool, markTool } from './draw.js';
+import { GRID_W, GRID_H, SIZES, SIZE_NAMES, CUSTOM, LEVELS, FILL, encodeParts, decodeStroke, quantise, strokeOn as inkStroke, fillOn, paintInk, createPainter } from '../games/ink.js';
+import { fillTool, markTool, flagModel, flagButton, flagDrawing, tintOfPen, pickTint } from './draw.js';
+import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
 import { hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
@@ -43,6 +44,9 @@ export function footText(m, sent) {
   if (m.phase === 'text') return m.to ? `${m.to.name} will draw what you write.` : 'Yours is the last word in the chain!';
   return '';
 }
+
+export const BLANK_TEXT = 'Blank page! Make up what it might be.';
+export const HIDDEN_SRC_TEXT = 'This drawing was hidden. Make up what it might be.';
 
 export function verbOf(e) {
   if (e.i === 0) return 'started with';
@@ -165,21 +169,12 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   const track = h('div', { class: 'telephone-track-wrap' });
   const task = h('div', { class: 'telephone-task', attrs: { 'aria-live': 'polite' } });
   const canvas = h('canvas', { class: 'ink-canvas', attrs: { width: GRID_W * SCALE, height: GRID_H * SCALE, role: 'img', 'aria-label': 'Drawing' } });
-  const blankNote = h('p', { class: 'telephone-blank telephone-off', text: 'Blank page! Make up what it might be.' });
+  const blankNote = h('p', { class: 'telephone-blank telephone-off', text: BLANK_TEXT });
   const paper = h('div', { class: 'paper telephone-paper' }, canvas, blankNote);
   const ctx = contextOf(canvas);
   const painter = createPainter(SCALE);
-  const pen = { c: 1, z: 1, fill: false };
-  const swatches = COLORS.map((col, i) =>
-    h('button', {
-      class: ['swatch', i === ERASER ? 'is-eraser' : null, i === pen.c ? 'is-on' : null],
-      type: 'button',
-      dataset: { key: i === ERASER ? 'eraser' : `color-${i}` },
-      vars: { '--sw': col },
-      attrs: { 'aria-label': COLOR_NAMES[i], 'aria-pressed': i === pen.c ? 'true' : 'false', title: COLOR_NAMES[i] },
-      on: { click: () => setPen({ c: i }) },
-    }, i === ERASER ? h('span', { class: 'swatch-icon', text: '🧽', attrs: { 'aria-hidden': 'true' } }) : null),
-  );
+  const pen = { c: 1, z: 1, fill: false, drop: false };
+  const palette = createPalette({ pen, onPick: (t) => setPen(pickTint(t)) });
   const sizes = SIZES.map((z, i) =>
     h('button', {
       class: ['size', i === pen.z ? 'is-on' : null],
@@ -187,18 +182,20 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       dataset: { key: `size-${i}` },
       vars: { '--dot': `${Math.max(4, Math.min(26, z))}px` },
       attrs: { 'aria-label': `${SIZE_NAMES[i]} pen`, 'aria-pressed': i === pen.z ? 'true' : 'false', title: SIZE_NAMES[i] },
-      on: { click: () => setPen({ z: i, fill: false }) },
+      on: { click: () => setPen({ z: i, fill: false, drop: false }) },
     }, h('span', { class: 'size-dot', attrs: { 'aria-hidden': 'true' } })),
   );
-  const fillBtn = fillTool(pen.fill, () => setPen({ fill: !pen.fill }));
+  const fillBtn = fillTool(pen.fill, () => setPen({ fill: !pen.fill, drop: false }));
+  const dropBtn = dropTool(pen.drop, () => setPen({ drop: !pen.drop }));
   const undoBtn = button('Undo', { variant: 'ghost', size: 'sm', key: 'undo', on: () => undo() });
   const clearBtn = button('Clear', { variant: 'ghost', size: 'sm', key: 'clear', on: () => clearAll() });
   const meter = h('div', { class: 'telephone-meter' });
   const tools = h(
     'div',
     { class: 'draw-tools', attrs: { role: 'toolbar', 'aria-label': 'Drawing tools' } },
-    h('div', { class: 'swatches' }, swatches),
-    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes, fillBtn), h('div', { class: 'tool-actions' }, undoBtn, clearBtn)),
+    palette.el,
+    palette.pop,
+    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes, fillBtn, dropBtn), h('div', { class: 'tool-actions' }, undoBtn, clearBtn)),
   );
   const doneBtn = button('Done!', { variant: 'primary', size: 'lg', key: 'draw-done', on: () => finishDrawing() });
   const editBtn = button('Keep drawing', { variant: 'ghost', key: 'draw-edit', on: () => keepDrawing() });
@@ -216,7 +213,11 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   const revealBox = h('div', { class: 'telephone-reveal' });
   const awardBox = h('div', { class: 'telephone-awards' });
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
-  el.append(head, track, task, board, entry, waitBox, revealBox, awardBox, foot);
+  const flagSrc = h('div', { class: 'flag-slot' });
+  const flagShow = h('div', { class: 'flag-slot telephone-flag' });
+  const flagged = new Set();
+  board.insertBefore(flagSrc, tools);
+  el.append(head, track, task, board, entry, waitBox, revealBox, flagShow, awardBox, foot);
 
   const mine = { key: null, strokes: [], parts: [], used: 0, dirty: false };
   const local = { stepKey: null, sent: null, reacted: new Set() };
@@ -234,13 +235,20 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
 
   function setPen(p) {
     Object.assign(pen, p);
-    swatches.forEach((b, i) => {
-      b.classList.toggle('is-on', i === pen.c);
-      b.setAttribute('aria-pressed', i === pen.c ? 'true' : 'false');
-    });
-    sizes.forEach((b, i) => markTool(b, !pen.fill && i === pen.z));
-    markTool(fillBtn, pen.fill);
-    board.classList.toggle('is-filling', pen.fill);
+    palette.mark(pen);
+    sizes.forEach((b, i) => markTool(b, !pen.fill && !pen.drop && i === pen.z));
+    markTool(fillBtn, pen.fill && !pen.drop);
+    markTool(dropBtn, pen.drop);
+    board.classList.toggle('is-filling', pen.fill && !pen.drop);
+    board.classList.toggle('is-dropping', pen.drop);
+  }
+
+  function sample(e) {
+    const at = canvasPixel(canvas, e);
+    const hex = at ? pixelAt(ctx, at[0], at[1]) : null;
+    if (!hex) return;
+    palette.take(hex);
+    setPen({ drop: false, fill: false });
   }
 
   function stepKeyOf(m) {
@@ -328,7 +336,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   }
 
   function fillAt(p) {
-    const parts = encodeParts({ c: pen.c, z: FILL, pts: [p] });
+    const parts = encodeParts({ ...tintOfPen(pen), z: FILL, pts: [p] });
     if (!parts.length || mine.used + inkChars(parts) > INK_CHARS || mine.parts.flat().length + parts.length > INK_PARTS) {
       outOfInk('Out of ink! Undo a line or tap Done.');
       return;
@@ -348,6 +356,11 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     if (cur && !samePointer(e) && canDraw() && cur.key === mine.key && !pointerGone()) return;
     if (cur) commitStroke();
     if (!canDraw()) return;
+    if (pen.drop) {
+      e.preventDefault();
+      sample(e);
+      return;
+    }
     if (mine.used >= INK_CHARS || mine.parts.flat().length >= INK_PARTS) {
       outOfInk('Out of ink! Undo a line or tap Done.');
       return;
@@ -368,7 +381,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
         held = false;
       }
     }
-    cur = { c: pen.c, z: pen.z, pts: [p], id: e.pointerId, key: mine.key, held };
+    cur = { ...tintOfPen(pen), z: pen.z, pts: [p], id: e.pointerId, key: mine.key, held };
     strokeOn(ctx, cur);
   }
 
@@ -400,7 +413,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
 
   function commitStroke(keep = false) {
     if (!cur) return false;
-    const s = { c: cur.c, z: cur.z, pts: cur.pts };
+    const s = cur.c === CUSTOM ? { c: cur.c, rgb: cur.rgb, z: cur.z, pts: cur.pts } : { c: cur.c, z: cur.z, pts: cur.pts };
     const id = cur.id;
     const key = cur.key;
     const held = cur.held;
@@ -417,7 +430,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       return false;
     }
     if (fit.cut) outOfInk('Out of ink! That line got cut short.');
-    else if (keep) cur = { c: s.c, z: s.z, pts: [s.pts[s.pts.length - 1]], id, key, held };
+    else if (keep) cur = { ...s, pts: [s.pts[s.pts.length - 1]], id, key, held };
     mine.parts.push(fit.parts);
     mine.strokes.push(...decodeAll(fit.parts));
     mine.used += inkChars(fit.parts);
@@ -655,7 +668,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
             { class: ['telephone-entry-item', `telephone-kind-${e.k === 'd' ? 'draw' : 'text'}`, e.i === r.at ? 'telephone-new' : null], dataset: { entry: e.i } },
             h('div', { class: 'telephone-entry-who' }, faceRow(e.by, verbOf(e), 'xs'), e.miss ? h('span', { class: 'telephone-miss muted', text: e.k === 'd' ? '(ran out of time)' : '(no answer, so it carried over)' }) : null),
             e.k === 'd'
-              ? h('div', { class: 'paper telephone-mini' }, h('canvas', { class: 'ink-canvas', dataset: { draw: e.i }, attrs: { width: GRID_W * SCALE, height: GRID_H * SCALE, role: 'img', 'aria-label': `Drawing by ${e.by.isMe ? 'you' : e.by.name}` } }), e.strokes ? null : h('p', { class: 'telephone-blank', text: 'Blank page!' }))
+              ? h('div', { class: ['paper', 'telephone-mini', e.hidden ? 'is-hidden' : null] }, h('canvas', { class: 'ink-canvas', dataset: { draw: e.i }, attrs: { width: GRID_W * SCALE, height: GRID_H * SCALE, role: 'img', 'aria-label': e.hidden ? 'Hidden drawing' : `Drawing by ${e.by.isMe ? 'you' : e.by.name}` } }), e.hidden ? h('p', { class: 'telephone-blank telephone-hidden', text: 'Hidden' }) : e.strokes ? null : h('p', { class: 'telephone-blank', text: 'Blank page!' }))
               : h('p', { class: 'telephone-bubble', text: e.t }),
             h(
               'div',
@@ -708,6 +721,21 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
 
   const paintFoot = memo((m) => h('span', { class: 'foot-text', text: m.text }));
 
+  const paintFlagSrc = memo((f) => flagButton(f, () => flag()));
+  const paintFlagShow = memo((f) => flagButton(f, () => flag()));
+
+  function flag() {
+    if (!snap) return;
+    flagDrawing({ engine, snap, game: 'telephone', item: telephone.drawingOf(snap), local: flagged, toast });
+    update(engine.snapshot());
+  }
+
+  function paintFlags(next, m) {
+    const f = m.phase === 'text' || m.phase === 'reveal' ? flagModel(next, telephone.drawingOf(next), flagged) : null;
+    paintFlagSrc(flagSrc, m.phase === 'text' ? f : null);
+    paintFlagShow(flagShow, m.phase === 'reveal' ? f : null);
+  }
+
   function syncBoard(m) {
     const drawing = m.phase === 'draw' && m.playing;
     const viewing = m.phase === 'text' && m.playing && m.src;
@@ -721,6 +749,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     board.classList.toggle('is-drawing', canDraw());
     board.classList.toggle('telephone-viewing', Boolean(viewing));
     doneRow.classList.toggle('telephone-off', !drawing);
+    if (!canDraw()) palette.close(false);
     if (drawing) {
       const key = stepKeyOf(m);
       if (mine.key !== key) {
@@ -756,6 +785,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       const sig = `${m.src.key}:${m.src.k}:${inkSig(srcStrokes(m))}`;
       if (sig !== shownSrc || shown !== 'src') paintBoard();
       blankNote.classList.toggle('telephone-off', !m.src.blank);
+      blankNote.textContent = m.src.hidden ? HIDDEN_SRC_TEXT : BLANK_TEXT;
       return;
     }
     blankNote.classList.add('telephone-off');
@@ -849,6 +879,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       : null;
     if (paintReveal(revealBox, r)) drawEntries(next.state);
     paintAwards(awardBox, { phase: m.phase, note: m.note, awards: m.awards });
+    paintFlags(next, m);
     paintFoot(foot, { text: footText(m, sent) });
     el.dataset.phase = m.phase;
     hear(m);

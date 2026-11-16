@@ -2142,6 +2142,188 @@
   font-size: 13px;
 }
 
+.report-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+}
+
+.report-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.report-item {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+
+.report-item.is-dismissed {
+  opacity: 0.75;
+}
+
+.report-art {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #ffffff;
+}
+
+.report-art.is-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--surface-3);
+  font-size: 13px;
+  text-align: center;
+}
+
+.report-art.skeleton-art {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 0;
+  background: var(--surface-3);
+}
+
+.report-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.report-info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.report-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.report-time {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.report-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+}
+
+.report-person {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.report-label {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.report-who {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  min-width: 0;
+}
+
+.report-who-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.report-who-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.report-who-handle,
+.report-who-known {
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.report-who-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.report-word {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.report-note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.report-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+@media (max-width: 640px) {
+  .report-item {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+  }
+
+  .report-tools {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 480px) {
   .party-add .inline-form {
     flex-direction: column;

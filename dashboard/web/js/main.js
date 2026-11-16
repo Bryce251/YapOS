@@ -17,6 +17,7 @@ import { renderTickets } from './pages/tickets.js';
 import { renderPublicSettings } from './pages/public-settings.js';
 import { renderPublic } from './pages/public.js';
 import { renderParty } from './pages/party.js';
+import { renderPartyReports } from './pages/party-reports.js';
 import { spotlight } from './spotlight.js';
 
 const root = document.getElementById('app');
@@ -31,6 +32,7 @@ const TITLES = {
   landing: '',
   servers: 'Servers',
   party: 'Party admins',
+  'party-reports': 'Party reports',
   overview: 'Overview',
   apps: 'Apps',
   app: 'App settings',
@@ -46,6 +48,7 @@ const TITLES = {
 const PAGES = {
   servers: renderServers,
   party: renderParty,
+  'party-reports': renderPartyReports,
   overview: renderOverview,
   apps: renderApps,
   app: renderAppSettings,
@@ -78,10 +81,12 @@ async function ensureUser(signal) {
     const data = await api.get('/api/me', { signal, allow401: true });
     state.user = data?.user || null;
     state.partyOwner = Boolean(state.user) && data?.partyOwner === true;
+    state.partyAdmin = state.partyOwner || (Boolean(state.user) && data?.partyAdmin === true);
   } catch (err) {
     if (err?.status === 401) {
       state.user = null;
       state.partyOwner = false;
+      state.partyAdmin = false;
     }
     else throw err;
   }
@@ -183,7 +188,7 @@ async function render() {
     main: shell.main,
     navigate,
     setTitle,
-    setChrome: (chrome) => shell.update({ ...chrome, user: state.user, partyOwner: state.partyOwner }),
+    setChrome: (chrome) => shell.update({ ...chrome, user: state.user, partyOwner: state.partyOwner, partyAdmin: state.partyAdmin }),
     setLeaveGuard: (guard) => {
       leaveGuard = guard;
     },

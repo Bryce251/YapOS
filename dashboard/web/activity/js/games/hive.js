@@ -164,7 +164,7 @@ export function candidates(letters, centre) {
 function verified(list, letters, centre) {
   if (!dictReady || !list) return [];
   const full = maskOf(letters);
-  return list.filter((w) => w.length >= MIN_LETTERS && w.includes(centre) && (maskOf(w) & full) === maskOf(w) && isWord(w) && !isBlockedWord(w)).sort();
+  return list.filter((w) => w.length >= MIN_LETTERS && w.includes(centre) && (maskOf(w) & full) === maskOf(w) && isWord(w) && !isBlockedWord(w, { strict: true })).sort();
 }
 
 export function hiveWords(letters, centre) {
@@ -278,7 +278,7 @@ export function checkWord(text, puzzle, found, opts = {}) {
   const w = cleanWord(text);
   if (!w) return 'empty';
   if (!/^[a-z]+$/.test(w)) return 'letters';
-  if (isBlockedWord(w)) return 'blocked';
+  if (isBlockedWord(w, { strict: true })) return 'blocked';
   if (w.length < MIN_LETTERS) return 'short';
   if (w.length > MAX_LETTERS) return 'long';
   const full = maskOf(puzzle.letters);

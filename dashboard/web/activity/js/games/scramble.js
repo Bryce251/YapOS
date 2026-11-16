@@ -13,11 +13,9 @@ export const GUESS_GAP_MS = 300;
 export const GUESS_CHARS = 24;
 export const FOUND_MAX = 16;
 export const SHUFFLE_TRIES = 80;
-export const BLOCKED = Object.freeze(new Set(['rape', 'neger', 'perianal', 'bordello', 'raunchier', 'boogerman', 'snog']));
 
 export function blocked(word) {
-  const w = String(word || '').toLowerCase();
-  return BLOCKED.has(w) || isBlockedWord(w);
+  return isBlockedWord(String(word || '').toLowerCase(), { strict: true });
 }
 
 export function cleanGuess(text) {

@@ -426,3 +426,8 @@
     transform: none;
   }
 }
+
+.odd-seat-flag {
+  font-size: var(--text-sm);
+  line-height: 1;
+}

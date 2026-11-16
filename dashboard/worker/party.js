@@ -26,7 +26,13 @@ export async function getActivityAdmins(request, env, url, t) {
   const stored = new Set(((res && res.results) || []).map((r) => String(r.id).toLowerCase()));
   const owner = ids.find((id) => isPartyOwner(env, id)) || null;
   const admins = ids.filter((id) => id === owner || stored.has(id.toLowerCase()));
-  return json({ admins, owner }, 200, { 'Cache-Control': 'private, max-age=30' });
+  let barred = new Set();
+  try {
+    const bans = await env.DB.prepare(`SELECT id FROM party_bans WHERE id IN (${marks})`).bind(...lower).all();
+    barred = new Set(((bans && bans.results) || []).map((r) => String(r.id).toLowerCase()));
+  } catch {}
+  const banned = ids.filter((id) => !isPartyOwner(env, id) && barred.has(id.toLowerCase()));
+  return json({ admins, owner, banned }, 200, { 'Cache-Control': 'private, max-age=30' });
 }
 
 export function activityAdminsRoute(request, env, url, t) {

@@ -118,6 +118,7 @@ export function renderParty(ctx) {
     pageHeader({
       title: 'Party admins',
       description: 'Party admins get the ADMIN panel in YapOS Party calls, where they can start, skip and end games, add time, give or take points, kick, ban or lock the room, post announcements and play harmless pranks on people.',
+      actions: linkButton({ label: 'Reports', href: '/party/reports', icon: 'flag', size: 'sm' }),
     }),
     card({ title: 'Add a party admin', icon: 'plus' }, form),
     card({ title: 'Admins', icon: 'crown', actions: countEl }, listBody));

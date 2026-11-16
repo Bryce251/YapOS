@@ -100,3 +100,35 @@ CREATE TABLE IF NOT EXISTS party_admins (
   added_by TEXT NOT NULL,
   added_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS party_reports (
+  id TEXT PRIMARY KEY,
+  game TEXT NOT NULL,
+  drawer_id TEXT NOT NULL,
+  drawer_name TEXT NOT NULL,
+  drawer_username TEXT,
+  reporter_id TEXT NOT NULL,
+  reporter_name TEXT NOT NULL,
+  ink TEXT NOT NULL DEFAULT '[]',
+  word TEXT,
+  at INTEGER NOT NULL,
+  created INTEGER NOT NULL,
+  ip_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  dismissed_at INTEGER,
+  dismissed_by TEXT
+);
+CREATE INDEX IF NOT EXISTS party_reports_created ON party_reports (created, id);
+CREATE INDEX IF NOT EXISTS party_reports_status ON party_reports (status, created, id);
+CREATE INDEX IF NOT EXISTS party_reports_pair ON party_reports (reporter_id, drawer_id, created);
+CREATE INDEX IF NOT EXISTS party_reports_ip ON party_reports (ip_hash, created);
+
+CREATE TABLE IF NOT EXISTS party_bans (
+  id TEXT PRIMARY KEY,
+  name TEXT,
+  username TEXT,
+  reason TEXT,
+  banned_by TEXT NOT NULL,
+  banned_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_bans_at ON party_bans (banned_at);

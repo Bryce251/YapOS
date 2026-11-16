@@ -26,23 +26,23 @@ test('the activity admin check needs no sign-in and says who is an admin', async
   const res = await admins(h, [uid(1), uid(2), OWNER.id]);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('Cache-Control'), 'private, max-age=30');
-  assert.deepEqual(await res.json(), { admins: [uid(1), OWNER.id], owner: OWNER.id });
+  assert.deepEqual(await res.json(), { admins: [uid(1), OWNER.id], owner: OWNER.id, banned: [] });
 });
 
 test('the owner is always an admin, even with an empty table and different letter case', async () => {
   const h = party();
   const upper = OWNER.id.toUpperCase();
   const body = await (await admins(h, [upper, uid(5)])).json();
-  assert.deepEqual(body, { admins: [upper], owner: upper });
+  assert.deepEqual(body, { admins: [upper], owner: upper, banned: [] });
   const none = await (await admins(h, [uid(5)])).json();
-  assert.deepEqual(none, { admins: [], owner: null });
+  assert.deepEqual(none, { admins: [], owner: null, banned: [] });
 });
 
 test('without an owner configured nobody is the owner, but added admins still count', async () => {
   const h = createHarness();
   addRow(h, uid(3));
   const body = await (await admins(h, [OWNER.id, uid(3)])).json();
-  assert.deepEqual(body, { admins: [uid(3)], owner: null });
+  assert.deepEqual(body, { admins: [uid(3)], owner: null, banned: [] });
 });
 
 test('the activity admin check refuses bad, missing and too many ids', async () => {

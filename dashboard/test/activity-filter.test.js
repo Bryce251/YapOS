@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { room } from './activity-kit.test.js';
-import { normalizeForFilter, findBlocked, isBlockedWord, censor, encodeTerm, decodeTerm, HIDDEN_NOTE, BLOCKED_NOTE } from '../web/activity/js/filter.js';
+import { normalizeForFilter, findBlocked, isBlockedWord, isBlockedGameWord, censor, encodeTerm, decodeTerm, HIDDEN_NOTE, BLOCKED_NOTE } from '../web/activity/js/filter.js';
 import { cleanText, cleanShared, hidesWords } from '../web/activity/js/text.js';
 import { cleanAdminAction, cleanText as cleanAnnounceText } from '../web/activity/js/engine.js';
 import hottakes, { KEY as HOT, ANSWER_PREFIX, seal } from '../web/activity/js/games/hottakes.js';
@@ -316,7 +316,7 @@ test('word chain: blocked words are refused with a clear reason', async () => {
   assert.equal(chainCheck(T.co, 'c', []), 'blocked');
   assert.equal(chainCheck(T.co, 'c', [], { dictionary: false }), 'blocked');
   assert.equal(chainCheck('cocoon', 'c', []), null);
-  assert.equal(chainCheck('damn', 'd', []), null);
+  assert.equal(chainCheck('dandy', 'd', []), null);
   assert.equal(CHAIN_PROBLEMS.blocked, BLOCKED_NOTE);
   const r = room(3, { games: [chain] });
   await r.clock.advance(500);
@@ -375,7 +375,7 @@ test('the private note and refusal copy stay plain and friendly', () => {
   }
 });
 
-const DICTIONARY_HITS = ["iondxn","iondxnr","iybdz","jrvdtizp","jrvdtidp","jrvdd","jrvddo","jrvddu","jybd","jybdl","kkte","kktexo","kktel","kkeaba","kkeabar","kkear","kixu","kixul","mkt","mktwxn","mktwxnx","mktwhp","mktwhpdf","mktwhpqa","mktwhpr","mktwhpx","mktwr","mkti","nyybbsni","nyybbsnil","nyybbsnix","nyba","nybal","nicfh","oyaaxu","oyaaxur","oyaabar","oyaar","pxwkg","qkc","qstqukn","qstquknu","rsxu","rsxul","tyawhhhqnl","tyawhhnki","tyawhhnkia","ust","ustwxz","ustwxn","ustwxncqr","ustwxndf","ustwxnekxp","ustwxnekxppg","ustwxnfqtap","ustwxnggfl","ustwxnhum","ustwxnhur","ustwxnkkso","ustwxnr","ustwxnsqj","ustwxnvgjl","ustwxnx","ustwxp","ustwbjf","ustwhp","ustwkw","wspatjhpsqpg","wspatjhpsg","wsxur","wyyqvg","yoqidem","yoqidemu","yogqkz","yogqkzdf","yogqkzr","zzvs","zzvsl","zahqp","zahqpo","abndged","dogrtyj","dogrtyju","dyt","dyc","dyci","fsq","fsqi"];
+const DICTIONARY_HITS = ["abndged","akvw","dogrtyj","dogrtyju","drbhx","drbhxo","dstwxn","dyc","dyci","dyt","fsq","fsqi","iondxn","iondxnr","iybdz","iyukgg","iyukggr","jksvka","jrvdd","jrvddedt","jrvddeduy","jrvddo","jrvddu","jrvdtidp","jrvdtizp","jrvdxa","jybbba","jybbbar","jybd","jybdl","kixu","kixul","kkeaba","kkeabar","kkear","kkeaxu","kkeaxur","kkte","kktel","kktexo","mkt","mkti","mktwhp","mktwhpdf","mktwhpqa","mktwhpr","mktwhpx","mktwr","mktwxn","mktwxnx","nicfh","nsaph","nscfh","nyba","nybal","nyybbsni","nyybbsnil","nyybbsnix","nyybrsni","oyaaba","oyaabar","oyaar","oyaaxu","oyaaxur","pxwkg","qkc","qstqukn","qstquknu","rixu","rksvbn","rksvbnr","rksyk","rksyko","rsxu","rsxul","tyawhhhqnl","tyawhhnki","tyawhhnkia","tyyulp","tyyulpdf","tyyulpdt","tyyulpdtx","tyyulphpl","tyyulpr","ust","ustwbjf","ustwhp","ustwkw","ustwxn","ustwxncqr","ustwxndf","ustwxnekxp","ustwxnekxppg","ustwxnfqtap","ustwxnggfl","ustwxnhum","ustwxnhur","ustwxnkkso","ustwxnr","ustwxnsqj","ustwxnvgjl","ustwxnx","ustwxp","ustwxz","woqeidhnj","woqeidhnni","wspatjhpsg","wspatjhpsqpg","wspqgempd","wspqgempnmd","wspstjhp","wspstjhpsg","wspstjhpsqpg","wsxur","wybvmwg","wyyqvg","ykcu","ykcul","ykcuw","ykcygc","ykcylp","ykcylpr","yogqkz","yogqkzdf","yogqkzr","yoqidem","yoqidemu","zahqp","zahqpo","zvhj","zvhjl","zvhjmu","zzva","zzval","zzvs","zzvsd","zzvsdo","zzvsl","zzvw"];
 
 test('the full word list only loses slurs and their forms', () => {
   const words = readFileSync(new URL('../web/activity/data/words.txt', import.meta.url), 'utf8').split(/\r?\n/).filter(Boolean);
@@ -452,5 +452,149 @@ test('more dodges are caught', () => {
     T.hh.replace('i', '1').replace('e', '3'),
   ]) {
     assert.ok(findBlocked(d).length > 0, `dodge ${JSON.stringify(encodeTerm(d))}`);
+  }
+});
+
+const VARIANTS = ['rixu', 'rixul', 'rilax', 'rsvyda', 'zzva', 'zzval', 'zzvsd', 'zzvsdo', 'nyybrsni', 'wspstjhpsg', 'kkeaxu', 'oyaaba', 'jrvdxa', 'rksvbn', 'jybbba', 'dstwxn', 'wybvmwg', 'nscfh', 'uitwxn', 'uitwxnr', 'rixus', 'jybds', 'wrnwhp'].map(decodeTerm);
+const VARIANT_OK = ['ksxu', 'ksxul', 'kkesr', 'kkesb', 'rsfi', 'jsf', 'ssq', 'jkxu', 'rspaxa', 'zzvsr', 'zzvsx', 'jybaba', 'roli', 'jya', 'wyybtyj'].map(decodeTerm);
+const GAME_WORDS = [
+  'kspa', 'kspal', 'jypa', 'jypal', 'asgi', 'asg', 'asgjbar', 'wefir', 'mepa', 'mepabjf', 'tygxxnewhspf', 'zrvj', 'ieybldhv', 'jeaj', 'woayl',
+  'cktygw', 'iybrl', 'jez', 'ksyth', 'wyed', 'wyedhcqcupj', 'oyedr', 'zvhj', 'drbhx', 'zoko', 'zok', 'ykcu', 'agnj', 'dkaaxn', 'isgsa',
+  'hcfxhhd', 'jvvjhnhu', 'vbtqli', 'aofjbykgx', 'lbbjby', 'uotuk', 'zxbw', 'iyetxhkq', 'ykhdvdhgw', 'woeytjzn', 'iybwxnlcs',
+  'hcf', 'ikfjtnc', 'jbnf', 'uequ', 'uscfear', 'oybaxn', 'wszf', 'mogyld', 'oizyx', 'sofrh', 'nyqttim', 'kkzd', 'areuxonoj',
+].map(decodeTerm);
+const GAME_OK = [
+  'jypaies', 'zrhjmhdetkv', 'jypakkzem', 'jypatpnq', 'jypar', 'okashyj', 'kspaxjr', 'kspaxu', 'kspar', 'kspaxn', 'asgjxn', 'asgxx', 'asgchqrg',
+  'wefiryzv', 'wefirbnqy', 'wefi', 'hxaqeo', 'jezyg', 'jepkfxdt', 'jezkeqr', 'zokjtjs', 'zokjxp', 'zokjhj', 'lcfuq', 'zmhdmdntum', 'woaylpnpj',
+  'pxiqzemcym', 'tsfxbp', 'jefxbpd', 'zrvjmwg', 'zrvymwjg', 'zgndd', 'zgnddu', 'dbvimszvhp', 'zkyjpwsgw', 'hcfqlohp', 'wkfibkm', 'arrhtlhuy',
+  'zmeqia', 'kbnfx', 'oyedxp', 'zrbhg', 'hxnbros', 'iegjhj', 'kypkfamv', 'jyaimeswyqzb',
+].map(decodeTerm).concat(['cocktail', 'peacock', 'title', 'analysis', 'grape', 'dickens', 'hello', 'pimple', 'shaggy', 'craps', 'naked', 'public', 'testy', 'assess', 'class', 'nickname', 'snicker', 'knickers', 'panicky', 'quiz']);
+const G = Object.fromEntries(Object.entries({ d: 'kspa', ds: 'kspal', t: 'asgi', s: 'zrvj', ss: 'zrvjl' }).map(([k, v]) => [k, decodeTerm(v)]));
+const STRICT_COUNT = 614;
+
+test('slur spelling variants are caught everywhere without touching look-alike words', () => {
+  for (const w of VARIANTS) {
+    assert.equal(isBlockedWord(w), true, encodeTerm(w));
+    assert.ok(findBlocked(`you ${w} lol`).length > 0, encodeTerm(w));
+  }
+  for (const w of VARIANT_OK) {
+    assert.equal(isBlockedWord(w), false, encodeTerm(w));
+    assert.deepEqual(findBlocked(`a ${w} here`), [], encodeTerm(w));
+  }
+  for (const key of ['zzvsd wmf xxlb', 'zzvsd-wmf-xxlb']) {
+    const line = decodeTerm(key);
+    assert.deepEqual(censor(`so ${line} now`), { text: `so ${line} now`, changed: false }, key);
+  }
+  for (const key of ['fyh argd', 'drnj t ookp', 'ny x o d a']) assert.equal(censor(decodeTerm(key)).changed, true, key);
+});
+
+test('strict mode blocks crude and sexual words on top of slurs', () => {
+  for (const w of GAME_WORDS) {
+    assert.equal(isBlockedWord(w, { strict: true }), true, encodeTerm(w));
+    assert.equal(isBlockedGameWord(w), true, encodeTerm(w));
+    assert.equal(isBlockedGameWord(w.toUpperCase()), true, encodeTerm(w));
+  }
+  for (const w of [...VARIANTS, T.n, T.k, T.f]) assert.equal(isBlockedGameWord(w), true, encodeTerm(w));
+  for (const w of GAME_OK) assert.equal(isBlockedGameWord(w), false, encodeTerm(w));
+  assert.equal(isBlockedGameWord(''), false);
+  assert.equal(isBlockedGameWord(null), false);
+});
+
+const HIDDEN_EVERYWHERE = new Set(["ykcu","ykcul","ykcuw","ykcygc","ykcylp","ykcylpr","tyyulp","tyyulpr","tyyulpdf","tyyulpdt","tyyulpdtx","tyyulphpl","woqe","woqel","woqeidhnj","woqeidhnja","woqeidhnni","wkrth","wkrtho","wkrthlgkqm","wkrthlgkqmd","drbhx","drbhxo","zvhj","zvhjl","zvhjmu","zundd","zunddo","zunddu"].map(decodeTerm));
+
+test('strict mode leaves free text alone: swears still pass in chat and answers', () => {
+  for (const w of GAME_WORDS) {
+    if (HIDDEN_EVERYWHERE.has(w)) continue;
+    assert.equal(isBlockedWord(w), false, encodeTerm(w));
+    assert.deepEqual(censor(`well ${w} then`), { text: `well ${w} then`, changed: false }, encodeTerm(w));
+  }
+  for (const w of SWEARS) assert.equal(isBlockedWord(w), false, w);
+});
+
+test('the crude word list is stored encoded too', () => {
+  const src = readFileSync(new URL('../web/activity/js/filter.js', import.meta.url), 'utf8').toLowerCase();
+  for (const w of [...GAME_WORDS, ...VARIANTS]) assert.equal(new RegExp(`\\b${w}\\b`).test(src), false, encodeTerm(w));
+  const scramble = readFileSync(new URL('../web/activity/js/games/scramble.js', import.meta.url), 'utf8').toLowerCase();
+  for (const w of GAME_WORDS) assert.equal(new RegExp(`'${w}'`).test(scramble), false, encodeTerm(w));
+});
+
+test('strict mode over the full word list blocks a reviewed set and spares everyday words', () => {
+  const words = readFileSync(new URL('../web/activity/data/words.txt', import.meta.url), 'utf8').split(/\r?\n/).filter(Boolean);
+  const strict = new Set(words.filter((w) => isBlockedGameWord(w)));
+  assert.equal(strict.size, STRICT_COUNT);
+  for (const w of words.filter((x) => isBlockedWord(x))) assert.equal(strict.has(w), true, encodeTerm(w));
+  for (const w of GAME_OK) assert.equal(strict.has(w), false, encodeTerm(w));
+});
+
+test('word chain refuses crude words with the friendly message but keeps innocent ones', async () => {
+  assert.equal(chainCheck(G.d, 'd', []), 'blocked');
+  assert.equal(chainCheck(G.d, 'd', [], { dictionary: false }), 'blocked');
+  assert.equal(chainCheck(G.t, G.t[0], [], { dictionary: false }), 'blocked');
+  assert.equal(chainCheck(VARIANTS[0], VARIANTS[0][0], [], { dictionary: false }), 'blocked');
+  for (const w of ['cocktail', 'dickens', 'title', 'peacock', 'dandy']) assert.equal(chainCheck(w, w[0], [], { dictionary: false }), null, w);
+  const r = room(3, { games: [chain] });
+  await r.clock.advance(500);
+  assert.equal(r.engines[0].lobby.pick('chain'), true);
+  assert.equal(r.engines[0].lobby.start().ok, true);
+  await r.clock.advance(300);
+  let st = r.engines[0].snapshot().state.chain;
+  bySlot(r, st.cur).act({ type: 'word', text: `${st.letter}aad`, t: st.t });
+  await r.clock.advance(400);
+  st = r.engines[0].snapshot().state.chain;
+  assert.equal(st.letter, 'd');
+  bySlot(r, st.cur).act({ type: 'word', text: G.d, t: st.t });
+  await r.clock.advance(400);
+  st = r.engines[0].snapshot().state.chain;
+  assert.equal(st.bad.why, 'blocked');
+  assert.equal(CHAIN_PROBLEMS[st.bad.why], BLOCKED_NOTE);
+  assert.equal(st.words.some((w) => w[2] === G.d), false);
+});
+
+test('letter hive never lists, accepts or reveals crude words', () => {
+  const list = ['dickens', 'snide', 'kind', 'skid', 'nice', 'dine', 'send', G.d, G.ds];
+  dictionary.useText(list.slice().sort().join('\n'));
+  try {
+    const puzzle = pickPuzzle(() => 0.1, { seeds: ['dickens'], words: list, tries: 3, min: 1 });
+    assert.ok(puzzle);
+    assert.equal(puzzle.words.includes(G.d), false);
+    assert.equal(puzzle.words.includes(G.ds), false);
+    assert.ok(puzzle.words.includes('dickens'));
+    const letters = lettersOf('dickens');
+    const all = hiveWords(letters, 'd');
+    assert.equal(all.includes(G.d) || all.includes(G.ds), false);
+    assert.equal(hiveCheck(G.d, { letters, centre: 'd' }, [], { answers: new Set([G.d]) }), 'blocked');
+    assert.equal(hiveCheck(G.ds, { letters, centre: 'd' }, []), 'blocked');
+    assert.equal(hiveCheck('dickens', { letters, centre: 'd' }, [], { answers: new Set(['dickens']) }), null);
+  } finally {
+    dictionary.reset();
+  }
+});
+
+test('scramble never uses, accepts or shows crude words', async () => {
+  const { SHORT, MEDIUM, LONG } = await import('../web/activity/data/scramble.js');
+  for (const w of [...SHORT, ...MEDIUM, ...LONG]) assert.equal(scrambleBlocked(w), false, w);
+  const { SEEDS } = await import('../web/activity/data/hive.js');
+  for (const w of SEEDS) assert.equal(isBlockedGameWord(w), false, w);
+  for (const w of GAME_WORDS) assert.equal(scrambleBlocked(w), true, encodeTerm(w));
+  for (const w of ['apple', 'title', 'cocktail', 'dickens']) assert.equal(scrambleBlocked(w), false, w);
+  dictionary.useText([G.s, 'hist', 'this'].sort().join('\n'));
+  try {
+    assert.equal(judgeGuess(G.s, 'hist', { dictionary: true }), 'unknown');
+    assert.equal(judgeGuess('this', 'hist', { dictionary: true }), 'other');
+    for (let i = 0; i < 200; i += 1) assert.notEqual(scrambleWord('hist', Math.random, () => false), G.s);
+  } finally {
+    dictionary.reset();
+  }
+});
+
+test('sexual violence terms and sexual insults are hidden everywhere, swears and look-alike words stay', () => {
+  const blocked = ['ykcu', 'ykcylp', 'tyyulpdt', 'woqeidhnj', 'wkrth', 'drbhx', 'zvhj', 'zundd'].map(decodeTerm);
+  for (const term of blocked) {
+    assert.equal(censor(`well ${term} then`).changed, true, encodeTerm(term));
+    assert.equal(isBlockedWord(term), true, encodeTerm(term));
+    assert.equal(isBlockedGameWord(term), true, encodeTerm(term));
+  }
+  for (const fine of ['grape juice', 'close the drape', 'scrape it', 'trapeze artist', 'rapeseed oil', 'my pedometer', 'he was rapping', 'she rapped the beat', 'my favorite rapper', 'what a fucking day']) {
+    assert.equal(censor(fine).text, fine, fine);
   }
 });

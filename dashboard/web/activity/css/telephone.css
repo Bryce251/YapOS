@@ -487,3 +487,11 @@
     transform: none;
   }
 }
+
+.telephone-flag {
+  margin-top: var(--space-3);
+}
+
+.telephone-hidden {
+  color: var(--danger);
+}

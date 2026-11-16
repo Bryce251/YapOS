@@ -4,11 +4,21 @@ export const ADMIN_BATCH = 40;
 export const ADMIN_REFRESH_MS = 60000;
 export const ADMIN_RETRY_MS = 5000;
 export const ADMIN_TRACK_MAX = 400;
+export const REPORTS_ENDPOINT = '/api/activity/reports';
+export const REPORT_GAMES = Object.freeze(['draw', 'odd', 'telephone']);
+export const REPORT_STROKES = 200;
+export const REPORT_INK_CHARS = 16000;
+export const REPORT_NAME_MAX = 64;
+export const REPORT_WORD_MAX = 80;
+export const REPORT_SENT_MAX = 200;
+const INK_RE = /^[A-Za-z0-9_-]{6,4096}$/;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 let env = defaults();
 let checked = new Map();
 let admins = new Set();
+let banned = new Set();
+let reported = new Set();
 let owner = null;
 let failedAt = new Map();
 let busy = new Map();
@@ -37,6 +47,8 @@ export function resetAdmins() {
   timer = null;
   checked = new Map();
   admins = new Set();
+  banned = new Set();
+  reported = new Set();
   owner = null;
   failedAt = new Map();
   busy = new Map();
@@ -65,6 +77,15 @@ export function isAdmin(id) {
 export function isOwner(id) {
   const key = idOf(id);
   return Boolean(key) && owner !== null && key === owner;
+}
+
+export function isBanned(id) {
+  const key = idOf(id);
+  return Boolean(key) && banned.has(key);
+}
+
+export function bannedIds() {
+  return [...banned];
 }
 
 export function knows(id) {
@@ -109,6 +130,7 @@ function track(id, at) {
     const old = checked.keys().next().value;
     checked.delete(old);
     admins.delete(old);
+    banned.delete(old);
   }
 }
 
@@ -129,6 +151,7 @@ async function ask(ids) {
 function apply(ids, body) {
   const asked = new Set(ids);
   const yes = new Set(body.admins.filter((x) => typeof x === 'string' && asked.has(x)));
+  const out = new Set((Array.isArray(body.banned) ? body.banned : []).filter((x) => typeof x === 'string' && asked.has(x)));
   let changed = false;
   const at = env.now();
   for (const id of ids) {
@@ -138,6 +161,12 @@ function apply(ids, body) {
       admins.add(id);
       changed = true;
     } else if (!yes.has(id) && admins.delete(id)) {
+      changed = true;
+    }
+    if (out.has(id) && !banned.has(id)) {
+      banned.add(id);
+      changed = true;
+    } else if (!out.has(id) && banned.delete(id)) {
       changed = true;
     }
   }
@@ -205,4 +234,66 @@ export function refreshAdmins(list, opts = {}) {
     if (changed) announce();
     return changed;
   });
+}
+
+function cleanReportName(raw) {
+  if (typeof raw !== 'string') return '';
+  const text = raw.replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim();
+  return Array.from(text).slice(0, REPORT_NAME_MAX).join('');
+}
+
+export function reportInk(list) {
+  const out = [];
+  let chars = 0;
+  for (const s of Array.isArray(list) ? list : []) {
+    if (out.length >= REPORT_STROKES) break;
+    if (typeof s !== 'string' || !INK_RE.test(s)) continue;
+    if (chars + s.length > REPORT_INK_CHARS) break;
+    out.push(s);
+    chars += s.length;
+  }
+  return out;
+}
+
+export function reportBody(input) {
+  const x = input && typeof input === 'object' ? input : {};
+  if (!REPORT_GAMES.includes(x.game)) return null;
+  const d = x.drawer && typeof x.drawer === 'object' ? x.drawer : {};
+  const r = x.reporter && typeof x.reporter === 'object' ? x.reporter : {};
+  const drawerId = idOf(d.id);
+  const reporterId = idOf(r.id);
+  if (!validId(drawerId) || !validId(reporterId) || drawerId === reporterId) return null;
+  const handle = typeof d.username === 'string' ? cleanReportName(d.username.replace(/^@+/, '')).replace(/\s/g, '') : '';
+  const word = typeof x.word === 'string' ? Array.from(cleanReportName(x.word)).slice(0, REPORT_WORD_MAX).join('') : '';
+  return {
+    game: x.game,
+    drawer: { id: drawerId, name: cleanReportName(d.name) || 'Player', username: handle || null },
+    reporter: { id: reporterId, name: cleanReportName(r.name) || 'Player' },
+    ink: reportInk(x.ink),
+    word: word || null,
+    at: Number.isFinite(x.at) ? Math.round(x.at) : env.now(),
+  };
+}
+
+export function wasReported(key) {
+  return typeof key === 'string' && reported.has(key);
+}
+
+export async function sendReport(key, input) {
+  if (typeof key !== 'string' || !key || reported.has(key)) return false;
+  const body = reportBody(input);
+  if (!body || typeof env.fetch !== 'function') return false;
+  reported.add(key);
+  while (reported.size > REPORT_SENT_MAX) reported.delete(reported.values().next().value);
+  try {
+    const res = await env.fetch(REPORTS_ENDPOINT, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return Boolean(res && res.ok);
+  } catch {
+    return false;
+  }
 }

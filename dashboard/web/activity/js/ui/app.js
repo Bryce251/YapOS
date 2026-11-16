@@ -12,6 +12,11 @@ export const ANNOUNCE_MS = 10000;
 export const LEAVE_GRACE_MS = 6000;
 export const KICKED_TEXT = 'An admin moved you to watching.';
 export const BANNED_TEXT = "An admin moved you to watching. You can't rejoin until an admin lets you back in.";
+export const PARTY_BANNED_TEXT = "You can't join YapOS Party games right now.";
+
+export function partyBanned(snap) {
+  return Boolean(snap && snap.ready && snap.admin && snap.admin.partyBanned);
+}
 
 export function isAdminSnap(snap) {
   return Boolean(snap && snap.ready && snap.admin && snap.admin.me);
@@ -109,7 +114,7 @@ export function gameTint(snap, phase) {
 
 export function spectateModel(snap) {
   if (!snap.ready || snap.room.phase !== 'game' || snap.meJoined) return null;
-  return { meJoined: false, joining: snap.joining || null };
+  return { meJoined: false, joining: snap.joining || null, banned: partyBanned(snap) };
 }
 
 export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, juice = null }) {
@@ -126,8 +131,9 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const toastRoot = h('div', { class: 'toasts', attrs: { 'aria-live': 'polite' } });
   const head = h('header', { class: 'top' });
   const announceSlot = h('div', { class: 'announce-slot' });
+  const banSlot = h('div', { class: 'party-ban-slot' });
   const stage = h('main', { class: 'stage', attrs: { id: 'stage' } });
-  const shell = h('div', { class: 'shell' }, head, announceSlot, stage);
+  const shell = h('div', { class: 'shell' }, head, announceSlot, banSlot, stage);
   const fxLayer = h('div', { class: 'troll-layer' });
   let adminOpen = false;
   const panel = createAdminPanel({
@@ -350,8 +356,18 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       : null,
   );
 
+  const paintBan = memo((on) => (on ? h('p', { class: 'party-ban', text: PARTY_BANNED_TEXT, attrs: { role: 'status' } }) : null));
+
   const paintSpectate = memo((m) => {
     if (!m) return null;
+    if (m.banned) {
+      return h(
+        'div',
+        { class: 'spectate', attrs: { role: 'status' } },
+        h('span', { class: 'spectate-label' }, h('span', { text: 'Watching' })),
+        h('span', { class: 'spectate-hint', text: PARTY_BANNED_TEXT }),
+      );
+    }
     const btn = joinButton(m, { size: 'sm', key: 'join-late' });
     btn.addEventListener('click', () => engine.join());
     return h(
@@ -397,7 +413,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     const mine = snap.players.find((p) => p.isMe);
     if (wasJoined && !joined && snap.admin && mine && mine.present && snap.joining !== 'out' && now() - selfLeaveAt > LEAVE_GRACE_MS) {
       const banned = Array.isArray(snap.admin.banned) && snap.admin.banned.includes(snap.me);
-      toast(banned ? BANNED_TEXT : KICKED_TEXT);
+      toast(partyBanned(snap) ? PARTY_BANNED_TEXT : banned ? BANNED_TEXT : KICKED_TEXT);
     }
     if (snap.joining === 'out') selfLeaveAt = now();
     wasJoined = joined;
@@ -411,6 +427,12 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
         return;
       }
       if (n.dataset && (n.dataset.key === 'join' || n.dataset.key === 'join-late')) {
+        if (partyBanned(engine.snapshot())) {
+          if (typeof e.stopPropagation === 'function') e.stopPropagation();
+          if (typeof e.preventDefault === 'function') e.preventDefault();
+          toast(PARTY_BANNED_TEXT);
+          return;
+        }
         const c = centerOf(n);
         const x = c ? c.x : Number(e.clientX) || (win.innerWidth || 360) / 2;
         const y = c ? c.y : Number(e.clientY) || (win.innerHeight || 640) / 2;
@@ -513,6 +535,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     watchKick(snap);
     announceLive = announceModel(snap, now());
     paintAnnounce(announceSlot, announceLive ? { text: announceLive.text, until: announceLive.until } : null);
+    paintBan(banSlot, partyBanned(snap) && hm.phase !== 'game');
     tickAnnounce(now());
     panel.update(snap);
     paintBody(snap, hm);

@@ -2,6 +2,7 @@ import { MINUTE, HOUR, DAY } from './util.js';
 import { expireJobs } from './jobs.js';
 import { STATE_TTL } from './auth.js';
 import { PROFILE_KEEP, WANTED_TTL } from './profiles.js';
+import { cleanupStatements } from './reports.js';
 
 export const PUBLIC_STALE = 2 * HOUR;
 export const SNAPSHOT_STALE = DAY;
@@ -20,8 +21,9 @@ export async function cleanup(db, t) {
     db.prepare('DELETE FROM snapshots WHERE updated < ?').bind(t - SNAPSHOT_STALE),
     db.prepare('DELETE FROM profile_wanted WHERE asked < ?').bind(t - WANTED_TTL),
     db.prepare('DELETE FROM profiles WHERE fetched < ?').bind(t - PROFILE_KEEP),
+    ...cleanupStatements(db, t),
   ]);
-  const names = ['sessions', 'states', 'jobs', 'rate', 'grants', 'userServers', 'publicPages', 'snapshots', 'profileWanted', 'profiles'];
+  const names = ['sessions', 'states', 'jobs', 'rate', 'grants', 'userServers', 'publicPages', 'snapshots', 'profileWanted', 'profiles', 'dismissedReports', 'extraReports'];
   const removed = {};
   results.forEach((r, i) => {
     removed[names[i]] = Number((r && r.meta && r.meta.changes) || 0);

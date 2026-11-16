@@ -23,6 +23,7 @@ export const STROKE_POINTS = 1500;
 export const PARTS_MAX = 6;
 export const PALETTE = Object.freeze([3, 8, 6, 9, 4, 10, 7, 11, 1, 5, 2]);
 export const USED_MAX = 60;
+export const FLAG_PHASES = Object.freeze(['draw', 'vote', 'guess']);
 
 const EXTRA_EPS = [8, 12, 18, 26];
 
@@ -165,6 +166,57 @@ export function guessChoices(word, random = Math.random) {
   return shuffle([word].concat(others), random).map((w) => w.id);
 }
 
+export function drawingId(st, slot) {
+  return `odd.${st.k}.${slot}`;
+}
+
+function hiddenOf(st) {
+  return Array.isArray(st && st.hid) ? st.hid : [];
+}
+
+export function authors(st) {
+  if (!st || !Array.isArray(st.marks)) return [];
+  const hid = new Set(hiddenOf(st));
+  const out = [];
+  for (let i = st.marks.length - 1; i >= 0; i -= 1) {
+    const s = st.marks[i];
+    if (!Number.isInteger(s) || s < 0 || hid.has(s) || out.includes(s)) continue;
+    out.unshift(s);
+  }
+  return out;
+}
+
+function lensFit(raw, st) {
+  const lens = st.lens;
+  if (!Array.isArray(lens) || !Array.isArray(st.marks) || lens.length !== st.marks.length) return false;
+  return lens.reduce((a, n) => a + (Number.isInteger(n) && n > 0 ? n : 0), 0) === raw.length;
+}
+
+export function splitLines(raw, st, slot) {
+  const mine = [];
+  const rest = [];
+  if (lensFit(raw, st)) {
+    let at = 0;
+    st.marks.forEach((s, i) => {
+      const n = Number.isInteger(st.lens[i]) && st.lens[i] > 0 ? st.lens[i] : 0;
+      (s === slot ? mine : rest).push(...raw.slice(at, at + n));
+      at += n;
+    });
+    return { mine, rest };
+  }
+  const pos = st.order.indexOf(slot);
+  const col = pos >= 0 ? st.cols[pos] : null;
+  for (const s of raw) {
+    const d = decodeStroke(s);
+    (d && d.c === col ? mine : rest).push(s);
+  }
+  return { mine, rest };
+}
+
+function miss(st) {
+  return { ...st, marks: st.marks.concat([-1]), lens: (Array.isArray(st.lens) ? st.lens : []).concat([0]) };
+}
+
 function present(api) {
   return api.players().map((p) => p.slot);
 }
@@ -212,6 +264,8 @@ function newRound(api, prev) {
     n: 0,
     cap: strokeCap(order.length * laps),
     marks: [],
+    lens: [],
+    hid: [],
     wait: [],
     voted: [],
     votes: null,
@@ -234,7 +288,8 @@ function newRound(api, prev) {
 }
 
 function advance(api, st) {
-  const live = present(api);
+  const hid = new Set(hiddenOf(st));
+  const live = present(api).filter((s) => !hid.has(s));
   const seat = st.turn === null ? nextSeat(st.order, live, 1, 0, st.laps) : nextSeat(st.order, live, st.lap, st.pos + 1, st.laps);
   if (!seat) return startVote(api, st);
   const starts = api.now();
@@ -323,15 +378,38 @@ function inkOf(api, st) {
   return rawInk(ink, st.k);
 }
 
-function place(api, st, slot, chunks) {
-  const fits = Boolean(chunks && chunks.length <= MAX_CHUNKS && inkBytes(chunks) <= INK_MAX);
-  if (fits) {
-    for (const ch of chunks) {
-      const have = api.get(inkKey(ch.i));
-      if (JSON.stringify(have) !== JSON.stringify(ch)) api.put(inkKey(ch.i), ch);
-    }
+function writeChunks(api, chunks) {
+  for (const ch of chunks) {
+    const have = api.get(inkKey(ch.i));
+    if (JSON.stringify(have) !== JSON.stringify(ch)) api.put(inkKey(ch.i), ch);
   }
-  advance(api, { ...st, marks: st.marks.concat([fits ? slot : -1]) });
+}
+
+function place(api, st, slot, chunks, added = 0) {
+  const fits = Boolean(chunks && chunks.length <= MAX_CHUNKS && inkBytes(chunks) <= INK_MAX);
+  if (fits) writeChunks(api, chunks);
+  const lens = Array.isArray(st.lens) && st.lens.length === st.marks.length ? st.lens : null;
+  advance(api, { ...st, marks: st.marks.concat([fits ? slot : -1]), lens: lens ? lens.concat([fits ? added : 0]) : null });
+}
+
+function hide(api, d) {
+  const st = api.get(KEY);
+  if (!st || !FLAG_PHASES.includes(st.phase)) return false;
+  const slot = authors(st).find((s) => drawingId(st, s) === d);
+  if (slot === undefined) return false;
+  const { rest } = splitLines(inkOf(api, st), st, slot);
+  const chunks = pack(rest, st.k);
+  clearInk(api);
+  writeChunks(api, chunks);
+  const next = {
+    ...st,
+    marks: st.marks.map((s) => (s === slot ? -1 : s)),
+    lens: Array.isArray(st.lens) && st.lens.length === st.marks.length ? st.lens.map((n, i) => (st.marks[i] === slot ? 0 : n)) : null,
+    hid: hiddenOf(st).concat([slot]),
+  };
+  if (st.phase === 'draw' && st.turn === slot) advance(api, miss(next));
+  else api.put(KEY, next);
+  return true;
 }
 
 export function fillPoint(action) {
@@ -348,7 +426,7 @@ function fill(api, slot, action) {
   const at = fillPoint(action);
   if (!at) return;
   const c = st.cols[st.pos] ?? colorFor(st.pos);
-  place(api, st, slot, pack(inkOf(api, st).concat([encodeStroke({ c, z: FILL, pts: [at] })]), st.k));
+  place(api, st, slot, pack(inkOf(api, st).concat([encodeStroke({ c, z: FILL, pts: [at] })]), st.k), 1);
 }
 
 function stroke(api, slot, action) {
@@ -365,7 +443,7 @@ function stroke(api, slot, action) {
     parts = fitStroke(pts, c, PEN_SIZE, CAP_MIN);
     chunks = parts ? pack(raw.concat(parts), st.k) : null;
   }
-  place(api, st, slot, chunks);
+  place(api, st, slot, chunks, parts ? parts.length : 0);
 }
 
 function vote(api, slot, action) {
@@ -432,13 +510,30 @@ const odd = {
   deadline(api) {
     const st = api.get(KEY);
     if (!st) return api.finish();
-    if (st.phase === 'intro' || st.phase === 'draw') return advance(api, st.phase === 'draw' ? { ...st, marks: st.marks.concat([-1]) } : st);
+    if (st.phase === 'intro' || st.phase === 'draw') return advance(api, st.phase === 'draw' ? miss(st) : st);
     if (st.phase === 'vote') return closeVote(api);
     if (st.phase === 'guess') return settle(api, st, { caught: true, guess: null });
     return newRound(api, st);
   },
 
+  drawings(api) {
+    const st = api.get(KEY);
+    if (!st || !FLAG_PHASES.includes(st.phase)) return [];
+    return authors(st).map((s) => ({ d: drawingId(st, s), drawer: s }));
+  },
+
+  drawingOf(snap) {
+    const st = snap && snap.state ? snap.state[KEY] : null;
+    if (!st || !FLAG_PHASES.includes(st.phase)) return null;
+    const list = authors(st);
+    if (!list.length) return null;
+    const slot = list[list.length - 1];
+    const w = secretWord(st);
+    return { d: drawingId(st, slot), drawer: slot, ink: splitLines(rawInk(snap.state, st.k), st, slot).mine, word: w ? w.w : null };
+  },
+
   admin(api, action) {
+    if (action.type === 'hideDrawing') return hide(api, action.d);
     const st = api.get(KEY);
     if (!st || !['intro', 'draw', 'vote', 'guess', 'reveal'].includes(st.phase)) return false;
     if (action.type === 'skip') {
@@ -478,7 +573,7 @@ const odd = {
     const o = secretOdd(st);
     if (!live.includes(o)) return endEarly(api, st, 'left');
     if (playing.length < 3 && st.phase !== 'guess') return endEarly(api, st, 'few');
-    if (st.phase === 'draw' && !live.includes(st.turn)) return advance(api, { ...st, marks: st.marks.concat([-1]) });
+    if (st.phase === 'draw' && !live.includes(st.turn)) return advance(api, miss(st));
     if (st.phase === 'vote' && everyoneVoted(api, st)) return closeVote(api);
     return undefined;
   },
@@ -504,8 +599,10 @@ const odd = {
     const myPos = playing ? st.order.indexOf(mine) : -1;
     const strokesBy = (slot) => st.marks.filter((s) => s === slot).length;
     const shownOdd = reveal || st.phase === 'guess' ? who(st.odd) : null;
+    const hid = new Set(hiddenOf(st));
     const seats = st.order.map((slot, i) => ({
       ...who(slot),
+      hidden: hid.has(slot),
       color: COLORS[st.cols[i]] || COLORS[1],
       up: st.phase === 'draw' && slot === st.turn,
       lines: strokesBy(slot),
@@ -566,6 +663,7 @@ const odd = {
       gained: mine !== null && st.gained ? st.gained[mine] || 0 : 0,
       gains: st.gained || {},
       note: st.note,
+      hiddenMine: mine !== null && hid.has(mine),
       waiting: wait || (mine !== null && !playing && snap.meJoined !== false),
     };
   },

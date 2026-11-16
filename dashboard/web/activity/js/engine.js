@@ -1,7 +1,7 @@
 import { OpBudget, OPS_WINDOW_MS, MAX_VALUE_BYTES, checkSet, jsonBytes, validKey } from './limits.js';
 import { idOf, people, person, cleanName, initials, hueOf } from './players.js';
 import { censor } from './filter.js';
-import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, refreshAdmins, onAdmins } from './admin.js';
+import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins } from './admin.js';
 
 export const FLUSH_MS = 120;
 export const SOFT_OPS = 60;
@@ -32,12 +32,43 @@ export const FUN_FX = Object.freeze(['confetti', 'emoji-rain', 'spotlight', 'hyp
 export const TROLL_FX = Object.freeze(['flip', 'mirror', 'shake', 'spin', 'tiny', 'comic', 'blur', 'crash', 'clown', 'fake-win']);
 export const ALL_FX = Object.freeze(FUN_FX.concat(TROLL_FX));
 export const TARGET_FX = Object.freeze(['spotlight', 'clown', 'fake-win']);
-export const ADMIN_ACTIONS = Object.freeze(['start', 'end', 'skip', 'time', 'points', 'kick', 'ban', 'unban', 'lock', 'announce']);
+export const ADMIN_ACTIONS = Object.freeze(['start', 'end', 'skip', 'time', 'points', 'kick', 'ban', 'unban', 'lock', 'announce', 'clearDrawing']);
+export const FLAG_KEEP = 12;
+export const DRAWING_RE = /^[A-Za-z0-9_.:-]{1,48}$/;
 const USER_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const STRIP_RE = /[\u0000-\u001f\u007f​-‏‪-‮⁦-⁩]/g;
 const EMOJI_RE = /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u;
 const EMOJI_PARTS_RE = /^[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}\p{Emoji_Component}‍️⃣]+$/u;
-const DEFAULT_ADMINS = Object.freeze({ isAdmin: cachedAdmin, knows: cachedKnows, ownerId: cachedOwner, refresh: refreshAdmins, onChange: onAdmins });
+const DEFAULT_ADMINS = Object.freeze({ isAdmin: cachedAdmin, knows: cachedKnows, ownerId: cachedOwner, banned: cachedBanned, refresh: refreshAdmins, onChange: onAdmins });
+
+export function validDrawing(d) {
+  return typeof d === 'string' && DRAWING_RE.test(d);
+}
+
+export function flagNeed(guessers) {
+  const n = Number.isFinite(guessers) ? Math.floor(guessers) : 0;
+  return Math.max(1, Math.ceil(n / 2));
+}
+
+export function flagsIn(room) {
+  const f = room && room.flags;
+  return f && typeof f === 'object' && !Array.isArray(f) ? f : {};
+}
+
+function viewerSet(viewers) {
+  return Array.isArray(viewers) ? new Set(viewers.filter((s) => Number.isInteger(s))) : null;
+}
+
+export function flagInfo(snap, d, drawer, viewers = null) {
+  const room = snap && snap.room;
+  const raw = validDrawing(d) ? flagsIn(room)[d] : null;
+  const see = viewerSet(viewers);
+  const players = (snap && Array.isArray(snap.players) ? snap.players : []).filter((p) => p.joined && p.present !== false && Number.isInteger(p.slot) && p.slot !== drawer && (!see || see.has(p.slot)));
+  const live = new Set(players.map((p) => p.slot));
+  const by = Array.isArray(raw) ? raw.filter((s) => Number.isInteger(s) && s !== drawer) : [];
+  const me = snap ? snap.meSlot : null;
+  return { count: by.filter((s) => live.has(s)).length, need: flagNeed(players.length), mine: Number.isInteger(me) && by.includes(me) };
+}
 
 export function shiftEnd(ends, ms, at) {
   const base = Number.isFinite(ends) ? ends : at;
@@ -85,6 +116,7 @@ export function cleanAdminAction(a) {
   if (!a || typeof a !== 'object' || typeof a.type !== 'string' || !ADMIN_ACTIONS.includes(a.type)) return null;
   const type = a.type;
   if (type === 'start' || type === 'end' || type === 'skip') return { type };
+  if (type === 'clearDrawing') return validDrawing(a.d) ? { type, d: a.d } : { type };
   if (type === 'lock') return { type, on: Boolean(a.on) };
   if (type === 'announce') return { type, text: cleanText(a.text) };
   if (type === 'time') {
@@ -665,12 +697,14 @@ export function createEngine(opts) {
     const room = read(ROOM);
     if (!room || room.phase !== 'game') return;
     const game = games.get(room.game);
-    if (!game || typeof game.roster !== 'function') return;
-    try {
-      game.roster(gameApi(game));
-    } catch (e) {
-      fail(e);
+    if (game && typeof game.roster === 'function') {
+      try {
+        game.roster(gameApi(game));
+      } catch (e) {
+        fail(e);
+      }
     }
+    recheckFlags();
   }
 
   function lateJoin(id) {
@@ -776,7 +810,7 @@ export function createEngine(opts) {
     for (const slot of win) s.w[slot] = (s.w[slot] || 0) + 1;
     fitScores(s);
     write(SCORES, s);
-    patchRoom({ phase: 'results', deadline: null, last: { game: game.id, winners: win, at: now() } });
+    patchRoom({ phase: 'results', deadline: null, flags: null, last: { game: game.id, winners: win, at: now() } });
   }
 
   function handleIntent(from, data, depth = 0) {
@@ -789,8 +823,15 @@ export function createEngine(opts) {
       } else if (data.t === 'late') {
         const at = timerAt(read(ROOM));
         if (at !== null && now() >= at) onDeadline();
+      } else if (data.t === 'flag') {
+        const room = read(ROOM);
+        if (!room || room.phase !== 'game' || data.g !== room.game || !validDrawing(data.d)) return;
+        if (!isJoined(from) || !presentIds().has(from)) return;
+        const slot = slotOf(from);
+        if (slot === null) return;
+        flagDrawing(games.get(room.game), data.d, slot);
       } else if (data.t === 'in') {
-        if (!presentIds().has(from) || isBanned(from)) return;
+        if (!presentIds().has(from) || isBanned(from) || partyBanned(from)) return;
         const room = read(ROOM);
         if (room && room.lock && !isJoined(from)) {
           checkAdmin(from, (ok) => {
@@ -829,7 +870,7 @@ export function createEngine(opts) {
   }
 
   function joinNow(id) {
-    if (!isHost() || destroyed || !presentIds().has(id) || isBanned(id)) return;
+    if (!isHost() || destroyed || !presentIds().has(id) || isBanned(id) || partyBanned(id)) return;
     if (setJoined(id, true)) {
       lateJoin(id);
       checkAuto();
@@ -839,6 +880,90 @@ export function createEngine(opts) {
   function isBanned(id) {
     const room = read(ROOM);
     return Boolean(id && room && Array.isArray(room.ban) && room.ban.includes(id));
+  }
+
+  function partyBanned(id) {
+    try {
+      return Boolean(id) && typeof admins.banned === 'function' && Boolean(admins.banned(id));
+    } catch {
+      return false;
+    }
+  }
+
+  function enforceBans() {
+    if (!hostOnly()) return;
+    try {
+      for (const p of activePlayers()) if (partyBanned(p.id)) kick(p.id);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  function drawingsOf(game) {
+    if (!game || typeof game.drawings !== 'function') return [];
+    let list = [];
+    try {
+      list = game.drawings(gameApi(game));
+    } catch (e) {
+      fail(e);
+      return [];
+    }
+    return (Array.isArray(list) ? list : [])
+      .filter((x) => x && validDrawing(x.d) && Number.isInteger(x.drawer))
+      .map((x) => ({ d: x.d, drawer: x.drawer, viewers: viewerSet(x.viewers) }));
+  }
+
+  function hideDrawing(game, item, why) {
+    if (!game || typeof game.admin !== 'function') return false;
+    try {
+      return Boolean(game.admin(gameApi(game), { type: 'hideDrawing', d: item.d, drawer: item.drawer, why }));
+    } catch (e) {
+      fail(e);
+      return false;
+    }
+  }
+
+  function flaggers(item) {
+    return activePlayers()
+      .map((p) => p.slot)
+      .filter((s) => s !== item.drawer && (!item.viewers || item.viewers.has(s)));
+  }
+
+  function checkFlag(game, item) {
+    const by = flagsIn(read(ROOM))[item.d];
+    if (!Array.isArray(by)) return false;
+    const live = flaggers(item);
+    const count = by.filter((s) => live.includes(s)).length;
+    if (count < flagNeed(live.length)) return false;
+    return hideDrawing(game, item, 'flags');
+  }
+
+  function flagDrawing(game, d, slot) {
+    const list = drawingsOf(game);
+    const item = list.find((x) => x.d === d);
+    if (!item || item.drawer === slot || (item.viewers && !item.viewers.has(slot))) return false;
+    const flags = flagsIn(read(ROOM));
+    const by = Array.isArray(flags[d]) ? flags[d].filter((s) => Number.isInteger(s)) : [];
+    if (by.includes(slot)) return false;
+    const live = new Set(list.map((x) => x.d));
+    const kept = Object.entries(flags)
+      .filter(([k, v]) => k !== d && live.has(k) && Array.isArray(v))
+      .slice(-(FLAG_KEEP - 1));
+    patchRoom({ flags: Object.fromEntries(kept.concat([[d, by.concat([slot])]])) });
+    checkFlag(game, item);
+    return true;
+  }
+
+  function recheckFlags() {
+    const room = read(ROOM);
+    if (!room || room.phase !== 'game') return;
+    const flags = flagsIn(room);
+    if (!Object.keys(flags).length) return;
+    const game = games.get(room.game);
+    for (const item of drawingsOf(game)) {
+      if (!Array.isArray(flags[item.d])) continue;
+      if (checkFlag(game, item)) return;
+    }
   }
 
   function ownerOf() {
@@ -940,6 +1065,13 @@ export function createEngine(opts) {
       patchRoom({ ann: a.text ? { text: a.text, until: now() + ANNOUNCE_MS } : null });
       return true;
     }
+    if (a.type === 'clearDrawing') {
+      if (room.phase !== 'game') return false;
+      const game = games.get(room.game);
+      const list = drawingsOf(game);
+      const item = a.d ? list.find((x) => x.d === a.d) : list[list.length - 1];
+      return item ? hideDrawing(game, item, 'admin') : false;
+    }
     const id = targetOf(a);
     if (!id || shielded(from, id)) return false;
     if (a.type === 'unban') {
@@ -1018,6 +1150,7 @@ export function createEngine(opts) {
     } catch (e) {
       fail(e);
     }
+    enforceBans();
     scheduleDeadline();
     emit('host', { me: true });
   }
@@ -1244,7 +1377,7 @@ export function createEngine(opts) {
         s.g = {};
         write(SCORES, s);
         memory[game.id] = {};
-        patchRoom({ phase: 'game', game: game.id, deadline: null, round: (room.round || 0) + 1, last: null, auto: null });
+        patchRoom({ phase: 'game', game: game.id, deadline: null, round: (room.round || 0) + 1, last: null, auto: null, flags: null });
         game.start(gameApi(game));
       } catch (e) {
         fail(e);
@@ -1263,7 +1396,7 @@ export function createEngine(opts) {
     toLobby() {
       if (!hostOnly()) return false;
       for (const g of gameList) clearGameKeys(g);
-      patchRoom({ phase: 'lobby', game: null, deadline: null, auto: null });
+      patchRoom({ phase: 'lobby', game: null, deadline: null, auto: null, flags: null });
       checkAuto();
       return true;
     },
@@ -1271,7 +1404,7 @@ export function createEngine(opts) {
       if (!hostOnly()) return false;
       for (const g of gameList) clearGameKeys(g);
       write(SCORES, newScores());
-      patchRoom({ phase: 'lobby', game: null, deadline: null, last: null, auto: null });
+      patchRoom({ phase: 'lobby', game: null, deadline: null, last: null, auto: null, flags: null });
       checkAuto();
       return true;
     },
@@ -1318,7 +1451,19 @@ export function createEngine(opts) {
   }
 
   function join() {
+    if (partyBanned(meId())) return false;
     return setWant('in');
+  }
+
+  function flag(d) {
+    const room = read(ROOM);
+    if (destroyed || !room || room.phase !== 'game' || !validDrawing(d) || !isJoined(meId())) return false;
+    const msg = { t: 'flag', g: room.game, d };
+    if (isHost()) {
+      handleIntent(meId(), msg);
+      return true;
+    }
+    return broadcast(msg);
   }
 
   function leave() {
@@ -1417,7 +1562,7 @@ export function createEngine(opts) {
       game: games.get(room.game) || null,
       pick,
       settings: pick ? settingsFor(pick, room) : {},
-      admin: { me: adminOk(me), owner, locked: Boolean(room.lock), banned: Array.isArray(room.ban) ? room.ban.filter((x) => typeof x === 'string') : [] },
+      admin: { me: adminOk(me), owner, locked: Boolean(room.lock), banned: Array.isArray(room.ban) ? room.ban.filter((x) => typeof x === 'string') : [], partyBanned: partyBanned(me) },
       announce: announceOf(room),
       state,
       now: sharedNow(),
@@ -1443,7 +1588,13 @@ export function createEngine(opts) {
   for (const [ev, fn] of Object.entries(listeners)) t.on(ev, fn);
   let stopAdmins = null;
   try {
-    stopAdmins = typeof admins.onChange === 'function' ? admins.onChange(() => changed()) : null;
+    stopAdmins =
+      typeof admins.onChange === 'function'
+        ? admins.onChange(() => {
+            enforceBans();
+            changed();
+          })
+        : null;
   } catch {
     stopAdmins = null;
   }
@@ -1471,6 +1622,7 @@ export function createEngine(opts) {
     join,
     leave,
     act,
+    flag,
     direct,
     drop,
     broadcast,

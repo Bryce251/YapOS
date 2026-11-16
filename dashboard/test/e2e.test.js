@@ -573,9 +573,27 @@ test('the local test call treats Pip as the party owner and Juno as an extra adm
   const juno = 'de7e0000-0000-4000-8000-000000000002';
   const rex = 'de7e0000-0000-4000-8000-000000000003';
   const all = await (await fetch(`${dev.url}/api/activity/admins?ids=${pip},${juno},${rex}`)).json();
-  assert.deepEqual(all, { admins: [pip, juno], owner: pip });
+  assert.deepEqual(all, { admins: [pip, juno], owner: pip, banned: [] });
   const noPip = await (await fetch(`${dev.url}/api/activity/admins?ids=${juno},${rex}`)).json();
-  assert.deepEqual(noPip, { admins: [juno], owner: null });
+  assert.deepEqual(noPip, { admins: [juno], owner: null, banned: [] });
+});
+
+test('Jolli sees the sample flagged drawing locally and others cannot', async () => {
+  const jolli = await login('jolli');
+  const me = await (await jolli.req('GET', '/api/me')).json();
+  assert.equal(me.partyAdmin, true);
+  assert.equal((await jolli.req('GET', '/party/reports')).status, 200);
+  const data = await (await jolli.req('GET', '/api/party/reports')).json();
+  const sample = data.reports.find((r) => r.id === 'devreport0001');
+  assert.ok(sample);
+  assert.equal(sample.game, 'draw');
+  assert.equal(sample.drawer.name, 'Rex');
+  assert.equal(sample.drawer.profile.username, 'rexplorer');
+  assert.equal(sample.reporter.name, 'Mila');
+  assert.ok(sample.ink.length >= 5);
+  const alex = await login('alex');
+  assert.equal((await (await alex.req('GET', '/api/me')).json()).partyAdmin, false);
+  assert.equal((await alex.req('GET', '/api/party/reports')).status, 403);
 });
 
 test('Jolli can open Party admins locally and others cannot', async () => {

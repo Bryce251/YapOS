@@ -11,6 +11,7 @@ import { createDashboard } from '../engine/dashboard.js';
 import { createBudget } from '../engine/budget.js';
 import { createLogger } from '../engine/log.js';
 import { monthKey, shiftMonth } from '../apps/wrapped.js';
+import { encodeStroke } from './web/activity/js/games/ink.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.join(HERE, 'web');
@@ -31,6 +32,9 @@ const FAKE_COLORS = [['#f2613f', '#ff9a6b'], ['#8b5cf6', '#c4b5fd'], ['#ec4899',
 const CODE_TTL_MS = 5 * 60_000;
 export const DEV_PARTY_OWNER = 'de7e0000-0000-4000-8000-000000000001';
 export const DEV_PARTY_ADMIN = 'de7e0000-0000-4000-8000-000000000002';
+export const DEV_REPORT_ID = 'devreport0001';
+export const DEV_REPORT_DRAWER = 'de7e0000-0000-4000-8000-000000000003';
+export const DEV_REPORT_REPORTER = 'de7e0000-0000-4000-8000-000000000004';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -202,13 +206,44 @@ export async function withDevPartyOwner(response, url) {
   const headers = new Headers(response.headers);
   headers.set('Cache-Control', 'no-store');
   headers.delete('Content-Length');
-  return new Response(JSON.stringify({ admins: ids.filter((id) => given.has(id)), owner: DEV_PARTY_OWNER }), { status: 200, headers });
+  const banned = (Array.isArray(body.banned) ? body.banned : []).filter((id) => id !== DEV_PARTY_OWNER);
+  return new Response(JSON.stringify({ admins: ids.filter((id) => given.has(id)), owner: DEV_PARTY_OWNER, banned }), { status: 200, headers });
 }
 
 export function seedPartyAdmins(db, ownerId, t = Date.now()) {
   const juno = fakeProfile(DEV_PARTY_ADMIN);
   db.raw.prepare('INSERT INTO party_admins (id, added_by, added_at) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING').run(DEV_PARTY_ADMIN, ownerId, t);
   db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, ?, NULL, 0, ?) ON CONFLICT (id) DO UPDATE SET username = excluded.username, display_name = excluded.display_name, missing = 0, fetched = excluded.fetched').run(DEV_PARTY_ADMIN, juno.username, juno.display_name, t);
+}
+
+function ring(cx, cy, rx, ry, from, to, steps) {
+  const pts = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const a = from + ((to - from) * i) / steps;
+    pts.push([Math.round(cx + Math.cos(a) * rx), Math.round(cy + Math.sin(a) * ry)]);
+  }
+  return pts;
+}
+
+export function devReportInk() {
+  return [
+    { c: 5, z: 2, pts: ring(240, 180, 110, 110, 0, Math.PI * 2, 48) },
+    { c: 1, z: 3, pts: [[200, 150]] },
+    { c: 1, z: 3, pts: [[280, 150]] },
+    { c: 1, z: 2, pts: ring(240, 190, 60, 45, 0.15 * Math.PI, 0.85 * Math.PI, 16) },
+    { c: 10, z: 1, pts: [[60, 60], [90, 40], [120, 70], [150, 45], [180, 75], [210, 50]] },
+    { c: 5, z: 4, pts: [[240, 180]] },
+  ].map(encodeStroke);
+}
+
+export function seedPartyReport(db, t = Date.now()) {
+  const stmt = db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, ?, NULL, 0, ?) ON CONFLICT (id) DO UPDATE SET username = excluded.username, display_name = excluded.display_name, missing = 0, fetched = excluded.fetched');
+  const rex = fakeProfile(DEV_REPORT_DRAWER);
+  const mila = fakeProfile(DEV_REPORT_REPORTER);
+  stmt.run(rex.id, rex.username, rex.display_name, t);
+  stmt.run(mila.id, mila.username, mila.display_name, t);
+  db.raw.prepare("INSERT INTO party_reports (id, game, drawer_id, drawer_name, drawer_username, reporter_id, reporter_name, ink, word, at, created, ip_hash, status) VALUES (?, 'draw', ?, ?, ?, ?, ?, ?, 'sunflower', ?, ?, 'dev', 'open') ON CONFLICT (id) DO NOTHING")
+    .run(DEV_REPORT_ID, rex.id, rex.display_name, rex.username, mila.id, mila.display_name, JSON.stringify(devReportInk()), t - 5 * 60_000, t - 5 * 60_000);
 }
 
 async function activityDev(request) {
@@ -541,6 +576,7 @@ export async function startDev({
     PARTY_OWNER_ID: IDS.owner,
   };
   seedPartyAdmins(db, IDS.owner);
+  seedPartyReport(db);
 
   const oauth = createFakeOAuth({
     users: TEST_USERS,
@@ -641,7 +677,7 @@ async function main() {
     `Fake Yapin' sign-in is at ${dev.oauthUrl}`,
     `YapOS Party test call is at ${dev.url}/activity-dev/`,
     `Test server: Test Town (${dev.serverId})`,
-    'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party.',
+    'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party and see a sample flagged drawing at /party/reports.',
     '',
     'Test users (pick one on the sign-in page):',
     ...dev.users.map((u) => `  ${u.display_name.padEnd(8)} @${u.username.padEnd(8)} ${u.role}`),

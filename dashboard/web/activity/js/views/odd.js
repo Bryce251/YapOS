@@ -1,6 +1,6 @@
 import odd, { REVEAL_MS, INTRO_MS, TURN_MS, VOTE_MS, GUESS_MS, PEN_SIZE, STROKE_POINTS, fitStroke } from '../games/odd.js';
 import { GRID_W, GRID_H, COLORS, ERASER, FILL, readInk, liveMessage, applyLive, pruneLive, quantise, strokeOn as inkStroke, fillOn, createPainter } from '../games/ink.js';
-import { SCALE, LIVE_MS, LIVE_CHARS, boardRows, BOARD_MAX, fillTool, markTool } from './draw.js';
+import { SCALE, LIVE_MS, LIVE_CHARS, boardRows, BOARD_MAX, fillTool, markTool, flagModel, flagButton, flagDrawing, FLAG_ICON } from './draw.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
 import { board as scoreBoard } from '../ui/board.js';
 
@@ -30,6 +30,7 @@ export function roleText(m) {
 export function bannerText(m) {
   if (m.phase === 'intro') return m.role === 'odd' ? 'Shh! Act natural. The drawing starts in a moment.' : 'Read your card. The drawing starts in a moment.';
   if (m.phase === 'draw') {
+    if (m.hiddenMine) return "Your lines were hidden, so you sit out the rest of this drawing.";
     if (m.myTurn) return 'Your turn! Draw ONE line, then let go.';
     return `${nameOf(m.turn)} is adding a line…`;
   }
@@ -143,6 +144,9 @@ export function createOddView({ engine, fx, toast, win, cues }) {
   const board = h('div', { class: 'draw-board odd-board' }, paper, tools, penTag);
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
   const scores = h('div', { class: 'draw-scores odd-scores' });
+  const flagBox = h('div', { class: 'flag-slot' });
+  board.insertBefore(flagBox, tools);
+  const flagged = new Set();
   el.append(head, roleBox, seatsBox, banner, actBox, board, foot, scores);
   const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d', { willReadFrequently: true }) : null;
   const painter = createPainter(SCALE);
@@ -389,6 +393,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
           s.lines ? h('span', { class: 'odd-seat-lines', text: `✏️${s.lines}`, attrs: { 'aria-label': plural(s.lines, 'line', 'lines') } }) : null,
           s.voted ? h('span', { class: 'got-tick', text: '✓', attrs: { 'aria-label': 'Voted' } }) : null,
           s.isOdd ? h('span', { class: 'odd-seat-badge', text: '🕵️', attrs: { 'aria-label': 'The Odd One Out' } }) : null,
+          s.hidden ? h('span', { class: 'odd-seat-flag', text: FLAG_ICON, attrs: { 'aria-label': 'Lines hidden', title: 'Lines hidden' } }) : null,
         ),
       ),
     ),
@@ -527,6 +532,22 @@ export function createOddView({ engine, fx, toast, win, cues }) {
     if (dirty) repaint();
   }
 
+  const paintFlag = memo((f) => flagButton(f, () => flag(), f ? f.note : null));
+
+  function flag() {
+    if (!snapLast) return;
+    flagDrawing({ engine, snap: snapLast, game: 'odd', item: odd.drawingOf(snapLast), local: flagged, toast: say });
+    update(engine.snapshot());
+  }
+
+  function flagFor(next, m) {
+    const item = odd.drawingOf(next);
+    const f = flagModel(next, item, flagged);
+    if (!f) return null;
+    const by = m.seats.find((s) => s.slot === item.drawer);
+    return { ...f, note: by ? `Latest line by ${by.isMe ? 'you' : by.name}` : null };
+  }
+
   function update(next) {
     snapLast = next;
     const m = odd.model(next, local);
@@ -539,7 +560,8 @@ export function createOddView({ engine, fx, toast, win, cues }) {
     const people = new Map(m.seats.map((s) => [s.slot, s]));
     paintHead(head, { r: m.r, rounds: m.rounds, topic: m.topic, phase: m.phase, lap: m.lap, laps: m.laps, ends: m.ends, label: timerLabel(m) });
     paintRole(roleBox, { phase: m.phase, role: m.role, word: m.word, topic: m.topic, waiting: m.waiting, hidden: local.hidden && m.role !== 'watch' });
-    paintSeats(seatsBox, { seats: m.seats.map((s) => ({ slot: s.slot, id: s.id, name: s.name, initials: s.initials, hue: s.hue, avatar: s.avatar, isMe: s.isMe, present: s.present, color: s.color, up: s.up, lines: s.lines, voted: s.voted, isOdd: s.isOdd })) });
+    paintSeats(seatsBox, { seats: m.seats.map((s) => ({ slot: s.slot, id: s.id, name: s.name, initials: s.initials, hue: s.hue, avatar: s.avatar, isMe: s.isMe, present: s.present, color: s.color, up: s.up, lines: s.lines, voted: s.voted, isOdd: s.isOdd, hidden: s.hidden })) });
+    paintFlag(flagBox, flagFor(next, m));
     const turnSeat = m.turn ? people.get(m.turn.slot) : null;
     paintBanner(banner, { text: bannerText(m), mine: m.myTurn, color: m.phase === 'draw' && turnSeat ? turnSeat.color : null });
     const gains = Object.entries(m.gains)

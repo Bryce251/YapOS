@@ -8,12 +8,17 @@ export const HIDDEN_NOTE = 'Some words were hidden.';
 export const BLOCKED_NOTE = 'That word isn’t allowed here.';
 
 const WORDS = [
-  'ust(?:i|t|wr|ce|is|oym|xr|dxb|gg|mmq|vl|brf)?', 'ustweasu?', 'qstquknu?', 'jybdl?', 'kkea(?:r|ed|kja)', 'wspatjhps(?:g|tsj)',
-  'zrrrhkmu?', 'zrvjlghpx?', 'jrvdd(?:o|x|kja)?', 'nybal?', 'gscfxnggfld?', 'qkci?', 'jrvdti(?:z|g)s', 'zzvsl?', 'dogrtyju?',
+  'ust(?:i|t|wr|ce|is|oym|xr|dxb|gg|mmq|vl|brf)?', 'ustweasu?', 'qstquknu?', 'jybdl?', 'kkea(?:r|ax|kj|qpg|vsp)', 'wspatjhps(?:g|tsj)',
+  'zrrrhkmu?', 'zrvjlghpx?', 'jrvdd(?:o|x|kja|tsi|cbsw)?', 'nybal?', 'gscfxnggfld?', 'qkci?', 'jrvdti(?:z|g)s', 'zzvsl?', 'dogrtyju?',
   'iondxnr?', 'wkxyl?', 'yktxxwcu?', 'ayjueddcia?', 'rsxul?', 'fsqi?', 'oorrl?', 'yoqidemu?', 'pxwkgo?', 'zahqpo?', 'dyci?',
-  'kkt(?:e|ho|ngx)', 'dyti?', 'nyybbsnix?', 'nicel?', 'wsxuro?', 'wyyqvgr?', 'oyaa(?:r|ax|kja|pmj)', 'iybdzo?', 'mkt(?:i|zu|nv|tbd)?',
-  'kixul?', 'abndg(?:u|hg|nmd)', 'abbego?', 'zrrcthdu?', 'wybvmaqu?', 'ikgjrxnax?', 'ikgjri(?:z|g)s', 'yogqkz(?:r|gi|w|zg)?', 'aketl?',
-  'zznp(?:xo|df|nvr|m)?', 'tyawhhnkia?', 'rif', 'oyyeakzz', 'usorto?',
+  'kkt(?:e|ho|ngx)', 'dyti?', 'nyybbsnix?', 'nicel?', 'wsxuro?', 'wyyqvgr?', 'oyaa(?:r|ax|kj|qpg|vsp)', 'iybdzo?',
+  'mkt(?:i|zu|nv|tbd|wk|cqs|hz|nfh)?', 'kixul?', 'abndg(?:u|hg|nmd)', 'abbego?', 'zrrcthdu?', 'wybvmaqu?', 'ikgjrxnax?', 'ikgjri(?:z|g)s',
+  'yogqkz(?:r|gi|w|zg)?', 'aketl?', 'zznp(?:xo|df|nvr|m)?', 'tyawhhnkia?', 'rif', 'oyyeakzz', 'usorto?', 'rksvbnr?', 'rksyko?', 'jksvkar?',
+  'jybbbar?', 'dstwxnr?', 'nsapho?', 'iyukggr?', 'akvwl?', 'wybvmwgu?', 'wspstjhpx?', 'jrvdxar?', 'zzvwl?',
+  'ykcu', 'ykcul', 'ykcuw', 'ykcygc', 'ykcylp', 'ykcylpr', 'tyyulp', 'tyyulpr',
+  'tyyulpdf', 'tyyulpdt', 'tyyulpdtx', 'tyyulphpl', 'woqe', 'woqel', 'woqeidhnj', 'woqeidhnja',
+  'woqeidhnni', 'wkrth', 'wkrtho', 'wkrthlgkqm', 'wkrthlgkqmd', 'drbhx', 'drbhxo', 'zvhj',
+  'zvhjl', 'zvhjmu', 'zundd', 'zunddo', 'zunddu',
 ];
 
 const PHRASES = [
@@ -31,9 +36,49 @@ const ALLOW = ['zxvwz', 'ustwea', 'ustweemi', 'ustweu', 'ustwtnc', 'ustwnj', 'yo
 
 const EXACT = ['mktem', 'mktemo', 'mktemp'];
 
-const NEXT = ['jrvddo?(?:hp|tn)', 'oyaa(?:r|ax|kja|pmj)nlnny?'];
+const NEXT = [
+  'jrvddo?(?:hp|tn)', 'oyaa(?:r|ax|kj|qpg|vsp)trtte?', 'zzvsd?o?zpi',
+];
 
-const SAFE = new Set(['woops', 'jaap', 'pollack', 'pollacks', 'darkle', 'darkles', 'darkled', ...EXACT.map((x) => decodeTerm(x))]);
+const GAME = [
+  'kspa(?:l|ddci|ppoum|tag|cjph|xvaf|mzr)?', 'jypa(?:l|ddci|ppoum|pufqnd|hmxifvz|chsdemi)?', 'asg(?:i|mu|skja|ewv)?', 'iybr(?:l|ed|kja)?',
+  'wefi(?:r|edu)', 'jez(?:i|femi|rmo|gyiq|skuce|hdpr|tpbdf)?', 'oyed(?:r|edt|nmdh|zhbsv|ouk)',
+  'zok(?:o|baq|kjae|wcs|fnhyb|f|ik|oce|xpxt|ul|ac|kso)?', 'hxnb(?:eu)?', 'hxhi(?:xo)?', 'hbfu(?:l|z|gqqm|sccyp)?',
+  'isgsa(?:ar|a|nmc|wvmq|iqm|np|xfzqt)?', 'ietwxn(?:r|gi|qyu|p)?', 'ykc(?:u|xo|df|nvr|wjn|fswy|nk)', 'iyauko?', 'zundd(?:o|x)?', 'arbjl?',
+  'vbt(?:o|bar|kfaewt)', 'zozug', 'zzrhfo?', 'zmeemqlu?', 'zmeemw', 'aofjbykgx?', 'jvvj(?:l|kqkx|wcwjyp|ougu)?', 'ceylt(?:o|d)?',
+  'noaymwk(?:u|ni)?', 'wrnbe(?:qr|k|zapg|zw)', 'lbbjby(?:z|cq|iwzp|cpm|lyve)?', 'jyathir?', 'csnwkw', 'tsyvl?', 'ooajte', 'zwrwfw', 'xeruyo?',
+  'moysa(?:ar|gi|qyu)?', 'zmubhjfu?', 'wopaxnr?', 'jybsa(?:ed|kja|j)?', 'wybdmwmi', 'korfmdqqfb', 'jbrqflhgx?', 'jepal?', 'aeetl?', 'zrnj',
+  'q(?:oea|tyj)qknd?', 'ykhdvd(?:x|kjz|tsjn|flb|owqhk)?', 'iyetxhkqx?', 'ibbjaaku?', 'woeytjzn', 'iybwxnlcs', 'zxbw(?:l|cdf|lqyu)?',
+  'uoth(?:h|kdu|ta|pgj|ypshy)', 'uotuk', 'teyqmpn(?:u|ja)?', 'zkzrho?', 'zrrug(?:u|hg|nmd)', 'iypxxo?', 'hlbi?', 'seohto?', 'zznimebu?',
+  'rbnkmo?', 'uizfakr?',
+  'hcf(?:ul|dzv|mieg|ncme|zoyqh)?', '(?:qkpa|wqld|xulfk|vxd|nolw|uso|jbvk)kfi(?:xo)?', 'ikfjtncu?', 'jbnf(?:iu|okjz|awvmq|phj|yucy|kcs|tlbf)?',
+  'kkzd(?:l|es)?', 'kkzcbp', 'nyqtti(?:m|pjl|xwk)?', 'ayfixnr?', 'ioybxjcu?', 'tsawxo?', 'mkad(?:r|edu)', 'rxbraazfx?', 'ayqwxnr?', 'oybaxnr?',
+  'wbbimeswy(?:m|pg|vx|fnj|oxz|xgiq)', 'wszf(?:l|ac|kso)?', 'ueq(?:u|xo|hvd|qdh|zmqs|lyv)', 'lbrsmenpx?', 'rsaa(?:r|edt|nmdh)',
+  'mogyld(?:du|nax|wjgp|ivz|reik)?', 'iyattcd', 'areuxonoja?', 'myeuihza', 'weo(?:ul|eb|kx)', 'iegj(?:akkg|mwwsj|jiuj|vugvk)',
+  'zwhj(?:l|px|vnmc|hzypt)?', 'sojt(?:eu|mgxa|pf|vmq)?', 'uyba(?:ba|x)', 'zrnw(?:l|cdf|lqyu|xyo|ghxb)?', 'zzhdd', 'qs(?:fc|si|rutu)', 'zzyehcd',
+  'zdeqikmu?', 'skoy(?:t|ql)', 'tesvweugwa?', 'yszcbjf', 'msfjbjf', 'infc', 'okebhpr?', 'oefi(?:r|edu)', 'zvnfiaqu?', 'abbbekou?', 'zdekfldvx?',
+  'mvbes(?:u|hg|nmd)', 'jepahhc(?:u|jl|tbx|lv)?', 'wk?rtho?', 'uscfear?', 'aofj(?:xo|hu)', 'zokfhpr?', 'hxvbbjfwx', 'oiz(?:yx|edu)',
+  'som(?:pba|ykja|ko|qyo|br|hxe)', 'sofrho?', 'oyzel?', 'skqoukxu?', 'jrvdded',
+];
+
+const GAME_STEMS = [
+  'mepa', 'zrvj', 'jeaj', 'agnj', 'dkaa', 'qsmp', 'ksyth', 'wyed', 'woayl', 'cktygw', 'tkfjnnacy', 'ltnsnhzv', 'ivbmcka', 'okatcka', 'yszzhx',
+  'jypalqbm', 'drbhx', 'zvhj', 'iyybhyj', 'vbtqli', 'woqeidhn', 'wkrthlgkq', 'iofjbwkky', 'uophhlgkq', 'pxpulp', 'tyyulp', 'jeadbhhplcd',
+  'moybtp', 'zyqef', 'hcfxhhd', 'wsfi', 'iexatgd', 'nkawuwmi', 'uizfaklcs',
+];
+
+const GAME_ALLOW = [
+  'bcuym', 'vcuym', 'nkfxbp', 'uofxbp', 'lsfxbp', 'ycuym', 'tsfxbp', 'hcuym', 'yofxbpg', 'wofxbp', 'zrvjmwg', 'zrvjmel', 'agnjvd', 'agnjxn',
+  'agnjmh', 'agnjmaq', 'zgndd', 'agndd', 'dkaatl', 'dkaaxh', 'dkaaea', 'dkaaee', 'dkaaeu', 'zzvil', 'uscylo', 'akcylo', 'wsfihz', 'wsfitooj',
+  'wvnsnjs', 'woaylpn', 'woaylqk', 'wyedxor', 'hqnfhnm', 'lzbhges', 'pxiqzemc', 'lfnwbjz', 'cktygws', 'cktygwmv', 'moybtpz', 'pcbthi',
+  'wcbthi', 'zvhjvd', 'zvhjaaq', 'vfrhlhtv', 'skcylo', 'zmhdmd',
+];
+
+const SAFE = new Set(['woops', 'rapped', 'rapping', 'rapper', 'rappers', 'rappe', 'rappee', 'rappees', 'rappist', 'moiest', 'jaap', 'pollack', 'pollacks', 'darkle', 'darkles', 'darkled', 'dike', 'dikes', 'diked', 'diking', ...EXACT.map((x) => decodeTerm(x))]);
+
+const TIGHT = new Set(['rif']);
+
+const VOWELS = new Set(['a', 'e', 'i', 'o', 'u']);
 
 const TAILS = /^(?:a|ah|as|az|uh|er|ers|ot|ots|it|its|et|ets|y|s|z)$/;
 
@@ -96,19 +141,55 @@ function compile(src) {
   return out;
 }
 
+function loose(src) {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c >= 'a' && c <= 'z') {
+      let j = i;
+      while (src[j] === c) j += 1;
+      const k = j - i;
+      let atom = VOWELS.has(c) ? `${c}{${k}}` : `${c}+`;
+      if (src[j] === '?' || src[j] === '*') atom = `(?:${atom})`;
+      out += atom;
+      i = j;
+    } else {
+      out += c;
+      i += 1;
+    }
+  }
+  return out;
+}
+
+function fold(s) {
+  return s.replace(/ph/g, 'ff').replace(/q/g, 'k').replace(/c(?![eiy])/g, 'k').replace(/y+/g, 'i').replace(/([aeiou])\1{2,}/g, '$1').replace(/(?<=[a-z]{3})z$/, 's');
+}
+
 function anchored(list) {
   return new RegExp(`^(?:${list.map((x) => compile(decodeTerm(x))).join('|')})$`);
 }
 
 const WORD_RE = anchored(WORDS);
 const PHRASE_RE = anchored(PHRASES);
+const VARIANT_RE = new RegExp(`^(?:${WORDS.filter((x) => !TIGHT.has(x)).map((x) => loose(fold(decodeTerm(x)))).join('|')})$`);
 const STEM_RE = new RegExp(STEMS.map((x) => compile(decodeTerm(x))).join('|'), 'g');
 const ALLOW_RES = ALLOW.map((x) => new RegExp(compile(decodeTerm(x)), 'g'));
 const NEXT_RE = anchored(NEXT);
 const LEAD_RE = new RegExp(`^(?:${STEMS.map((x) => compile(decodeTerm(x))).join('|')})`);
+const FOLD_STEM_RE = new RegExp(STEMS.map(decodeTerm).filter((x) => !x.includes('q')).map((x) => compile(fold(x))).join('|'), 'g');
+const FOLD_ALLOW_RES = ALLOW.map((x) => new RegExp(compile(fold(decodeTerm(x))), 'g'));
+const GAME_RE = new RegExp(`^(?:${GAME.map(decodeTerm).join('|')})$`);
+const GAME_STEM_RE = new RegExp(GAME_STEMS.map(decodeTerm).join('|'), 'g');
+const GAME_ALLOW_RES = GAME_ALLOW.map((x) => new RegExp(decodeTerm(x), 'g'));
 
-function covered(s, a, b) {
-  for (const re of ALLOW_RES) {
+function variant(s) {
+  const f = fold(s);
+  return VARIANT_RE.test(f) || (f !== s && stemHit(f, f.length, 0, FOLD_STEM_RE, FOLD_ALLOW_RES));
+}
+
+function covered(s, a, b, allow = ALLOW_RES) {
+  for (const re of allow) {
     re.lastIndex = 0;
     let m = re.exec(s);
     while (m) {
@@ -120,14 +201,14 @@ function covered(s, a, b) {
   return false;
 }
 
-function stemHit(s, lo = s.length, hi = 0) {
-  STEM_RE.lastIndex = 0;
-  let m = STEM_RE.exec(s);
+function stemHit(s, lo = s.length, hi = 0, re = STEM_RE, allow = ALLOW_RES) {
+  re.lastIndex = 0;
+  let m = re.exec(s);
   while (m) {
     const end = m.index + m[0].length;
-    if (m.index < lo && end > hi && !covered(s, m.index, end)) return true;
-    STEM_RE.lastIndex = m.index + 1;
-    m = STEM_RE.exec(s);
+    if (m.index < lo && end > hi && !covered(s, m.index, end, allow)) return true;
+    re.lastIndex = m.index + 1;
+    m = re.exec(s);
   }
   return false;
 }
@@ -213,7 +294,7 @@ function scan(tokens, hits) {
         continue;
       } else if (count > 1 && count <= 3 && split(joined, tail)) {
         hits.push([tokens[i].start, tokens[j].end]);
-      } else if (tight && !SAFE.has(joined) && (WORD_RE.test(joined) || stemHit(joined, head, count === 1 ? 0 : tail))) {
+      } else if (tight && !SAFE.has(joined) && (WORD_RE.test(joined) || variant(joined) || stemHit(joined, head, count === 1 ? 0 : tail))) {
         let k = j;
         if (count > 1) while (k + 1 < n && tokens[k + 1].text.length === 1) k += 1;
         hits.push([tokens[i].start, tokens[k].end]);
@@ -281,12 +362,23 @@ export function findBlocked(raw) {
   return merge(hits.map(([a, b]) => [a, extend(text, b)])).map(([start, end]) => ({ start, end, text: text.slice(start, end) }));
 }
 
-export function isBlockedWord(word) {
+function gameHit(word) {
+  const w = /^[a-z]+$/.test(word) ? word : normalizeForFilter(word).compact;
+  if (!w) return false;
+  return GAME_RE.test(w) || stemHit(w, w.length, 0, GAME_STEM_RE, GAME_ALLOW_RES);
+}
+
+export function isBlockedWord(word, { strict = false } = {}) {
   const w = String(word ?? '').trim().toLowerCase();
   if (!w) return false;
+  if (strict && gameHit(w)) return true;
   if (SAFE.has(w)) return false;
-  if (/^[a-z]+$/.test(w)) return WORD_RE.test(w) || PHRASE_RE.test(w) || stemHit(w);
+  if (/^[a-z]+$/.test(w)) return WORD_RE.test(w) || PHRASE_RE.test(w) || variant(w) || stemHit(w);
   return findBlocked(w).length > 0;
+}
+
+export function isBlockedGameWord(word) {
+  return isBlockedWord(word, { strict: true });
 }
 
 export function censor(raw) {

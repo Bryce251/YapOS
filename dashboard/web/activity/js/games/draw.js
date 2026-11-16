@@ -1,6 +1,6 @@
 import { WORDS, TIERS, wordById, wordsIn } from '../../data/draw.js';
 import { shuffle } from '../engine.js';
-import { INK_PREFIX } from './ink.js';
+import { INK_PREFIX, MAX_CHUNKS, inkKey } from './ink.js';
 import { person } from '../players.js';
 import { cleanShared } from '../text.js';
 
@@ -156,6 +156,24 @@ export function blanks(word, shown, nonce) {
   return Array.from(word).map((ch, i) => (ch === ' ' ? ' ' : open.has(i) ? ch : '_'));
 }
 
+export function drawingId(st) {
+  return `draw.${st.nonce}.${st.n}`;
+}
+
+export function inkStrings(state, k) {
+  const out = [];
+  for (let i = 0; i < MAX_CHUNKS; i += 1) {
+    const ch = state ? state[inkKey(i)] : null;
+    if (!ch || typeof ch !== 'object' || ch.k !== k || ch.i !== i || !Array.isArray(ch.s)) continue;
+    for (const s of ch.s) if (typeof s === 'string') out.push(s);
+  }
+  return out;
+}
+
+function showsInk(st) {
+  return Boolean(st) && !st.hid && (st.phase === 'draw' || st.phase === 'reveal');
+}
+
 function presentSlots(api) {
   return api.players().map((p) => p.slot);
 }
@@ -233,6 +251,22 @@ function reveal(api, note) {
   api.setDeadline(ends);
 }
 
+function hide(api, d) {
+  const st = api.get(KEY);
+  if (!showsInk(st) || d !== drawingId(st)) return false;
+  clearInk(api);
+  const had = (st.gained && st.gained[st.drawer]) || 0;
+  if (had) api.addPoints(st.drawer, -had);
+  const next = { ...st, hid: 1, gained: { ...(st.gained || {}), [st.drawer]: 0 } };
+  if (st.phase === 'draw') {
+    api.put(KEY, next);
+    reveal(api, 'hidden');
+  } else {
+    api.put(KEY, { ...next, note: 'hidden' });
+  }
+  return true;
+}
+
 function everyoneGot(api, st) {
   const guessers = presentSlots(api).filter((s) => s !== st.drawer);
   return guessers.length > 0 && guessers.every((s) => st.got.some((g) => g[0] === s));
@@ -300,7 +334,8 @@ const draw = {
     if (!key.startsWith(INK_PREFIX)) return false;
     const st = get(KEY);
     if (!st || !Number.isInteger(slot) || slot !== st.drawer) return false;
-    return value === null || Boolean(value && typeof value === 'object' && value.k === st.nonce);
+    if (value === null) return true;
+    return !st.hid && Boolean(value && typeof value === 'object' && value.k === st.nonce);
   },
 
   start(api) {
@@ -328,7 +363,19 @@ const draw = {
     return turn(api, st, st.round, st.pos + 1);
   },
 
+  drawings(api) {
+    const st = api.get(KEY);
+    return showsInk(st) ? [{ d: drawingId(st), drawer: st.drawer }] : [];
+  },
+
+  drawingOf(snap) {
+    const st = snap && snap.state ? snap.state[KEY] : null;
+    if (!showsInk(st)) return null;
+    return { d: drawingId(st), drawer: st.drawer, ink: inkStrings(snap.state, st.nonce), word: wordOf(st) };
+  },
+
   admin(api, action) {
+    if (action.type === 'hideDrawing') return hide(api, action.d);
     const st = api.get(KEY);
     if (!st || (st.phase !== 'pick' && st.phase !== 'draw' && st.phase !== 'reveal')) return false;
     if (action.type === 'skip') {
@@ -425,6 +472,8 @@ const draw = {
       gained: mine !== null && st.gained ? st.gained[mine] || 0 : 0,
       drawerGain: st.gained ? st.gained[st.drawer] || 0 : 0,
       note: st.note,
+      hidden: Boolean(st.hid),
+      drawing: showsInk(st) ? drawingId(st) : null,
       spectator: !playing && !amDrawer,
     };
   },
