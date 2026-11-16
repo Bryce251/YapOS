@@ -13,6 +13,11 @@ export const LIMITS = {
   reports: 5,
   textReports: 10,
   reportsAll: 60,
+  results: 30,
+  resultsAll: 600,
+  daily: 120,
+  dailyPost: 20,
+  packs: 60,
 };
 
 export async function hit(db, key, limit, t, weight = 1) {

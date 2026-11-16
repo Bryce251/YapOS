@@ -7,6 +7,7 @@ export const ROUTES = [
   { name: 'servers', pattern: new RegExp('^/servers$'), keys: [], private: true },
   { name: 'party', pattern: new RegExp('^/party$'), keys: [], private: true },
   { name: 'party-reports', pattern: new RegExp('^/party/reports$'), keys: [], private: true },
+  { name: 'packs', pattern: new RegExp('^/packs$'), keys: [], private: true },
   { name: 'overview', pattern: new RegExp(`^/servers/${ID}$`), keys: ['sid'], private: true },
   { name: 'apps', pattern: new RegExp(`^/servers/${ID}/apps$`), keys: ['sid'], private: true },
   { name: 'app', pattern: new RegExp(`^/servers/${ID}/apps/${APP}$`), keys: ['sid', 'app'], private: true },

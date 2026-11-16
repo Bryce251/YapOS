@@ -65,6 +65,17 @@ const MAX_WANTED = 25;
 const PROFILE_WORKERS = 4;
 const PROFILE_LOOKUP_MS = 5_000;
 const PROFILE_TEXT_MAX = 64;
+const PARTY_ROWS = 100;
+const PARTY_XP_MAX = 200;
+const PARTY_APPLIED_KEEP = 1000;
+const PARTY_STATS_IDS = 25;
+const PARTY_STATS_MS = 60_000;
+const PARTY_STATS_CACHE = 2000;
+const PARTY_BADGES_MAX = 40;
+const PARTY_REASON = 'YapOS Party';
+const PARTY_NS = 'party';
+const PARTY_GAME_RE = /^[a-z0-9_-]{1,32}$/;
+const PARTY_BADGE_RE = /^[A-Za-z0-9_.:-]{1,48}$/;
 
 export const SLUG_RE = /^[a-z0-9-]{3,32}$/;
 
@@ -275,6 +286,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     timer: null, stopped: true, busy: false, failures: 0, delay: null, hot: false,
     used: new Map(), snapped: new Map(), published: new Map(), pending: [],
     gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity, profileRun: null,
+    reportsOpen: 0, partyStats: new Map(), partyAcks: [],
   };
 
   async function request(method, path, body) {
@@ -1095,6 +1107,119 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     return run;
   }
 
+  function partyRow(raw) {
+    if (!plainObject(raw)) return null;
+    const id = typeof raw.id === 'string' || typeof raw.id === 'number' ? String(raw.id).trim() : '';
+    if (!SAFE_ID.test(id)) return null;
+    const user = typeof raw.user === 'string' ? raw.user.trim() : '';
+    const xp = Number(raw.xp);
+    const game = typeof raw.game === 'string' ? raw.game.trim().toLowerCase() : '';
+    if (!SAFE_ID.test(user) || !Number.isInteger(xp) || xp < 1 || xp > PARTY_XP_MAX || !PARTY_GAME_RE.test(game)) return { id, bad: true };
+    return { id, user, xp, game, won: raw.won === true };
+  }
+
+  function appliedParty() {
+    const list = engine.store.get(PARTY_NS, 'applied', []);
+    return Array.isArray(list) ? list : [];
+  }
+
+  function rememberParty(ids) {
+    if (!ids.length) return;
+    engine.store.update(PARTY_NS, 'applied', (cur) => {
+      const list = Array.isArray(cur) ? cur.filter((x) => typeof x === 'string') : [];
+      for (const id of ids) if (!list.includes(id)) list.push(id);
+      if (list.length > PARTY_APPLIED_KEEP) list.splice(0, list.length - PARTY_APPLIED_KEEP);
+      return list;
+    }, []);
+  }
+
+  async function applyParty(party) {
+    if (!plainObject(party)) return { applied: 0, acked: 0 };
+    const open = Number(party.reportsOpen);
+    if (Number.isInteger(open) && open >= 0) state.reportsOpen = Math.min(open, HARD_CAP);
+    const rows = Array.isArray(party.xp) ? party.xp.slice(0, PARTY_ROWS) : [];
+    const levels = engine.service('levels');
+    const done = new Set(appliedParty());
+    const ack = [];
+    let applied = 0;
+    for (const raw of rows) {
+      const r = partyRow(raw);
+      if (!r || ack.includes(r.id)) continue;
+      if (r.bad || done.has(r.id)) { ack.push(r.id); continue; }
+      if (!levels || typeof levels.addXp !== 'function') continue;
+      try {
+        await levels.addXp(null, r.user, r.xp, PARTY_REASON, { party: { game: r.game, won: r.won } });
+      } catch (e) {
+        log.debug('[dashboard] applying Party XP failed', e?.message);
+        continue;
+      }
+      done.add(r.id);
+      try {
+        rememberParty([r.id]);
+      } catch (e) {
+        log.warn(`[dashboard] couldn't save which Party XP was applied: ${e?.message}`);
+      }
+      ack.push(r.id);
+      applied++;
+      try {
+        await engine.bot.emit('party:played', { user: r.user, server_id: null, game: r.game, won: r.won });
+      } catch (e) {
+        log.debug('[dashboard] party:played listener failed', e?.message);
+      }
+    }
+    const pending = [...new Set([...state.partyAcks, ...ack])].slice(-PARTY_APPLIED_KEEP);
+    state.partyAcks = pending;
+    if (!pending.length) return { applied, acked: 0 };
+    const res = await request('POST', '/bot/party/ack', { ids: pending.slice(0, PARTY_ROWS) }).catch((e) => ({ ok: false, status: 0, error: e }));
+    if (res.ok) state.partyAcks = pending.slice(PARTY_ROWS);
+    else log.debug('[dashboard] Party XP ack failed', res.status);
+    return { applied, acked: res.ok ? Math.min(pending.length, PARTY_ROWS) : 0 };
+  }
+
+  function cleanPartyStats(raw) {
+    if (!plainObject(raw)) return null;
+    const count = (v) => (Number.isInteger(v) && v >= 0 ? Math.min(v, HARD_CAP) : 0);
+    const byGame = {};
+    if (plainObject(raw.byGame)) {
+      for (const [g, v] of Object.entries(raw.byGame).slice(0, 64)) {
+        if (!PARTY_GAME_RE.test(g) || !plainObject(v)) continue;
+        byGame[g] = { p: count(v.p), w: count(v.w) };
+      }
+    }
+    const fav = typeof raw.fav === 'string' && PARTY_GAME_RE.test(raw.fav) ? raw.fav : null;
+    const badges = Array.isArray(raw.badges) ? [...new Set(raw.badges.filter((b) => typeof b === 'string' && PARTY_BADGE_RE.test(b)))].slice(0, PARTY_BADGES_MAX) : [];
+    return { games: count(raw.games), wins: count(raw.wins), fav, byGame, badges };
+  }
+
+  async function partyStats(list) {
+    const ids = [...new Set((Array.isArray(list) ? list : [list]).filter((x) => typeof x === 'string' && SAFE_ID.test(x)))].slice(0, PARTY_STATS_IDS);
+    const out = {};
+    if (!ids.length) return out;
+    const t = now();
+    const missing = [];
+    for (const id of ids) {
+      const hit = state.partyStats.get(id);
+      if (hit && t - hit.at < PARTY_STATS_MS) out[id] = hit.value;
+      else missing.push(id);
+    }
+    if (!missing.length || !enabled) return out;
+    let r;
+    try {
+      r = await request('GET', `/bot/party/stats?ids=${missing.map(encodeURIComponent).join(',')}`);
+    } catch (e) {
+      log.debug('[dashboard] Party stats lookup failed', e?.message);
+      return out;
+    }
+    if (!r.ok || !plainObject(r.data?.stats)) return out;
+    if (state.partyStats.size >= PARTY_STATS_CACHE) state.partyStats.clear();
+    for (const id of missing) {
+      const value = cleanPartyStats(r.data.stats[id]);
+      state.partyStats.set(id, { at: t, value });
+      out[id] = value;
+    }
+    return out;
+  }
+
   async function tick() {
     if (!enabled) return null;
     if (state.busy) return state.delay;
@@ -1109,6 +1234,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       const results = [];
       for (const job of jobs) results.push(await runJob(job));
       await postResults(results);
+      if (r.data?.party !== undefined) await applyParty(r.data.party).catch((e) => log.debug('[dashboard] Party sync failed', e?.message));
       await pushDirty();
       await refresh();
       if (state.failures) log.info('[dashboard] connected again');
@@ -1147,6 +1273,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     get hot() { return state.hot; },
     get running() { return !state.stopped; },
     get jobTypes() { return [...jobTypes]; },
+    get reportsOpen() { return state.reportsOpen; },
     start() {
       if (!enabled) {
         log.info(reason ? `[dashboard] off: ${reason}.` : '[dashboard] off: set YAPOS_DASHBOARD_URL and YAPOS_DASHBOARD_SECRET to turn it on.');
@@ -1175,5 +1302,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     unpublishPublic,
     serverGone,
     pushSnapshot,
+    applyParty,
+    partyStats,
   };
 }

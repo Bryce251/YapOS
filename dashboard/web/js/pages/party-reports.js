@@ -20,6 +20,7 @@ export const GAME_NAMES = Object.freeze({
   trivia: 'Trivia',
   wyr: 'Would You Rather',
   hive: 'Letter Hive',
+  bluff: 'Bluff',
 });
 export const ART_SCALE = 2;
 const FILTERS = [['open', 'Open'], ['dismissed', 'Dismissed'], ['all', 'All']];

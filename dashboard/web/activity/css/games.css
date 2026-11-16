@@ -1282,3 +1282,210 @@
     background: var(--surface-3);
   }
 }
+
+.team-bar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+}
+
+.team-card {
+  --team: var(--text-2);
+  --team-soft: var(--spot);
+  --team-line: var(--border);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--team-line);
+  border-radius: var(--radius);
+  background: var(--team-soft);
+  color: var(--text);
+}
+
+.team-card.team-r,
+.got-item.team-r,
+.team-chip.team-r {
+  --team: var(--danger);
+  --team-soft: var(--danger-soft);
+  --team-line: var(--danger-line);
+}
+
+.team-card.team-b,
+.got-item.team-b,
+.team-chip.team-b {
+  --team: var(--info);
+  --team-soft: var(--info-soft);
+  --team-line: var(--info-line);
+}
+
+.team-card.is-lead {
+  border-color: var(--team);
+}
+
+.team-card.is-mine {
+  box-shadow: inset 0 0 0 1px var(--team);
+}
+
+.team-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+}
+
+.team-you {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--team-soft);
+  color: var(--team);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+}
+
+.team-pts {
+  color: var(--team);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-heavy);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-tight);
+}
+
+.team-faces {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+
+.team-boost {
+  grid-column: 1 / -1;
+  color: var(--text-3);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-tight);
+}
+
+.team-empty {
+  color: var(--text-3);
+  font-size: var(--text-2xs);
+  justify-self: end;
+}
+
+.got-item.team-r,
+.got-item.team-b {
+  border-color: var(--team-line);
+  background: var(--team-soft);
+}
+
+.team-chip {
+  border-color: var(--team-line);
+  background: var(--team-soft);
+  color: var(--team);
+}
+
+.pack-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pack-chip.is-miss {
+  border-color: var(--warning-line);
+  background: var(--warning-soft);
+  color: var(--warning);
+  white-space: normal;
+}
+
+.team-final {
+  display: grid;
+  gap: var(--space-4);
+  margin: var(--space-4) 0;
+  text-align: center;
+}
+
+.team-final-title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-heavy);
+  line-height: var(--leading-tight);
+}
+
+.team-final-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  text-align: left;
+}
+
+.team-card.is-final {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  padding: var(--space-3) var(--space-4);
+}
+
+.team-card.is-final .team-pts {
+  font-size: var(--text-xl);
+}
+
+.team-list {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.team-member {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.team-member.is-me .team-member-name {
+  color: var(--team);
+  font-weight: var(--weight-bold);
+}
+
+.team-member-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-member-pts {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.game-draw[data-phase='final'] .draw-main,
+.game-draw[data-phase='final'] .draw-word,
+.game-draw[data-phase='final'] .draw-reveal,
+.game-draw[data-phase='final'] .draw-got,
+.game-draw[data-phase='final'] .draw-pick {
+  display: none;
+}
+
+@media (max-width: 420px) {
+  .team-final-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .team-pts {
+    font-size: var(--text-md);
+  }
+}

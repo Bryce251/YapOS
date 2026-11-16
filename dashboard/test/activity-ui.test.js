@@ -212,14 +212,14 @@ test('every game sits in one of the picker categories', async () => {
   const { GAMES, CATEGORIES } = await import('../web/activity/js/games/index.js');
   const ids = CATEGORIES.map((c) => c.id);
   assert.deepEqual(ids, ['drawing', 'words', 'quiz', 'party', 'quick']);
-  assert.equal(GAMES.length, 12);
+  assert.equal(GAMES.length, 15);
   for (const g of GAMES) assert.ok(ids.includes(g.category), `${g.id} has category ${g.category}`);
   assert.deepEqual(GAMES.slice(0, 4).map((g) => g.id), ['trivia', 'draw', 'chain', 'wyr']);
   const { VIEWS } = await import('../web/activity/js/views/index.js');
   for (const g of GAMES) assert.equal(typeof VIEWS[g.id], 'function', g.id);
   const html = readFileSync(path.join(activity, 'index.html'), 'utf8');
   const sheets = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)">/g)].map((m) => m[1]);
-  for (const id of ['odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex']) {
+  for (const id of ['odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower']) {
     const at = sheets.indexOf(`/activity/css/${id}.css`);
     assert.ok(at > sheets.indexOf('/activity/css/games.css'), id);
   }
@@ -231,13 +231,13 @@ test('pickerTabs counts each category and keeps existing games first', async () 
   const list = GAMES.map((g) => ({ id: g.id, category: g.category }));
   const tabs = pickerTabs(list);
   assert.deepEqual(tabs.map((t) => t.id), ['all', 'drawing', 'words', 'quiz', 'party', 'quick']);
-  assert.equal(tabs[0].count, 12);
-  assert.equal(tabs.slice(1).reduce((n, t) => n + t.count, 0), 12);
-  assert.deepEqual(gamesInTab(list, 'drawing').map((g) => g.id), ['draw', 'odd', 'telephone']);
+  assert.equal(tabs[0].count, 15);
+  assert.equal(tabs.slice(1).reduce((n, t) => n + t.count, 0), 15);
+  assert.deepEqual(gamesInTab(list, 'drawing').map((g) => g.id), ['draw', 'odd', 'telephone', 'pixel']);
   assert.deepEqual(gamesInTab(list, 'words').map((g) => g.id), ['chain', 'scramble', 'hive']);
-  assert.deepEqual(gamesInTab(list, 'quiz').map((g) => g.id), ['trivia', 'emoji']);
+  assert.deepEqual(gamesInTab(list, 'quiz').map((g) => g.id), ['trivia', 'emoji', 'bluff']);
   assert.deepEqual(gamesInTab(list, 'party').map((g) => g.id), ['wyr', 'hottakes', 'truths']);
-  assert.deepEqual(gamesInTab(list, 'quick').map((g) => g.id), ['reflex']);
+  assert.deepEqual(gamesInTab(list, 'quick').map((g) => g.id), ['reflex', 'higherlower']);
   assert.deepEqual(pickerTabs([{ id: 'x', category: null }]).map((t) => t.id), ['all']);
   installDom({ url: 'https://yapos.dev/activity/' });
   const r = room(1, { join: false });
@@ -256,13 +256,13 @@ test('the picker shows category tabs with counts, arrow keys move between them a
   assert.ok(list);
   const tabs = all(list).filter((n) => n.getAttribute && n.getAttribute('role') === 'tab');
   assert.deepEqual(tabs.map((t) => t.dataset.key), ['tab-all', 'tab-drawing', 'tab-words', 'tab-quiz', 'tab-party', 'tab-quick']);
-  assert.match(text(byKey(el, 'tab-all')), /All\s+12/);
-  assert.match(text(byKey(el, 'tab-drawing')), /Drawing\s+3/);
-  assert.match(text(byKey(el, 'tab-quick')), /Quick\s+1/);
+  assert.match(text(byKey(el, 'tab-all')), /All\s+15/);
+  assert.match(text(byKey(el, 'tab-drawing')), /Drawing\s+4/);
+  assert.match(text(byKey(el, 'tab-quick')), /Quick\s+2/);
   assert.equal(selectedTab(el).dataset.key, 'tab-quiz');
   assert.equal(byKey(el, 'tab-quiz').getAttribute('tabindex'), '0');
   assert.equal(byKey(el, 'tab-words').getAttribute('tabindex'), '-1');
-  assert.deepEqual(pickKeys(el), ['pick-trivia', 'pick-emoji']);
+  assert.deepEqual(pickKeys(el), ['pick-trivia', 'pick-emoji', 'pick-bluff']);
   assert.equal(byKey(el, 'pick-trivia').getAttribute('aria-checked'), 'true');
   const key = (k) => {
     selectedTab(el).dispatchEvent(new FakeEvent('keydown', { bubbles: true, key: k }));
@@ -278,7 +278,7 @@ test('the picker shows category tabs with counts, arrow keys move between them a
   assert.equal(selectedTab(el).dataset.key, 'tab-quick');
   key('Home');
   assert.equal(selectedTab(el).dataset.key, 'tab-all');
-  assert.equal(pickKeys(el).length, 12);
+  assert.equal(pickKeys(el).length, 15);
   key('End');
   assert.equal(selectedTab(el).dataset.key, 'tab-quick');
   byKey(el, 'tab-words').click();

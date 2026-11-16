@@ -141,3 +141,64 @@ CREATE TABLE IF NOT EXISTS party_bans (
   banned_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS party_bans_at ON party_bans (banned_at);
+
+CREATE TABLE IF NOT EXISTS party_stats (
+  user_id TEXT PRIMARY KEY,
+  games INTEGER NOT NULL DEFAULT 0,
+  wins INTEGER NOT NULL DEFAULT 0,
+  by_game TEXT NOT NULL DEFAULT '{}',
+  counters TEXT NOT NULL DEFAULT '{}',
+  updated INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS party_xp (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  xp INTEGER NOT NULL,
+  game TEXT NOT NULL,
+  won INTEGER NOT NULL DEFAULT 0,
+  day TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  claimed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS party_xp_claimed ON party_xp (claimed, at, id);
+CREATE INDEX IF NOT EXISTS party_xp_user_day ON party_xp (user_id, day);
+
+CREATE TABLE IF NOT EXISTS party_results (
+  hash TEXT PRIMARY KEY,
+  game TEXT NOT NULL,
+  created INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_results_created ON party_results (created);
+
+CREATE TABLE IF NOT EXISTS party_daily_scores (
+  day TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  username TEXT,
+  score INTEGER NOT NULL,
+  ms INTEGER NOT NULL,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (day, kind, user_id)
+);
+CREATE INDEX IF NOT EXISTS party_daily_scores_rank ON party_daily_scores (day, kind, score DESC, ms ASC);
+
+CREATE TABLE IF NOT EXISTS party_daily_streaks (
+  user_id TEXT PRIMARY KEY,
+  last_day TEXT NOT NULL,
+  streak INTEGER NOT NULL DEFAULT 0,
+  best INTEGER NOT NULL DEFAULT 0,
+  updated INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS party_packs (
+  code TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  words TEXT NOT NULL DEFAULT '[]',
+  trivia TEXT NOT NULL DEFAULT '[]',
+  created INTEGER NOT NULL,
+  updated INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_packs_owner ON party_packs (owner_id, created);

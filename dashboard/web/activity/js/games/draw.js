@@ -3,6 +3,8 @@ import { shuffle } from '../engine.js';
 import { INK_PREFIX, MAX_CHUNKS, inkKey } from './ink.js';
 import { person } from '../players.js';
 import { cleanShared } from '../text.js';
+import { TEAM_IDS, TEAM_MS, teamSetting, wantsTeams, splitTeams, placeLate, teamOf, teamWinners, teamNames, teamBoard } from './teams.js';
+import { PACK_STEP_MS, packSetting, packCode, packStep, packFor, drawablePackWords, hideWord, showWord } from './packs.js';
 
 export const KEY = 'draw';
 export const DRAWER_STEP = 5;
@@ -15,6 +17,7 @@ export const GUESS_MIN = 100;
 export const FEED_MAX = 8;
 export const GUESS_CHARS = 40;
 export const USED_MAX = 150;
+export const PACK_USED_MAX = 90;
 export const GUESS_GAP_MS = 400;
 
 export function normalize(text) {
@@ -190,10 +193,90 @@ function clearInk(api) {
   for (const k of api.keys()) if (k.startsWith(INK_PREFIX)) api.put(k, null);
 }
 
+export function codeWord(code, nonce) {
+  if (typeof code === 'string') return showWord(code, nonce);
+  if (!Number.isInteger(code)) return null;
+  const w = wordById(unmask(code, nonce));
+  return w ? w.w : null;
+}
+
 function wordOf(st) {
   if (!st || st.w === null || st.w === undefined) return null;
-  const w = wordById(unmask(st.w, st.nonce));
-  return w ? w.w : null;
+  return codeWord(st.w, st.nonce);
+}
+
+export function pickPackWords(words, used, n, random = Math.random) {
+  if (!Array.isArray(words) || !words.length || n <= 0) return [];
+  const seen = new Set(used || []);
+  const all = words.map((_, i) => i);
+  const fresh = all.filter((i) => !seen.has(i));
+  return shuffle(fresh.length >= n ? fresh : all, random).slice(0, n);
+}
+
+export function wordChoices(level, used, packWords, packUsed, only, random = Math.random) {
+  const want = Array.isArray(packWords) && packWords.length ? Math.min(only ? 3 : 2, packWords.length) : 0;
+  const picks = pickPackWords(packWords, packUsed, want, random);
+  const ids = picks.length < 3 ? chooseWords(level, used, random).slice(0, 3 - picks.length) : [];
+  return { ids, picks };
+}
+
+function mates(st, a, b) {
+  if (!st || !st.tm) return false;
+  const t = teamOf(st.tm, a);
+  return Boolean(t) && t === teamOf(st.tm, b);
+}
+
+function finalPhase(api, st) {
+  clearInk(api);
+  const starts = api.now();
+  const ends = starts + TEAM_MS;
+  api.put(KEY, { ...st, phase: 'final', opts: [], starts, ends });
+  api.setDeadline(ends);
+}
+
+function endGame(api, st, quick = false) {
+  if (!st || !st.tm) return api.finish();
+  if (quick) return api.finish(teamWinners(st.tm, api.points()).slots);
+  finalPhase(api, st);
+  return undefined;
+}
+
+function placeTeams(api, st) {
+  if (!st || !st.tm) return false;
+  const next = placeLate(st.tm, presentSlots(api), api.points());
+  if (!next) return false;
+  st.tm = next;
+  return true;
+}
+
+function begin(api) {
+  const code = packCode(api.settings);
+  const step = packStep(api, code);
+  if (step.state === 'wait') {
+    api.setDeadline(api.now() + PACK_STEP_MS);
+    return;
+  }
+  const pack = step.state === 'ready' ? step.pack : null;
+  const words = pack ? drawablePackWords(pack.words) : [];
+  api.memory.pack = pack;
+  const present = presentSlots(api);
+  const tm = wantsTeams(api.settings) && present.length >= 2 ? splitTeams(present, api.random) : null;
+  const order = tm ? teamOrder(tm) : present;
+  const pk = pack && words.length ? { c: code, n: pack.name } : null;
+  const pm = step.state === 'fail' || (pack && !words.length) ? code : null;
+  turn(api, { order, rounds: api.settings.rounds, used: [], n: 0, tm, pk, pm, pu: [] }, 1, 0);
+}
+
+export function teamOrder(tm) {
+  const lists = TEAM_IDS.map((id) =>
+    Object.keys(tm)
+      .map(Number)
+      .filter((s) => tm[s] === id)
+      .sort((a, b) => a - b),
+  );
+  const out = [];
+  for (let i = 0; i < Math.max(...lists.map((l) => l.length)); i += 1) for (const l of lists) if (i < l.length) out.push(l[i]);
+  return out;
 }
 
 function pushFeed(st, slot, text, kind) {
@@ -206,10 +289,17 @@ function turn(api, prev, round, pos) {
   const present = presentSlots(api);
   const order = prev.order.slice();
   for (const s of present) if (!order.includes(s)) order.push(s);
+  const tm = prev.tm ? placeLate(prev.tm, present, api.points()) || prev.tm : null;
   const seat = nextSeat(order, present, round, pos, prev.rounds);
-  if (!seat || present.length < 2) return api.finish();
+  if (!seat || present.length < 2) {
+    if (prev.phase && tm) return endGame(api, { ...prev, tm }, present.length < 2);
+    return api.finish();
+  }
   const nonce = 1 + Math.floor(api.random() * 65535);
-  const ids = chooseWords(api.settings.words, prev.used, api.random);
+  const pack = prev.pk ? packFor(api, prev.pk.c) : null;
+  const packWords = pack ? drawablePackWords(pack.words) : [];
+  const { ids, picks } = wordChoices(api.settings.words, prev.used, packWords, prev.pu, Boolean(api.settings.packOnly), api.random);
+  const opts = shuffle(ids.map((id) => mask(id, nonce)).concat(picks.map((i) => hideWord(packWords[i], nonce))), api.random);
   const starts = api.now();
   const ends = starts + PICK_MS;
   api.put(KEY, {
@@ -222,7 +312,7 @@ function turn(api, prev, round, pos) {
     drawer: seat.slot,
     phase: 'pick',
     nonce,
-    opts: ids.map((id) => mask(id, nonce)),
+    opts,
     w: null,
     word: null,
     got: [],
@@ -230,6 +320,10 @@ function turn(api, prev, round, pos) {
     fid: 0,
     gained: {},
     used: (prev.used || []).concat(ids).slice(-USED_MAX),
+    pu: (prev.pu || []).concat(picks).slice(-PACK_USED_MAX),
+    tm,
+    pk: prev.pk || null,
+    pm: prev.pm || null,
     note: null,
     starts,
     ends,
@@ -281,9 +375,13 @@ function everyoneGot(api, st) {
 }
 
 function guesserCount(api, st) {
-  const all = new Set(presentSlots(api).filter((s) => s !== st.drawer));
-  for (const g of st.got) all.add(g[0]);
+  const all = new Set(presentSlots(api).filter((s) => s !== st.drawer && !mates(st, s, st.drawer)));
+  for (const g of st.got) if (!mates(st, g[0], st.drawer)) all.add(g[0]);
   return all.size;
+}
+
+function drawerGot(st) {
+  return st.got.filter((g) => !mates(st, g[0], st.drawer));
 }
 
 function guess(api, slot, action) {
@@ -303,7 +401,7 @@ function guess(api, slot, action) {
     const pts = guessPoints(Math.min(at, st.ends), st.starts, st.ends);
     st.got.push([slot, pts]);
     const had = (st.gained && st.gained[st.drawer]) || 0;
-    const extra = drawerGain(st.got, guesserCount(api, st), had);
+    const extra = mates(st, slot, st.drawer) ? 0 : drawerGain(drawerGot(st), guesserCount(api, st), had);
     st.gained = { ...st.gained, [slot]: pts, [st.drawer]: had + extra };
     api.addPoints(slot, pts);
     if (extra) api.addPoints(st.drawer, extra);
@@ -336,6 +434,9 @@ const draw = {
       options: [{ value: 'mix', label: '🎲 Mixed' }].concat(TIERS.map((t) => ({ value: t.id, label: `${t.emoji} ${t.name}` }))),
       default: 'mix',
     },
+    teamSetting(),
+    packSetting(),
+    { id: 'packOnly', label: 'Pack words only', type: 'toggle', default: false },
   ],
 
   writer(get, key, slot, value) {
@@ -347,8 +448,12 @@ const draw = {
   },
 
   start(api) {
-    const order = presentSlots(api);
-    turn(api, { order, rounds: api.settings.rounds, used: [], n: 0 }, 1, 0);
+    begin(api);
+  },
+
+  results(api) {
+    const st = api.get(KEY);
+    return st && st.tm ? { teams: teamNames(st.tm) } : {};
   },
 
   intent(api, slot, action) {
@@ -365,7 +470,8 @@ const draw = {
 
   deadline(api) {
     const st = api.get(KEY);
-    if (!st) return api.finish();
+    if (!st) return begin(api);
+    if (st.phase === 'final') return api.finish(teamWinners(st.tm, api.points()).slots);
     if (st.phase === 'pick') return choose(api, st, Math.floor(api.random() * st.opts.length));
     if (st.phase === 'draw') return reveal(api, 'time');
     return turn(api, st, st.round, st.pos + 1);
@@ -412,7 +518,12 @@ const draw = {
   join(api, slot) {
     const st = api.get(KEY);
     if (!st || !Number.isInteger(slot)) return undefined;
-    if (!Array.isArray(st.order) || st.order.includes(slot)) return undefined;
+    if (!Array.isArray(st.order)) return undefined;
+    const placed = placeTeams(api, st);
+    if (st.order.includes(slot)) {
+      if (placed) api.put(KEY, st);
+      return undefined;
+    }
     api.put(KEY, { ...st, order: st.order.concat([slot]) });
     return undefined;
   },
@@ -427,9 +538,11 @@ const draw = {
 
   roster(api) {
     const st = api.get(KEY);
-    if (!st || st.phase === 'reveal') return;
+    if (!st || st.phase === 'final') return;
+    if (placeTeams(api, st)) api.put(KEY, st);
+    if (st.phase === 'reveal') return;
     const present = presentSlots(api);
-    if (present.length < 2) return api.finish();
+    if (present.length < 2) return endGame(api, st, true);
     if (!present.includes(st.drawer)) return reveal(api, 'left');
     if (st.phase === 'draw' && everyoneGot(api, st)) return reveal(api, 'all');
     return undefined;
@@ -461,12 +574,24 @@ const draw = {
     const choices =
       amDrawer && st.phase === 'pick'
         ? st.opts.map((code, i) => {
+            if (typeof code === 'string') {
+              const w = showWord(code, st.nonce);
+              return w ? { i, word: w, tier: 'pack' } : null;
+            }
             const w = wordById(unmask(code, st.nonce));
             return w ? { i, word: w.w, tier: w.tier } : null;
           }).filter(Boolean)
         : [];
     const gotMe = st.got.find((g) => g[0] === mine);
+    const teams = st.tm ? teamBoard(st.tm, snap.players, snap.scores, mine) : null;
+    const myTeam = st.tm ? teamOf(st.tm, mine) : null;
     return {
+      teams,
+      myTeam,
+      drawerTeam: st.tm ? teamOf(st.tm, st.drawer) : null,
+      mate: !amDrawer && Boolean(myTeam) && myTeam === (st.tm ? teamOf(st.tm, st.drawer) : null),
+      pack: st.pk ? { code: st.pk.c, name: st.pk.n } : null,
+      packMiss: st.pm || null,
       phase: st.phase,
       n: st.n,
       round: st.round,

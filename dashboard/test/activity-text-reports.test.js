@@ -87,7 +87,7 @@ test('the request body is the text report shape and is cleaned and clipped', () 
   assert.equal(textReportBody({ game: 'nope', author, reporter, text: 'hi' }), null);
   assert.equal(textReportBody({ game: 'draw', author, reporter, text: '   ' }), null);
   assert.equal(textReportBody({ game: 'draw', author: { id: 'bad id!' }, reporter, text: 'hi' }), null);
-  assert.deepEqual([...TEXT_REPORT_GAMES].sort(), ['chain', 'draw', 'hottakes', 'telephone', 'truths']);
+  assert.deepEqual([...TEXT_REPORT_GAMES].sort(), ['bluff', 'chain', 'draw', 'hottakes', 'telephone', 'truths']);
   assert.equal(validTextRef('draw.12.3.g4'), true);
   assert.equal(validTextRef('bad ref'), false);
   resetAdmins();

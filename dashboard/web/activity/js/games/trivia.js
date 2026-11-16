@@ -1,8 +1,13 @@
 import { CATEGORIES, QUESTIONS, TIERS, questionById } from '../../data/trivia.js';
 import { shuffle } from '../engine.js';
 import { person } from '../players.js';
+import { TEAM_MS, teamSetting, wantsTeams, splitTeams, placeLate, teamOf, teamWinners, teamNames, teamBoard } from './teams.js';
+import { PACK_STEP_MS, PACK_EMOJI, packSetting, packCode, packStep, packFor, packTrivia } from './packs.js';
 
 export const KEY = 'trivia';
+export const PACK_CAT = 'pack';
+export const PACK_PREFIX = '~';
+const PACK_ID_RE = /^~\d{1,3}$/;
 export const REVEAL_MS = 5000;
 export const MIN_POINTS = 400;
 export const MAX_POINTS = 1000;
@@ -65,19 +70,74 @@ export function buildDeck(cats, count, random = Math.random, level = MIX) {
   return deck.map((q) => q.id);
 }
 
-function ask(api, deck, i) {
-  const q = questionById(deck[i]);
-  if (!q) return finishOrNext(api, deck, i);
+export function isPackId(id) {
+  return typeof id === 'string' && PACK_ID_RE.test(id);
+}
+
+export function packDeck(questions, count, random = Math.random) {
+  const list = Array.isArray(questions) ? questions : [];
+  return shuffle(list.map((_, i) => i), random)
+    .slice(0, Math.max(0, count))
+    .map((i) => `${PACK_PREFIX}${i}`);
+}
+
+export function deckWithPack(questions, cats, count, random = Math.random, level = MIX) {
+  const head = packDeck(questions, count, random);
+  const left = count - head.length;
+  return left > 0 ? head.concat(buildDeck(cats, left, random, level)) : head;
+}
+
+export function hideAnswer(answer, salt, n) {
+  return (answer + salt) % n;
+}
+
+export function showAnswer(q) {
+  if (!q || !Array.isArray(q.options) || !Number.isInteger(q.x) || !Number.isInteger(q.s)) return -1;
+  const n = q.options.length;
+  return (((q.x - q.s) % n) + n) % n;
+}
+
+function carryOf(st) {
+  return { tm: (st && st.tm) || null, pk: (st && st.pk) || null, pm: (st && st.pm) || null };
+}
+
+function packQuestion(api, carry, id) {
+  if (!carry.pk) return null;
+  const pack = packFor(api, carry.pk.c);
+  if (!pack) return null;
+  const list = packTrivia(pack.trivia);
+  const q = list[Number(id.slice(PACK_PREFIX.length))];
+  return q ? { id, cat: PACK_CAT, tier: PACK_CAT, q: q.q, a: q.a, w: q.w } : null;
+}
+
+function swapIn(api, deck) {
+  const fresh = buildDeck(api.settings.cats, deck.length + 5, api.random, api.settings.level).find((id) => !deck.includes(id));
+  return fresh ? questionById(fresh) : null;
+}
+
+function ask(api, deck, i, carry = carryOf(api.get(KEY))) {
+  let q = isPackId(deck[i]) ? packQuestion(api, carry, deck[i]) : questionById(deck[i]);
+  if (!q && isPackId(deck[i])) {
+    q = swapIn(api, deck);
+    if (q) deck = deck.map((id, k) => (k === i ? q.id : id));
+  }
+  if (!q) return finishOrNext(api, deck, i, carry);
   const options = shuffle([q.a, ...q.w], api.random);
   const starts = api.now();
   const ends = starts + api.settings.timer * 1000;
-  api.memory.cur = { qid: q.id, answer: options.indexOf(q.a), picks: {} };
+  const answer = options.indexOf(q.a);
+  const salt = q.cat === PACK_CAT ? Math.floor(api.random() * 1000) : 0;
+  api.memory.cur = { qid: q.id, answer, picks: {} };
+  const placed = carry.tm ? placeLate(carry.tm, api.players().map((p) => p.slot), api.points()) : null;
   api.put(KEY, {
     deck,
     i,
     total: deck.length,
     phase: 'question',
-    q: { id: q.id, cat: q.cat, tier: q.tier, text: q.q, options },
+    q: q.cat === PACK_CAT ? { id: q.id, cat: q.cat, tier: q.tier, text: q.q, options, s: salt, x: hideAnswer(answer, salt, options.length) } : { id: q.id, cat: q.cat, tier: q.tier, text: q.q, options },
+    tm: placed || carry.tm,
+    pk: carry.pk,
+    pm: carry.pm,
     in: api.players().map((p) => p.slot),
     wait: [],
     answered: [],
@@ -92,9 +152,35 @@ function ask(api, deck, i) {
   api.setDeadline(ends);
 }
 
-function finishOrNext(api, deck, i) {
-  if (i + 1 < deck.length) return ask(api, deck, i + 1);
+function finishOrNext(api, deck, i, carry) {
+  if (i + 1 < deck.length) return carry ? ask(api, deck, i + 1, carry) : ask(api, deck, i + 1);
+  const st = api.get(KEY);
+  if (st && st.tm) {
+    const starts = api.now();
+    const ends = starts + TEAM_MS;
+    api.put(KEY, { ...st, phase: 'final', starts, ends });
+    api.setDeadline(ends);
+    return undefined;
+  }
   return api.finish();
+}
+
+function begin(api) {
+  const code = packCode(api.settings);
+  const step = packStep(api, code);
+  if (step.state === 'wait') {
+    api.setDeadline(api.now() + PACK_STEP_MS);
+    return;
+  }
+  const pack = step.state === 'ready' ? step.pack : null;
+  const questions = pack ? packTrivia(pack.trivia) : [];
+  api.memory.pack = pack;
+  const present = api.players().map((p) => p.slot);
+  const tm = wantsTeams(api.settings) && present.length >= 2 ? splitTeams(present, api.random) : null;
+  const pk = questions.length ? { c: code, n: pack.name } : null;
+  const pm = step.state === 'fail' || (pack && !questions.length) ? code : null;
+  const deck = deckWithPack(questions, api.settings.cats, api.settings.rounds, api.random, api.settings.level);
+  ask(api, deck, 0, { tm, pk, pm });
 }
 
 function reveal(api, skipped) {
@@ -117,6 +203,8 @@ function reveal(api, skipped) {
         api.addPoints(Number(slot), pts);
       }
     }
+  } else if (st.q.cat === PACK_CAT) {
+    answer = showAnswer(st.q);
   } else {
     const q = questionById(st.q.id);
     answer = q ? st.q.options.indexOf(q.a) : -1;
@@ -125,6 +213,14 @@ function reveal(api, skipped) {
   const ends = api.now() + REVEAL_MS;
   api.put(KEY, { ...st, phase: 'reveal', answer, chose, right: right.sort((a, b) => a - b), gained, skipped: !live, ends });
   api.setDeadline(ends);
+}
+
+function placeTeams(api, st) {
+  if (!st || !st.tm) return false;
+  const next = placeLate(st.tm, api.players().map((p) => p.slot), api.points());
+  if (!next) return false;
+  st.tm = next;
+  return true;
 }
 
 function inPlay(st) {
@@ -179,11 +275,17 @@ const trivia = {
       default: MIX,
     },
     { id: 'cats', label: 'Categories', type: 'multi', options: CATEGORIES.map((c) => ({ value: c.id, label: `${c.emoji} ${c.name}` })), default: CATEGORIES.map((c) => c.id) },
+    teamSetting(),
+    packSetting(),
   ],
 
   start(api) {
-    const deck = buildDeck(api.settings.cats, api.settings.rounds, api.random, api.settings.level);
-    ask(api, deck, 0);
+    begin(api);
+  },
+
+  results(api) {
+    const st = api.get(KEY);
+    return st && st.tm ? { teams: teamNames(st.tm) } : {};
   },
 
   intent(api, slot, action) {
@@ -211,7 +313,8 @@ const trivia = {
 
   deadline(api) {
     const st = api.get(KEY);
-    if (!st) return api.finish();
+    if (!st) return begin(api);
+    if (st.phase === 'final') return api.finish(teamWinners(st.tm, api.points()).slots);
     if (st.phase === 'question') return reveal(api, false);
     return finishOrNext(api, st.deck, st.i);
   },
@@ -243,13 +346,19 @@ const trivia = {
 
   join(api, slot) {
     const st = api.get(KEY);
-    if (st && admit(api, st, slot)) api.put(KEY, st);
+    if (!st) return;
+    const placed = placeTeams(api, st);
+    if (admit(api, st, slot) || placed) api.put(KEY, st);
   },
 
   roster(api) {
     const st = api.get(KEY);
-    if (!st || st.phase !== 'question') return;
-    let added = false;
+    if (!st || st.phase === 'final') return;
+    let added = placeTeams(api, st);
+    if (st.phase !== 'question') {
+      if (added) api.put(KEY, st);
+      return;
+    }
     for (const p of api.players()) if (admit(api, st, p.slot)) added = true;
     if (added) api.put(KEY, st);
     if (everyoneAnswered(api, st)) reveal(api, false);
@@ -265,15 +374,22 @@ const trivia = {
     const watching = !waiting && (mine === null || (playing ? !playing.includes(mine) : false));
     const myPick = st.phase === 'reveal' && st.chose && st.chose[mine] !== undefined ? st.chose[mine] : local.qid === st.q.id ? local.pick ?? null : null;
     const counts = st.q.options.map((_, i) => Object.values(st.chose || {}).filter((x) => x === i).length);
-    const cat = CAT_NAMES.get(st.q.cat) || { name: 'Trivia', emoji: '❓' };
+    const fromPack = st.q.cat === PACK_CAT;
+    const cat = fromPack ? { name: (st.pk && st.pk.n) || 'Word pack', emoji: PACK_EMOJI } : CAT_NAMES.get(st.q.cat) || { name: 'Trivia', emoji: '❓' };
     const tier = tierOf(st.q.tier);
+    const myTeam = st.tm ? teamOf(st.tm, mine) : null;
     return {
+      teams: st.tm ? teamBoard(st.tm, snap.players, snap.scores, mine) : null,
+      myTeam,
+      pack: st.pk ? { code: st.pk.c, name: st.pk.n } : null,
+      packMiss: st.pm || null,
+      fromPack,
       phase: st.phase,
       number: st.i + 1,
       total: st.total,
       category: cat.name,
       emoji: cat.emoji,
-      tier: tier.id,
+      tier: fromPack ? null : tier.id,
       tierName: tier.name,
       tierEmoji: tier.emoji,
       tierBonus: tier.mult > 1 ? `×${tier.mult}` : '',
@@ -297,7 +413,7 @@ const trivia = {
         mine: myPick === i,
         count: st.phase === 'reveal' ? counts[i] : null,
       })),
-      right: (st.right || []).map((s) => bySlot.get(s)).filter(Boolean).map((p) => ({ ...face(p, mine), pts: st.gained[p.slot] || 0 })),
+      right: (st.right || []).map((s) => bySlot.get(s)).filter(Boolean).map((p) => ({ ...face(p, mine), pts: st.gained[p.slot] || 0, team: st.tm ? teamOf(st.tm, p.slot) : null })),
       myGain: mine !== null && st.gained ? st.gained[mine] || 0 : 0,
       gotIt: mine !== null && (st.right || []).includes(mine),
     };

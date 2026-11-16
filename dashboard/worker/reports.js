@@ -4,7 +4,7 @@ import { lookupProfiles, cleanText, MAX_PROFILE_IDS } from './profiles.js';
 import { isPartyOwner } from './party.js';
 
 export const REPORT_GAMES = new Set(['draw', 'odd', 'telephone']);
-export const TEXT_GAMES = new Set(['draw', 'odd', 'telephone', 'hottakes', 'truths', 'chain', 'emoji', 'scramble', 'trivia', 'wyr', 'hive']);
+export const TEXT_GAMES = new Set(['draw', 'odd', 'telephone', 'hottakes', 'truths', 'chain', 'emoji', 'scramble', 'trivia', 'wyr', 'hive', 'bluff']);
 export const REPORT_KINDS = new Set(['drawing', 'text']);
 export const TEXT_MAX = 300;
 export const CONTEXT_MAX = 200;

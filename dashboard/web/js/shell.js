@@ -56,6 +56,16 @@ export function reportsLink(active = false) {
   }, icon('flag', { size: 16 }));
 }
 
+export function packsLink(active = false) {
+  return h('a', {
+    href: '/packs',
+    class: ['icon-btn', 'party-link', active ? 'is-active' : ''],
+    title: 'Word packs',
+    dataset: { link: '' },
+    attrs: { 'aria-label': 'Word packs', 'aria-current': active ? 'page' : null },
+  }, icon('folder', { size: 16 }));
+}
+
 function userBlock(user, onLogout, { partyOwner = false, partyAdmin = false, section = '' } = {}) {
   const name = user?.display_name || user?.username || 'You';
   return h('div', { class: 'user-block' },
@@ -63,6 +73,7 @@ function userBlock(user, onLogout, { partyOwner = false, partyAdmin = false, sec
     h('div', { class: 'user-text' },
       h('span', { class: 'user-name', text: name }),
       user?.username && user.username !== name ? h('span', { class: 'user-handle', text: `@${user.username}` }) : null),
+    packsLink(section === 'packs'),
     partyOwner ? partyLink(section === 'party') : null,
     partyOwner || partyAdmin ? reportsLink(section === 'party-reports') : null,
     h('button', { type: 'button', class: 'icon-btn', title: 'Log out', attrs: { 'aria-label': 'Log out' }, on: { click: onLogout } }, icon('logout', { size: 16 })));

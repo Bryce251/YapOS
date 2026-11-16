@@ -12,6 +12,7 @@ import { createBudget } from '../engine/budget.js';
 import { createLogger } from '../engine/log.js';
 import { monthKey, shiftMonth } from '../apps/wrapped.js';
 import { encodeStroke } from './web/activity/js/games/ink.js';
+import { dayKey } from './web/activity/js/daily.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.join(HERE, 'web');
@@ -36,6 +37,7 @@ export const DEV_REPORT_ID = 'devreport0001';
 export const DEV_REPORT_DRAWER = 'de7e0000-0000-4000-8000-000000000003';
 export const DEV_REPORT_REPORTER = 'de7e0000-0000-4000-8000-000000000004';
 export const DEV_TEXT_REPORT_ID = 'devreport0002';
+export const DEV_PACK_CODE = 'DEVPACK2';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -215,6 +217,40 @@ export function seedPartyAdmins(db, ownerId, t = Date.now()) {
   const juno = fakeProfile(DEV_PARTY_ADMIN);
   db.raw.prepare('INSERT INTO party_admins (id, added_by, added_at) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING').run(DEV_PARTY_ADMIN, ownerId, t);
   db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, ?, NULL, 0, ?) ON CONFLICT (id) DO UPDATE SET username = excluded.username, display_name = excluded.display_name, missing = 0, fetched = excluded.fetched').run(DEV_PARTY_ADMIN, juno.username, juno.display_name, t);
+}
+
+export const DEV_PACK = Object.freeze({
+  name: 'Test Town classics',
+  words: ['sunflower', 'treehouse', 'pancake stack', 'rubber duck', 'lighthouse', 'snow globe', 'paper plane', 'disco ball', 'campfire', 'roller skate', 'hot air balloon', 'jellyfish'],
+  trivia: [
+    { q: 'Which planet is known as the red planet?', a: 'Mars', w: ['Venus', 'Jupiter', 'Saturn'] },
+    { q: 'How many legs does a spider have?', a: 'Eight', w: ['Six', 'Ten', 'Twelve'] },
+    { q: 'What do bees make?', a: 'Honey', w: ['Milk', 'Silk', 'Wax paper'] },
+  ],
+});
+
+export function seedPartyPack(db, ownerId, t = Date.now()) {
+  db.raw.prepare('INSERT INTO party_packs (code, owner_id, name, words, trivia, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (code) DO NOTHING')
+    .run(DEV_PACK_CODE, ownerId, DEV_PACK.name, JSON.stringify(DEV_PACK.words), JSON.stringify(DEV_PACK.trivia), t, t);
+}
+
+export function seedDailyScores(db, t = Date.now()) {
+  const day = dayKey(t);
+  const players = [
+    { n: 3, hive: 42, scramble: 500, ms: 95_000, streak: 4 },
+    { n: 5, hive: 31, scramble: 400, ms: 120_000, streak: 2 },
+    { n: 6, hive: 18, scramble: 300, ms: 160_000, streak: 1 },
+    { n: 7, hive: 9, scramble: 100, ms: 210_000, streak: 9 },
+  ];
+  const score = db.raw.prepare('INSERT INTO party_daily_scores (day, kind, user_id, name, username, score, ms, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (day, kind, user_id) DO NOTHING');
+  const streak = db.raw.prepare('INSERT INTO party_daily_streaks (user_id, last_day, streak, best, updated) VALUES (?, ?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING');
+  for (const p of players) {
+    const id = `de7e0000-0000-4000-8000-${String(p.n).padStart(12, '0')}`;
+    const prof = fakeProfile(id);
+    score.run(day, 'hive', id, prof.display_name, prof.username, p.hive, p.ms, t);
+    score.run(day, 'scramble', id, prof.display_name, prof.username, p.scramble, Math.round(p.ms / 2), t);
+    streak.run(id, day, p.streak, Math.max(p.streak, 7), t);
+  }
 }
 
 function ring(cx, cy, rx, ry, from, to, steps) {
@@ -582,6 +618,8 @@ export async function startDev({
   };
   seedPartyAdmins(db, IDS.owner);
   seedPartyReport(db);
+  seedPartyPack(db, IDS.owner);
+  seedDailyScores(db);
 
   const oauth = createFakeOAuth({
     users: TEST_USERS,
@@ -683,6 +721,8 @@ async function main() {
     `YapOS Party test call is at ${dev.url}/activity-dev/`,
     `Test server: Test Town (${dev.serverId})`,
     'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party and see a sample flagged drawing and a flagged Hot Takes answer at /party/reports.',
+    `Word packs: sign in as Jolli and open /packs to edit the sample pack. Type the code ${DEV_PACK_CODE} into Draw & Guess or Trivia settings to play with it.`,
+    "Daily puzzle: today's Letter Hive and Scramble already have a few scores on the leaderboard (/api/activity/daily/top?kind=hive).",
     '',
     'Test users (pick one on the sign-in page):',
     ...dev.users.map((u) => `  ${u.display_name.padEnd(8)} @${u.username.padEnd(8)} ${u.role}`),

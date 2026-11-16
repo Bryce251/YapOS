@@ -2,6 +2,7 @@ import { SEEDS, WORDS } from '../../data/hive.js';
 import { ready as dictReady, failed as dictFailed, loading as dictLoading, isWord, load as loadDictionary } from '../dictionary.js';
 import { face } from './trivia.js';
 import { isBlockedWord, BLOCKED_NOTE } from '../filter.js';
+import { cachedDaily, loadDaily, dailyFailedFor, utcDay } from '../admin.js';
 
 export const KEY = 'hive';
 export const MISS_KEY = 'hive.miss';
@@ -24,6 +25,7 @@ export const MISS_SHOW = 18;
 export const SYNC_MS = 400;
 export const SLICE_MS = 30;
 export const WARM_RETRY_MS = 15000;
+export const DAILY_TIMER = 180;
 
 const A = 97;
 
@@ -447,26 +449,40 @@ function soon(api, st) {
   if (cur.timer === null || cur.timer === undefined) cur.timer = later(() => flushSoon(api, cur), wait);
 }
 
-function begin(api, puzzle, note) {
+function dailyOf(api, st) {
+  if (st && typeof st.daily === 'string') return st.daily;
+  return api.settings.daily ? utcDay(api.now()) : null;
+}
+
+export function dailyHive(puzzle) {
+  if (!puzzle || !puzzle.hive) return null;
+  const letters = lettersOf(puzzle.hive.letters);
+  const centre = String(puzzle.hive.centre || '').toLowerCase();
+  if (letters.length !== 7 || centre.length !== 1 || !letters.includes(centre)) return null;
+  return { seed: letters, letters, centre, words: hiveWords(letters, centre) };
+}
+
+function begin(api, puzzle, note, daily = null) {
   const starts = api.now();
-  const ends = starts + api.settings.timer * 1000;
+  const ends = starts + (daily ? DAILY_TIMER : api.settings.timer) * 1000;
   const id = Math.floor(api.random() * 1e9);
   const words = puzzle.words.slice();
   const max = words.reduce((a, w) => a + wordPoints(w, puzzle.letters), 0);
   const pg = words.filter((w) => isPangram(w, puzzle.letters)).length;
   const b = {};
   for (const s of present(api)) b[s] = [0, 0, 0];
-  const st = { v: 1, phase: 'play', id, l: puzzle.letters, c: puzzle.centre, total: words.length, max, pg, b, r: {}, last: null, note: note || null, starts, ends };
+  const st = { v: 1, phase: 'play', id, l: puzzle.letters, c: puzzle.centre, total: words.length, max, pg, b, r: {}, last: null, note: note || null, daily: daily || null, starts, ends };
   api.memory.job = null;
   api.memory.cur = { id, answers: new Set(words), all: words, found: {}, st, at: -Infinity, dirty: false, timer: null, owed: {} };
   commit(api, st);
   api.setDeadline(ends);
 }
 
-function failNow(api, st) {
+function failNow(api, st, why = null) {
   const ends = api.now() + FAIL_MS;
   api.memory.job = null;
-  api.put(KEY, { ...(st || { v: 1, b: {} }), phase: 'fail', starts: api.now(), ends });
+  const daily = dailyOf(api, st);
+  api.put(KEY, { ...(st || { v: 1, b: {} }), phase: 'fail', daily: daily || null, why: why || (st && st.why) || null, starts: api.now(), ends });
   api.setDeadline(ends);
 }
 
@@ -481,7 +497,32 @@ function background(api, job) {
   later(step, 0);
 }
 
+function tryDaily(api, st, date) {
+  const puzzle = cachedDaily(date);
+  if (!puzzle) {
+    if (dailyFailedFor(date)) {
+      failNow(api, st, 'daily');
+      return true;
+    }
+    loadDaily(date);
+    return false;
+  }
+  if (!wordsReady()) {
+    if (wordsFailed()) {
+      failNow(api, st);
+      return true;
+    }
+    return false;
+  }
+  const pick = dailyHive(puzzle);
+  if (!pick || !pick.words.length) failNow(api, st, 'daily');
+  else begin(api, pick, st && st.note, date);
+  return true;
+}
+
 function tryBuild(api, st) {
+  const date = dailyOf(api, st);
+  if (date) return tryDaily(api, st, date);
   if (wordsReady()) {
     let job = api.memory.job;
     if (!job) {
@@ -508,7 +549,8 @@ function waitForWords(api, st) {
   const now = api.now();
   const since = st && typeof st.since === 'number' ? st.since : now;
   if (now - since >= LOAD_MAX_MS) return failNow(api, st);
-  const next = { v: 1, phase: 'load', b: (st && st.b) || {}, since, note: (st && st.note) || null, starts: since, ends: since + LOAD_MAX_MS };
+  const daily = dailyOf(api, st);
+  const next = { v: 1, phase: 'load', b: (st && st.b) || {}, since, note: (st && st.note) || null, daily: daily || null, starts: since, ends: since + LOAD_MAX_MS };
   if (!st || st.phase !== 'load' || st.since !== since) api.put(KEY, next);
   api.setDeadline(now + LOAD_STEP_MS);
   return undefined;
@@ -586,7 +628,19 @@ function play(api, slot, action) {
 
 const SETTINGS = Object.freeze([
   Object.freeze({ id: 'timer', label: 'Time', type: 'choice', options: [90, 120, 180].map((v) => ({ value: v, label: v % 60 ? `${v} s` : `${v / 60} min` })), default: 120 }),
+  Object.freeze({ id: 'daily', label: 'Daily puzzle', type: 'toggle', default: false, daily: 'hive' }),
 ]);
+
+export function hiveResults(st) {
+  if (!st || typeof st !== 'object') return {};
+  const b = st.b && typeof st.b === 'object' ? st.b : {};
+  const pangram = Object.keys(b)
+    .map(Number)
+    .filter((s) => Number.isInteger(s) && Array.isArray(b[s]) && b[s][2] > 0);
+  const out = { extra: pangram.length ? { pangram } : {} };
+  if (typeof st.daily === 'string' && st.phase !== 'fail' && st.phase !== 'load') out.daily = st.daily;
+  return out;
+}
 
 const hive = {
   id: 'hive',
@@ -610,7 +664,12 @@ const hive = {
   start(api) {
     buildIndex();
     loadWords();
+    if (api.settings.daily) loadDaily(utcDay(api.now()));
     if (!tryBuild(api, null)) waitForWords(api, null);
+  },
+
+  results(api) {
+    return hiveResults(current(api));
   },
 
   intent(api, slot, action) {
@@ -707,6 +766,8 @@ const hive = {
       starts: st.starts,
       ends: st.ends,
       note: st.note || null,
+      daily: typeof st.daily === 'string' ? st.daily : null,
+      why: st.why || null,
       board,
       me: { pts: meRow[0], count: meRow[1], pangrams: meRow[2] },
       rank: rankOf(meRow[0], st.max || 0),

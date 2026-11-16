@@ -70,6 +70,15 @@ export function rankRound(taps, slots) {
   return { res: res.concat(rest), gained };
 }
 
+export function fastestOf(best) {
+  const rows = Object.entries(best || {})
+    .map(([s, ms]) => [Number(s), Number(ms)])
+    .filter(([s, ms]) => Number.isInteger(s) && Number.isFinite(ms) && ms >= 0);
+  if (!rows.length) return [];
+  const low = Math.min(...rows.map(([, ms]) => ms));
+  return rows.filter(([, ms]) => ms === low).map(([s]) => s);
+}
+
 export function bestAfter(best, res) {
   const out = { ...(best || {}) };
   for (const r of res) if (r.k === 'ok' && (!(r.s in out) || r.ms < out[r.s])) out[r.s] = r.ms;
@@ -193,6 +202,12 @@ const reflex = {
 
   start(api) {
     round(api, startState(api), 0);
+  },
+
+  results(api) {
+    const st = api.get(KEY);
+    const fastest = st ? fastestOf(st.best) : [];
+    return { extra: fastest.length ? { fastest } : {} };
   },
 
   intent(api, slot, action) {

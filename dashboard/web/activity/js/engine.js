@@ -1,7 +1,7 @@
 import { OpBudget, OPS_WINDOW_MS, MAX_VALUE_BYTES, checkSet, jsonBytes, validKey } from './limits.js';
 import { idOf, people, person, cleanName, initials, hueOf } from './players.js';
 import { censor } from './filter.js';
-import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins, sendTextReport } from './admin.js';
+import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins, sendTextReport, sendResults } from './admin.js';
 
 export const FLUSH_MS = 120;
 export const SOFT_OPS = 60;
@@ -41,6 +41,12 @@ export const TEXT_REPORT_WINDOW_MS = 60000;
 export const TEXT_REPORT_KEEP = 400;
 export const TEXT_REPORT_CHARS = 300;
 export const TEXT_CONTEXT_CHARS = 200;
+export const CODE_MAX = 12;
+export const RESULT_MIN_PLAYERS = 2;
+export const RESULT_MAX_PLAYERS = 16;
+export const RESULT_EXTRA_KEYS = 8;
+const EXTRA_KEY_RE = /^[A-Za-z][A-Za-z0-9]{0,23}$/;
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const USER_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const STRIP_RE = /[\u0000-\u001f\u007f​-‏‪-‮⁦-⁩]/g;
 const EMOJI_RE = /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u;
@@ -175,8 +181,15 @@ export function defaultSettings(game) {
   return out;
 }
 
+export function cleanCode(raw, max = CODE_MAX) {
+  if (typeof raw !== 'string') return undefined;
+  const cap = Math.max(0, Math.min(CODE_MAX, Number.isInteger(max) ? max : CODE_MAX));
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, cap);
+}
+
 export function cleanSetting(spec, value) {
   if (!spec) return undefined;
+  if (spec.type === 'code') return cleanCode(value, spec.max);
   const values = (spec.options || []).map((o) => o.value);
   if (spec.type === 'toggle') return Boolean(value);
   if (spec.type === 'multi') {
@@ -261,6 +274,7 @@ export function createEngine(opts) {
   const admins = { ...DEFAULT_ADMINS, ...(opts.admins || {}) };
   const fxSeen = new Map();
   const postText = typeof opts.reportText === 'function' ? opts.reportText : sendTextReport;
+  const postResults = typeof opts.postResults === 'function' ? opts.postResults : sendResults;
   const textSeen = new Set();
   const textTimes = new Map();
   const myReports = new Set();
@@ -823,14 +837,68 @@ export function createEngine(opts) {
     for (const k of keys) if (read(k) !== null) write(k, null);
   }
 
+  function gameResults(game) {
+    if (!game || typeof game.results !== 'function') return {};
+    try {
+      const r = game.results(gameApi(game));
+      return r && typeof r === 'object' ? r : {};
+    } catch (e) {
+      fail(e);
+      return {};
+    }
+  }
+
+  function partyPlayers(points, win, teams) {
+    const slots = new Set(activePlayers().map((p) => p.slot));
+    for (const [slot, pts] of Object.entries(points || {})) if (Number(pts)) slots.add(Number(slot));
+    const out = [];
+    for (const slot of [...slots].filter(Number.isInteger).sort((a, b) => a - b)) {
+      const id = idOfSlot(slot);
+      if (!id || !USER_RE.test(id)) continue;
+      const p = personFor(id);
+      const team = teams && typeof teams[slot] === 'string' ? clip(teams[slot], 24) || null : null;
+      out.push({ slot, id, name: p.name, username: p.username, score: Math.round(Number(points[slot]) || 0), won: win.includes(slot), team });
+    }
+    return out.sort((a, b) => b.score - a.score || a.slot - b.slot).slice(0, RESULT_MAX_PLAYERS);
+  }
+
+  function partyExtra(raw, players) {
+    const bySlot = new Map(players.map((p) => [p.slot, p.id]));
+    const out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    for (const [k, list] of Object.entries(raw)) {
+      if (Object.keys(out).length >= RESULT_EXTRA_KEYS) break;
+      if (!EXTRA_KEY_RE.test(k) || !Array.isArray(list)) continue;
+      const ids = [...new Set(list.map((s) => bySlot.get(s)).filter(Boolean))];
+      if (ids.length) out[k] = ids;
+    }
+    return out;
+  }
+
+  function postParty(game, points, win, info, at) {
+    const players = partyPlayers(points, win, info.teams);
+    if (players.length < RESULT_MIN_PLAYERS) return players;
+    const body = { game: game.id, at, players: players.map(({ slot, ...p }) => p), extra: partyExtra(info.extra, players) };
+    try {
+      Promise.resolve(postResults(body)).catch(() => false);
+    } catch {}
+    return players;
+  }
+
   function finishGame(game, winners) {
     const s = clone(read(SCORES)) || newScores();
     const win = Array.isArray(winners) ? winners.filter((x) => Number.isInteger(x)) : topSlots(s.g);
+    const info = gameResults(game);
+    const at = now();
+    const counted = postParty(game, s.g, win, info, at);
     for (const [slot, pts] of Object.entries(s.g)) s.t[slot] = (s.t[slot] || 0) + pts;
     for (const slot of win) s.w[slot] = (s.w[slot] || 0) + 1;
     fitScores(s);
     write(SCORES, s);
-    patchRoom({ phase: 'results', deadline: null, flags: null, last: { game: game.id, winners: win, at: now() } });
+    const last = { game: game.id, winners: win, at };
+    if (counted.length >= RESULT_MIN_PLAYERS) last.ps = counted.map((p) => p.slot);
+    if (typeof info.daily === 'string' && DAY_RE.test(info.daily)) last.daily = info.daily;
+    patchRoom({ phase: 'results', deadline: null, flags: null, last });
   }
 
   function handleIntent(from, data, depth = 0) {

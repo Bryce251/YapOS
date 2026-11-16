@@ -222,6 +222,7 @@ function reveal(api) {
   }
   const { res, top, gained } = tally(cur.authors, cur.votes);
   for (const [slot, pts] of Object.entries(gained)) api.addPoints(Number(slot), pts);
+  api.memory.tops = [...new Set((Array.isArray(api.memory.tops) ? api.memory.tops : []).concat(top.filter(Number.isInteger)))];
   api.memory.cur = null;
   return toReveal(api, st, { res, top, gained, note: null });
 }
@@ -311,6 +312,11 @@ const hottakes = {
 
   start(api) {
     ask(api, buildDeck(api.settings.rounds, api.random), 0);
+  },
+
+  results(api) {
+    const tops = Array.isArray(api.memory.tops) ? api.memory.tops.filter(Number.isInteger) : [];
+    return { extra: tops.length ? { topTake: tops } : {} };
   },
 
   intent(api, slot, action) {

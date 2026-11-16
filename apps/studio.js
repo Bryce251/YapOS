@@ -17,7 +17,7 @@ const MAX_LINES = 6;
 const MAX_DOWNLOAD = 15 * 1024 * 1024;
 const MAX_OUTPUT = Math.floor(9.5 * 1024 * 1024);
 const MAX_SIDE = 4096;
-const MAX_SECONDS = 12;
+const MAX_SECONDS = 10;
 const MIN_CAPTION_WIDTH = 240;
 const MAX_UPSCALED_HEIGHT = 2048;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
@@ -34,7 +34,8 @@ const FILES_PER_MINUTE = 20;
 const WINDOW_MS = 60_000;
 const USER_LIMIT = 5000;
 const MAX_PIXELS = MAX_SIDE * MAX_SIDE;
-const ANIMATED_AREA = 480 * 640;
+export const ANIMATED_AREA = 400 * 540;
+export const ANIMATED_COLOURS = 128;
 const OUTPUT_STOP = MAX_OUTPUT + 1024 * 1024;
 const RENDER_THREADS = 2;
 const MAX_PATH_LENGTH = 512;
@@ -43,7 +44,7 @@ const STALE_NAME = /^yapos-studio-(?:[0-9a-f]{16}-)?[A-Za-z0-9]{6}$/;
 const BURST_LIMIT = 5;
 const BURST_MS = 10_000;
 
-export const PASSES = [{ maxWidth: 480, fps: 15 }, { maxWidth: 320, fps: 10 }];
+export const PASSES = [{ maxWidth: 400, fps: 12 }, { maxWidth: 288, fps: 8 }];
 export const IMAGE_TYPES = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
 export const ALLOWED_HOSTS = ['files.yapper.website', 'www.yapin.gg'];
 export const FONT_CANDIDATES = [
@@ -378,7 +379,9 @@ export function buildArgs(job) {
       chain.push(`drawtext=fontfile=${font}:textfile=${filterPath(file)}:expansion=none:fontsize=${job.layout.fontSize}:fontcolor=black:x=(w-text_w)/2:y=${job.layout.baselines[i]}-ascent`);
     });
   }
-  const graph = `[0:v]${chain.join(',')},split[a][b];[a]palettegen[p];[b][p]paletteuse=dither=sierra2_4a[o]`;
+  const palette = job.animated ? `palettegen=max_colors=${ANIMATED_COLOURS}:stats_mode=diff` : 'palettegen';
+  const use = job.animated ? 'paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle' : 'paletteuse=dither=sierra2_4a';
+  const graph = `[0:v]${chain.join(',')},split[a][b];[a]${palette}[p];[b][p]${use}[o]`;
   const limit = job.animated ? ['-t', String(job.seconds)] : [];
   return [
     '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',

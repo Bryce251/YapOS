@@ -1,8 +1,10 @@
-import { TIERS, wordById, idsIn, tierOf } from '../../data/scramble.js';
+import { TIERS, WORDS, wordById, idsIn, tierOf } from '../../data/scramble.js';
 import { shuffle } from '../engine.js';
 import { mask, unmask } from './draw.js';
 import { ready as dictReady, isWord, load as loadDictionary } from '../dictionary.js';
 import { isBlockedWord } from '../filter.js';
+import { cachedDaily, loadDaily, dailyFailedFor, utcDay } from '../admin.js';
+import { answerHash } from '../daily.js';
 
 export const KEY = 'scramble';
 export const ROUND_MS = 30000;
@@ -13,6 +15,10 @@ export const GUESS_GAP_MS = 300;
 export const GUESS_CHARS = 24;
 export const FOUND_MAX = 16;
 export const SHUFFLE_TRIES = 80;
+export const DAILY_ROUNDS = 5;
+export const LOAD_STEP_MS = 500;
+export const LOAD_MAX_MS = 15000;
+export const FAIL_MS = 6000;
 
 export function blocked(word) {
   return isBlockedWord(String(word || '').toLowerCase(), { strict: true });
@@ -73,6 +79,37 @@ export function judgeGuess(guess, target, { dictionary } = {}) {
   return 'unknown';
 }
 
+export function judgeDaily(guess, letters, target) {
+  const g = cleanGuess(guess);
+  const l = String(letters || '').toLowerCase();
+  if (!g) return 'empty';
+  if (target && g === target) return 'right';
+  if (g.length !== l.length || !sameLetters(g, l)) return 'letters';
+  if (blocked(g)) return 'unknown';
+  if (dictReady && isWord(g)) return target ? 'other' : 'right';
+  return 'unknown';
+}
+
+export function dailyTarget(letters, check = null) {
+  const key = letterKey(String(letters || '').toLowerCase());
+  let first = null;
+  for (let i = 0; i < WORDS.length; i += 1) {
+    if (letterKey(WORDS[i]) !== key || blocked(WORDS[i])) continue;
+    if (!check || check(WORDS[i])) return i;
+    if (first === null) first = i;
+  }
+  return first;
+}
+
+export function dailyDeck(puzzle) {
+  const rounds = puzzle && puzzle.scramble && Array.isArray(puzzle.scramble.rounds) ? puzzle.scramble.rounds : [];
+  return rounds
+    .slice(0, DAILY_ROUNDS)
+    .map((r, i) => ({ l: String((r && r.letters) || '').toLowerCase(), hash: r ? r.answerHash : null, i }))
+    .filter((r) => /^[a-z]{3,12}$/.test(r.l))
+    .map((r) => ({ s: r.l, id: dailyTarget(r.l, puzzle.date && r.hash ? (w) => answerHash(puzzle.date, r.i, w) === r.hash : null) }));
+}
+
 export function buildDeck(length, rounds, random = Math.random) {
   const count = Math.max(1, Math.floor(rounds) || 1);
   if (TIERS.some((t) => t.id === length)) return shuffle(idsIn(length), random).slice(0, count);
@@ -100,6 +137,7 @@ function targetOf(st) {
 }
 
 function ask(api, st, i, note) {
+  if (st.daily) return askDaily(api, st, i, note);
   const deck = st.deck.map((code) => unmask(code, st.k));
   const word = wordById(deck[i]);
   if (!word) return api.finish();
@@ -129,8 +167,70 @@ function ask(api, st, i, note) {
   return undefined;
 }
 
+function askDaily(api, st, i, note) {
+  const letters = st.dl && st.dl[i];
+  if (!letters) return api.finish();
+  const code = st.deck[i];
+  const id = code === null || code === undefined ? null : unmask(code, st.k);
+  const word = id === null ? null : wordById(id);
+  const starts = api.now();
+  const ends = starts + ROUND_MS;
+  api.memory.cur = { i, words: {} };
+  api.put(KEY, {
+    v: 1,
+    k: st.k,
+    deck: st.deck,
+    dl: st.dl,
+    daily: st.daily,
+    i,
+    total: st.dl.length,
+    len: 'daily',
+    phase: 'play',
+    w: word ? code : null,
+    s: letters,
+    tier: tierOf(letters),
+    got: [],
+    no: {},
+    found: null,
+    word: null,
+    note: note || null,
+    starts,
+    ends,
+  });
+  api.setDeadline(ends);
+  return undefined;
+}
+
+function failDaily(api, date) {
+  const starts = api.now();
+  const ends = starts + FAIL_MS;
+  api.put(KEY, { v: 1, phase: 'fail', daily: date, i: 0, total: DAILY_ROUNDS, got: [], no: {}, starts, ends });
+  api.setDeadline(ends);
+  return undefined;
+}
+
+function startDaily(api, date, puzzle) {
+  const deck = dailyDeck(puzzle);
+  if (!deck.length) return failDaily(api, date);
+  const k = 1 + Math.floor(api.random() * 65535);
+  return askDaily(api, { k, deck: deck.map((d) => (d.id === null ? null : mask(d.id, k))), dl: deck.map((d) => d.s), daily: date }, 0);
+}
+
+function waitDaily(api, date, st) {
+  const now = api.now();
+  const since = st && st.phase === 'load' && typeof st.since === 'number' ? st.since : now;
+  const puzzle = cachedDaily(date);
+  if (puzzle) return startDaily(api, date, puzzle);
+  if (now - since >= LOAD_MAX_MS || (st && dailyFailedFor(date))) return failDaily(api, date);
+  loadDaily(date);
+  if (!st || st.phase !== 'load') api.put(KEY, { v: 1, phase: 'load', daily: date, since, i: 0, total: DAILY_ROUNDS, got: [], no: {}, starts: since, ends: since + LOAD_MAX_MS });
+  api.setDeadline(now + LOAD_STEP_MS);
+  return undefined;
+}
+
 function next(api, st) {
-  if (st.i + 1 < st.deck.length) return ask(api, st, st.i + 1);
+  const total = st.daily ? (st.dl || []).length : st.deck.length;
+  if (st.i + 1 < total) return ask(api, st, st.i + 1);
   return api.finish();
 }
 
@@ -149,7 +249,8 @@ function reveal(api, note) {
   api.memory.cur = null;
   const starts = api.now();
   const ends = starts + REVEAL_MS;
-  api.put(KEY, { ...st, phase: 'reveal', word: target, found, note: note || null, starts, ends });
+  const shown = target || (found.length ? found[0][1] : null);
+  api.put(KEY, { ...st, phase: 'reveal', word: shown, found: target ? found : found.slice(1), note: note || null, starts, ends });
   api.setDeadline(ends);
 }
 
@@ -170,8 +271,8 @@ function guess(api, slot, action) {
   if (gaps[slot] && at - gaps[slot] < GUESS_GAP_MS) return;
   gaps[slot] = at;
   const target = targetOf(st);
-  if (!target) return;
-  const verdict = judgeGuess(action.text, target);
+  if (!target && !st.daily) return;
+  const verdict = st.daily ? judgeDaily(action.text, st.s, target) : judgeGuess(action.text, target);
   if (verdict === 'empty') return;
   if (verdict !== 'right' && verdict !== 'other') {
     st.no = { ...(st.no || {}), [slot]: ((st.no && st.no[slot]) || 0) + 1 };
@@ -180,7 +281,7 @@ function guess(api, slot, action) {
   }
   const pts = placePoints(st.got.length);
   st.got = st.got.concat([[slot, pts]]);
-  if (verdict === 'other') {
+  if (verdict === 'other' || (verdict === 'right' && !target)) {
     const cur = api.memory.cur && api.memory.cur.i === st.i ? api.memory.cur : (api.memory.cur = { i: st.i, words: {} });
     cur.words[slot] = cleanGuess(action.text);
   }
@@ -206,6 +307,7 @@ const scramble = {
       options: [{ value: 'mixed', label: '🎲 Mixed' }].concat(TIERS.map((t) => ({ value: t.id, label: `${t.emoji} ${t.name} (${t.min}-${t.max})` }))),
       default: 'mixed',
     },
+    { id: 'daily', label: 'Daily puzzle', type: 'toggle', default: false, daily: 'scramble' },
   ],
 
   prepare() {
@@ -214,6 +316,7 @@ const scramble = {
 
   start(api) {
     loadDictionary();
+    if (api.settings.daily) return waitDaily(api, utcDay(api.now()), null);
     const k = 1 + Math.floor(api.random() * 65535);
     const ids = buildDeck(api.settings.length, api.settings.rounds, api.random);
     ask(api, { k, deck: ids.map((id) => mask(id, k)), len: api.settings.length }, 0);
@@ -223,15 +326,26 @@ const scramble = {
     if (action.type === 'guess') guess(api, slot, action);
   },
 
+  results(api) {
+    const st = api.get(KEY);
+    return st && typeof st.daily === 'string' && st.phase !== 'load' && st.phase !== 'fail' ? { daily: st.daily } : {};
+  },
+
   deadline(api) {
     const st = api.get(KEY);
     if (!st) return api.finish();
+    if (st.phase === 'load') return waitDaily(api, st.daily, st);
+    if (st.phase === 'fail') return api.finish();
     if (st.phase === 'play') return reveal(api, 'time');
     return next(api, st);
   },
 
   admin(api, action) {
     const st = api.get(KEY);
+    if (st && (st.phase === 'load' || st.phase === 'fail') && action.type === 'skip') {
+      api.finish();
+      return true;
+    }
     if (!st || (st.phase !== 'play' && st.phase !== 'reveal')) return false;
     if (action.type === 'skip') {
       if (st.phase === 'play') reveal(api, 'skip');
@@ -256,6 +370,7 @@ const scramble = {
     loadDictionary();
     const st = api.get(KEY);
     if (!st) return scramble.start(api);
+    if (st.phase === 'load') return waitDaily(api, st.daily, st);
     if (st.phase === 'play') {
       const cur = api.memory.cur;
       if (!cur || cur.i !== st.i) return reveal(api, 'host');
@@ -273,6 +388,10 @@ const scramble = {
   model(snap, local = {}) {
     const st = snap.state[KEY];
     if (!st) return null;
+    if (st.phase === 'load' || st.phase === 'fail') {
+      const watching = snap.meSlot === null || snap.meSlot === undefined || snap.meJoined === false;
+      return { phase: st.phase, daily: st.daily || null, i: 0, number: 1, total: st.total || DAILY_ROUNDS, starts: st.starts, ends: st.ends, got: [], found: [], letters: [], size: 0, tier: null, playing: !watching, canGuess: false, gotMe: false, wrong: 0, note: null };
+    }
     const mine = snap.meSlot;
     const now = local.now ?? snap.now;
     const bySlot = new Map(snap.players.filter((p) => p.slot !== null).map((p) => [p.slot, p]));
@@ -316,6 +435,7 @@ const scramble = {
       canGuess: st.phase === 'play' && playing && !gotMe,
       players: (snap.players || []).filter((p) => p.present && p.slot !== null && p.joined !== false).length,
       note: st.note,
+      daily: typeof st.daily === 'string' ? st.daily : null,
     };
   },
 };

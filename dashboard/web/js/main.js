@@ -18,6 +18,7 @@ import { renderPublicSettings } from './pages/public-settings.js';
 import { renderPublic } from './pages/public.js';
 import { renderParty } from './pages/party.js';
 import { renderPartyReports } from './pages/party-reports.js';
+import { renderPacks } from './pages/packs.js';
 import { spotlight } from './spotlight.js';
 
 const root = document.getElementById('app');
@@ -33,6 +34,7 @@ const TITLES = {
   servers: 'Servers',
   party: 'Party admins',
   'party-reports': 'Party reports',
+  packs: 'Word packs',
   overview: 'Overview',
   apps: 'Apps',
   app: 'App settings',
@@ -49,6 +51,7 @@ const PAGES = {
   servers: renderServers,
   party: renderParty,
   'party-reports': renderPartyReports,
+  packs: renderPacks,
   overview: renderOverview,
   apps: renderApps,
   app: renderAppSettings,

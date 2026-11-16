@@ -3,6 +3,8 @@ import { expireJobs } from './jobs.js';
 import { STATE_TTL } from './auth.js';
 import { PROFILE_KEEP, WANTED_TTL } from './profiles.js';
 import { cleanupStatements } from './reports.js';
+import { resultsCleanupStatements } from './party-results.js';
+import { dailyCleanupStatements } from './party-daily.js';
 
 export const PUBLIC_STALE = 2 * HOUR;
 export const SNAPSHOT_STALE = DAY;
@@ -22,8 +24,10 @@ export async function cleanup(db, t) {
     db.prepare('DELETE FROM profile_wanted WHERE asked < ?').bind(t - WANTED_TTL),
     db.prepare('DELETE FROM profiles WHERE fetched < ?').bind(t - PROFILE_KEEP),
     ...cleanupStatements(db, t),
+    ...resultsCleanupStatements(db, t),
+    ...dailyCleanupStatements(db, t),
   ]);
-  const names = ['sessions', 'states', 'jobs', 'rate', 'grants', 'userServers', 'publicPages', 'snapshots', 'profileWanted', 'profiles', 'dismissedReports', 'extraReports'];
+  const names = ['sessions', 'states', 'jobs', 'rate', 'grants', 'userServers', 'publicPages', 'snapshots', 'profileWanted', 'profiles', 'dismissedReports', 'extraReports', 'orphanReportTexts', 'partyResults', 'partyXp', 'dailyScores'];
   const removed = {};
   results.forEach((r, i) => {
     removed[names[i]] = Number((r && r.meta && r.meta.changes) || 0);

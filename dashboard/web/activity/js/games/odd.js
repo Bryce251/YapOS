@@ -341,6 +341,7 @@ function settle(api, st, { caught, guess, note = null }) {
   const votes = st.votes || {};
   const stole = Boolean(caught && word && guess === word.id);
   const gained = note ? {} : award({ order: st.order, odd, votes: Object.fromEntries(Object.entries(votes).map(([a, b]) => [Number(a), b])), caught, stole });
+  if (!note && caught) noteCatchers(api, votes, odd);
   for (const [slot, pts] of Object.entries(gained)) api.addPoints(Number(slot), pts);
   const g = guess === null || guess === undefined ? null : wordById(guess);
   const starts = api.now();
@@ -366,6 +367,20 @@ function settle(api, st, { caught, guess, note = null }) {
     ends,
   });
   api.setDeadline(ends);
+}
+
+export function catchersOf(votes, odd) {
+  if (!Number.isInteger(odd)) return [];
+  return Object.entries(votes || {})
+    .filter(([voter, target]) => target === odd && Number(voter) !== odd)
+    .map(([voter]) => Number(voter))
+    .filter(Number.isInteger);
+}
+
+function noteCatchers(api, votes, odd) {
+  const seen = new Set(Array.isArray(api.memory.caught) ? api.memory.caught : []);
+  for (const s of catchersOf(votes, odd)) seen.add(s);
+  api.memory.caught = [...seen];
 }
 
 function endEarly(api, st, note) {
@@ -497,6 +512,11 @@ const odd = {
 
   start(api) {
     newRound(api, null);
+  },
+
+  results(api) {
+    const caught = Array.isArray(api.memory.caught) ? api.memory.caught.filter(Number.isInteger) : [];
+    return { extra: caught.length ? { fakerCaught: caught } : {} };
   },
 
   intent(api, slot, action) {

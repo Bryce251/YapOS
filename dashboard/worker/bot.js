@@ -1,6 +1,7 @@
 import { SERVER_ID_RE, SLUG_RE, PART_LIMIT, HttpError, json, fail, readJson, isPlainObject, safeEqual, isLocalHost, byteLength, clipString, safeHttpsUrl } from './util.js';
 import { expireJobs, claimJobs, isHot, DENIED, SERVER_JOB_TYPES } from './jobs.js';
 import { claimWanted, hasWanted, putProfiles } from './profiles.js';
+import { partyPoll, ackParty, partyStats } from './party-results.js';
 
 const RESULTS_LIMIT = 2 * 1024 * 1024;
 const SNAPSHOT_LIMIT = 4 * PART_LIMIT + 64 * 1024;
@@ -60,7 +61,8 @@ async function poll(env, t) {
   const jobs = await claimJobs(env.DB, t, 25);
   const wanted = await claimWanted(env.DB, t);
   const hot = wanted.length > 0 || (await isHot(env.DB, t)) || (await hasWanted(env.DB, t));
-  return json({ jobs, hot, wanted });
+  const party = await partyPoll(env.DB);
+  return json({ jobs, hot, wanted, party });
 }
 
 async function results(request, env, t) {
@@ -255,6 +257,14 @@ export async function handleBot(request, env, deps, url) {
   const method = request.method;
   if (segs.length === 2 && segs[1] === 'poll' && method === 'GET') return poll(env, t);
   if (segs.length === 2 && segs[1] === 'results' && method === 'POST') return results(request, env, t);
+  if (segs.length === 3 && segs[1] === 'party' && segs[2] === 'ack') {
+    if (method === 'POST') return ackParty(request, env, t);
+    return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  }
+  if (segs.length === 3 && segs[1] === 'party' && segs[2] === 'stats') {
+    if (method === 'GET') return partyStats(env, url);
+    return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  }
   if (segs.length === 2 && segs[1] === 'profiles') {
     if (method === 'POST') return putProfiles(request, env, t);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');

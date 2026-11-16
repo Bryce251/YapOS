@@ -9,13 +9,16 @@ import { flagInfo } from '../engine.js';
 import { sendReport } from '../admin.js';
 import { textFlag } from '../ui/report.js';
 import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
+import { TEAM_MS, teamInfo, finalText } from '../games/teams.js';
+import { PACK_EMOJI } from '../games/packs.js';
+import { teamBar, teamFinal, packChip } from './teams.js';
 
 export const SCALE = 2;
 export const LIVE_MS = 250;
 export const WRITE_GAP_MS = 900;
 export const LIVE_CHARS = 3000;
 
-const TIER_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
+const TIER_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard', pack: `${PACK_EMOJI} Pack` };
 
 export const FLAG_ICON = '🚩';
 export const FLAG_TITLE = 'Flag this drawing if it breaks the rules. When enough players flag it, it gets hidden.';
@@ -91,7 +94,14 @@ export function feedRefs(m) {
   return m.feed.map((f) => ({ ...f, ref: !f.mine && !f.isMe && reportableGuess(f.text, f.kind) ? guessRef({ nonce: m.k, n: m.n }, f.fid) : null }));
 }
 
+export function teamChipText(id) {
+  const t = teamInfo(id);
+  return t ? `${t.emoji} ${t.name} draws` : '';
+}
+
 export function footText(m) {
+  if (m.phase === 'final') return m.teams ? finalText(m.teams) : 'That was the last turn!';
+  if (m.phase === 'draw' && m.mate && !m.gotMe && !m.spectator) return 'Your teammate is drawing! Guess it to score for your team.';
   if (m.phase === 'pick') return m.amDrawer ? 'Pick the word you want to draw.' : 'Get ready to guess! The drawing starts in a moment.';
   if (m.phase === 'reveal') {
     let lead = "Time's up!";
@@ -307,7 +317,9 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   const hiddenTag = h('p', { class: 'paper-hidden', text: HIDDEN_TEXT, attrs: { 'aria-hidden': 'true' } });
   paper.append(hiddenTag);
   board.insertBefore(flagBox, tools);
-  el.append(head, wordBar, revealBox, gotBox, pickBox, h('div', { class: 'draw-main' }, board, side), foot, boardBox);
+  const teamBox = h('div', { class: 'draw-teams' });
+  const finalBox = h('div', { class: 'draw-final' });
+  el.append(head, teamBox, finalBox, wordBar, revealBox, gotBox, pickBox, h('div', { class: 'draw-main' }, board, side), foot, boardBox);
   const flagged = new Set();
 
   const mine = { k: null, strokes: [], shown: [], level: 0, count: 0, chunks: [] };
@@ -604,17 +616,25 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     if (hit) repaint();
   });
 
-  const paintHead = memo((m) =>
-    h(
+  const paintHead = memo((m) => {
+    if (m.phase === 'final') return h('div', { class: 'game-head' }, h('span', { class: 'chip chip-static', text: '🏁 Final scores' }), timer(m.timerStarts, m.ends, 'Results in'));
+    return h(
       'div',
       { class: 'game-head' },
       h('span', { class: 'chip chip-static', text: `Round ${m.round} of ${m.rounds}` }),
+      m.drawerTeam ? h('span', { class: ['chip', 'chip-static', 'team-chip', `team-${m.drawerTeam}`], text: teamChipText(m.drawerTeam) }) : null,
+      packChip(m.pack, m.packMiss, 'words'),
       who(m.drawer, { verb: m.phase === 'pick' ? 'is up next' : 'is drawing', me: m.phase === 'pick' ? "You're up next" : "You're drawing", size: 'sm', cls: 'drawer-tag' }),
       timer(m.timerStarts, m.ends, m.phase === 'pick' ? 'Time left to pick' : m.phase === 'reveal' ? 'Next turn in' : 'Time left to draw'),
-    ),
-  );
+    );
+  });
+
+  const paintTeams = memo((m) => (m.phase === 'final' ? null : teamBar(m.teams)));
+
+  const paintFinal = memo((m) => (m.phase === 'final' ? teamFinal(m.teams) : null));
 
   const paintWord = memo((m) => {
+    if (m.phase === 'final') return null;
     if (m.phase === 'reveal') return h('p', { class: 'word-line' }, h('span', { class: 'muted', text: 'The word was ' }), h('strong', { class: 'word-reveal', text: m.word || '???' }));
     if (m.phase === 'pick') {
       if (m.amDrawer) return h('p', { class: 'word-line muted', text: 'Your turn to draw! Pick a word.' });
@@ -771,8 +791,10 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
       swapEmpty();
       return;
     }
-    const timerStarts = m.phase === 'reveal' ? m.ends - REVEAL_MS : m.phase === 'pick' ? m.ends - PICK_MS : m.starts;
-    paintHead(head, { round: m.round, rounds: m.rounds, drawer: m.drawer, phase: m.phase, timerStarts, ends: m.ends });
+    const timerStarts = m.phase === 'reveal' ? m.ends - REVEAL_MS : m.phase === 'pick' ? m.ends - PICK_MS : m.phase === 'final' ? m.ends - TEAM_MS : m.starts;
+    paintHead(head, { round: m.round, rounds: m.rounds, drawer: m.drawer, drawerTeam: m.drawerTeam, pack: m.pack, packMiss: m.packMiss, phase: m.phase, timerStarts, ends: m.ends });
+    paintTeams(teamBox, { phase: m.phase, teams: m.teams });
+    paintFinal(finalBox, { phase: m.phase, teams: m.teams });
     paintWord(wordBar, { phase: m.phase, amDrawer: m.amDrawer, word: m.word, hint: m.hint, letters: m.letters, words: m.words, gotMe: m.gotMe, drawer: m.drawer });
     paintReveal(revealBox, { phase: m.phase, drawer: m.drawer, drawerGain: m.drawerGain, amDrawer: m.amDrawer, got: m.got.map((g) => ({ id: g.id, slot: g.slot, name: g.name, initials: g.initials, hue: g.hue, avatar: g.avatar, isMe: g.isMe, pts: g.pts })) });
     paintScores(boardBox, { rows: boardRows(next, m.drawer.slot), badge: { slot: m.drawer.slot, id: m.drawer.id, icon: PENCIL, label: 'Drawing now' } });

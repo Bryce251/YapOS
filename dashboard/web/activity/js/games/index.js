@@ -10,8 +10,11 @@ import emoji from './emoji.js';
 import hottakes from './hottakes.js';
 import truths from './truths.js';
 import reflex from './reflex.js';
+import bluff from './bluff.js';
+import pixel from './pixel.js';
+import higherlower from './higherlower.js';
 
-export const GAMES = Object.freeze([trivia, draw, chain, wyr, odd, telephone, scramble, hive, emoji, hottakes, truths, reflex]);
+export const GAMES = Object.freeze([trivia, draw, chain, wyr, odd, telephone, scramble, hive, emoji, hottakes, truths, reflex, bluff, pixel, higherlower]);
 
 export const CATEGORIES = Object.freeze([
   Object.freeze({ id: 'drawing', name: 'Drawing', emoji: '🎨' }),

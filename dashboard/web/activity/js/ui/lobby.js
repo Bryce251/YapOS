@@ -3,8 +3,11 @@ import { board, standings } from './board.js';
 import { sfx as defaultSfx } from './sfx.js';
 import { burstFrom } from './juice.js';
 import { CATEGORIES } from '../games/index.js';
+import { createDailyBox } from './daily.js';
+import { cleanCode, CODE_MAX } from '../engine.js';
 
 export const TAB_KEY = 'yapos.party.tab';
+export const DAILY_INTRO = 'Everyone everywhere gets the same puzzle today. Your best score goes on the daily board and keeps your streak going.';
 export const ALL_TAB = 'all';
 
 function slim(p) {
@@ -39,6 +42,17 @@ export function lobbyModel(snap, games) {
     games: games.map((g) => ({ id: g.id, name: g.name, emoji: g.emoji, blurb: g.blurb, min: g.minPlayers || 1, category: g.category || null })),
     rounds: snap.room.round || 0,
   };
+}
+
+export function dailyOf(game, settings) {
+  const spec = ((game && game.settings) || []).find((s) => s && s.daily && s.type === 'toggle');
+  return spec && settings && settings[spec.id] ? spec.daily : null;
+}
+
+export function codeText(spec, value) {
+  const v = typeof value === 'string' ? value : '';
+  if (v) return v;
+  return spec.empty || 'None';
 }
 
 export function pickerTabs(list, categories = CATEGORIES) {
@@ -116,8 +130,51 @@ export function joinButton(m, { size = 'xl', key = 'join' } = {}) {
   });
 }
 
-function settingControl(spec, value, isHost, onSet) {
+function codeControl(spec, value, isHost, onSet, drafts) {
+  const max = Number.isInteger(spec.max) ? Math.min(spec.max, CODE_MAX) : CODE_MAX;
+  if (!isHost) return h('span', { class: ['code-value', value ? null : 'is-empty'], text: codeText(spec, value) });
+  const draft = drafts && drafts.has(spec.id) ? drafts.get(spec.id) : typeof value === 'string' ? value : '';
+  const commit = (el) => {
+    const v = cleanCode(el.value, max) ?? '';
+    el.value = v;
+    if (drafts) drafts.delete(spec.id);
+    if (v !== (value || '')) onSet(spec.id, v);
+  };
+  return h('input', {
+    class: 'code-input',
+    dataset: { key: `set-${spec.id}` },
+    attrs: {
+      type: 'text',
+      value: draft,
+      maxlength: max,
+      autocomplete: 'off',
+      autocapitalize: 'characters',
+      autocorrect: 'off',
+      spellcheck: 'false',
+      enterkeyhint: 'done',
+      placeholder: spec.placeholder || 'Code',
+      'aria-label': spec.label,
+    },
+    on: {
+      input: (e) => {
+        const el = e.currentTarget;
+        const v = cleanCode(el.value, max) ?? '';
+        if (el.value !== v) el.value = v;
+        if (drafts) drafts.set(spec.id, v);
+      },
+      change: (e) => commit(e.currentTarget),
+      keydown: (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        commit(e.currentTarget);
+      },
+    },
+  });
+}
+
+function settingControl(spec, value, isHost, onSet, drafts) {
   const opts = spec.options || [];
+  if (spec.type === 'code') return codeControl(spec, value, isHost, onSet, drafts);
   if (spec.type === 'multi') {
     const picked = Array.isArray(value) ? value : [];
     return h(
@@ -197,6 +254,9 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
   let tab = readTab(store);
   let tabPick = null;
   let last = null;
+  const drafts = new Map();
+  const daily = createDailyBox();
+  let draftPick = null;
 
   function catOf(m, id) {
     const g = m.games.find((x) => x.id === id);
@@ -389,9 +449,11 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       'div',
       { class: 'settings' },
       (game.settings || []).map((spec) =>
-        h('div', { class: 'setting' }, h('span', { class: 'setting-label', text: spec.label }), settingControl(spec, m.settings[spec.id], m.isHost, setSetting)),
+        h('div', { class: ['setting', spec.type === 'code' ? 'is-code' : null] }, h('span', { class: 'setting-label', text: spec.label }), settingControl(spec, m.settings[spec.id], m.isHost, setSetting, drafts)),
       ),
     );
+    const dailyKind = dailyOf(game, m.settings);
+    daily.show(dailyKind, { intro: DAILY_INTRO, compact: true });
     const gameCard = h(
       'div',
       { class: 'card glass game-card' },
@@ -399,6 +461,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       tabRow,
       panel,
       settings,
+      dailyKind ? daily.el : null,
       h('div', { class: 'start-row' }, actionRow(m, gameMeta)),
     );
     const scoreCard = h(
@@ -420,6 +483,8 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     el,
     update(snap) {
       last = lobbyModel(snap, games);
+      if (draftPick !== last.pick || !last.isHost) drafts.clear();
+      draftPick = last.pick;
       settleTab(last);
       paint(el, { ...last, tab });
       if (!popPending) return;
@@ -430,6 +495,8 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       cue(sfx, 'pop');
       burstFrom(tile, { count: 10, spread: 70, size: 7, emoji: emoji && emoji.textContent ? [emoji.textContent] : null });
     },
-    destroy() {},
+    destroy() {
+      daily.destroy();
+    },
   };
 }

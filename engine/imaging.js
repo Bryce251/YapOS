@@ -17,6 +17,8 @@ export const TRANSPARENT = 0;
 export const WHITE = GREYS;
 export const BLACK = 1;
 const COLOURS = 256 - GREYS - 1;
+export const ANIMATED_PALETTE = 128;
+const ANIMATED_COLOURS = ANIMATED_PALETTE - GREYS - 1;
 const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 const DITHER = 10;
 const SAMPLE_PER_FRAME = 8192;
@@ -33,7 +35,7 @@ export const LIMITS = {
   maxCoefBytes: 40 * 1024 * 1024,
   maxInterlacedPixels: 4 * 1024 * 1024,
   outputStop: Math.floor(9.5 * 1024 * 1024) + 1024 * 1024,
-  maxSeconds: 12,
+  maxSeconds: 10,
 };
 
 export class ImagingError extends Error {
@@ -424,11 +426,11 @@ export function samplePixels(rgba, limit = SAMPLE_PER_FRAME) {
   return out;
 }
 
-export function buildPalette(sample) {
+export function buildPalette(sample, colours = COLOURS) {
   const pal = basePalette();
   if (sample.length >= 4) {
     const data = Uint8Array.from(sample);
-    for (const c of quantize(data, COLOURS, { format: 'rgb444' })) pal.push([c[0], c[1], c[2]]);
+    for (const c of quantize(data, colours, { format: 'rgb444' })) pal.push([c[0], c[1], c[2]]);
   }
   return pal;
 }
@@ -491,7 +493,8 @@ export class GifWriter {
     this.gif = GIFEncoder();
     this.index = new Uint8Array(width * this.height);
     if (barIndices) this.index.set(barIndices);
-    this.shared = makeMapper(buildPalette(sample));
+    this.colours = animated ? ANIMATED_COLOURS : COLOURS;
+    this.shared = makeMapper(buildPalette(sample, this.colours));
     this.sharedError = Math.max(1, this.shared.error(Uint8Array.from(sample)));
     this.prev = null;
     this.global = null;
@@ -505,7 +508,7 @@ export class GifWriter {
     const { width, barHeight, index } = this;
     let mapper = this.shared;
     if (this.animated && mapper.error(rgba) > Math.max(this.sharedError * 2.5, 150)) {
-      mapper = makeMapper(buildPalette(samplePixels(rgba, 16384)));
+      mapper = makeMapper(buildPalette(samplePixels(rgba, 16384), this.colours));
       this.localFrames++;
     }
     const base = width * barHeight;

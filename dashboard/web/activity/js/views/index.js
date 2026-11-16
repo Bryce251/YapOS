@@ -12,6 +12,9 @@ import { createEmojiView } from './emoji.js';
 import { createHottakesView } from './hottakes.js';
 import { createTruthsView } from './truths.js';
 import { createReflexView } from './reflex.js';
+import { createBluffView } from './bluff.js';
+import { createPixelView } from './pixel.js';
+import { createHigherlowerView } from './higherlower.js';
 
 function soundOf(over) {
   if (over && typeof over.play === 'function') return over;
@@ -78,6 +81,9 @@ export const VIEWS = Object.freeze({
   hottakes: cued(createHottakesView),
   truths: cued(createTruthsView),
   reflex: cued(createReflexView),
+  bluff: cued(createBluffView),
+  pixel: cued(createPixelView),
+  higherlower: cued(createHigherlowerView),
 });
 
 export function viewFor(id) {

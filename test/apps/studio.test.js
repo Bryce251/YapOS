@@ -12,12 +12,13 @@ import pngjs from 'pngjs';
 import jpegjs from 'jpeg-js';
 import gifenc from 'gifenc';
 import omggif from 'omggif';
-import { gifSchedule, renderInWorker, bundledFontPath, textMeasure, LIMITS } from '../../engine/imaging.js';
+import { gifSchedule, renderInWorker, bundledFontPath, textMeasure, LIMITS, GifWriter, ANIMATED_PALETTE } from '../../engine/imaging.js';
 import { decodeJpeg } from '../../engine/imaging-jpeg.js';
 import { decodePng, readPngChunks } from '../../engine/imaging-png.js';
 import {
   wrapText, cleanCaption, fontSizeFor, minFontSizeFor, measureText, fontMetrics, filterPath, buildArgs, sniffImage, imageSize,
   extensionOf, attachmentUrl, isAllowedUrl, outputSize, parseDm, drawable, findFont, findFfmpeg, sweepStale, FONT_CANDIDATES, PASSES,
+  ANIMATED_AREA, ANIMATED_COLOURS,
 } from '../../apps/studio.js';
 
 const S = IDS.server;
@@ -327,7 +328,7 @@ test('extensionOf, parseDm and outputSize behave', () => {
   assert.equal(parseDm(''), null);
   assert.equal(parseDm(null), null);
 
-  assert.deepEqual(outputSize({ width: 1280, height: 720 }), { width: 480, height: 270 });
+  assert.deepEqual(outputSize({ width: 1280, height: 720 }), { width: 400, height: 226 });
   assert.deepEqual(outputSize({ width: 1280, height: 720, maxWidth: 320 }), { width: 320, height: 180 });
   assert.deepEqual(outputSize({ width: 333, height: 201 }), { width: 332, height: 200 });
   assert.deepEqual(outputSize({ width: 100, height: 80 }), { width: 100, height: 80 });
@@ -335,14 +336,14 @@ test('extensionOf, parseDm and outputSize behave', () => {
   assert.deepEqual(outputSize({ width: 10, height: 4000, minWidth: 240 }), { width: 10, height: 4000 });
   assert.deepEqual(outputSize({ width: 40, height: 400, minWidth: 240 }), { width: 204, height: 2040 });
   assert.deepEqual(outputSize({ width: 100, height: 1000, minWidth: 240, maxWidth: 320 }), { width: 204, height: 2040 });
-  assert.deepEqual(outputSize({ width: 4096, height: 3 }), { width: 480, height: 2 });
-  assert.deepEqual(outputSize({ width: 480, height: 640, maxArea: 480 * 640 }), { width: 480, height: 640 });
+  assert.deepEqual(outputSize({ width: 4096, height: 3 }), { width: 400, height: 2 });
+  assert.deepEqual(outputSize({ width: 400, height: 540, maxArea: ANIMATED_AREA }), { width: 400, height: 540 });
   for (const [width, height, maxWidth] of [[480, 4096, 480], [4096, 4096, 480], [100, 4096, 480], [64, 4000, 320], [480, 4096, 320]]) {
     const out = outputSize({ width, height, maxWidth, minWidth: 240, maxArea: 480 * 640 });
     assert.ok(out.width * out.height <= 480 * 640 * 1.02, `${width}x${height} -> ${out.width}x${out.height}`);
     assert.ok(out.width <= maxWidth && out.width % 2 === 0 && out.height % 2 === 0);
   }
-  assert.deepEqual(PASSES, [{ maxWidth: 480, fps: 15 }, { maxWidth: 320, fps: 10 }]);
+  assert.deepEqual(PASSES, [{ maxWidth: 400, fps: 12 }, { maxWidth: 288, fps: 8 }]);
 });
 
 test('drawable drops characters the caption font has no shape for', () => {
@@ -423,8 +424,8 @@ test('DM caption: the GIF comes back in the DM as caption.gif', async () => {
   const job = state.jobs[0];
   assert.equal(job.kind, 'caption');
   assert.equal(job.type, 'png');
-  assert.equal(job.outWidth, 480);
-  assert.equal(job.outHeight, 360);
+  assert.equal(job.outWidth, 400);
+  assert.equal(job.outHeight, 300);
   assert.equal(job.layout.lines.join(' '), 'when the code works first try');
   assert.equal(job.lineFiles.length, job.layout.lines.length);
   assert.equal(filesIn(G).length, 0);
@@ -813,7 +814,7 @@ test('hostile file names and paths never reach the renderer or the reply', async
   assert.equal(path.dirname(job.input), job.dir);
   assert.match(path.basename(job.dir), /^yapos-studio-[0-9a-f]{16}-.{6}$/);
   assert.equal(path.dirname(job.output), job.dir);
-  for (const f of job.lineFiles) assert.match(path.basename(f), /^line-480-\d\.txt$/);
+  for (const f of job.lineFiles) assert.match(path.basename(f), /^line-400-\d\.txt$/);
   const args = svc.buildArgs({ ...job, fontFile: job.fontFile || 'C:/Windows/Fonts/impact.ttf' });
   const flat = args.join('\n').split(path.basename(job.dir)).join('');
   for (const bad of ['concat:', 'win.ini', 'calc', 'quoted', 'pts', '-i.png']) assert.ok(!flat.includes(bad), bad);
@@ -1030,14 +1031,14 @@ test('a renderer failure is friendly and never shows raw output', async () => {
   assert.match(lastText(dmOf(IDS.mod)), /couldn't turn that picture into a GIF/);
 });
 
-test('an oversized result is retried once at 320 px and 10 fps, then refused', async () => {
-  const big = () => { const b = Buffer.alloc(Math.floor(9.5 * MB) + 1); gifHead(480, 400).copy(b); return b; };
+test('an oversized result is retried once at 288 px and 8 fps, then refused', async () => {
+  const big = () => { const b = Buffer.alloc(Math.floor(9.5 * MB) + 1); gifHead(400, 300).copy(b); return b; };
   const { state, dm, lastText, filesIn } = await make();
-  state.out = (job) => (job.maxWidth === 480 ? big() : gifHead(320, 266));
+  state.out = (job) => (job.maxWidth === 400 ? big() : gifHead(288, 216));
   await dm('caption retry me', { attachments: [pic()] });
   assert.equal(state.jobs.length, 2);
-  assert.deepEqual([state.jobs[0].maxWidth, state.jobs[0].fps, state.jobs[0].outWidth], [480, 15, 480]);
-  assert.deepEqual([state.jobs[1].maxWidth, state.jobs[1].fps, state.jobs[1].outWidth], [320, 10, 320]);
+  assert.deepEqual([state.jobs[0].maxWidth, state.jobs[0].fps, state.jobs[0].outWidth], [400, 12, 400]);
+  assert.deepEqual([state.jobs[1].maxWidth, state.jobs[1].fps, state.jobs[1].outWidth], [288, 8, 288]);
   assert.ok(state.jobs[1].layout.fontSize < state.jobs[0].layout.fontSize);
   assert.equal(filesIn(dmOf(IDS.member)).length, 1);
 
@@ -1527,22 +1528,22 @@ test('real ffmpeg: gif converts stills and keeps animations moving', { skip: noF
   assert.deepEqual([fromJpg.width, fromJpg.height, fromJpg.frames], [100, 80, 1]);
 });
 
-test('real ffmpeg: wide pictures are scaled to 480 and sideways photos are turned upright', { skip: noFfmpeg }, async () => {
+test('real ffmpeg: wide pictures are scaled to 400 and sideways photos are turned upright', { skip: noFfmpeg }, async () => {
   const { svc, check, wide, jpg } = await realSetup();
   const scaled = await check(await svc.produce({ kind: 'gif', data: wide }), 'gif-wide.gif');
-  assert.deepEqual([scaled.width, scaled.height], [480, 270]);
+  assert.deepEqual([scaled.width, scaled.height], [400, 226]);
   const sideways = Buffer.concat([jpg.subarray(0, 2), exifSegment(6), jpg.subarray(2)]);
   assert.deepEqual(imageSize(sideways), { width: 80, height: 100, orientation: 6, animated: false });
   const turned = await check(await svc.produce({ kind: 'gif', data: sideways }), 'gif-turned.gif');
   assert.deepEqual([turned.width, turned.height], [80, 100]);
 });
 
-test('real ffmpeg: long fast animations are capped at 15 fps and 12 seconds', { skip: noFfmpeg }, async () => {
+test('real ffmpeg: long fast animations are capped at 12 fps and 10 seconds', { skip: noFfmpeg }, async () => {
   const { svc, check, fast } = await realSetup();
   assert.ok(gifFrames(fast) > 400);
   const info = await check(await svc.produce({ kind: 'gif', data: fast }), 'gif-fast.gif');
-  assert.ok(info.frames > 100 && info.frames <= 181, `frames ${info.frames}`);
-  if (info.duration !== null) assert.ok(info.duration <= 12.2, `duration ${info.duration}`);
+  assert.ok(info.frames > 80 && info.frames <= 121, `frames ${info.frames}`);
+  if (info.duration !== null) assert.ok(info.duration <= 10.2, `duration ${info.duration}`);
 });
 
 test('real ffmpeg: the whole DM flow sends a real GIF, and a damaged picture fails kindly', { skip: noCaption }, async () => {
@@ -1659,7 +1660,7 @@ test('real ffmpeg: the output stops growing just past the size limit and tall an
 
   const tall = fs.readFileSync(gen(['-i', 'testsrc2=size=480x2000:rate=10', '-t', '1'], 'tall.gif'));
   const info = await check(await svc.produce({ kind: 'gif', data: tall }), 'gif-tall.gif');
-  assert.ok(info.width * info.height <= 480 * 640 * 1.02, `${info.width}x${info.height}`);
+  assert.ok(info.width * info.height <= 400 * 540 * 1.02, `${info.width}x${info.height}`);
   assert.ok(info.frames > 1);
   assert.ok(Math.abs(info.height / info.width - 2000 / 480) < 0.05);
 });
@@ -1825,15 +1826,15 @@ test('built-in renderer: an animated caption keeps the bar on every frame', asyn
   assert.ok(near(gif.at(2, 120, bar + 90), GREEN));
 });
 
-test('built-in renderer: fast GIFs drop frames to the pass fps and long ones stop at 12 seconds', async () => {
+test('built-in renderer: fast GIFs drop frames to the pass fps and long ones stop at 10 seconds', async () => {
   const sched = gifSchedule(Array(30).fill(2), 15);
   assert.ok(sched.length >= 8 && sched.length <= 10, `${sched.length} frames`);
   assert.equal(sched.reduce((a, s) => a + s.delay, 0), 60);
   assert.ok(sched.every((s) => s.delay >= 6));
   assert.equal(gifSchedule(Array(90).fill(7).map((d, i) => (i % 3 === 2 ? 6 : d)), 15).length, 90);
   const long = gifSchedule(Array(200).fill(10), 15);
-  assert.equal(long.length, 120);
-  assert.equal(long.reduce((a, s) => a + s.delay, 0), 1200);
+  assert.equal(long.length, 100);
+  assert.equal(long.reduce((a, s) => a + s.delay, 0), 1000);
   assert.deepEqual(gifSchedule([0, 1, 0], 15).map((s) => s.delay), [10, 10, 10]);
 
   const { svc } = await jsStudio();
@@ -2205,4 +2206,39 @@ test('a slow Yapin is not logged as an error and the next try works', async (t) 
   await dm('gif', { attachments: [pic()] });
   t.mock.timers.reset();
   assert.equal(filesIn(cid).length, 1, 'the next try works once Yapin is back');
+});
+
+test('Studio GIFs come out smaller and faster: 400 px, 12 fps, 10 seconds and 128 colours when animated', async () => {
+  assert.ok(PASSES[0].maxWidth <= 400 && PASSES[0].fps <= 12);
+  assert.ok(PASSES[1].maxWidth < PASSES[0].maxWidth && PASSES[1].fps < PASSES[0].fps);
+  assert.equal(LIMITS.maxSeconds, 10);
+  assert.ok(ANIMATED_AREA <= 400 * 540);
+  const hd = outputSize({ width: 1920, height: 1080 });
+  assert.ok(hd.width * hd.height < 480 * 270 * 0.75, `${hd.width}x${hd.height} is a lot fewer pixels than before`);
+
+  const rainbow = [];
+  for (let i = 0; i < 4096; i++) rainbow.push((i * 37) & 255, (i * 91) & 255, (i * 13) & 255, 255);
+  const moving = new GifWriter({ width: 32, imageHeight: 24, sample: rainbow, animated: true });
+  const still = new GifWriter({ width: 32, imageHeight: 24, sample: rainbow, animated: false });
+  assert.equal(ANIMATED_PALETTE, ANIMATED_COLOURS);
+  assert.ok(moving.shared.palette.length <= ANIMATED_PALETTE, `${moving.shared.palette.length} colours`);
+  assert.ok(still.shared.palette.length > ANIMATED_PALETTE, 'stills keep the full palette');
+
+  const base = { type: 'gif', dir: 'C:\tmp\job', input: 'C:\tmp\job\in.gif', output: 'C:\tmp\job\out-400.gif', outWidth: 400, outHeight: 300, orientation: 1, fps: 12, seconds: 10, kind: 'gif' };
+  const anim = buildArgs({ ...base, animated: true });
+  const g = anim[anim.indexOf('-filter_complex') + 1];
+  assert.match(g, /palettegen=max_colors=128:stats_mode=diff/);
+  assert.match(g, /paletteuse=dither=bayer/);
+  assert.equal(anim[anim.lastIndexOf('-t') + 1], '10');
+  const one = buildArgs({ ...base, type: 'png', animated: false });
+  const g1 = one[one.indexOf('-filter_complex') + 1];
+  assert.ok(!/max_colors/.test(g1));
+  assert.match(g1, /dither=sierra2_4a/);
+
+  const { svc } = await jsStudio();
+  const colours = [RED, BLUE, GREEN, YELLOW];
+  const big = gifOf(640, 480, Array.from({ length: 6 }, (_, i) => ({ color: colours[i % 4], delay: 10 })));
+  const out = readGif(await svc.produce({ kind: 'gif', data: big }));
+  assert.deepEqual([out.width, out.height], [400, 300]);
+  assert.equal(out.frames.length, 6);
 });

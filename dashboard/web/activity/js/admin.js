@@ -1,3 +1,4 @@
+import { findBlocked, isBlockedGameWord } from './filter.js';
 export const ADMINS_EVENT = 'yapos:admins';
 export const ADMINS_ENDPOINT = '/api/activity/admins';
 export const ADMIN_BATCH = 40;
@@ -11,7 +12,7 @@ export const REPORT_INK_CHARS = 16000;
 export const REPORT_NAME_MAX = 64;
 export const REPORT_WORD_MAX = 80;
 export const REPORT_SENT_MAX = 200;
-export const TEXT_REPORT_GAMES = Object.freeze(['draw', 'hottakes', 'truths', 'telephone', 'chain']);
+export const TEXT_REPORT_GAMES = Object.freeze(['draw', 'hottakes', 'truths', 'telephone', 'chain', 'bluff']);
 export const REPORT_TEXT_MAX = 300;
 export const REPORT_CONTEXT_MAX = 200;
 const INK_RE = /^[A-Za-z0-9_-]{6,4096}$/;
@@ -57,6 +58,7 @@ export function resetAdmins() {
   busy = new Map();
   listeners = new Set();
   env = defaults();
+  resetParty();
 }
 
 function idOf(x) {
@@ -342,4 +344,332 @@ export async function sendTextReport(input) {
   } catch {
     return false;
   }
+}
+
+export const RESULTS_ENDPOINT = '/api/activity/results';
+export const RESULT_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower']);
+export const RESULT_PLAYERS_MAX = 16;
+export const RESULT_SCORE_MAX = 1000000;
+export const RESULT_EXTRA_KEYS = 8;
+export const RESULT_TEAM_MAX = 24;
+export const PARTY_XP_PLAY = 10;
+export const PARTY_XP_WIN = 15;
+export const PARTY_XP_DAY = 200;
+export const DAILY_ENDPOINT = '/api/activity/daily';
+export const DAILY_TOP_ENDPOINT = '/api/activity/daily/top';
+export const DAILY_KINDS = Object.freeze(['hive', 'scramble']);
+export const DAILY_ROUNDS = 5;
+export const DAILY_WORDS_MAX = 200;
+export const DAILY_TOP_MAX = 20;
+export const DAILY_TOP_MS = 30000;
+export const DAILY_RETRY_MS = 8000;
+export const PACK_ENDPOINT = '/api/activity/pack/';
+export const PACK_CODE_MAX = 12;
+export const PACK_CODE_MIN = 4;
+export const PACK_WORDS_MAX = 500;
+export const PACK_TRIVIA_MAX = 200;
+export const PACK_KEEP = 16;
+const GAME_RE = /^[a-z0-9-]{1,32}$/;
+const EXTRA_RE = /^[A-Za-z][A-Za-z0-9]{0,23}$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+let dailyCache = new Map();
+let dailyBusy = new Map();
+let dailyFailed = new Map();
+let topCache = new Map();
+let packCache = new Map();
+let packBusy = new Map();
+
+export function resetParty() {
+  dailyCache = new Map();
+  dailyBusy = new Map();
+  dailyFailed = new Map();
+  topCache = new Map();
+  packCache = new Map();
+  packBusy = new Map();
+}
+
+async function getJson(url) {
+  if (typeof env.fetch !== 'function') return null;
+  try {
+    const res = await env.fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+    if (!res || !res.ok) return null;
+    const body = await res.json();
+    return body && typeof body === 'object' ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+async function postJson(url, body) {
+  if (typeof env.fetch !== 'function') return null;
+  try {
+    const res = await env.fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res || !res.ok) return null;
+    try {
+      const out = await res.json();
+      return out && typeof out === 'object' ? out : {};
+    } catch {
+      return {};
+    }
+  } catch {
+    return null;
+  }
+}
+
+function cleanHandle(raw) {
+  if (typeof raw !== 'string') return null;
+  const v = cleanReportName(raw.replace(/^@+/, '')).replace(/\s/g, '');
+  return v || null;
+}
+
+function cleanUser(raw) {
+  const u = raw && typeof raw === 'object' ? raw : {};
+  const id = idOf(u.id);
+  if (!validId(id)) return null;
+  return { id, name: cleanReportName(u.name) || 'Player', username: cleanHandle(u.username) };
+}
+
+export function partyXp(won) {
+  return PARTY_XP_PLAY + (won ? PARTY_XP_WIN : 0);
+}
+
+export function resultsBody(input) {
+  const x = input && typeof input === 'object' ? input : {};
+  if (typeof x.game !== 'string' || !GAME_RE.test(x.game) || !RESULT_GAMES.includes(x.game)) return null;
+  const seen = new Set();
+  const players = [];
+  for (const raw of Array.isArray(x.players) ? x.players : []) {
+    if (players.length >= RESULT_PLAYERS_MAX) break;
+    const u = cleanUser(raw);
+    if (!u || seen.has(u.id)) continue;
+    seen.add(u.id);
+    const n = Number(raw.score);
+    const score = Number.isFinite(n) ? Math.round(Math.max(-RESULT_SCORE_MAX, Math.min(RESULT_SCORE_MAX, n))) : 0;
+    const team = typeof raw.team === 'string' ? clipReport(raw.team, RESULT_TEAM_MAX) || null : null;
+    players.push({ id: u.id, name: u.name, username: u.username, score, won: raw.won === true, team });
+  }
+  if (players.length < 2) return null;
+  const extra = {};
+  const src = x.extra && typeof x.extra === 'object' && !Array.isArray(x.extra) ? x.extra : {};
+  for (const [k, v] of Object.entries(src)) {
+    if (Object.keys(extra).length >= RESULT_EXTRA_KEYS) break;
+    if (!EXTRA_RE.test(k) || !Array.isArray(v)) continue;
+    const ids = [...new Set(v.map(idOf).filter((id) => validId(id) && seen.has(id)))].slice(0, RESULT_PLAYERS_MAX);
+    if (ids.length) extra[k] = ids;
+  }
+  return { game: x.game, at: Number.isFinite(x.at) ? Math.round(x.at) : env.now(), players, extra };
+}
+
+export async function sendResults(input) {
+  const body = resultsBody(input);
+  if (!body) return false;
+  return (await postJson(RESULTS_ENDPOINT, body)) !== null;
+}
+
+export function utcDay(ms) {
+  const d = new Date(Number.isFinite(ms) ? ms : env.now());
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+function lowLetters(raw) {
+  const s = Array.isArray(raw) ? raw.join('') : typeof raw === 'string' ? raw : '';
+  return s.toLowerCase();
+}
+
+export function cleanDaily(raw) {
+  const x = raw && typeof raw === 'object' ? raw : null;
+  if (!x || typeof x.date !== 'string' || !DATE_RE.test(x.date)) return null;
+  const hive = x.hive && typeof x.hive === 'object' ? x.hive : null;
+  const letters = hive ? lowLetters(hive.letters) : '';
+  const centre = hive && typeof hive.centre === 'string' ? hive.centre.toLowerCase() : '';
+  const set = [...new Set(letters)].sort().join('');
+  const hiveOk = /^[a-z]{7}$/.test(set) && letters.length === 7 && /^[a-z]$/.test(centre) && set.includes(centre);
+  const rounds = [];
+  const sc = x.scramble && typeof x.scramble === 'object' ? x.scramble : null;
+  for (const r of sc && Array.isArray(sc.rounds) ? sc.rounds.slice(0, DAILY_ROUNDS) : []) {
+    const l = lowLetters(r && r.letters);
+    if (!/^[a-z]{3,12}$/.test(l)) return null;
+    const hash = r && (typeof r.answerHash === 'string' || Number.isFinite(r.answerHash)) ? r.answerHash : null;
+    rounds.push({ letters: l, answerHash: hash });
+  }
+  if (!hiveOk || !rounds.length) return null;
+  return { date: x.date, hive: { letters: set, centre }, scramble: { rounds } };
+}
+
+export function cachedDaily(date) {
+  const key = typeof date === 'string' ? date : utcDay();
+  return dailyCache.get(key) || null;
+}
+
+export function dailyFailedFor(date) {
+  const at = dailyFailed.get(date);
+  return at !== undefined && env.now() - at < DAILY_RETRY_MS;
+}
+
+async function localDaily(date) {
+  try {
+    const load =
+      typeof env.importDaily === 'function'
+        ? env.importDaily
+        : () => Promise.all([import('./daily.js'), import('../data/hive.js'), import('../data/scramble.js'), import('./dictionary.js')]);
+    const got = await load();
+    const [mod, hiveData, scrambleData, dict] = Array.isArray(got) ? got : [got];
+    if (!mod || typeof mod.dailyPuzzle !== 'function') return null;
+    const opts = { hiveSeeds: hiveData ? hiveData.SEEDS : undefined, scrambleWords: scrambleData ? scrambleData.WORDS : undefined };
+    if (dict && dict.ready && typeof dict.isWord === 'function') opts.isWord = dict.isWord;
+    return cleanDaily(mod.dailyPuzzle(date, opts));
+  } catch {
+    return null;
+  }
+}
+
+export function loadDaily(date) {
+  const key = typeof date === 'string' && DATE_RE.test(date) ? date : utcDay();
+  if (dailyCache.has(key)) return Promise.resolve(dailyCache.get(key));
+  if (dailyBusy.has(key)) return dailyBusy.get(key);
+  const p = (async () => {
+    const body = await getJson(DAILY_ENDPOINT);
+    let puzzle = cleanDaily(body && body.puzzle && typeof body.puzzle === 'object' ? body.puzzle : body);
+    if (puzzle && puzzle.date !== key) puzzle = null;
+    if (!puzzle) puzzle = await localDaily(key);
+    if (puzzle && puzzle.date === key) {
+      dailyCache.set(key, puzzle);
+      dailyFailed.delete(key);
+      while (dailyCache.size > 3) dailyCache.delete(dailyCache.keys().next().value);
+      return puzzle;
+    }
+    dailyFailed.set(key, env.now());
+    return null;
+  })().finally(() => dailyBusy.delete(key));
+  dailyBusy.set(key, p);
+  return p;
+}
+
+export function dailyBody(input) {
+  const x = input && typeof input === 'object' ? input : {};
+  if (typeof x.date !== 'string' || !DATE_RE.test(x.date) || !DAILY_KINDS.includes(x.kind)) return null;
+  const user = cleanUser(x.user);
+  if (!user) return null;
+  const ms = Number.isFinite(x.ms) ? Math.round(Math.max(0, Math.min(3600000, x.ms))) : 0;
+  if (x.kind === 'hive') {
+    const list = (Array.isArray(x.words) ? x.words : []).filter((w) => typeof w === 'string').map((w) => w.trim().toLowerCase());
+    const words = [...new Set(list.filter((w) => /^[a-z]{4,30}$/.test(w)))].slice(0, DAILY_WORDS_MAX);
+    if (!words.length) return null;
+    return { date: x.date, kind: 'hive', user, words, ms };
+  }
+  const answers = [];
+  const src = Array.isArray(x.answers) ? x.answers : [];
+  for (let i = 0; i < DAILY_ROUNDS; i += 1) {
+    const a = typeof src[i] === 'string' ? src[i].trim().toLowerCase() : '';
+    answers.push(/^[a-z]{1,24}$/.test(a) ? a : '');
+  }
+  if (!answers.some(Boolean)) return null;
+  return { date: x.date, kind: 'scramble', user, answers, ms };
+}
+
+export async function sendDaily(input) {
+  const body = dailyBody(input);
+  if (!body) return null;
+  const out = await postJson(DAILY_ENDPOINT, body);
+  if (!out) return null;
+  const num = (v) => (v !== null && v !== undefined && Number.isFinite(Number(v)) ? Math.max(0, Math.round(Number(v))) : null);
+  topCache.delete(body.kind);
+  const score = num(out.score) ?? 0;
+  const best = num(out.best);
+  return { score, best: best !== null && best > score ? best : score, rank: num(out.rank), streak: num(out.streak) ?? 0 };
+}
+
+function cleanTopRow(r) {
+  if (!r || typeof r !== 'object') return null;
+  const score = Number(r.score);
+  if (!Number.isFinite(score)) return null;
+  const streak = Number(r.streak);
+  return { name: cleanReportName(r.name) || 'Player', username: cleanHandle(r.username), score: Math.max(0, Math.round(score)), streak: Number.isFinite(streak) ? Math.max(0, Math.round(streak)) : 0 };
+}
+
+export function cachedTop(kind) {
+  const hit = topCache.get(kind);
+  return hit && Array.isArray(hit.rows) ? hit.rows : null;
+}
+
+export async function dailyTop(kind, opts = {}) {
+  if (!DAILY_KINDS.includes(kind)) return null;
+  const hit = topCache.get(kind);
+  if (hit && !opts.force && env.now() - hit.at < DAILY_TOP_MS) return hit.rows;
+  const body = await getJson(`${DAILY_TOP_ENDPOINT}?${new URLSearchParams({ kind })}`);
+  const list = body && Array.isArray(body.top) ? body.top : Array.isArray(body) ? body : null;
+  if (!list) return hit ? hit.rows : null;
+  const rows = list.map(cleanTopRow).filter(Boolean).slice(0, DAILY_TOP_MAX);
+  topCache.set(kind, { rows, at: env.now() });
+  return rows;
+}
+
+export function cleanPackCode(raw) {
+  if (typeof raw !== 'string') return '';
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, PACK_CODE_MAX);
+}
+
+function cleanPackText(raw, max) {
+  const text = clipReport(raw, max);
+  if (!text || findBlocked(text).length) return '';
+  return text;
+}
+
+export function cleanPack(raw) {
+  const x = raw && typeof raw === 'object' ? raw : null;
+  if (!x) return null;
+  const words = [];
+  const seen = new Set();
+  for (const w of Array.isArray(x.words) ? x.words : []) {
+    if (words.length >= PACK_WORDS_MAX) break;
+    const text = cleanPackText(w, 40);
+    const key = text.toLowerCase();
+    if (!text || seen.has(key) || isBlockedGameWord(key)) continue;
+    seen.add(key);
+    words.push(text);
+  }
+  const trivia = [];
+  for (const t of Array.isArray(x.trivia) ? x.trivia : []) {
+    if (trivia.length >= PACK_TRIVIA_MAX) break;
+    if (!t || typeof t !== 'object') continue;
+    const q = cleanPackText(t.q, 200);
+    const a = cleanPackText(t.a, 80);
+    const w = (Array.isArray(t.w) ? t.w : []).map((v) => cleanPackText(v, 80)).filter(Boolean).slice(0, 3);
+    const uniq = new Set(w.map((v) => v.toLowerCase()));
+    if (!q || !a || w.length < 3 || uniq.size < 3 || uniq.has(a.toLowerCase())) continue;
+    trivia.push({ q, a, w });
+  }
+  if (!words.length && !trivia.length) return null;
+  return { code: cleanPackCode(x.code), name: cleanPackText(x.name, REPORT_NAME_MAX) || 'Word pack', words, trivia };
+}
+
+export function cachedPack(code) {
+  return packCache.get(cleanPackCode(code)) || null;
+}
+
+export function loadPack(code) {
+  const key = cleanPackCode(code);
+  if (key.length < PACK_CODE_MIN) return Promise.resolve(null);
+  if (packCache.has(key)) return Promise.resolve(packCache.get(key));
+  if (packBusy.has(key)) return packBusy.get(key);
+  const p = getJson(`${PACK_ENDPOINT}${encodeURIComponent(key)}`)
+    .then((body) => {
+      const pack = cleanPack(body);
+      if (!pack) return null;
+      const out = { code: key, name: pack.name, words: pack.words, trivia: pack.trivia };
+      packCache.set(key, out);
+      while (packCache.size > PACK_KEEP) packCache.delete(packCache.keys().next().value);
+      return out;
+    })
+    .catch(() => null)
+    .finally(() => packBusy.delete(key));
+  packBusy.set(key, p);
+  return p;
 }

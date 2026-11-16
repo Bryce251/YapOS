@@ -1,5 +1,7 @@
 import trivia, { REVEAL_MS } from '../games/trivia.js';
+import { TEAM_MS } from '../games/teams.js';
 import { h, memo, timer, avatar, plural } from '../ui/dom.js';
+import { teamBar, teamFinal, packChip } from './teams.js';
 
 const LETTERS = ['A', 'B', 'C', 'D'];
 
@@ -35,7 +37,7 @@ function gotList(list) {
     list.slice(0, 8).map((p) =>
       h(
         'li',
-        { class: ['got-item', p.isMe ? 'is-me' : null], attrs: { title: p.username ? `${p.name} (@${p.username})` : p.name } },
+        { class: ['got-item', p.isMe ? 'is-me' : null, p.team ? `team-${p.team}` : null], attrs: { title: p.username ? `${p.name} (@${p.username})` : p.name } },
         avatar(p, 'xs'),
         h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }),
         h('span', { class: 'got-tick', text: `+${p.pts.toLocaleString('en-US')}` }),
@@ -74,12 +76,19 @@ export function createTriviaView({ engine, fx, cues }) {
 
   function render(m) {
     if (!m) return h('p', { class: 'waiting', text: 'Getting the first round ready…' });
+    if (m.phase === 'final') {
+      return [
+        h('div', { class: 'game-head' }, h('span', { class: 'chip chip-static', text: '🏁 Final scores' }), timer(m.ends - TEAM_MS, m.ends, 'Results in')),
+        teamFinal(m.teams),
+      ];
+    }
     const reveal = m.phase === 'reveal';
     return [
       h(
         'div',
         { class: 'game-head' },
         h('span', { class: 'chip chip-static', text: `${m.emoji} ${m.category}` }),
+        m.packMiss && m.number === 1 ? packChip(null, m.packMiss, 'questions') : null,
         m.tier
           ? h('span', {
               class: ['chip', 'chip-static', 'tier-chip', `tier-${m.tier}`],
@@ -90,6 +99,7 @@ export function createTriviaView({ engine, fx, cues }) {
         h('span', { class: 'game-count', text: `Question ${m.number} of ${m.total}` }),
         timer(reveal ? m.ends - REVEAL_MS : m.starts, m.ends, reveal ? 'Next question in' : 'Time left to answer'),
       ),
+      teamBar(m.teams),
       h('h2', { class: 'question', text: m.text }),
       h(
         'div',

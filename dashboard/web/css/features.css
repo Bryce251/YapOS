@@ -2379,3 +2379,208 @@
     align-items: flex-start;
   }
 }
+
+.pack-page > .card + .card,
+.pack-form > .card + .card {
+  margin-top: 16px;
+}
+
+.pack-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.pack-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pack-list > li + li {
+  border-top: 1px solid var(--border);
+}
+
+.pack-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 12px 0;
+}
+
+.pack-row:first-child {
+  padding-top: 0;
+}
+
+.pack-row:last-child {
+  padding-bottom: 0;
+}
+
+.pack-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pack-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.pack-row-sub {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.pack-row-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.pack-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pack-code-text {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.pack-code-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+.pack-form .field-label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.pack-words {
+  min-height: 200px;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.pack-counter {
+  color: var(--text-3);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pack-counter.is-over {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.trivia-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trivia-rows:empty {
+  display: none;
+}
+
+.trivia-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.trivia-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.trivia-num {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.trivia-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.trivia-answers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.trivia-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+.trivia-add .field-help {
+  margin: 0;
+}
+
+.trivia-rows:empty + .trivia-add {
+  margin-top: 0;
+}
+
+.pack-error {
+  margin: 16px 0 0;
+}
+
+.pack-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+@media (max-width: 640px) {
+  .pack-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .trivia-answers {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pack-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+}

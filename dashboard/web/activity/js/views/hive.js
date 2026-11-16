@@ -1,5 +1,6 @@
 import hive, { checkWord, cleanWord, problemText, wordPoints, isPangram, knownWord, warm, veil, rankOf, MAX_LETTERS, REVEAL_MS } from '../games/hive.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { noteDaily, finishDaily, createDailyBox } from '../ui/daily.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -171,13 +172,17 @@ export function shuffled(list, random = Math.random) {
 }
 
 export function footText(m) {
-  if (m.phase === 'load') return 'Gathering letters for the hive…';
-  if (m.phase === 'fail') return "The word list didn't load, so Letter Hive can't run this time. Try again in a moment or pick another game.";
+  if (m.phase === 'load') return m.daily ? 'Getting today’s puzzle…' : 'Gathering letters for the hive…';
+  if (m.phase === 'fail') {
+    if (m.why === 'daily') return "Today's puzzle couldn't load right now. Try again in a moment, or turn off Daily puzzle for a regular hive.";
+    return "The word list didn't load, so Letter Hive can't run this time. Try again in a moment or pick another game.";
+  }
   if (m.phase === 'reveal') {
     if (m.reveal && m.reveal.lost) return 'The host changed, so the word lists were lost. Scores still count!';
-    return 'Time’s up! Here’s what everyone found.';
+    return m.daily ? 'Time’s up! Your daily score is saved below.' : 'Time’s up! Here’s what everyone found.';
   }
-  if (!m.playing) return "You're watching. Join the next game to play along.";
+  if (!m.playing) return m.daily ? "You're watching today's puzzle. Join the next game to play it too." : "You're watching. Join the next game to play along.";
+  if (m.daily) return `Today's puzzle is the same for everyone everywhere. Make words with ${m.centre.toUpperCase()} in them.`;
   return `Make words with ${m.centre.toUpperCase()} in them. Drag across the letters and let go to send. Drag back to undo, hold a letter to use it again.`;
 }
 
@@ -250,8 +255,10 @@ export function createHiveView({ engine, fx, cues, timers }) {
   const found = h('div', { class: 'hive-foundwrap' });
   const board = h('div', { class: 'hive-boardwrap' });
   const results = h('div', { class: 'hive-revealwrap' });
+  const daily = createDailyBox();
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
-  el.append(head, rank, comb, entry, found, board, results, foot);
+  el.append(head, rank, comb, entry, found, board, results, daily.el, foot);
+  const today = { date: null, starts: null, ends: null, sent: false };
 
   const local = { id: null, order: [], found: [], pending: new Map(), seen: new Set(), opt: new Map(), maxQ: -1, q: Math.floor(Math.random() * 1e6) };
   const drag = { on: false, pointer: null, base: '', trace: null, claimed: false, timer: null, box: null, holdKey: null };
@@ -651,6 +658,7 @@ export function createHiveView({ engine, fx, cues, timers }) {
     h(
       'div',
       { class: 'game-head' },
+      m.daily ? h('span', { class: 'chip chip-static chip-daily', text: '📅 Daily puzzle' }) : null,
       h('span', { class: 'chip chip-static', text: `${plural(m.total, 'word', 'words')} to find` }),
       m.pg ? h('span', { class: 'chip chip-static hive-pg', text: plural(m.pg, 'pangram', 'pangrams') }) : null,
       m.phase === 'play' || m.phase === 'reveal' ? timer(m.phase === 'reveal' ? m.ends - REVEAL_MS : m.starts, m.ends, m.phase === 'reveal' ? 'Results in' : 'Time left') : null,
@@ -783,13 +791,44 @@ export function createHiveView({ engine, fx, cues, timers }) {
     if (!m) return;
     const v = withPending(m, pendingExtra());
     if (drag.on && !m.canPlay) cancelDrag();
-    paintHead(head, { total: m.total, pg: m.pg, phase: m.phase, starts: m.starts, ends: m.ends });
+    paintHead(head, { total: m.total, pg: m.pg, phase: m.phase, starts: m.starts, ends: m.ends, daily: Boolean(m.daily) });
     paintRank(rank, { phase: v.phase, playing: v.playing, rank: v.rank, me: v.me });
     if (paintComb(comb, m.phase === 'play' ? combModel(m) : {})) drawTrace();
     paintFound(found, foundModel());
     paintBoard(board, { phase: v.phase, board: v.board });
     paintReveal(results, { phase: m.phase, letters: m.letters, centre: m.centre, reveal: m.reveal });
-    paintFoot(foot, { phase: m.phase, playing: m.playing, centre: m.centre, reveal: m.reveal ? { lost: m.reveal.lost } : null });
+    paintFoot(foot, { phase: m.phase, playing: m.playing, centre: m.centre, daily: m.daily, why: m.why, reveal: m.reveal ? { lost: m.reveal.lost } : null });
+  }
+
+  function trackDaily(m, snap) {
+    if (!m.daily) {
+      daily.show(null);
+      return;
+    }
+    if (today.date !== m.daily) {
+      today.date = m.daily;
+      today.starts = null;
+      today.ends = null;
+      today.sent = false;
+    }
+    const me = (snap.players || []).find((p) => p.isMe);
+    if (m.phase === 'play') {
+      today.starts = m.starts;
+      today.ends = m.ends;
+      if (m.playing && me) {
+        const at = Math.min(Number(snap.now) || m.starts, m.ends);
+        noteDaily('hive', m.daily, { user: { id: me.id, name: me.name, username: me.username || null }, words: local.found.slice(), ms: Math.max(0, at - m.starts) });
+      }
+    }
+    if (m.phase === 'reveal' && !today.sent) {
+      today.sent = true;
+      if (today.starts !== null) {
+        const until = Math.min(today.ends || m.starts, m.starts);
+        if (me && local.found.length) noteDaily('hive', m.daily, { user: { id: me.id, name: me.name, username: me.username || null }, words: local.found.slice(), ms: Math.max(0, until - today.starts) });
+        finishDaily('hive', m.daily);
+      }
+    }
+    daily.show(m.phase === 'reveal' || m.phase === 'fail' ? 'hive' : null, { date: m.daily });
   }
 
   function update(next) {
@@ -815,6 +854,7 @@ export function createHiveView({ engine, fx, cues, timers }) {
     if (local.order.length !== m.outer.length) local.order = shuffled(m.outer);
     settle(m);
     render();
+    trackDaily(m, next);
     const open = m.canPlay;
     input.disabled = !open;
     delBtn.disabled = !open;
@@ -836,6 +876,7 @@ export function createHiveView({ engine, fx, cues, timers }) {
     destroy() {
       if (drag.on) cancelDrag();
       stopMsg();
+      daily.destroy();
     },
   };
 }

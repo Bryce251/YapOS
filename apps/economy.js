@@ -5,7 +5,7 @@ import { tokenize, didYouMean, clip, formatDuration, fuzzyFind, fillTemplate, ro
 import { permName, friendly } from '../engine/errors.js';
 import { accept, reject, boolField } from '../engine/dashboard.js';
 import { HARD_CAP, parseLimit, readLimit, isUnlimited } from '../engine/limits.js';
-import { GLOBAL_KEY, CURRENCY, globalConfig, patchGlobalConfig, mergeOnce, canGiveCurrency, allowGiver, denyGiver, ownerIds } from '../engine/global.js';
+import { GLOBAL_KEY, CURRENCY, globalConfig, patchGlobalConfig, mergeOnce, canGiveCurrency, allowGiver, denyGiver, ownerIds, addSeason, seasonBoard, seasonScore, seasonName } from '../engine/global.js';
 
 const ID = 'economy';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -35,6 +35,9 @@ const MAX_ITEM_NAME = 40;
 const PAY_CONFIRM_OVER = 1000;
 const TOP_SIZE = 10;
 const MEDALS = ['🥇', '🥈', '🥉'];
+const CASINO_WIN = /^(?:Coinflip|Dice|Slots|Blackjack|Roulette|Crash|Casino) win$/i;
+const SEASON_REASON = /^(?:Trivia win|Daily quest\b.*|YapOS Party\b.*)$/i;
+const QUEST_REASON = /^Daily quest\b/i;
 const OWNER_ONLY_EARN = `Only the bot owner can change how many ${CURRENCY.name} people earn.`;
 const OWNER_ONLY_MOVE = `Only the bot owner can hand out or take ${CURRENCY.name}.`;
 
@@ -250,17 +253,40 @@ function needAmount(amount) {
   if (!validAmount(amount)) throw friendly(`Amounts are whole numbers of ${CURRENCY.name}, from 1 up. ${AMOUNT_HELP}`, { title: "That amount didn't work" });
 }
 
+export function earnSource(reason) {
+  const r = String(reason || '');
+  if (CASINO_WIN.test(r)) return 'casino';
+  if (QUEST_REASON.test(r)) return 'quest';
+  if (/^YapOS Party\b/i.test(r)) return 'party';
+  if (/^(?:Game|Trivia) win$/i.test(r)) return 'game';
+  return 'other';
+}
+
+function earned(engine, uid, amount, source, reason, season) {
+  const n = Math.floor(Number(amount) || 0);
+  if (!uid || n <= 0) return;
+  if (season) {
+    try { addSeason(engine, 'shards', uid, n); } catch (e) { engine.log.debug('[economy] season Shards failed', e?.message); }
+  }
+  Promise.resolve()
+    .then(() => engine.bot.emit?.('shards:earned', { user: uid, server_id: null, amount: n, source, reason: reason || null }))
+    .catch((e) => engine.log.debug('[economy] shards:earned listener failed', e?.message));
+}
+
 function serviceAdd(engine, sid, uid, amount, reason) {
   needIds(sid, uid);
   needAmount(amount);
   if (uid === botId(engine)) return 0;
   const t = clock(engine);
   const cfg = cfgOf(engine);
-  return mutateUsers(engine, (doc) => {
+  let real = 0;
+  const bal = mutateUsers(engine, (doc) => {
     const u = ensureUser(doc, uid, cfg, t);
-    change(u, amount, reason || 'Added', t);
+    real = change(u, amount, reason || 'Added', t);
     return u.bal;
   });
+  earned(engine, uid, real, earnSource(reason), reason, SEASON_REASON.test(String(reason || '')));
+  return bal;
 }
 
 function serviceTake(engine, sid, uid, amount, reason) {
@@ -539,6 +565,12 @@ async function claimDaily(ctx) {
     const got = change(u, amount, `Daily (day ${u.streak})`, t);
     return { got, bonus, streak: u.streak, bal: u.bal, lost };
   });
+  if (!res.wait) {
+    earned(engine, ctx.userId, res.got, 'daily', 'Daily', true);
+    Promise.resolve()
+      .then(() => engine.bot.emit?.('economy:daily', { user: ctx.userId, server_id: null, streak: res.streak, amount: res.got }))
+      .catch((e) => engine.log.debug('[economy] economy:daily listener failed', e?.message));
+  }
   if (res.wait) {
     return ctx.warn('Already claimed today', `You get one daily for the whole bot. Your next one is ready in **${waitText(res.wait)}**.${res.streak > 1 ? ` Keep your **${res.streak}-day streak** 🔥 going!` : ''}`);
   }
@@ -565,6 +597,7 @@ async function doBeg(ctx) {
     const got = pay ? change(u, pay, 'Begging', t) : 0;
     return { got, bal: u.bal };
   });
+  if (!res.wait) earned(engine, ctx.userId, res.got, 'beg', 'Begging', true);
   if (res.wait) return ctx.warn('Give it a rest', `People are tired of you asking. Try again in **${waitText(res.wait)}**.`);
   const pick = (list) => list[Math.floor(Math.random() * list.length)];
   const line = res.got ? fillTemplate(pick(BEG_YES), { amount: `${money(cur, res.got)} ${cur.emoji}` }) : pick(BEG_NO);
@@ -587,6 +620,7 @@ async function doWork(ctx) {
     const got = change(u, pay, 'Work', t);
     return { got, bal: u.bal };
   });
+  if (!res.wait) earned(engine, ctx.userId, res.got, 'work', 'Work', true);
   if (res.wait) return ctx.warn('Take a break', `You're worn out. You can work again in **${waitText(res.wait)}**.`);
   const line = fillTemplate(JOBS[Math.floor(Math.random() * JOBS.length)], { amount: `${money(cur, res.got)} ${cur.emoji}` });
   return ctx.reply({ embeds: [card({ title: '💼 Shift done', body: `${line}\nBalance **${fmt(res.bal)}** · work again in ${waitText(WORK_COOLDOWN_MS)}`, color: 'economy', footer: false })] });
@@ -602,7 +636,21 @@ async function topView(ctx) {
   const pos = list.findIndex((x) => x.id === ctx.userId);
   const mine = pos >= 0 ? `You: **#${pos + 1}** of ${fmt(list.length)} · ${price(cur, list[pos].bal)}` : `You aren't ranked yet. Grab your **/daily**!`;
   const body = lines.length ? `${lines.join('\n')}\n\n${mine}\n-# One leaderboard for every server YapOS is in.` : `Nobody has any ${cur.name} yet. Be the first with **/daily**!`;
-  return { embeds: [card({ title: `🏆 Richest yappers everywhere`, body, color: 'economy' })] };
+  return { embeds: [card({ title: `🏆 Richest yappers everywhere`, body, color: 'economy' })], components: [row(button('This season', cid('season'), 'secondary', '🗓️'))] };
+}
+
+async function seasonView(ctx) {
+  const { engine } = ctx;
+  const cur = currencyOf();
+  const board = seasonBoard(engine, 'shards');
+  const members = await ctx.members().catch(() => []);
+  const nameOf = (id) => { const m = members.find((x) => x.id === id); return m ? nameOfMember(m) : 'a yapper elsewhere'; };
+  const lines = board.list.slice(0, TOP_SIZE).map((x, i) => `${MEDALS[i] || `**${i + 1}.**`} ${nameOf(x.id)} · ${price(cur, x.score)} earned`);
+  const pos = board.list.findIndex((x) => x.id === ctx.userId);
+  const mine = pos >= 0 ? `You: **#${pos + 1}** of ${fmt(board.list.length)} · ${price(cur, board.list[pos].score)} earned` : `You haven't earned any ${cur.name} this month yet. **/daily** is a good start!`;
+  const intro = `${cur.name} earned in **${seasonName(board.month)}** from /daily, work, begging, trivia and quests. The top 10 at month end keep a season badge on **/rank**. Nobody's wallet resets.`;
+  const body = [intro, '', ...(lines.length ? lines : [`Nobody has earned ${cur.name} this month yet.`]), '', mine].join('\n');
+  return { embeds: [card({ title: `🗓️ ${cur.name} season · ${seasonName(board.month)}`, body, color: 'economy' })], components: [row(button('All-time richest', cid('top'), 'secondary', '🏆'))] };
 }
 
 async function historyView(ctx, targetId) {
@@ -690,6 +738,7 @@ async function runBalance(ctx, tokensIn) {
   if (['work', 'job', 'shift'].includes(sub)) return doWork(ctx);
   if (['beg', 'plead'].includes(sub)) return doBeg(ctx);
   if (['top', 'leaderboard', 'lb', 'rich', 'richest'].includes(sub)) return ctx.reply(await topView(ctx));
+  if (['season', 'seasons', 'month', 'monthly'].includes(sub)) return ctx.reply(await seasonView(ctx));
   if (['history', 'log', 'hist'].includes(sub)) return showHistory(ctx, rest.join(' '));
   if (sub === 'daily') return claimDaily(ctx);
   return showWallet(ctx, tokens.join(' '));
@@ -1282,6 +1331,7 @@ export const { setup, teardown, check } = defineApp({
     work: { run: doWork },
     beg: { run: doBeg },
     top: { run: async (ctx) => ctx.reply(await topView(ctx)) },
+    season: { run: async (ctx) => ctx.reply(await seasonView(ctx)) },
     history: { run: (ctx) => showHistory(ctx, '') },
     wallet: { run: async (ctx) => ctx.ephemeral(await walletView(ctx, ctx.userId, { self: true })) },
     pick: { run: (ctx) => openBuy(ctx, (ctx.values || [])[0]) },
@@ -1372,6 +1422,8 @@ export const { setup, teardown, check } = defineApp({
     take: (sid, uid, amount, reason) => serviceTake(engine, sid, uid, amount, reason),
     transfer: (sid, fromId, toId, amount, reason) => serviceTransfer(engine, sid, fromId, toId, amount, reason),
     enabled: (sid) => engine.settings.isEnabled(sid, ID),
+    seasonBoard: () => seasonBoard(engine, 'shards'),
+    seasonScore: (uid) => seasonScore(engine, 'shards', uid),
   }),
 
   presets: {
@@ -1386,6 +1438,7 @@ export const { setup, teardown, check } = defineApp({
     `Your wallet of ${CURRENCY.emoji} ${CURRENCY.name} and your level follow you to every server YapOS is in.`,
     '/daily gives Shards once a day. Claim again within 48 hours to keep your streak: +10% for each streak day, up to +100% from day 10. One claim per person, not per server.',
     '/balance work pays a little once an hour. Pay a friend with /balance pay @sam 50 (over 1,000 asks you to confirm). /balance top is the one global leaderboard, /balance history your last 20 changes.',
+    `Seasons: ${CURRENCY.name} earned this month count toward /balance season. The top 10 at month end keep a badge on /rank. Wallets never reset.`,
     'Admins run the shop here: /shop add role @Supporter 500 · /shop add item "Golden ticket" 200 · /shop stock 1 10 · /shop price 1 750 · /shop remove 1',
     `Only the bot owner hands out ${CURRENCY.name} or changes earn rates: /economy give @sam 100 · /economy daily 150 · /economy allow @sam lets someone else help.`,
   ],

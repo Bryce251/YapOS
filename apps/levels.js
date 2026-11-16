@@ -5,7 +5,7 @@ import { tokenize, didYouMean, fillTemplate, clip, normalizeName, parseBool, cha
 import { permName, explain, friendly } from '../engine/errors.js';
 import { avatarUrl } from '../engine/links.js';
 import { accept, reject, boolField, channelById, roleById, idList, plainObject } from '../engine/dashboard.js';
-import { globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, mergeOnce, canGiveCurrency } from '../engine/global.js';
+import { globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, mergeOnce, canGiveCurrency, addSeason, seasonBoard, seasonScore, seasonBadges, seasonBadgeText, seasonName, rollSeason, CURRENCY } from '../engine/global.js';
 
 const ID = 'levels';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -29,6 +29,21 @@ const BAR_EMPTY = '⬛';
 const AVATAR_CACHE_MS = 10 * 60_000;
 const AVATAR_CACHE_LIMIT = 2000;
 const AVATAR_LOOKUP_MS = 1500;
+const PARTY_LOOKUP_MS = 1500;
+const PARTY_BADGES_SHOWN = 4;
+const SEASON_BADGES_SHOWN = 3;
+const SEASON_JOB = 'seasonend';
+export const PARTY_GAMES = Object.freeze({
+  trivia: '🧠 Trivia', draw: '🎨 Draw & Guess', chain: '🔗 Word Chain', wyr: '🤔 Would You Rather', odd: '🕵️ Odd One Out',
+  telephone: '☎️ Draw Telephone', scramble: '🔀 Scramble Race', hive: '🐝 Letter Hive', emoji: '🧩 Emoji Decode',
+  hottakes: '🌶️ Hot Takes', truths: '🤥 Two Truths and a Lie', reflex: '⚡ Reflex', bluff: '🃏 Bluff', pixel: '🟪 Pixel Art',
+  pixelart: '🟪 Pixel Art', higherlower: '📈 Higher or Lower',
+});
+export const PARTY_BADGES = Object.freeze({
+  'first-game': '🎈 First game', 'games-10': '🎲 Party regular', 'games-50': '🥳 Party animal', 'games-100': '🏟️ Party legend',
+  'wins-10': '🥇 Winner', 'wins-50': '👑 Champion', 'faker-10': '🕵️ Faker caught 10 times', 'pangram-5': '🐝 Pangram hunter',
+  'hottest-take-3': '🌶️ Hottest take', 'reflex-5': '⚡ Lightning reflexes', 'daily-7': '📅 Daily devotee',
+});
 const TIERS = [
   { min: 30, name: 'red', color: COLORS.error, square: '🟥' },
   { min: 20, name: 'gold', color: COLORS.economy, square: '🟨' },
@@ -300,8 +315,20 @@ function applyGain(engine, uid, { xp = 0, voiceSeconds = 0, messages = 0 }) {
 }
 
 async function addXp(engine, sid, uid, amount, extra = {}) {
-  const res = applyGain(engine, uid, { xp: Number(amount) || 0, voiceSeconds: extra.voiceSeconds, messages: extra.messages });
-  if (res.leveledUp) await onLevelUp(engine, sid, uid, res.level, { channelId: extra.channelId });
+  const xp = Number(amount) || 0;
+  const res = applyGain(engine, uid, { xp, voiceSeconds: extra.voiceSeconds, messages: extra.messages });
+  const gained = Math.floor(xp);
+  if (gained > 0) {
+    try { addSeason(engine, 'xp', uid, gained); } catch (e) { engine.log.debug('[levels] season XP failed', e?.message); }
+  }
+  if (res.leveledUp && sid) await onLevelUp(engine, sid, uid, res.level, { channelId: extra.channelId });
+  if (gained > 0 || extra.messages || extra.voiceSeconds) {
+    try {
+      await engine.bot.emit?.('xp:gained', { user: uid, server_id: null, serverId: sid || null, amount: Math.max(0, gained), reason: extra.reason || null, messages: Number(extra.messages) || 0, voiceSeconds: Number(extra.voiceSeconds) || 0 });
+    } catch (e) {
+      engine.log.debug('[levels] xp:gained listener failed', e?.message);
+    }
+  }
   return res;
 }
 
@@ -518,6 +545,56 @@ function withAuthor(embed, name, icon) {
   return embed;
 }
 
+export function partyGameName(id) {
+  const key = String(id || '');
+  if (PARTY_GAMES[key]) return PARTY_GAMES[key];
+  return humanize(key) || 'a game';
+}
+
+function humanize(id) {
+  return String(id || '').replace(/([a-z])([A-Z0-9])/g, '$1 $2').replace(/([0-9])([a-zA-Z])/g, '$1 $2').replace(/[_.:-]+/g, ' ').trim().replace(/^./, (c) => c.toUpperCase()).slice(0, 48);
+}
+
+export function partyBadgeName(id) {
+  const key = String(id || '');
+  if (PARTY_BADGES[key]) return PARTY_BADGES[key];
+  const h = humanize(key);
+  return h ? `🎖️ ${h}` : null;
+}
+
+export function partyText(stats) {
+  if (!stats || !(stats.games > 0)) return null;
+  const lines = [`\`${num(stats.games)}\` ${stats.games === 1 ? 'game' : 'games'} · \`${num(stats.wins)}\` ${stats.wins === 1 ? 'win' : 'wins'}`];
+  if (stats.fav) lines.push(`Favourite: ${partyGameName(stats.fav)}`);
+  const badges = (stats.badges || []).map(partyBadgeName).filter(Boolean);
+  if (badges.length) lines.push(badges.slice(0, PARTY_BADGES_SHOWN).join(' · ') + (badges.length > PARTY_BADGES_SHOWN ? ` · +${badges.length - PARTY_BADGES_SHOWN} more` : ''));
+  return lines.join('\n');
+}
+
+async function partyStatsOf(engine, uid) {
+  const fn = engine.dashboard?.partyStats;
+  if (typeof fn !== 'function') return null;
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), PARTY_LOOKUP_MS); timer.unref?.(); });
+  try {
+    const got = await Promise.race([Promise.resolve().then(() => fn([uid])).catch(() => null), late]);
+    return got?.[uid] || null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function seasonText(engine, uid) {
+  const score = seasonScore(engine, 'xp', uid);
+  const board = score > 0 ? seasonBoard(engine, 'xp') : null;
+  const pos = board ? board.list.findIndex((x) => x.id === uid) : -1;
+  const badges = seasonBadges(engine, uid);
+  if (!score && !badges.length) return null;
+  const lines = [score ? `This month: \`${num(score)} XP\`${pos >= 0 ? ` · #${num(pos + 1)}` : ''}` : 'No XP this month yet.'];
+  if (badges.length) lines.push(badges.slice(0, SEASON_BADGES_SHOWN).map(seasonBadgeText).join('\n') + (badges.length > SEASON_BADGES_SHOWN ? `\n-# +${badges.length - SEASON_BADGES_SHOWN} more season badges` : ''));
+  return lines.join('\n');
+}
+
 const roleLabeller = (roles) => (id) => {
   const r = roles.find((x) => x.id === id);
   return r ? `**@${mdSafe(r.name, 'role')}**` : 'a role that was deleted';
@@ -541,6 +618,8 @@ async function rankView(ctx, target) {
   const name = displayName(target);
   const icon = avatarUrl(await avatarPathOf(engine, target).catch(() => null));
   const empty = !(u.xp > 0) && !(u.voiceSeconds > 0);
+  const party = partyText(await partyStatsOf(engine, target.id).catch(() => null));
+  const season = seasonText(engine, target.id);
   const maxed = p.level >= MAX_LEVEL;
   const head = maxed ? `**Level ${num(p.level)}**  ▸  max level` : `**Level ${num(p.level)}**  ▸  Level ${num(p.level + 1)}`;
   const nextReward = next ? `Level ${num(next.level)} → ${roleLabel(next.roleId)}` : rewards.length ? 'all unlocked 🎉' : 'none set';
@@ -573,6 +652,8 @@ async function rankView(ctx, target) {
       since ? { name: '📅 Member since', value: since, inline: true } : null,
     ];
   }
+  if (season) fields.push({ name: '🗓️ Season', value: season, inline: false });
+  if (party) fields.push({ name: '🎉 YapOS Party', value: party, inline: false });
   const embed = withAuthor(card({ body, fields, color: tier.color, footer: tipFor(earn), thumbnail: icon || undefined }), name, icon);
   return {
     embeds: [embed],
@@ -674,8 +755,60 @@ async function boardNames(engine, members, ids) {
   return names;
 }
 
+const BOARD_TABS = [
+  { by: 'xp', label: 'Sort by XP', emoji: '📈' },
+  { by: 'voice', label: 'Sort by voice time', emoji: '🎙️' },
+  { by: 'season', label: 'This season', emoji: '🗓️' },
+];
+
+function tabButtons(by) {
+  return BOARD_TABS.filter((t) => t.by !== by).map((t) => button(t.label, cid('lb', 1, t.by), 'primary', t.emoji));
+}
+
+function seasonEndText(endsAt, now) {
+  const days = Math.max(0, Math.ceil((endsAt - now) / 86_400_000));
+  return days <= 1 ? 'ends within a day' : `ends in ${days} days`;
+}
+
+async function seasonBoardView(ctx, page) {
+  const { engine } = ctx;
+  const board = seasonBoard(engine, 'xp');
+  const list = board.list;
+  const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  const p = Math.min(Math.max(1, Math.floor(Number(page) || 1)), pages);
+  const start = (p - 1) * PAGE_SIZE;
+  const slice = list.slice(start, start + PAGE_SIZE);
+  const members = await ctx.members().catch(() => []);
+  const names = await boardNames(engine, members, slice.map((u) => u.id));
+  const lines = slice.map((u, i) => {
+    const n = start + i;
+    const mark = MEDALS[n] || `\`#${n + 1}\``;
+    const who = names.has(u.id) ? mdSafe(names.get(u.id), 'someone', BOARD_NAME_MAX) : 'someone';
+    return `${mark} **${who}** · ${num(u.score)} XP this month${u.id === ctx.userId ? '  ◂ you' : ''}`;
+  });
+  const mine = list.findIndex((x) => x.id === ctx.userId);
+  let you = null;
+  if (mine < start || mine >= start + PAGE_SIZE) {
+    you = mine >= 0 ? `-# You: #${num(mine + 1)} · ${num(list[mine].score)} XP this month` : "-# You haven't earned XP this month yet. Chat, hang out in voice or play YapOS Party to join in!";
+  }
+  const intro = `The top 10 by XP earned in **${seasonName(board.month)}** keep a season badge on their **/rank** forever. Levels never reset.`;
+  const body = [intro, '', ...(lines.length ? lines : ['Nobody has earned XP this month yet. Be the first!']), ...(you ? ['', you] : [])].join('\n');
+  const buttons = [];
+  if (pages > 1) {
+    buttons.push(button('Prev', cid('lb', p - 1, 'season'), 'secondary', '⬅️', { disabled: p <= 1 }));
+    buttons.push(button('Next', cid('lb', p + 1, 'season'), 'secondary', '➡️', { disabled: p >= pages }));
+  }
+  buttons.push(...tabButtons('season'));
+  const now = engine.scheduler?.now?.() ?? Date.now();
+  return {
+    embeds: [card({ title: `🗓️ Season leaderboard · ${seasonName(board.month)}`, body, color: COLORS.levels, footer: `Page ${p} of ${pages} · ${num(list.length)} ranked · season ${seasonEndText(board.endsAt, now)}` })],
+    components: [row(buttons)],
+  };
+}
+
 async function leaderboardView(ctx, page, sort) {
   const { engine } = ctx;
+  if (sort === 'season') return seasonBoardView(ctx, page);
   const by = sort === 'voice' ? 'voice' : 'xp';
   const list = ranked(engine, by);
   const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
@@ -707,7 +840,7 @@ async function leaderboardView(ctx, page, sort) {
     buttons.push(button('Prev', cid('lb', p - 1, by), 'secondary', '⬅️', { disabled: p <= 1 }));
     buttons.push(button('Next', cid('lb', p + 1, by), 'secondary', '➡️', { disabled: p >= pages }));
   }
-  buttons.push(button(by === 'voice' ? 'Sort by XP' : 'Sort by voice time', cid('lb', 1, by === 'voice' ? 'xp' : 'voice'), 'primary', by === 'voice' ? '📈' : '🎙️'));
+  buttons.push(...tabButtons(by));
   return {
     embeds: [card({ title, body, color: accent, footer: `Page ${p} of ${pages} · ${num(list.length)} ranked · everyone, every server` })],
     components: [row(buttons)],
@@ -720,6 +853,7 @@ function parseLeaderboardArgs(tokens) {
   for (const t of tokens.map((x) => String(x).toLowerCase())) {
     if (/^\d+$/.test(t)) page = Number(t);
     else if (['voice', 'vc', 'voicetime', 'time'].includes(t)) sort = 'voice';
+    else if (['season', 'seasons', 'month', 'monthly'].includes(t)) sort = 'season';
     else if (['xp', 'level', 'levels', 'chat'].includes(t)) sort = 'xp';
   }
   return { page, sort };
@@ -1181,7 +1315,7 @@ export const { setup, teardown, check } = defineApp({
 
   commands: {
     rank: { description: "Your level, XP and rank, or someone else's: /rank or /rank @sam", run: (ctx) => showRank(ctx, ctx.argv) },
-    leaderboard: { description: 'The global top by XP: /leaderboard, /leaderboard 2 for page 2, /leaderboard voice', run: (ctx) => showLeaderboard(ctx, ctx.argv) },
+    leaderboard: { description: 'The global top by XP: /leaderboard, /leaderboard 2, /leaderboard voice, /leaderboard season', run: (ctx) => showLeaderboard(ctx, ctx.argv) },
     levels: { description: 'Levels settings (admins): /levels reward 10 @Regular, /levels channel #level-ups', perm: 'admin', run: runLevels },
   },
 
@@ -1253,6 +1387,7 @@ export const { setup, teardown, check } = defineApp({
   yap: [
     { words: ['rank', 'level', 'xp'], run: (ctx) => showRank(ctx, ctx.argv) },
     { words: ['leaderboard', 'top'], run: (ctx) => showLeaderboard(ctx, ctx.argv) },
+    { words: ['season'], run: (ctx) => showLeaderboard(ctx, ['season', ...ctx.argv]) },
     {
       words: ['levels'],
       run: async (ctx) => {
@@ -1269,12 +1404,26 @@ export const { setup, teardown, check } = defineApp({
 
   dashboard: DASHBOARD,
 
+  jobs: {
+    [SEASON_JOB]: async (job, engine) => {
+      const closed = rollSeason(engine);
+      if (closed) engine.log.info(`[levels] season ${closed.month} closed: ${closed.tops.xp.length} XP badges and ${closed.tops.shards.length} ${CURRENCY.name} badges handed out`);
+      return undefined;
+    },
+  },
+
   init: (engine) => {
     dashboardEngine = engine;
     try {
       mergeServerXp(engine);
     } catch (e) {
       engine.log.debug('[levels] folding old server XP failed', e?.message);
+    }
+    try {
+      rollSeason(engine);
+      engine.scheduler?.schedule({ kind: `${ID}.${SEASON_JOB}`, key: 'season', repeat: { monthly: { day: 1, time: '00:00' }, tz: 'UTC' } });
+    } catch (e) {
+      engine.log.debug('[levels] season job setup failed', e?.message);
     }
   },
 
@@ -1285,6 +1434,9 @@ export const { setup, teardown, check } = defineApp({
       return { ...u, ...progressOf(u.xp), level: u.level };
     },
     addXp: (sid, uid, amount, reason, opts = {}) => addXp(engine, sid, uid, amount, { ...opts, reason }),
+    seasonBoard: () => seasonBoard(engine, 'xp'),
+    seasonScore: (uid) => seasonScore(engine, 'xp', uid),
+    seasonBadges: (uid) => seasonBadges(engine, uid),
     levelFor,
     xpForLevel,
   }),
@@ -1317,6 +1469,8 @@ export const { setup, teardown, check } = defineApp({
     'Your XP, level and place on the leaderboard count everywhere, so one level follows you from server to server.',
     'How fast XP is earned is set once by the bot owner. Reward roles, level-up messages and no-XP spots are per server.',
     'Leveling up can give reward roles: /levels reward 10 @Regular. Bots, commands and very short messages earn nothing.',
+    'Seasons: XP earned this month counts toward the season board (/leaderboard season). The top 10 at month end keep a badge on /rank. Levels never reset.',
+    'YapOS Party games give a little XP too, toward the same level.',
     'Typed settings: /levels channel #level-ups | here | dm | off · /levels noxp #channel · /levels rate 1.5 · /levels set @sam 12 · /levels reset @sam',
   ],
 

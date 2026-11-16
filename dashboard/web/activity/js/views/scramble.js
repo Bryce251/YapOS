@@ -1,6 +1,7 @@
 import scramble, { REVEAL_MS, sameLetters, cleanGuess, blocked } from '../games/scramble.js';
 import { ready as dictReady, isWord, load as loadDictionary } from '../dictionary.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { noteDaily, finishDaily, createDailyBox } from '../ui/daily.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
 const MEDALS = ['🥇', '🥈', '🥉'];
@@ -30,6 +31,9 @@ export const PROBLEMS = Object.freeze({
 });
 
 export function footText(m) {
+  if (m.phase === 'load') return 'Getting today’s puzzle…';
+  if (m.phase === 'fail') return "Today's puzzle couldn't load right now. Try again in a moment, or turn off Daily puzzle for a regular race.";
+  if (m.phase === 'reveal' && m.daily && m.number >= m.total) return 'That was the last daily word. Your score is saved below.';
   if (m.phase === 'reveal') {
     if (m.note === 'host') return 'The host changed, so this word ended early.';
     if (!m.got.length) return 'Nobody unscrambled this one.';
@@ -40,7 +44,14 @@ export function footText(m) {
   if (!m.playing) return `You're watching. ${plural(m.got.length, 'player has', 'players have')} solved it so far.`;
   if (m.gotMe) return `Solved in ${ordinal(m.place)} place! +${m.myPts}. Waiting for the others…`;
   if (m.got.length) return `${plural(m.got.length, 'player has', 'players have')} solved it. Points drop with every solve, so hurry!`;
+  if (m.daily) return "Today's words are the same for everyone everywhere. First to unscramble it scores 100 points.";
   return 'First to unscramble it scores 100 points.';
+}
+
+export function dailyAnswers(list, total) {
+  const out = [];
+  for (let i = 0; i < total; i += 1) out.push(list && typeof list[i] === 'string' ? list[i] : '');
+  return out;
 }
 
 export function scrambleMoments(was, m) {
@@ -114,8 +125,10 @@ export function createScrambleView({ engine, fx, win, cues }) {
   const tools = h('div', { class: 'scramble-tools' }, shuffleBtn, backBtn, clearBtn);
   const entry = h('div', { class: 'scramble-entry' }, h('div', { class: 'entry-row' }, input, sendBtn), tools, hint);
   const result = h('div', { class: 'scramble-result', attrs: { 'aria-live': 'polite' } });
+  const daily = createDailyBox();
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
-  el.append(head, board, entry, result, foot);
+  el.append(head, board, entry, result, daily.el, foot);
+  const today = { date: null, answers: [], ms: [], sent: false };
 
   const local = { solved: null, i: null, order: [], tried: '', sentI: null, sentAt: 0, wrong: 0, fresh: null };
   loadDictionary();
@@ -217,6 +230,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
     h(
       'div',
       { class: 'game-head' },
+      m.daily ? h('span', { class: 'chip chip-static chip-daily', text: '📅 Daily' }) : null,
       m.tier ? h('span', { class: 'chip chip-static', text: `${m.tier.name} word` }) : null,
       h('span', { class: 'game-count', text: `Word ${m.number} of ${m.total}` }),
       m.phase === 'reveal' ? timer(m.ends - REVEAL_MS, m.ends, 'Next word in') : timer(m.starts, m.ends, 'Time left for this word'),
@@ -338,12 +352,53 @@ export function createScrambleView({ engine, fx, win, cues }) {
     }
   }
 
+  function trackDaily(m, s) {
+    if (!m.daily) {
+      daily.show(null);
+      return;
+    }
+    if (today.date !== m.daily) {
+      today.date = m.daily;
+      today.answers = [];
+      today.ms = [];
+      today.sent = false;
+    }
+    const me = (s.players || []).find((p) => p.isMe);
+    if ((m.phase === 'play' || m.phase === 'reveal') && m.gotMe && !today.answers[m.i]) {
+      const word = m.check || m.myWord || (local.solved && local.solved.i === m.i ? local.solved.word : '') || '';
+      if (word) {
+        today.answers[m.i] = word;
+        today.ms[m.i] = Math.max(0, Math.min(m.ends, Number(s.now) || m.ends) - m.starts);
+      }
+    }
+    if (me && m.playing && (m.phase === 'play' || m.phase === 'reveal')) {
+      let ms = 0;
+      for (let i = 0; i < m.total; i += 1) ms += today.answers[i] ? today.ms[i] || 0 : 30000;
+      noteDaily('scramble', m.daily, { user: { id: me.id, name: me.name, username: me.username || null }, answers: dailyAnswers(today.answers, m.total), ms });
+    }
+    const last = m.phase === 'reveal' && m.number >= m.total;
+    if (last && !today.sent) {
+      today.sent = true;
+      finishDaily('scramble', m.daily);
+    }
+    daily.show(last || m.phase === 'fail' ? 'scramble' : null, { date: m.daily, compact: true });
+  }
+
   function update(next) {
     snap = next;
     const m = scramble.model(next, local);
     model = m;
     if (!m) {
       board.replaceChildren(h('p', { class: 'waiting', text: 'Mixing up the first word…' }));
+      return;
+    }
+    if (m.phase === 'load' || m.phase === 'fail') {
+      paintHead(head, { daily: true, tier: null, number: 1, total: m.total, phase: m.phase, starts: m.starts, ends: m.ends });
+      board.replaceChildren(h('p', { class: 'waiting', text: m.phase === 'load' ? 'Getting today’s puzzle…' : "Today's puzzle couldn't load." }));
+      result.replaceChildren();
+      paintFoot(foot, m);
+      entry.classList.add('is-hidden');
+      trackDaily(m, next);
       return;
     }
     if (local.sentI === m.i && !m.gotMe && m.wrong > local.wrong) {
@@ -357,7 +412,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
       hint.textContent = "That one didn't go through. Try again!";
     }
     local.wrong = m.wrong;
-    paintHead(head, { tier: m.tier, number: m.number, total: m.total, phase: m.phase, starts: m.starts, ends: m.ends });
+    paintHead(head, { daily: Boolean(m.daily), tier: m.tier, number: m.number, total: m.total, phase: m.phase, starts: m.starts, ends: m.ends });
     drawBoard();
     paintResult(result, { phase: m.phase, found: m.found, got: m.got });
     paintFoot(foot, m);
@@ -369,6 +424,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
     entry.classList.toggle('is-hidden', m.phase !== 'play' || !m.playing || m.gotMe);
     entry.classList.toggle('is-open', open);
     if (m.gotMe && hint.textContent) hint.textContent = '';
+    trackDaily(m, next);
     const heardBefore = heard;
     hear(m);
     if (open && heardBefore && heardBefore.i !== m.i && typeof input.focus === 'function') input.focus();
@@ -381,6 +437,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
     update,
     destroy() {
       if (ticker !== null && typeof w.clearInterval === 'function') w.clearInterval(ticker);
+      daily.destroy();
     },
   };
 }

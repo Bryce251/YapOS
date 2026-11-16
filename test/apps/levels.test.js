@@ -1431,7 +1431,7 @@ test('leaderboard medals, own position and single pages', async () => {
   ans = await small.slash('leaderboard', '', { user: IDS.member });
   assert.equal(small.findButton('Prev', ans), null);
   assert.equal(small.findButton('Next', ans), null);
-  assert.deepEqual(small.allButtons(ans).map((b) => b.label), ['Sort by voice time']);
+  assert.deepEqual(small.allButtons(ans).map((b) => b.label), ['Sort by voice time', 'This season']);
   assert.equal(embedOf(ans).footer.text, 'Page 1 of 1 · 2 ranked · everyone, every server');
   assert.doesNotMatch(embedOf(ans).description, /-# You/);
   ans = await small.slash('leaderboard', '', { user: IDS.mod });
