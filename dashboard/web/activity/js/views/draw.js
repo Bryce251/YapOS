@@ -3,6 +3,8 @@ import { GRID_W, GRID_H, COLORS, COLOR_NAMES, SIZES, SIZE_NAMES, ERASER, MAX_CHU
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
 import { board as scoreBoard, standings } from '../ui/board.js';
 import { person } from '../players.js';
+import { hidesWords } from '../text.js';
+import { HIDDEN_NOTE } from '../filter.js';
 
 export const SCALE = 2;
 export const LIVE_MS = 250;
@@ -446,6 +448,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     if (!text) return;
     engine.act({ type: 'guess', text });
     input.value = '';
+    if (hidesWords(text) && typeof toast === 'function') toast(HIDDEN_NOTE);
   }
 
   input.addEventListener('keydown', (e) => {

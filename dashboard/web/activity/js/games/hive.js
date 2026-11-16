@@ -1,6 +1,7 @@
 import { SEEDS, WORDS } from '../../data/hive.js';
 import { ready as dictReady, failed as dictFailed, loading as dictLoading, isWord, load as loadDictionary } from '../dictionary.js';
 import { face } from './trivia.js';
+import { isBlockedWord, BLOCKED_NOTE } from '../filter.js';
 
 export const KEY = 'hive';
 export const MISS_KEY = 'hive.miss';
@@ -163,7 +164,7 @@ export function candidates(letters, centre) {
 function verified(list, letters, centre) {
   if (!dictReady || !list) return [];
   const full = maskOf(letters);
-  return list.filter((w) => w.length >= MIN_LETTERS && w.includes(centre) && (maskOf(w) & full) === maskOf(w) && isWord(w)).sort();
+  return list.filter((w) => w.length >= MIN_LETTERS && w.includes(centre) && (maskOf(w) & full) === maskOf(w) && isWord(w) && !isBlockedWord(w)).sort();
 }
 
 export function hiveWords(letters, centre) {
@@ -277,6 +278,7 @@ export function checkWord(text, puzzle, found, opts = {}) {
   const w = cleanWord(text);
   if (!w) return 'empty';
   if (!/^[a-z]+$/.test(w)) return 'letters';
+  if (isBlockedWord(w)) return 'blocked';
   if (w.length < MIN_LETTERS) return 'short';
   if (w.length > MAX_LETTERS) return 'long';
   const full = maskOf(puzzle.letters);
@@ -311,6 +313,8 @@ export function problemText(code, centre) {
       return "That's not in this hive's word list.";
     case 'late':
       return "Time's up, so that one didn't count.";
+    case 'blocked':
+      return BLOCKED_NOTE;
     default:
       return "That word doesn't work.";
   }

@@ -1,6 +1,6 @@
 import { PROMPTS, promptById } from '../../data/hottakes.js';
 import { shuffle } from '../engine.js';
-import { cleanText } from '../text.js';
+import { cleanShared } from '../text.js';
 import { jsonBytes } from '../limits.js';
 import { face } from './trivia.js';
 
@@ -255,7 +255,7 @@ function onAnswer(api, slot, action) {
   const cur = fresh(api, st);
   if (!cur || cur.answers[slot] !== undefined) return;
   if (!ensureIn(api, st, slot)) return;
-  const text = cleanText(unseal(action.code, st.nonce), ANSWER_MAX);
+  const text = cleanShared(unseal(action.code, st.nonce), ANSWER_MAX);
   if (!text) return;
   cur.answers[slot] = text;
   if (!st.done.includes(slot)) st.done.push(slot);
@@ -377,7 +377,7 @@ const hottakes = {
     const watching = mine === null || (st.phase === 'write' && !waiting && !inRound);
     const sameRound = local.n === st.n;
     const wrote = mine !== null && st.done.includes(mine);
-    const sent = sameRound && local.sent ? cleanText(local.sent, ANSWER_MAX) : null;
+    const sent = sameRound && local.sent ? cleanShared(local.sent, ANSWER_MAX) : null;
     const answers = st.phase === 'write' ? [] : answersFrom(snap.state, st);
     const textOf = new Map(answers.map((a) => [a.id, a.text]));
     const voted = mine !== null && st.voted.includes(mine);

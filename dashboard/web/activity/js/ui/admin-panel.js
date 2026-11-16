@@ -2,6 +2,7 @@ import { h, memo, avatar, button, uidOf } from './dom.js';
 import { fmt } from './board.js';
 import { NEEDS_TARGET, TROLL_FX } from './trolls.js';
 import { sfx as defaultSfx } from './sfx.js';
+import { censor, HIDDEN_NOTE } from '../filter.js';
 
 export const TABS = [
   { id: 'game', label: 'Game', icon: '🎛️' },
@@ -276,7 +277,7 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
       say('Type a message first.');
       return false;
     }
-    const ok = run({ type: 'announce', text }, 'Announcement sent.');
+    const ok = run({ type: 'announce', text }, censor(text).changed ? `Announcement sent. ${HIDDEN_NOTE}` : 'Announcement sent.');
     if (ok) {
       draft = '';
       refreshForce();

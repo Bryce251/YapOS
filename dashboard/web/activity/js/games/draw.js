@@ -2,6 +2,7 @@ import { WORDS, TIERS, wordById, wordsIn } from '../../data/draw.js';
 import { shuffle } from '../engine.js';
 import { INK_PREFIX } from './ink.js';
 import { person } from '../players.js';
+import { cleanShared } from '../text.js';
 
 export const KEY = 'draw';
 export const DRAWER_STEP = 5;
@@ -266,7 +267,7 @@ function guess(api, slot, action) {
     if (extra) api.addPoints(st.drawer, extra);
     pushFeed(st, slot, '', 'ok');
   } else {
-    pushFeed(st, slot, verdict === 'hidden' ? '•••' : raw, verdict === 'close' ? 'close' : 'guess');
+    pushFeed(st, slot, verdict === 'hidden' ? '•••' : cleanShared(raw, GUESS_CHARS) || '•••', verdict === 'close' ? 'close' : 'guess');
   }
   api.put(KEY, st);
   if (verdict === 'right' && everyoneGot(api, st)) reveal(api, 'all');

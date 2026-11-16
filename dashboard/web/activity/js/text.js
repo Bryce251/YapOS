@@ -1,16 +1,33 @@
+import { censor } from './filter.js';
+
 const CONTROL = /[\u0000-\u001f\u007f​-‏‪-‮⁦-⁩]/g;
 const LINK = /\b(?:https?:\/\/|www\.)\S+/gi;
 const MENTION = /<[@#][!&]?[\w-]+>|@(?:everyone|here)\b/gi;
 
-export function cleanText(raw, max = 80) {
-  const text = String(raw ?? '')
+function tidy(raw) {
+  return String(raw ?? '')
     .replace(CONTROL, '')
     .replace(LINK, '🔗')
     .replace(MENTION, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function clip(text, max) {
   const chars = Array.from(text);
   return chars.length > max ? chars.slice(0, max).join('').trim() : text;
+}
+
+export function cleanText(raw, max = 80) {
+  return clip(tidy(raw), max);
+}
+
+export function cleanShared(raw, max = 80) {
+  return censor(clip(censor(tidy(raw)).text, max)).text;
+}
+
+export function hidesWords(raw) {
+  return censor(tidy(raw)).changed;
 }
 
 export function plainKey(raw) {

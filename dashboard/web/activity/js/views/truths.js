@@ -1,6 +1,7 @@
 import truths, { KEY, STATEMENT_MAX, PROBLEMS, mask, problemOf } from '../games/truths.js';
 import { ideaAt, sampleAt, IDEAS } from '../../data/truths.js';
-import { cleanText } from '../text.js';
+import { cleanShared, hidesWords } from '../text.js';
+import { HIDDEN_NOTE } from '../filter.js';
 import { h, memo, timer, avatar, who, button, plural } from '../ui/dom.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
@@ -189,7 +190,8 @@ export function createTruthsView({ engine, fx, cues }) {
       cue.play('error');
       return;
     }
-    const list = raw.map((x) => cleanText(x, STATEMENT_MAX));
+    const hid = raw.some((x) => hidesWords(x));
+    const list = raw.map((x) => cleanShared(x, STATEMENT_MAX));
     rows.forEach((r, i) => {
       r.input.value = list[i];
     });
@@ -197,7 +199,7 @@ export function createTruthsView({ engine, fx, cues }) {
     local.editing = false;
     sendSet(list, local.lie, false);
     cue.play('send');
-    hint.textContent = 'Locked in!';
+    hint.textContent = hid ? `Locked in! ${HIDDEN_NOTE}` : 'Locked in!';
     if (snap) update(snap);
   }
 

@@ -1,4 +1,5 @@
 import { ready as dictReady, failed as dictFailed, isWord, load as loadDictionary } from '../dictionary.js';
+import { isBlockedWord, BLOCKED_NOTE } from '../filter.js';
 
 export const KEY = 'chain';
 export const USED_PREFIX = 'chain.u.';
@@ -59,6 +60,7 @@ export function checkWord(text, letter, used, opts = {}) {
   const w = cleanWord(text);
   if (!w) return 'empty';
   if (!/^[a-z]+$/.test(w)) return 'letters';
+  if (isBlockedWord(w)) return 'blocked';
   if (w.length < MIN_LETTERS) return 'short';
   if (w.length > MAX_LETTERS) return 'long';
   if (letter && w[0] !== letter) return 'start';
@@ -76,6 +78,7 @@ export const PROBLEMS = Object.freeze({
   start: 'That word starts with the wrong letter.',
   used: 'Someone already played that word.',
   unknown: "That's not a word in my English dictionary. Check the spelling.",
+  blocked: BLOCKED_NOTE,
 });
 
 export function wordPoints(word) {

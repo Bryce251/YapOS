@@ -1,5 +1,6 @@
 import { OpBudget, OPS_WINDOW_MS, MAX_VALUE_BYTES, checkSet, jsonBytes, validKey } from './limits.js';
 import { idOf, people, person, cleanName, initials, hueOf } from './players.js';
+import { censor } from './filter.js';
 import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, refreshAdmins, onAdmins } from './admin.js';
 
 export const FLUSH_MS = 120;
@@ -47,9 +48,9 @@ export function shiftEnd(ends, ms, at) {
 
 export function cleanText(raw, max = ANNOUNCE_MAX) {
   if (typeof raw !== 'string') return '';
-  const text = raw.replace(STRIP_RE, '').replace(/\s+/g, ' ').trim();
+  const text = censor(raw.replace(STRIP_RE, '').replace(/\s+/g, ' ').trim()).text;
   const chars = Array.from(text);
-  return chars.length > max ? chars.slice(0, max).join('').trim() : text;
+  return chars.length > max ? censor(chars.slice(0, max).join('').trim()).text : text;
 }
 
 function graphemes(text) {

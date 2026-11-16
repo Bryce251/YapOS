@@ -1,5 +1,5 @@
 import { shuffle } from '../engine.js';
-import { cleanText, plainKey } from '../text.js';
+import { cleanShared, plainKey } from '../text.js';
 import { face } from './trivia.js';
 
 export const KEY = 'truths';
@@ -28,7 +28,7 @@ export function unmask(code, nonce) {
 
 export function cleanSet(raw) {
   if (!Array.isArray(raw) || raw.length !== 3) return null;
-  const out = raw.map((x) => (typeof x === 'string' ? cleanText(x, STATEMENT_MAX) : ''));
+  const out = raw.map((x) => (typeof x === 'string' ? cleanShared(x, STATEMENT_MAX) : ''));
   if (out.some((x) => !x)) return null;
   const keys = new Set(out.map((x) => plainKey(x) || x.toLowerCase()));
   if (keys.size !== 3) return null;
@@ -37,7 +37,7 @@ export function cleanSet(raw) {
 
 export function problemOf(raw, lie) {
   const list = Array.isArray(raw) ? raw : [];
-  const out = [0, 1, 2].map((i) => cleanText(list[i], STATEMENT_MAX));
+  const out = [0, 1, 2].map((i) => cleanShared(list[i], STATEMENT_MAX));
   if (out.some((x) => !x)) return 'empty';
   if (new Set(out.map((x) => plainKey(x) || x.toLowerCase())).size !== 3) return 'same';
   if (!Number.isInteger(lie) || lie < 0 || lie > 2) return 'lie';

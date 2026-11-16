@@ -2,6 +2,7 @@ import { TIERS, wordById, idsIn, tierOf } from '../../data/scramble.js';
 import { shuffle } from '../engine.js';
 import { mask, unmask } from './draw.js';
 import { ready as dictReady, isWord, load as loadDictionary } from '../dictionary.js';
+import { isBlockedWord } from '../filter.js';
 
 export const KEY = 'scramble';
 export const ROUND_MS = 30000;
@@ -15,7 +16,8 @@ export const SHUFFLE_TRIES = 80;
 export const BLOCKED = Object.freeze(new Set(['rape', 'neger', 'perianal', 'bordello', 'raunchier', 'boogerman', 'snog']));
 
 export function blocked(word) {
-  return BLOCKED.has(String(word || '').toLowerCase());
+  const w = String(word || '').toLowerCase();
+  return BLOCKED.has(w) || isBlockedWord(w);
 }
 
 export function cleanGuess(text) {

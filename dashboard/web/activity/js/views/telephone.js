@@ -2,6 +2,8 @@ import telephone, { REACTS, REACT_NAMES, NEXT_MIN_MS, TEXT_MAX, INK_CHARS, INK_P
 import { GRID_W, GRID_H, COLORS, COLOR_NAMES, SIZES, SIZE_NAMES, ERASER, LEVELS, FILL, encodeParts, decodeStroke, quantise, strokeOn as inkStroke, fillOn, paintInk, createPainter } from '../games/ink.js';
 import { fillTool, markTool } from './draw.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { hidesWords } from '../text.js';
+import { HIDDEN_NOTE } from '../filter.js';
 
 export const SCALE = 2;
 export const WRITE_GAP_MS = 700;
@@ -506,6 +508,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     local.sent = local.stepKey;
     cue.play('send');
     engine.act({ type: 'text', step: model.step, text });
+    if (hidesWords(input.value)) say(HIDDEN_NOTE);
     refresh();
     return true;
   }

@@ -3,7 +3,7 @@ import { shuffle } from '../engine.js';
 import { jsonBytes } from '../limits.js';
 import { decodeStroke } from './ink.js';
 import { mask, unmask } from './draw.js';
-import { cleanText, plainKey } from '../text.js';
+import { cleanShared, plainKey } from '../text.js';
 
 export const KEY = 'tel';
 export const IN_KEY = 'tel.in';
@@ -92,9 +92,14 @@ export function uncover(code, nonce) {
 }
 
 export function fitText(raw) {
-  const chars = Array.from(cleanText(raw, TEXT_MAX));
-  while (chars.length && encoder.encode(chars.join('')).length > TEXT_BYTES) chars.pop();
-  return chars.join('').trim();
+  let text = cleanShared(raw, TEXT_MAX);
+  for (;;) {
+    const chars = Array.from(text);
+    while (chars.length && encoder.encode(chars.join('')).length > TEXT_BYTES) chars.pop();
+    const next = cleanShared(chars.join('').trim(), TEXT_MAX);
+    if (next === text) return next;
+    text = next;
+  }
 }
 
 export function kindOf(step) {

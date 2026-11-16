@@ -1,5 +1,6 @@
 import hottakes, { KEY, ANSWER_MAX, seal, promptParts } from '../games/hottakes.js';
-import { cleanText } from '../text.js';
+import { cleanText, hidesWords } from '../text.js';
+import { HIDDEN_NOTE } from '../filter.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
@@ -82,7 +83,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
   el.append(head, top, entry, stage, foot);
 
-  const local = { n: null, sent: null, vote: null, lastSent: null };
+  const local = { n: null, sent: null, vote: null, lastSent: null, hid: false };
   const w = win || globalThis;
   let voteTimer = null;
   let model = null;
@@ -119,6 +120,10 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
     counter();
   });
 
+  function sentNote() {
+    return local.hid ? `Sent! ${HIDDEN_NOTE}` : 'Sent!';
+  }
+
   function submit() {
     const m = model;
     if (!m || m.phase !== 'write' || !m.canWrite || local.n === m.n) return;
@@ -130,12 +135,13 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
     local.n = m.n;
     local.sent = text;
     local.lastSent = text;
+    local.hid = hidesWords(text);
     local.vote = null;
     cue.play('send');
     engine.act({ type: 'answer', n: m.n, code: seal(text, m.nonce) });
     input.value = '';
     counter();
-    hint.textContent = 'Sent!';
+    hint.textContent = sentNote();
     if (snap) update(snap);
   }
 
@@ -335,7 +341,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
         if (open && !first && typeof input.focus === 'function') input.focus();
       }
     }
-    if (m && m.phase === 'write' && m.wrote && hint.textContent === 'Sending…') hint.textContent = 'Sent!';
+    if (m && m.phase === 'write' && m.wrote && hint.textContent === 'Sending…') hint.textContent = sentNote();
   }
 
   function update(next) {
