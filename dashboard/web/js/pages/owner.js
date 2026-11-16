@@ -6,6 +6,7 @@ import { formatNumber, relativeTime } from '../format.js';
 import { ownerPath, profilePath } from '../router.js';
 import { state } from '../state.js';
 import { mountAsync } from './common.js';
+import { PARTY_GAMES, PARTY_BADGE_COUNTERS } from '../community-data.js';
 
 export const OWNER_USERS_PATH = '/api/owner/users';
 export const OWNER_ACTIONS_PATH = '/api/owner/actions';
@@ -18,6 +19,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const OPEN = new Set(['queued', 'sent']);
 const REMOVALS = new Set(['shards.remove', 'xp.remove', 'achievement.revoke', 'badge.revoke', 'giver.revoke', 'quests.reset']);
 const GIFTS = new Set(['shards.add', 'xp.add', 'achievement.grant', 'badge.grant', 'giver.grant']);
+export const PARTY_GAME_IDS = Object.freeze(Object.keys(PARTY_GAMES));
+const isGame = (g) => typeof g === 'string' && Object.prototype.hasOwnProperty.call(PARTY_GAMES, g);
 
 export const STATUS_TEXT = {
   queued: { label: 'Waiting for YapOS', tone: 'neutral', icon: 'clock' },
@@ -45,8 +48,40 @@ export function readUser(u) {
     achievements: Array.isArray(u.achievements) ? u.achievements.filter((a) => typeof a === 'string') : [],
     clan: u.clan && typeof u.clan === 'object' && typeof u.clan.name === 'string' ? { name: u.clan.name, tag: str(u.clan.tag) } : null,
     party: { games: num(u.party?.games) || 0, wins: num(u.party?.wins) || 0 },
+    partyBoard: readBoard(u.partyBoard),
     known: u.known !== false,
   };
+}
+
+export function readBoard(b) {
+  const o = b && typeof b === 'object' ? b : {};
+  const m = o.month && typeof o.month === 'object' ? o.month : {};
+  const t = o.today && typeof o.today === 'object' ? o.today : {};
+  const c = o.counters && typeof o.counters === 'object' ? o.counters : {};
+  return {
+    points: num(o.points) || 0,
+    games: num(o.games) || 0,
+    wins: num(o.wins) || 0,
+    best: num(o.best) || 0,
+    bestGame: isGame(o.bestGame) ? o.bestGame : '',
+    rank: num(o.rank),
+    month: { month: str(m.month), points: num(m.points) || 0, rank: num(m.rank) },
+    today: { points: num(t.points) || 0, games: num(t.games) || 0 },
+    byGame: Array.isArray(o.byGame)
+      ? o.byGame.filter((g) => g && isGame(g.game)).map((g) => ({ game: g.game, points: num(g.points) || 0, games: num(g.games) || 0, wins: num(g.wins) || 0, best: num(g.best) || 0 }))
+      : [],
+    counters: Object.fromEntries(PARTY_BADGE_COUNTERS.map((x) => [x.key, num(c[x.key]) || 0])),
+    hidden: o.hidden === true,
+    banned: o.banned === true,
+  };
+}
+
+export function gameLabel(id) {
+  return isGame(id) ? `${PARTY_GAMES[id].emoji} ${PARTY_GAMES[id].name}` : 'an unknown game';
+}
+
+function plural(n, one, many) {
+  return `${formatNumber(n)} ${n === 1 ? one : many}`;
 }
 
 export function readUsers(data) {
@@ -123,6 +158,18 @@ export function describeAction(a, catalog = { achievements: [], badges: [] }) {
       const w = Number(a.value?.wins) || 0;
       return `Add ${formatNumber(g)} Party ${g === 1 ? 'game' : 'games'} and ${formatNumber(w)} ${w === 1 ? 'win' : 'wins'}`;
     }
+    case 'party.points.set': return `Set all-time Party points to ${n}`;
+    case 'party.month.set': return `Set this month's Party points to ${n}`;
+    case 'party.record.set': return `Set Party record to ${plural(Number(a.value?.games) || 0, 'game', 'games')} and ${plural(Number(a.value?.wins) || 0, 'win', 'wins')}`;
+    case 'party.best.set': return Number(a.value?.score) ? `Set best Party game to ${formatNumber(Number(a.value.score))} in ${gameLabel(a.value.game)}` : 'Clear best Party game';
+    case 'party.game.set': return `Set ${gameLabel(a.value?.game)} points to ${formatNumber(Number(a.value?.points) || 0)}`;
+    case 'party.counters.set': {
+      const parts = PARTY_BADGE_COUNTERS.filter((c) => a.value && typeof a.value === 'object' && c.key in a.value).map((c) => `${c.label} ${formatNumber(Number(a.value[c.key]) || 0)}`);
+      return parts.length ? `Set Party badge counters: ${parts.join(', ')}` : 'Set Party badge counters';
+    }
+    case 'party.reset': return a.value?.badges ? 'Reset Party leaderboard and badge stats' : 'Reset Party leaderboard stats';
+    case 'party.board.hide': return 'Remove from Party leaderboards';
+    case 'party.board.show': return 'Show on Party leaderboards again';
     default: return a.kind;
   }
 }
@@ -137,6 +184,15 @@ export function confirmText(kind, value, user, label = describeAction({ kind, va
     return { title: `Lower ${name}'s level?`, body: `They are level ${formatNumber(user.level)} now. Setting level ${formatNumber(value)} lowers it.` };
   }
   if (kind === 'giver.grant') return { title: `Let ${name} create Shards?`, body: 'They can make new Shards out of nothing, hand them to anyone, and change earn rates, achievement rewards and clan prices, just like you. Only do this for people you fully trust.' };
+  if (kind === 'party.reset') {
+    return {
+      title: `Reset ${name}'s Party leaderboard stats?`,
+      body: `Their all-time, per-game, monthly and today's Party points, games, wins and best game are wiped. ${value?.badges ? 'Their Party badge stats, counters and daily puzzle streak are wiped too, so Party badges they earned go away.' : 'Party badges and their profile games and wins stay.'} This can't be undone.`,
+    };
+  }
+  if (kind === 'party.board.hide') {
+    return { title: `Remove ${name} from the Party leaderboards?`, body: "They disappear from every Party board and can't win monthly prizes. They can still play and their stats are kept. You can show them again any time." };
+  }
   if (kind === 'streak.set' && value === 0) return { title: `Clear ${name}'s daily streak?`, body: 'Their /daily streak goes back to zero.' };
   return null;
 }
@@ -332,6 +388,21 @@ function amountField({ label, id, placeholder = '0', chips = false }) {
   return { wrap, input };
 }
 
+export function prefill(input, value) {
+  const text = String(value);
+  if (input.ownerDocument?.activeElement === input) return;
+  if (input.value !== '' && input.dataset.shown !== input.value) return;
+  input.value = text;
+  input.dataset.shown = text;
+}
+
+function gameSelect(id, blank = '') {
+  const sel = h('select', { id, class: 'input select' },
+    blank ? h('option', { value: '', text: blank }) : null,
+    ...PARTY_GAME_IDS.map((g) => h('option', { value: g, text: gameLabel(g) })));
+  return { sel, wrap: h('div', { class: 'select-shell' }, sel, icon('chevron-down', { size: 14, className: 'select-caret' })) };
+}
+
 function stat(label, value) {
   return h('div', { class: 'owner-stat' }, h('span', { class: 'owner-stat-label', text: label }), h('span', { class: 'owner-stat-value', text: value }));
 }
@@ -395,7 +466,7 @@ export function renderOwnerUser(ctx) {
     },
   });
 
-  async function send(kind, { value, ref, btn, notify } = {}) {
+  async function send(kind, { value, ref, btn, notify, onDone } = {}) {
     const ask = confirmText(kind, value, detail?.user, describeAction({ kind, value, ref }, detail?.catalog));
     if (ask) {
       const ok = await confirmDialog({ title: ask.title, body: ask.body, confirmLabel: 'Yes, do it' });
@@ -417,7 +488,9 @@ export function renderOwnerUser(ctx) {
         pageParts?.update(detail);
         toast(action.status === 'done' ? `${describeAction(action, detail.catalog)}: done.` : `${describeAction(action, detail.catalog)}: sent to YapOS.`);
       }
-      poller.later();
+      onDone?.();
+      if (action?.status === 'done') refresh();
+      else poller.later();
       return true;
     } catch (err) {
       if (ctx.signal?.aborted) return false;
@@ -468,6 +541,53 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
   const badgeList = h('div', { class: 'owner-checklist-wrap' });
   const userLog = h('div', { class: 'owner-log-wrap' });
 
+  const boardStatus = h('div', { class: 'owner-board-status' });
+  const boardStats = h('div', { class: 'owner-stats' });
+  const boardGames = h('div', { class: 'owner-board-games' });
+  const hideBoard = button({ label: 'Remove from leaderboards', icon: 'eye-off', variant: 'danger' });
+  const showBoard = button({ label: 'Show on leaderboards again', icon: 'eye' });
+  const headHide = button({ label: 'Remove from leaderboards', icon: 'eye-off', size: 'sm' });
+  const pointsField = amountField({ label: 'All-time points', id: nextId('owner-bpoints') });
+  const savePoints = button({ label: 'Save points', icon: 'check' });
+  const recGames = amountField({ label: 'Total games', id: nextId('owner-bgames') });
+  const recWins = amountField({ label: 'Total wins', id: nextId('owner-bwins') });
+  const saveRecord = button({ label: 'Save games and wins', icon: 'check' });
+  const bestField = amountField({ label: 'Best score', id: nextId('owner-bbest') });
+  const bestGameId = nextId('owner-bbest-game');
+  const bestGame = gameSelect(bestGameId, 'Pick a game');
+  const saveBest = button({ label: 'Save best game', icon: 'check' });
+  const clearBest = button({ label: 'Clear', icon: 'x' });
+  const monthField = amountField({ label: "This month's points", id: nextId('owner-bmonth') });
+  const saveMonth = button({ label: 'Save month', icon: 'check' });
+  const gamePickId = nextId('owner-bgame');
+  const gamePick = gameSelect(gamePickId);
+  gamePick.sel.value = PARTY_GAME_IDS[0];
+  const gamePoints = amountField({ label: 'Points in this game', id: nextId('owner-bgame-pts') });
+  const saveGame = button({ label: 'Save game points', icon: 'check' });
+  const counterFields = PARTY_BADGE_COUNTERS.map((c) => ({ key: c.key, field: amountField({ label: c.label, id: nextId(`owner-c-${c.key}`) }) }));
+  const saveCounters = button({ label: 'Save counters', icon: 'check' });
+  const resetBadgesId = nextId('owner-reset-badges');
+  const resetBadges = h('input', { type: 'checkbox', id: resetBadgesId, class: 'owner-check' });
+  const resetBoard = button({ label: 'Reset Party stats', icon: 'trash', variant: 'danger' });
+  const board = () => getDetail().user.partyBoard;
+
+  function gamePointsFor(game) {
+    const found = board().byGame.find((g) => g.game === game);
+    return found ? found.points : 0;
+  }
+
+  function showGamePoints() {
+    gamePoints.input.value = String(gamePointsFor(gamePick.sel.value));
+    gamePoints.input.dataset.shown = gamePoints.input.value;
+  }
+
+  function clean(...fields) {
+    for (const f of fields) {
+      f.input.value = '';
+      delete f.input.dataset.shown;
+    }
+  }
+
   function amountOrSay(field) {
     const r = parseWhole(field.input.value);
     if (r.error) {
@@ -506,6 +626,111 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
       winsField.input.value = '';
     }
   });
+
+  const setOne = (kind, field, btn) => async () => {
+    const value = amountOrSay(field);
+    if (value === null) return;
+    await send(kind, { value, btn, onDone: () => clean(field) });
+  };
+  savePoints.addEventListener('click', setOne('party.points.set', pointsField, savePoints));
+  saveMonth.addEventListener('click', setOne('party.month.set', monthField, saveMonth));
+  saveRecord.addEventListener('click', async () => {
+    const g = amountOrSay(recGames);
+    if (g === null) return;
+    const w = amountOrSay(recWins);
+    if (w === null) return;
+    if (w > g) return toast("Wins can't be more than games played.", { tone: 'danger', title: 'Check the numbers' });
+    await send('party.record.set', { value: { games: g, wins: w }, btn: saveRecord, onDone: () => clean(recGames, recWins) });
+  });
+  saveBest.addEventListener('click', async () => {
+    const score = amountOrSay(bestField);
+    if (score === null) return;
+    const game = bestGame.sel.value;
+    if (score > 0 && !isGame(game)) {
+      toast('Pick which game the best score was in.', { tone: 'danger', title: 'Pick a game' });
+      bestGame.sel.focus();
+      return;
+    }
+    await send('party.best.set', { value: score > 0 ? { score, game } : { score: 0 }, btn: saveBest, onDone: () => clean(bestField) });
+  });
+  clearBest.addEventListener('click', async () => {
+    await send('party.best.set', { value: { score: 0 }, btn: clearBest, onDone: () => clean(bestField) });
+  });
+  gamePick.sel.addEventListener('change', showGamePoints);
+  saveGame.addEventListener('click', async () => {
+    const points = amountOrSay(gamePoints);
+    if (points === null) return;
+    await send('party.game.set', { value: { game: gamePick.sel.value, points }, btn: saveGame, onDone: () => clean(gamePoints) });
+  });
+  saveCounters.addEventListener('click', async () => {
+    const value = {};
+    for (const { key, field } of counterFields) {
+      if (!field.input.value.trim()) continue;
+      const n = amountOrSay(field);
+      if (n === null) return;
+      if (n !== board().counters[key]) value[key] = n;
+    }
+    if (!Object.keys(value).length) return toast('Change at least one counter first.', { title: 'Nothing to save' });
+    await send('party.counters.set', { value, btn: saveCounters, onDone: () => clean(...counterFields.map((c) => c.field)) });
+  });
+  resetBoard.addEventListener('click', async () => {
+    await send('party.reset', {
+      value: { badges: resetBadges.checked },
+      btn: resetBoard,
+      onDone: () => {
+        resetBadges.checked = false;
+        clean(pointsField, recGames, recWins, bestField, monthField, gamePoints, ...counterFields.map((c) => c.field));
+      },
+    });
+  });
+  const hideOrShow = (btn) => () => send(board().hidden ? 'party.board.show' : 'party.board.hide', { btn });
+  hideBoard.addEventListener('click', hideOrShow(hideBoard));
+  showBoard.addEventListener('click', hideOrShow(showBoard));
+  headHide.addEventListener('click', hideOrShow(headHide));
+
+  function updateBoard(b) {
+    const where = b.banned ? badge('Banned from Party', 'danger', 'ban') : b.hidden ? badge('Hidden from leaderboards', 'caution', 'eye-off') : badge('On the leaderboards', 'success', 'check');
+    const today = b.today.points || b.today.games ? `Today: ${plural(b.today.points, 'point', 'points')} from ${plural(b.today.games, 'game', 'games')}.` : 'Nothing counted today.';
+    replace(boardStatus, where,
+      h('span', { class: 'owner-board-note muted', text: b.hidden ? 'They can still play. Nothing they do shows on a Party board or wins a monthly prize.' : today }));
+    hideBoard.hidden = b.hidden;
+    showBoard.hidden = !b.hidden;
+    headHide.hidden = b.hidden;
+    replace(boardStats,
+      stat('All-time points', formatNumber(b.points)),
+      stat('Rank', b.rank ? `#${formatNumber(b.rank)}` : 'Not ranked'),
+      stat('Games', formatNumber(b.games)),
+      stat('Wins', formatNumber(b.wins)),
+      stat('Best game', b.best ? `${formatNumber(b.best)} · ${gameLabel(b.bestGame)}` : 'None'),
+      stat('This month', `${formatNumber(b.month.points)}${b.month.rank ? ` · #${formatNumber(b.month.rank)}` : ''}`));
+    replace(boardGames, b.byGame.length
+      ? h('div', { class: 'table-wrap' }, h('table', { class: 'table owner-board-table' },
+        h('thead', null, h('tr', null, ...['Game', 'Points', 'Games', 'Wins', 'Best', ''].map((t) => h('th', { scope: 'col', class: t === 'Games' || t === 'Wins' ? 'owner-board-minor' : '', text: t })))),
+        h('tbody', null, ...b.byGame.map((g) => {
+          const edit = button({ label: 'Edit', size: 'sm', ariaLabel: `Edit ${PARTY_GAMES[g.game].name} points` });
+          edit.addEventListener('click', () => {
+            gamePick.sel.value = g.game;
+            showGamePoints();
+            gamePoints.input.focus();
+          });
+          return h('tr', null,
+            h('td', { text: gameLabel(g.game) }),
+            h('td', { text: formatNumber(g.points) }),
+            h('td', { class: 'owner-board-minor', text: formatNumber(g.games) }),
+            h('td', { class: 'owner-board-minor', text: formatNumber(g.wins) }),
+            h('td', { text: formatNumber(g.best) }),
+            h('td', null, edit));
+        }))))
+      : h('p', { class: 'owner-empty muted', text: 'No points in any game yet.' }));
+    prefill(pointsField.input, b.points);
+    prefill(recGames.input, b.games);
+    prefill(recWins.input, b.wins);
+    prefill(bestField.input, b.best);
+    if (bestGame.sel.ownerDocument?.activeElement !== bestGame.sel) bestGame.sel.value = b.bestGame || '';
+    prefill(monthField.input, b.month.points);
+    prefill(gamePoints.input, gamePointsFor(gamePick.sel.value));
+    for (const { key, field } of counterFields) prefill(field.input, b.counters[key]);
+  }
 
   function checklist(wrap, list, owned, { grant, revoke, earned = new Set(), filter = '', what, pending }) {
     const q = filter.trim().toLowerCase();
@@ -550,7 +775,10 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
         u.username ? h('span', { class: 'owner-card-handle', text: `@${u.username}` }) : null,
         h('code', { class: 'owner-card-id', text: u.id }),
         u.clan ? h('span', { class: 'owner-card-clan' }, icon('shield', { size: 14 }), h('span', { text: u.clan.tag ? `${u.clan.name} [${u.clan.tag}]` : u.clan.name })) : null),
-      u.username ? linkButton({ label: 'Public profile', href: profilePath(u.username), icon: 'user', size: 'sm' }) : null);
+      h('div', { class: 'owner-card-links' },
+        u.username ? linkButton({ label: 'Public profile', href: profilePath(u.username), icon: 'user', size: 'sm' }) : null,
+        headHide));
+    updateBoard(u.partyBoard);
     replace(stats,
       stat('Level', u.level === null ? 'Not known' : formatNumber(u.level)),
       stat('XP', u.xp === null ? 'Not known' : formatNumber(u.xp)),
@@ -598,6 +826,50 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
         h('div', { class: 'owner-pair' }, gamesField.wrap, winsField.wrap),
         row(addParty),
         h('p', { class: 'field-help', text: 'Added straight away. Party badges follow these numbers.' }))),
+    card({ title: 'Party leaderboard', icon: 'chart', className: 'owner-board-card' },
+      boardStatus,
+      boardStats,
+      boardGames,
+      h('div', { class: 'owner-board-edit' },
+        h('div', { class: 'owner-board-block' },
+          h('h3', { class: 'owner-section-title', text: 'All-time total' }),
+          pointsField.wrap,
+          row(savePoints),
+          h('p', { class: 'field-help', text: 'Only the all-time total. Per-game and monthly points stay as they are.' })),
+        h('div', { class: 'owner-board-block' },
+          h('h3', { class: 'owner-section-title', text: 'Games and wins' }),
+          h('div', { class: 'owner-pair' }, recGames.wrap, recWins.wrap),
+          row(saveRecord),
+          h('p', { class: 'field-help', text: 'Sets the exact numbers on the boards, their profile and Party badges.' })),
+        h('div', { class: 'owner-board-block' },
+          h('h3', { class: 'owner-section-title', text: 'Best game' }),
+          bestField.wrap,
+          h('div', { class: 'owner-field' }, h('label', { class: 'field-label', htmlFor: bestGameId, text: 'Game' }), bestGame.wrap),
+          row(saveBest, clearBest)),
+        h('div', { class: 'owner-board-block' },
+          h('h3', { class: 'owner-section-title', text: 'Monthly race' }),
+          monthField.wrap,
+          row(saveMonth),
+          h('p', { class: 'field-help', text: 'The monthly race. The top 3 get a badge when the month ends.' })),
+        h('div', { class: 'owner-board-block' },
+          h('h3', { class: 'owner-section-title', text: 'Points in one game' }),
+          h('div', { class: 'owner-field' }, h('label', { class: 'field-label', htmlFor: gamePickId, text: 'Game' }), gamePick.wrap),
+          gamePoints.wrap,
+          row(saveGame),
+          h('p', { class: 'field-help', text: 'All-time points move by the same amount, so the totals still add up.' })),
+        h('div', { class: 'owner-board-block' },
+          h('h3', { class: 'owner-section-title', text: 'Badge counters' }),
+          h('div', { class: 'owner-counters' }, ...counterFields.map((c) => c.field.wrap)),
+          row(saveCounters)),
+        h('div', { class: 'owner-board-block owner-board-danger' },
+          h('div', { class: 'owner-board-part' },
+            h('h3', { class: 'owner-section-title', text: 'Leaderboard access' }),
+            h('p', { class: 'owner-text', text: 'Hide someone who cheated. They keep playing but never show on a Party board or win a monthly prize.' }),
+            row(hideBoard, showBoard)),
+          h('div', { class: 'owner-board-part' },
+            h('h3', { class: 'owner-section-title', text: 'Start over' }),
+            h('label', { class: 'owner-tell-check', htmlFor: resetBadgesId }, resetBadges, h('span', { text: 'Also reset badge stats, counters and daily streak' })),
+            row(resetBoard))))),
     h('div', { class: 'owner-grid owner-grid-wide' },
       card({ title: 'Achievements', icon: 'trophy' },
         h('label', { class: 'sr-only', htmlFor: achSearchId, text: 'Search achievements' }), achSearch, achList),

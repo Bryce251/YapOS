@@ -4,7 +4,7 @@ import { cleanAvatar, cleanUsername } from './profiles.js';
 import { safeName } from './public-profiles.js';
 import { badgesFor, partySeasonBadges, seasonBadgeInfo } from './party-badges.js';
 import { readCatalog } from './owner.js';
-import { LEADERBOARD_GAMES } from './party-leaderboard.js';
+import { LEADERBOARD_GAMES, isOffBoard, offBoard } from './party-leaderboard.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 
 export const CARD_TTL = 30_000;
@@ -93,10 +93,9 @@ function visible(row, settings) {
 
 async function rankOf(db, id, points) {
   if (!(points > 0)) return null;
-  const banned = await db.prepare('SELECT 1 AS x FROM party_bans WHERE id = ?').bind(id).first();
-  if (banned) return null;
+  if (await isOffBoard(db, id)) return null;
   const above = await db
-    .prepare('SELECT COUNT(*) AS n FROM party_points p WHERE p.points > ? AND NOT EXISTS (SELECT 1 FROM party_bans b WHERE b.id = p.user_id)')
+    .prepare(`SELECT COUNT(*) AS n FROM party_points p WHERE p.points > ? AND ${offBoard('p.user_id')}`)
     .bind(points)
     .first();
   return { rank: (Number(above && above.n) || 0) + 1, points };

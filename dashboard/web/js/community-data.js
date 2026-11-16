@@ -28,6 +28,18 @@ export const PARTY_GAMES = Object.freeze({
   memory: { name: 'Memory Chain', emoji: '💡' },
 });
 
+export const PARTY_BADGE_COUNTERS = Object.freeze([
+  Object.freeze({ key: 'steals', label: 'Trivia steals' }),
+  Object.freeze({ key: 'perfect', label: 'Perfect Trivia games' }),
+  Object.freeze({ key: 'lightning', label: 'Lightning round answers' }),
+  Object.freeze({ key: 'bestWinStreak', label: 'Best win streak' }),
+  Object.freeze({ key: 'comeback', label: 'Comeback wins' }),
+  Object.freeze({ key: 'fakerCaught', label: 'Fakers caught' }),
+  Object.freeze({ key: 'pangram', label: 'Pangrams found' }),
+  Object.freeze({ key: 'topTake', label: 'Top hot takes' }),
+  Object.freeze({ key: 'fastest', label: 'Fastest in Reflex' }),
+]);
+
 export const BADGES = Object.freeze({
   'first-game': { label: 'First game', emoji: '🎈' },
   'games-10': { label: 'Party regular', emoji: '🎲' },

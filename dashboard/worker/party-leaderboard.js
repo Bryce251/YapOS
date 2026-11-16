@@ -106,7 +106,7 @@ export async function awardMonth(db, t) {
   const month = prevMonth(monthOf(t));
   const done = await db.prepare('SELECT 1 AS x FROM party_season_awards WHERE month = ? LIMIT 1').bind(month).first();
   if (done) return { month, awarded: 0 };
-  const res = await db.prepare(`SELECT m.user_id AS user_id, m.points AS points, p.name AS name, p.username AS username FROM party_points_month m LEFT JOIN party_points p ON p.user_id = m.user_id WHERE m.month = ? AND m.points > 0 AND ${NOT_BANNED.replace('{u}', 'm.user_id')} ORDER BY m.points DESC, m.updated ASC, m.user_id ASC LIMIT ?`).bind(month, MONTH_PRIZES).all();
+  const res = await db.prepare(`SELECT m.user_id AS user_id, m.points AS points, p.name AS name, p.username AS username FROM party_points_month m LEFT JOIN party_points p ON p.user_id = m.user_id WHERE m.month = ? AND m.points > 0 AND ${offBoard('m.user_id')} ORDER BY m.points DESC, m.updated ASC, m.user_id ASC LIMIT ?`).bind(month, MONTH_PRIZES).all();
   const rows = (res && res.results) || [];
   if (!rows.length) return { month, awarded: 0 };
   const out = await db.batch(rows.map((r, i) => db.prepare('INSERT OR IGNORE INTO party_season_awards (month, rank, user_id, name, username, points, awarded) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -140,7 +140,16 @@ function source(board, game, month = null) {
   return { from: 'party_points_game g LEFT JOIN party_points p ON p.user_id = g.user_id', col: `g.${board}`, where: 'g.game = ?', binds: [game], game: true };
 }
 
-const NOT_BANNED = 'NOT EXISTS (SELECT 1 FROM party_bans b WHERE b.id = {u})';
+export const OFF_BOARD_SQL = 'NOT EXISTS (SELECT 1 FROM party_bans b WHERE b.id = {u}) AND NOT EXISTS (SELECT 1 FROM party_board_hidden x WHERE x.user_id = LOWER({u}))';
+
+export function offBoard(u) {
+  return OFF_BOARD_SQL.replaceAll('{u}', u);
+}
+
+export async function isOffBoard(db, id) {
+  const row = await db.prepare('SELECT 1 AS x FROM party_bans WHERE id = ? UNION ALL SELECT 1 AS x FROM party_board_hidden WHERE user_id = LOWER(?) LIMIT 1').bind(id, id).first();
+  return Boolean(row);
+}
 
 async function lookup(db, ids) {
   if (!ids.length) return { avatars: new Map(), handles: new Map(), names: new Map(), open: new Map(), hidden: new Set() };
@@ -191,7 +200,7 @@ function cleanHandleOut(value) {
 async function buildBoard(db, board, game, limit, month = null) {
   const src = source(board, game, month);
   const al = src.alias || (src.game ? 'g' : 'p');
-  const notBanned = NOT_BANNED.replace('{u}', `${al}.user_id`);
+  const notBanned = offBoard(`${al}.user_id`);
   const idCol = `${al}.user_id`;
   const pick = src.game
     ? `${idCol} AS user_id, p.name AS name, p.username AS username, ${src.col} AS value, g.games AS games, g.wins AS wins, g.best AS best, g.game AS best_game`
@@ -236,8 +245,7 @@ async function buildBoard(db, board, game, limit, month = null) {
 
 async function myRank(db, board, game, me, month = null) {
   if (!me) return null;
-  const banned = await db.prepare('SELECT 1 AS x FROM party_bans WHERE id = ?').bind(me).first();
-  if (banned) return null;
+  if (await isOffBoard(db, me)) return null;
   const src = source(board, game, month);
   const own = month
     ? await db.prepare(`SELECT ${board} AS value FROM party_points_month WHERE user_id = ? AND month = ?`).bind(me, month).first()
@@ -246,7 +254,7 @@ async function myRank(db, board, game, me, month = null) {
     : await db.prepare(`SELECT ${board} AS value FROM party_points WHERE user_id = ?`).bind(me).first();
   const value = Number(own && own.value) || 0;
   if (value <= 0) return null;
-  const notBanned = NOT_BANNED.replace('{u}', `${src.alias || (src.game ? 'g' : 'p')}.user_id`);
+  const notBanned = offBoard(`${src.alias || (src.game ? 'g' : 'p')}.user_id`);
   const above = await db.prepare(`SELECT COUNT(*) AS n FROM ${src.from} WHERE ${src.where} AND ${src.col} > ? AND ${notBanned}`).bind(...src.binds, value).first();
   return { rank: (Number(above && above.n) || 0) + 1, value };
 }

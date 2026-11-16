@@ -423,6 +423,93 @@
   overflow-wrap: anywhere;
 }
 
+.owner-card-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.owner-board-card {
+  margin-top: 16px;
+}
+
+.owner-board-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.owner-board-note {
+  font-size: 13px;
+}
+
+.owner-board-games {
+  margin-top: 16px;
+}
+
+.owner-board-table {
+  min-width: 0;
+}
+
+.owner-board-table td,
+.owner-board-table th {
+  white-space: nowrap;
+}
+
+.owner-card-links > [hidden],
+.owner-actions-row > [hidden] {
+  display: none;
+}
+
+.owner-pair + .owner-actions-row {
+  margin-top: 12px;
+}
+
+.owner-board-edit {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.owner-board-block {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.owner-board-block > .owner-field + .owner-field {
+  margin-top: 12px;
+}
+
+.owner-board-danger {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px 24px;
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.owner-board-part {
+  min-width: 0;
+}
+
+.owner-counters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: end;
+  gap: 8px 12px;
+}
+
+.owner-counters + .owner-actions-row,
+.owner-tell-check + .owner-actions-row {
+  margin-top: 12px;
+}
+
 @media (max-width: 720px) {
   .owner-result {
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -433,12 +520,27 @@
   }
 
   .owner-grid,
-  .owner-grid-wide {
+  .owner-grid-wide,
+  .owner-board-edit {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .owner-tell {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .owner-board-minor {
+    display: none;
+  }
+
+  .owner-board-table td,
+  .owner-board-table th {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .owner-board-table td:first-child {
+    white-space: normal;
   }
 
   .owner-log-row {

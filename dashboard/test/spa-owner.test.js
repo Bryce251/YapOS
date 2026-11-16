@@ -264,3 +264,142 @@ test('letting someone create Shards always asks first and says what it means', (
   assert.match(ask.body, /out of nothing/);
   assert.equal(owner.describeAction({ kind: 'giver.grant' }), 'Let them create Shards');
 });
+
+const BOARD = {
+  points: 100000, games: 11, wins: 4, best: 50000, bestGame: 'trivia', rank: 1,
+  month: { month: '2026-11', points: 100000, rank: 1 }, today: { points: 100000, games: 11 },
+  byGame: [{ game: 'trivia', points: 50000, games: 6, wins: 3, best: 50000 }, { game: 'namefive', points: 50000, games: 5, wins: 1, best: 20000 }],
+  counters: { steals: 12, perfect: 1, bestWinStreak: 4 }, hidden: false, banned: false,
+};
+
+function boardDetail(over = {}) {
+  const d = structuredClone(DETAIL);
+  d.user.name = 'XD';
+  d.user.partyBoard = { ...structuredClone(BOARD), ...over };
+  return d;
+}
+
+function doneAction(path, body, n) {
+  return { action: { id: `p${n}`, user: body.user, kind: body.kind, value: body.value ?? null, ref: null, notify: false, created: Date.now(), status: 'done', result: 'Done here.' } };
+}
+
+const inputByLabel = (root, text) => {
+  const label = walk(root).find((n) => n.localName === 'label' && n.textContent.trim() === text);
+  return label ? walk(root).find((n) => n.id === label.htmlFor) : null;
+};
+
+test('the Party leaderboard card shows current numbers prefilled and saves exact values', async () => {
+  state.partyOwner = true;
+  const posts = [];
+  let gets = 0;
+  const { main, stop } = mount(owner.renderOwnerUser, {
+    params: { id: ID },
+    get: async () => { gets += 1; return boardDetail(gets > 1 ? { points: 10 } : {}); },
+    post: async (path, body) => { posts.push(body); return doneAction(path, body, posts.length); },
+  });
+  await flush();
+  const text = main.textContent;
+  for (const bit of ['Party leaderboard', 'On the leaderboards', '100,000', '#1', '50,000 · 🧠 Trivia', '🖐️ Name 5', 'Today: 100,000 points from 11 games.']) assert.ok(text.includes(bit), bit);
+  const pts = inputByLabel(main, 'All-time points');
+  assert.equal(pts.value, '100000');
+  assert.equal(inputByLabel(main, 'Total games').value, '11');
+  assert.equal(inputByLabel(main, 'Total wins').value, '4');
+  assert.equal(inputByLabel(main, 'Best score').value, '50000');
+  assert.equal(inputByLabel(main, "This month's points").value, '100000');
+  assert.equal(inputByLabel(main, 'Trivia steals').value, '12');
+  assert.equal(inputByLabel(main, 'Fakers caught').value, '0');
+  const picker = walk(main).filter((n) => n.localName === 'select');
+  assert.equal(picker.length, 2);
+  assert.equal(walk(picker[1]).filter((n) => n.localName === 'option').length, owner.PARTY_GAME_IDS.length);
+  assert.ok(owner.PARTY_GAME_IDS.includes('namefive') && owner.PARTY_GAME_IDS.includes('memory'));
+  pts.value = '1,000';
+  byLabel(main, 'Save points').click();
+  await flush();
+  assert.deepEqual(posts[0], { user: ID, kind: 'party.points.set', value: 1000 });
+  await flush();
+  assert.equal(gets, 2, 'a finished change reloads the numbers');
+  await flush();
+  assert.equal(pts.value, '10');
+  inputByLabel(main, 'Total wins').value = '20';
+  byLabel(main, 'Save games and wins').click();
+  await flush();
+  assert.equal(posts.length, 1);
+  assert.match(document.body.textContent, /Wins can't be more than games/);
+  inputByLabel(main, 'Total wins').value = '0';
+  inputByLabel(main, 'Total games').value = '2';
+  byLabel(main, 'Save games and wins').click();
+  await flush();
+  assert.deepEqual(posts[1].value, { games: 2, wins: 0 });
+  byLabel(main, 'Edit Name 5 points').click();
+  const gp = inputByLabel(main, 'Points in this game');
+  assert.equal(gp.value, '50000');
+  gp.value = '0';
+  byLabel(main, 'Save game points').click();
+  await flush();
+  assert.deepEqual(posts[2].value, { game: 'namefive', points: 0 });
+  inputByLabel(main, 'Best score').value = '800';
+  picker[0].value = 'memory';
+  byLabel(main, 'Save best game').click();
+  await flush();
+  assert.deepEqual(posts[3].value, { score: 800, game: 'memory' });
+  byLabel(main, 'Clear').click();
+  await flush();
+  assert.deepEqual(posts[4].value, { score: 0 });
+  inputByLabel(main, 'Trivia steals').value = '0';
+  byLabel(main, 'Save counters').click();
+  await flush();
+  assert.deepEqual(posts[5].value, { steals: 0 });
+  inputByLabel(main, "This month's points").value = '5';
+  byLabel(main, 'Save month').click();
+  await flush();
+  assert.deepEqual(posts[6], { user: ID, kind: 'party.month.set', value: 5 });
+  stop();
+});
+
+test('removing from leaderboards and resetting ask first; hidden people can be shown again', async () => {
+  state.partyOwner = true;
+  const posts = [];
+  let hidden = false;
+  const { main, stop } = mount(owner.renderOwnerUser, {
+    params: { id: ID },
+    get: async () => boardDetail({ hidden }),
+    post: async (path, body) => { posts.push(body); if (body.kind === 'party.board.hide') hidden = true; return doneAction(path, body, posts.length); },
+  });
+  await flush();
+  const hideButtons = buttons(main).filter((b) => b.textContent.trim() === 'Remove from leaderboards');
+  assert.equal(hideButtons.length, 2);
+  hideButtons[0].click();
+  await flush();
+  let dialog = document.body.querySelector('.dialog-panel');
+  assert.match(dialog.textContent, /Remove XD from the Party leaderboards\?/);
+  byLabel(dialog, 'Cancel').click();
+  await flush();
+  assert.equal(posts.length, 0);
+  hideButtons[0].click();
+  await flush();
+  byLabel(document.body.querySelector('.dialog-panel'), 'Yes, do it').click();
+  await flush();
+  await flush();
+  assert.deepEqual(posts[0], { user: ID, kind: 'party.board.hide' });
+  assert.match(main.textContent, /Hidden from leaderboards/);
+  assert.ok(buttons(main).filter((b) => b.textContent.trim() === 'Remove from leaderboards').every((b) => b.hidden));
+  byLabel(main, 'Show on leaderboards again').click();
+  await flush();
+  assert.deepEqual(posts[1], { user: ID, kind: 'party.board.show' });
+  const check = inputByLabel(main, 'Also reset badge stats, counters and daily streak');
+  check.checked = true;
+  byLabel(main, 'Reset Party stats').click();
+  await flush();
+  dialog = document.body.querySelector('.dialog-panel');
+  assert.match(dialog.textContent, /Reset XD's Party leaderboard stats\?/);
+  assert.match(dialog.textContent, /badges they earned go away/);
+  byLabel(dialog, 'Yes, do it').click();
+  await flush();
+  assert.deepEqual(posts[2], { user: ID, kind: 'party.reset', value: { badges: true } });
+  assert.equal(owner.describeAction({ kind: 'party.game.set', value: { game: 'trivia', points: 0 } }), 'Set 🧠 Trivia points to 0');
+  assert.equal(owner.describeAction({ kind: 'party.best.set', value: { score: 0 } }), 'Clear best Party game');
+  assert.equal(owner.describeAction({ kind: 'party.counters.set', value: { steals: 3 } }), 'Set Party badge counters: Trivia steals 3');
+  assert.equal(owner.readBoard({ bestGame: 'constructor', byGame: [{ game: '__proto__' }] }).bestGame, '');
+  assert.deepEqual(owner.readBoard(null).byGame, []);
+  stop();
+});

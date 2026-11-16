@@ -4,6 +4,7 @@ import { getSession, touchSession } from './sessions.js';
 import { isPartyOwner, USER_ID_RE } from './party.js';
 import { cleanText, cleanUsername, cleanAvatar } from './profiles.js';
 import { PARTY_BADGES, badgesFor, partySeasonBadges, partySeasonBadgeId, seasonBadgeInfo } from './party-badges.js';
+import { PARTY_OWNER_KINDS, validatePartyValue, partyBoardView, partyActionPlan, partyActionDone } from './owner-party.js';
 
 export const OWNER_ACTIONS_PER_MIN = 120;
 export const OWNER_READS_PER_MIN = 300;
@@ -53,7 +54,8 @@ export const OWNER_KINDS = Object.freeze({
   'giver.revoke': Object.freeze({ label: 'Stop them creating Shards', input: 'none', gift: false }),
   'quests.reset': Object.freeze({ label: "Reset today's quests", input: 'none', gift: false }),
   'streak.set': Object.freeze({ label: 'Set daily streak', input: 'amount', min: 0, max: 10000, gift: false }),
-  'party.stats.add': Object.freeze({ label: 'Add Party games and wins', input: 'party', min: 0, max: 100000, gift: false }),
+  'party.stats.add': Object.freeze({ label: 'Add Party games and wins', input: 'party', min: 0, max: 100000, gift: false, instant: true }),
+  ...PARTY_OWNER_KINDS,
 });
 
 export const KIND_LIST = Object.freeze(Object.entries(OWNER_KINDS).map(([kind, k]) => Object.freeze({ kind, ...k })));
@@ -161,6 +163,8 @@ export function validateAction(body, catalog) {
     const wins = body.value.wins === undefined ? 0 : parseAmount(body.value.wins, spec);
     if (!games && !wins) throw bad('bad_value', 'Add at least one game or win.');
     value = { games, wins };
+  } else if (['record', 'best', 'game', 'counters', 'reset'].includes(spec.input)) {
+    value = validatePartyValue(spec, body.value, parseAmount);
   } else if (spec.input === 'achievement' || spec.input === 'badge') {
     const raw = typeof body.id === 'string' ? body.id.trim().toLowerCase() : '';
     const list = spec.input === 'achievement' ? catalog.achievements : catalog.badges;
@@ -319,7 +323,7 @@ function idList(value) {
   return out;
 }
 
-async function userDetail(env, raw) {
+async function userDetail(env, raw, t) {
   const id = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
   if (!USER_ID_RE.test(id)) return fail(400, 'bad_user', "That user id doesn't look right.");
   const db = env.DB;
@@ -357,7 +361,8 @@ async function userDetail(env, raw) {
     : null;
   user.party = party;
   user.hidden = Boolean(pub && Number(pub.hidden));
-  user.known = Boolean(pub || prof || (sess && sess.user_id) || known || stats);
+  user.partyBoard = await partyBoardView(db, id, t, isPlainObject(counters) ? counters : {});
+  user.known = Boolean(pub || prof || (sess && sess.user_id) || known || stats || user.partyBoard.points || user.partyBoard.games);
   return json({ user, actions: rowsOf(actions).map(actionOut), catalog });
 }
 
@@ -395,20 +400,16 @@ async function postAction(request, env, session, t) {
   const a = validateAction(body, catalog);
   const id = randomToken(12);
   const db = env.DB;
-  const instant = a.kind === 'party.stats.add';
-  const status = instant ? 'done' : 'queued';
-  const result = instant ? `Added ${nice(a.value.games)} ${a.value.games === 1 ? 'game' : 'games'} and ${nice(a.value.wins)} ${a.value.wins === 1 ? 'win' : 'wins'} to their Party stats.` : null;
+  const plan = OWNER_KINDS[a.kind].instant ? await partyActionPlan(db, a, session.user_id, t) : null;
+  const status = plan ? 'done' : 'queued';
+  const result = plan ? plan.result : null;
   const stmts = [
     db.prepare('INSERT INTO owner_actions (id, user_id, kind, value, ref, note, notify, created, status, sent_at, result, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)')
       .bind(id, a.user, a.kind, a.value === null ? null : JSON.stringify(a.value), a.ref, a.note, a.notify ? 1 : 0, t, status, result, t),
   ];
-  if (instant) {
-    stmts.push(
-      db.prepare("INSERT INTO party_stats (user_id, games, wins, by_game, counters, updated) VALUES (?, ?, ?, '{}', '{}', ?) ON CONFLICT (user_id) DO UPDATE SET games = party_stats.games + excluded.games, wins = party_stats.wins + excluded.wins, updated = excluded.updated")
-        .bind(a.user, a.value.games, a.value.wins, t),
-    );
-  }
+  if (plan) stmts.push(...plan.stmts);
   await db.batch(stmts);
+  if (plan) partyActionDone(db);
   const row = await db.prepare(`SELECT ${ACTION_COLUMNS} FROM owner_actions WHERE id = ?`).bind(id).first();
   return json({ action: actionOut(row) }, 201);
 }
@@ -428,7 +429,7 @@ export async function ownerApi(request, env, route, url, t, { csrf }) {
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   }
   if (n === 3 && route[1] === 'users') {
-    if (readOnly) return userDetail(env, route[2]);
+    if (readOnly) return userDetail(env, route[2], t);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   }
   if (n === 2 && route[1] === 'actions') {

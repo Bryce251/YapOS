@@ -425,6 +425,12 @@ CREATE TABLE IF NOT EXISTS party_season_awards (
 );
 CREATE INDEX IF NOT EXISTS party_season_awards_user ON party_season_awards (user_id, month);
 
+CREATE TABLE IF NOT EXISTS party_board_hidden (
+  user_id TEXT PRIMARY KEY,
+  by_id TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS activity_links (
   code_hash TEXT PRIMARY KEY,
   poll_hash TEXT NOT NULL UNIQUE,

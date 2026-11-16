@@ -168,6 +168,20 @@ test('ties are broken by the faster time', async () => {
   assert.deepEqual(top.top.map((r) => r.id), [uid(2), uid(1)]);
 });
 
+test('people hidden from the Party leaderboards are left off the daily puzzle board and ranks', async () => {
+  const h = daily();
+  const words = dailyScrambleWords(TODAY);
+  await submit(h, { date: TODAY, kind: 'scramble', user: user(1), answers: words, ms: 10000 });
+  h.db.raw.prepare("INSERT INTO party_board_hidden (user_id, by_id, at) VALUES (?, 'x', 1)").run(uid(1));
+  const next = await (await submit(h, { date: TODAY, kind: 'scramble', user: user(2), answers: words, ms: 30000 }, { ip: '198.51.100.33' })).json();
+  assert.equal(next.rank, 1);
+  const top = await (await h.request('GET', '/api/activity/daily/top?kind=scramble')).json();
+  assert.deepEqual(top.top.map((r) => [r.id, r.rank]), [[uid(2), 1]]);
+  h.db.raw.prepare('DELETE FROM party_board_hidden').run();
+  const back = await (await h.request('GET', '/api/activity/daily/top?kind=scramble', { ip: '198.51.100.34' })).json();
+  assert.deepEqual(back.top.map((r) => r.id), [uid(1), uid(2)]);
+});
+
 test('playing on the next day grows the streak and old puzzles are closed', async () => {
   const h = daily();
   await submit(h, { date: TODAY, kind: 'hive', user: user(1), words: [], ms: 1000 });
