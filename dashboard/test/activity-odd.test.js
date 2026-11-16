@@ -25,6 +25,10 @@ import odd, {
   fitStroke,
   joinParts,
   strokeCap,
+  capFor,
+  compact,
+  squeeze,
+  STROKE_POINTS,
   pickOdd,
   pickWord,
   guessChoices,
@@ -514,7 +518,7 @@ test('16 players with three laps of long lines stay inside every shared state li
   }
   assert.equal(s.phase, 'vote');
   assert.equal(s.marks.length, 48);
-  assert.ok(s.marks.filter((x) => x >= 0).length >= 46, 'nearly every line made it onto the canvas');
+  assert.equal(s.marks.filter((x) => x >= 0).length, 48, 'every line made it onto the canvas');
   const chunks = Object.entries(r.hub.state).filter(([k]) => k.startsWith('ink.')).map(([, v]) => v);
   assert.ok(chunks.length <= MAX_CHUNKS);
   assert.ok(inkBytes(chunks) <= INK_MAX);
@@ -821,4 +825,36 @@ test('strokes without a turn number are ignored, and a caught faker keeps their 
   assert.equal(s.phase, 'reveal');
   assert.equal(s.stole, true);
   assert.equal(s.note, null);
+});
+
+test('a line longer than the point limit is thinned along its whole length, never cut short', () => {
+  const random = seeded(12);
+  const pts = squiggle(6000, random, 240, 180, 30);
+  const small = compact(pts);
+  assert.ok(small.length <= STROKE_POINTS, `${small.length} points`);
+  assert.deepEqual(small[0], pts[0]);
+  assert.deepEqual(small[small.length - 1], pts[pts.length - 1]);
+  for (const cap of [CAP_MIN, CAP_MAX]) {
+    const joined = joinParts(fitStroke(pts, 3, 1, cap));
+    assert.ok(joined, String(cap));
+    assert.deepEqual(joined[0], pts[0], 'starts where the finger started');
+    assert.deepEqual(joined[joined.length - 1], pts[pts.length - 1], 'ends where the finger lifted');
+  }
+});
+
+test('each turn gets a fair share of what is left, and a full canvas re-simplifies old lines instead of losing a new one', () => {
+  const st = { order: [1, 2, 3], laps: 2, marks: [], cap: strokeCap(6) };
+  assert.ok(capFor(st, 0) >= strokeCap(6));
+  assert.ok(capFor(st, 0) <= CAP_MAX);
+  assert.equal(capFor({ ...st, marks: [1, 2, 3, 1, 2] }, INK_MAX - 100), Math.max(CAP_MIN, st.cap));
+  const random = seeded(21);
+  const raw = [];
+  while (raw.join('').length < INK_MAX * 0.97) raw.push(...fitStroke(squiggle(1500, random, 40 + random() * 400, 40 + random() * 280, 30), 1 + (raw.length % 9), 1, 1400));
+  const extra = fitStroke(squiggle(1500, random, 200, 200, 30), 2, 1, 1400);
+  const chunks = squeeze(raw, extra, 9);
+  assert.ok(chunks, 'room was made');
+  assert.ok(chunks.length <= MAX_CHUNKS && inkBytes(chunks) <= INK_MAX);
+  const all = chunks.flatMap((c) => c.s);
+  assert.equal(all.length, raw.length + extra.length, 'every line keeps its place, so authors still line up');
+  assert.deepEqual(all.slice(-extra.length), extra, 'the new line lands whole');
 });

@@ -13,6 +13,13 @@ export const MAX_CHUNKS = 24;
 export const INK_BYTES = 36000;
 export const PIECE_CHARS = 1500;
 export const LEVELS = Object.freeze([0.6, 1.2, 2, 3.5, 5.5]);
+export const COARSE = Object.freeze([8, 12, 18, 28, 44, 70, 110, 100000]);
+export const TOP_LEVEL = LEVELS.length + COARSE.length - 1;
+export const SEAT_POOL = 40960;
+export const SEAT_MAX = 12000;
+export const SEAT_CHUNKS = 8;
+export const SEAT_CHUNK_BYTES = 3700;
+export const G_MAX = 999999;
 export const FILL = SIZES.length;
 export const FILL_CHARS = 6;
 export const FILL_TOLERANCE = 20;
@@ -255,14 +262,126 @@ export function inkBytes(chunks) {
   return total;
 }
 
-export function fitInk(strokes, k, level = 0) {
-  for (let lvl = Math.max(0, level); lvl < LEVELS.length; lvl += 1) {
+export function levelEps(level) {
+  const i = Math.max(0, Math.floor(Number(level) || 0));
+  return i < LEVELS.length ? LEVELS[i] : COARSE[Math.min(COARSE.length - 1, i - LEVELS.length)];
+}
+
+export function fitLevels(strokes, level, fits) {
+  const list = Array.isArray(strokes) ? strokes : [];
+  for (let lvl = Math.max(0, Math.floor(Number(level) || 0)); lvl <= TOP_LEVEL; lvl += 1) {
+    const eps = levelEps(lvl);
     const parts = [];
-    for (const s of strokes) parts.push(...encodeParts(s, LEVELS[lvl]));
-    const chunks = pack(parts, k);
-    if (chunks.length <= MAX_CHUNKS && inkBytes(chunks) <= INK_BYTES) return { chunks, level: lvl, count: parts.length };
+    for (const s of list) parts.push(...encodeParts(s, eps));
+    const out = fits(parts);
+    if (out) return { ...out, level: lvl, count: parts.length, strokes: list, thinned: false };
   }
-  return null;
+  const per = list.map((s) => encodeParts(s, levelEps(TOP_LEVEL)));
+  const order = list.map((s, i) => i).sort((a, b) => Number(isFill(list[a])) - Number(isFill(list[b])) || a - b);
+  const without = (n) => {
+    const gone = new Set(order.slice(0, n));
+    const idx = list.map((s, i) => i).filter((i) => !gone.has(i));
+    const parts = idx.flatMap((i) => per[i]);
+    return { idx, parts, out: fits(parts) };
+  };
+  let lo = 1;
+  let hi = list.length;
+  let best = without(hi);
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const got = without(mid);
+    if (got.out) {
+      best = got;
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return { ...(best.out || {}), level: TOP_LEVEL, count: best.parts.length, strokes: best.idx.map((i) => list[i]), thinned: true };
+}
+
+export function fitInk(strokes, k, level = 0) {
+  return fitLevels(strokes, level, (parts) => {
+    const chunks = pack(parts, k);
+    return chunks.length <= MAX_CHUNKS && inkBytes(chunks) <= INK_BYTES ? { chunks } : null;
+  });
+}
+
+export function seatBudget(seats) {
+  const n = Math.max(1, Math.floor(Number(seats) || 1));
+  return Math.min(SEAT_MAX, Math.floor(SEAT_POOL / n));
+}
+
+export function seatKey(prefix, seat, i = 0) {
+  return i ? `${prefix}${seat}.${i}` : `${prefix}${seat}`;
+}
+
+export function seatOf(prefix, key) {
+  if (typeof key !== 'string' || !key.startsWith(prefix)) return null;
+  const m = /^(\d{1,3})(?:\.(\d))?$/.exec(key.slice(prefix.length));
+  if (!m) return null;
+  const seat = Number(m[1]);
+  const i = m[2] === undefined ? 0 : Number(m[2]);
+  if (i >= SEAT_CHUNKS || seatKey(prefix, seat, i) !== key) return null;
+  return { seat, i };
+}
+
+function genOf(v) {
+  return Number.isInteger(v.g) ? v.g : 0;
+}
+
+export function validChunk(v, k) {
+  if (!v || typeof v !== 'object' || v.k !== k || !Array.isArray(v.s)) return false;
+  if (v.g !== undefined && !(Number.isInteger(v.g) && v.g >= 0 && v.g <= G_MAX)) return false;
+  if (jsonBytes(v) > SEAT_CHUNK_BYTES) return false;
+  return v.s.every((s) => typeof s === 'string' && decodeStroke(s) !== null);
+}
+
+function getter(src) {
+  if (typeof src === 'function') return src;
+  return (key) => (src && Object.prototype.hasOwnProperty.call(src, key) ? src[key] : null);
+}
+
+export function readSeat(src, prefix, seat, k) {
+  const get = getter(src);
+  const first = get(seatKey(prefix, seat, 0));
+  if (!validChunk(first, k)) return { s: [], g: 0, values: [], bytes: 0 };
+  const g = genOf(first);
+  const values = [first];
+  for (let i = 1; i < SEAT_CHUNKS; i += 1) {
+    const v = get(seatKey(prefix, seat, i));
+    if (!validChunk(v, k) || genOf(v) !== g) break;
+    values.push(v);
+  }
+  return { s: values.flatMap((v) => v.s), g, values, bytes: values.reduce((a, v) => a + jsonBytes(v), 0) };
+}
+
+export function seatRoom(src, prefix, seat, i, value, k, budget) {
+  if (value === null) return true;
+  if (!validChunk(value, k)) return false;
+  const get = getter(src);
+  const g = genOf(value);
+  let total = jsonBytes(value);
+  for (let j = 0; j < SEAT_CHUNKS; j += 1) {
+    if (j === i) continue;
+    const v = get(seatKey(prefix, seat, j));
+    if (v && typeof v === 'object' && v.k === k && genOf(v) === g) total += jsonBytes(v);
+  }
+  return total <= budget;
+}
+
+export function fitSeat(strokes, k, level, budget) {
+  return fitLevels(strokes, level, (parts) => {
+    const chunks = pack(parts, k);
+    if (chunks.length > SEAT_CHUNKS) return null;
+    let bytes = 0;
+    for (const ch of chunks) {
+      const b = jsonBytes({ k, g: G_MAX, s: ch.s });
+      if (b > SEAT_CHUNK_BYTES) return null;
+      bytes += b;
+    }
+    return bytes <= budget ? { pieces: chunks.map((ch) => ch.s), bytes } : null;
+  });
 }
 
 export function readInk(state, k) {

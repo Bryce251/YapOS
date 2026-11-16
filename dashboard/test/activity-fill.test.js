@@ -29,7 +29,8 @@ import {
 } from '../web/activity/js/games/ink.js';
 import draw from '../web/activity/js/games/draw.js';
 import odd, { KEY as ODD_KEY, INTRO_MS, fitStroke as oddFit } from '../web/activity/js/games/odd.js';
-import telephone, { KEY as TEL_KEY, inkKey as telKey, validInk, inkChars, INK_CHARS } from '../web/activity/js/games/telephone.js';
+import telephone, { KEY as TEL_KEY, MAX_SEATS, inkKey as telKey, validInk, inkChars } from '../web/activity/js/games/telephone.js';
+import { seatBudget } from '../web/activity/js/games/ink.js';
 import { VIEWS } from '../web/activity/js/views/index.js';
 import { createOddView } from '../web/activity/js/views/odd.js';
 import { createTelephoneView } from '../web/activity/js/views/telephone.js';
@@ -445,7 +446,7 @@ test('Draw Telephone takes a fill on your own page only, for a tiny fixed bit of
   const ink = { k: s.k, s: [fill] };
   assert.equal(validInk(ink, s.k), true);
   assert.equal(inkChars(ink.s), FILL_CHARS);
-  assert.ok(FILL_CHARS / INK_CHARS < 0.01);
+  assert.ok(FILL_CHARS / seatBudget(MAX_SEATS) < 0.01);
   const mine = bySlot(r, s.seats[1]);
   const theirs = bySlot(r, s.seats[0]);
   assert.equal(telephone.writer((k) => (k === TEL_KEY ? s : null), telKey(1), s.seats[0], ink), false);
@@ -616,7 +617,7 @@ test('the Draw Telephone toolbar has a bucket that fills on tap and saves a six 
   assert.equal(r.hub.state[telKey(1)].s.length, 1, 'the same colour again sends nothing');
   byKey(v.el, 'undo').click();
   await r.clock.advance(1000);
-  assert.equal(r.hub.state[telKey(1)].s.length, 0);
+  assert.equal(r.hub.state[telKey(1)] ?? null, null, 'undoing the only fill empties the page');
   assert.deepEqual(ctx.at(0, 0), [255, 255, 255, 255]);
   byKey(v.el, 'size-0').click();
   assert.equal(tool.getAttribute('aria-pressed'), 'false');

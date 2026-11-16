@@ -139,7 +139,8 @@ function favourites(byGame) {
 }
 
 function applySettings(row, settings) {
-  if (!settings || Number(settings.claimed)) return { hidden: Boolean(Number(row.hidden)), showShards: row.shards !== null && row.shards !== undefined };
+  const fresh = settings && (!Number(settings.claimed) || Number(settings.updated) >= Number(row.updated || 0));
+  if (!fresh) return { hidden: Boolean(Number(row.hidden)), showShards: row.shards !== null && row.shards !== undefined };
   return { hidden: Boolean(Number(settings.hidden)), showShards: Boolean(Number(settings.show_shards)) };
 }
 
@@ -156,7 +157,7 @@ export async function getPublicProfile(request, env, raw, t) {
     .first();
   if (!row) return missing();
   const [settings, stats, streak, prof] = await Promise.all([
-    env.DB.prepare('SELECT hidden, show_shards, claimed FROM profile_settings WHERE user_id = ?').bind(row.user_id).first(),
+    env.DB.prepare('SELECT hidden, show_shards, claimed, updated FROM profile_settings WHERE user_id = ?').bind(row.user_id).first(),
     env.DB.prepare('SELECT games, wins, by_game, counters FROM party_stats WHERE user_id = ?').bind(row.user_id).first(),
     env.DB.prepare('SELECT best FROM party_daily_streaks WHERE user_id = ?').bind(row.user_id).first(),
     env.DB.prepare('SELECT avatar_url, missing FROM profiles WHERE id = ?').bind(row.user_id).first(),
@@ -192,8 +193,8 @@ export async function getPublicProfile(request, env, raw, t) {
 
 async function readVisibility(env, userId) {
   const [settings, row] = await Promise.all([
-    env.DB.prepare('SELECT hidden, show_shards, claimed FROM profile_settings WHERE user_id = ?').bind(userId).first(),
-    env.DB.prepare('SELECT username, hidden, shards FROM public_profiles WHERE user_id = ?').bind(userId).first(),
+    env.DB.prepare('SELECT hidden, show_shards, claimed, updated FROM profile_settings WHERE user_id = ?').bind(userId).first(),
+    env.DB.prepare('SELECT username, hidden, shards, updated FROM public_profiles WHERE user_id = ?').bind(userId).first(),
   ]);
   const base = row ? applySettings(row, settings) : settings ? applySettings({ hidden: 0, shards: null }, settings) : { hidden: false, showShards: false };
   return {

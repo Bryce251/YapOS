@@ -2,7 +2,7 @@ import { h, button } from './dom.js';
 import { GRID_W, GRID_H, decodeStroke, isFill, createPainter } from '../games/ink.js';
 
 export const REPLAY_KEEP = 24;
-export const REPLAY_CHARS = 16000;
+export const REPLAY_CHARS = 40000;
 export const REPLAY_MS = 4000;
 export const REPLAY_TICK_MS = 33;
 export const THUMB_SCALE = 0.3;

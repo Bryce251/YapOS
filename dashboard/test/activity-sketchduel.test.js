@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { room } from './activity-kit.test.js';
-import { installDom } from './dom-shim.js';
-import sketchduel, { KEY, INK_PREFIX, MAX_DUELS, VOTE_MS, RESULT_MS, GRACE_MS, VOTE_POINTS, WIN_BONUS, TIE_BONUS, inkKey, drawingId, pairKey, pickDrawers, pairUp, pickWords, wordPool, award } from '../web/activity/js/games/sketchduel.js';
+import { installDom, FakeEvent } from './dom-shim.js';
+import sketchduel, { KEY, INK_PREFIX, MAX_DUELS, VOTE_MS, RESULT_MS, GRACE_MS, VOTE_POINTS, WIN_BONUS, TIE_BONUS, inkKey, seatInk, drawingId, pairKey, pickDrawers, pairUp, pickWords, wordPool, award } from '../web/activity/js/games/sketchduel.js';
 import { createSketchduelView, footText, headline, duelMoments } from '../web/activity/js/views/sketchduel.js';
-import { encodeParts } from '../web/activity/js/games/ink.js';
+import { encodeParts, fitSeat, seatBudget, SEAT_POOL } from '../web/activity/js/games/ink.js';
 import { isBlockedGameWord } from '../web/activity/js/filter.js';
 import { jsonBytes, MAX_VALUE_BYTES, stateBytes, MAX_STATE_BYTES } from '../web/activity/js/limits.js';
 
@@ -274,5 +274,118 @@ test('the view shows the word to artists, the lineup to judges, and two vote but
   await r.clock.advance(500);
   assert.equal(st(r).phase, 'result');
   for (const v of views) for (const n of all(v.el)) assert.equal(n.hasAttribute && n.hasAttribute('style'), false);
+  for (const v of views) v.destroy();
+});
+
+function hugeStrokes(seed, count = 400) {
+  const out = [];
+  for (let i = 0; i < count; i += 1) out.push({ c: 1 + ((i + seed) % 11), z: i % 4, pts: Array.from({ length: 40 }, (_, j) => [(i * 7 + j * 13 + seed * 31) % 470, (i * 11 + j * 29 + seed * 17) % 350]) });
+  return out;
+}
+
+function hugeInk(k, seed, seats) {
+  return fitSeat(hugeStrokes(seed), k, 0, seatBudget(seats)).pieces.map((x) => ({ k, g: 2, s: x }));
+}
+
+async function drawHuge(r) {
+  const s = st(r);
+  const want = [];
+  for (const [seat, slot] of s.seats.entries()) {
+    const values = hugeInk(s.k, seat + 1, s.seats.length);
+    values.forEach((v, i) => {
+      assert.ok(jsonBytes(v) <= MAX_VALUE_BYTES);
+      assert.equal(bySlot(r, slot).direct(inkKey(seat, i), v), true, `seat ${seat} part ${i}`);
+      want.push([inkKey(seat, i), JSON.stringify(v)]);
+    });
+    await r.clock.advance(200);
+  }
+  for (let guard = 0; guard < 40 && !want.every(([key, v]) => JSON.stringify(r.hub.state[key]) === v); guard += 1) await r.clock.advance(500);
+  return s;
+}
+
+for (const n of [3, 8, 10]) {
+  test(`${n} players drawing huge pages stay under every limit and every page reaches the judges`, async () => {
+    const r = await startGame(n);
+    const s = await drawHuge(r);
+    assert.equal(s.b, seatBudget(s.seats.length));
+    assert.ok(s.b * s.seats.length <= SEAT_POOL);
+    for (const [seat] of s.seats.entries()) {
+      const page = seatInk(r.hub.state, seat, s.k);
+      assert.ok(page.s.length > 0 && page.bytes <= s.b, `seat ${seat}`);
+    }
+    assert.ok(stateBytes(r.hub.state) <= MAX_STATE_BYTES, `${stateBytes(r.hub.state)} bytes`);
+    assert.ok(Object.keys(r.hub.state).length <= 256);
+    const pages = s.seats.map((_, seat) => seatInk(r.hub.state, seat, s.k).s.join('|'));
+    for (const slot of s.seats) bySlot(r, slot).act({ type: 'done', r: s.round });
+    await r.clock.advance(1600);
+    assert.equal(st(r).phase, 'vote');
+    const m = sketchduel.model(r.engines[0].snapshot());
+    const duel = st(r).duels[st(r).d];
+    assert.equal(m.duel.a.ink.join('|'), pages[duel[0]]);
+    assert.equal(m.duel.b.ink.join('|'), pages[duel[1]]);
+    for (const item of sketchduel.drawingsOf(r.engines[0].snapshot())) assert.equal(item.ink.join('|'), pages[item.seat], 'reports get the whole page');
+    assert.deepEqual(r.hub.violations, []);
+  });
+}
+
+test('after the host leaves, the new host and the judges rebuild every page from its keys', async () => {
+  const r = await startGame(5);
+  const s = await drawHuge(r);
+  const pages = s.seats.map((_, seat) => seatInk(r.hub.state, seat, s.k).s.join('|'));
+  assert.ok(s.seats.some((_, seat) => seatInk(r.hub.state, seat, s.k).values.length >= 2), 'pages spread over keys');
+  for (const slot of s.seats) bySlot(r, slot).act({ type: 'done', r: s.round });
+  await r.clock.advance(1600);
+  assert.equal(st(r).phase, 'vote');
+  r.hub.leave(r.engines[0].snapshot().me);
+  r.engines[0].destroy();
+  await r.clock.advance(2000);
+  const after = st(r);
+  assert.ok(after.phase === 'vote' || after.phase === 'result');
+  for (const e of r.engines.slice(1)) {
+    const m = sketchduel.model(e.snapshot());
+    const duel = after.duels[after.d];
+    assert.equal(m.duel.a.ink.join('|'), pages[duel[0]]);
+    assert.equal(m.duel.b.ink.join('|'), pages[duel[1]]);
+  }
+});
+
+test('the drawing board has no ink meter and never says it ran out', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await startGame(3, { draw: 90 });
+  const toasts = [];
+  const views = r.engines.map((engine) => {
+    const v = createSketchduelView({ engine, fx: { confetti() {} }, toast: (t) => toasts.push(t), win: { setTimeout: r.clock.setTimeout, clearTimeout: r.clock.clearTimeout }, cues: { play() {}, burst() {}, float() {} } });
+    engine.on('change', (snap) => v.update(snap));
+    v.update(engine.snapshot());
+    return v;
+  });
+  const s = st(r);
+  const ix = r.engines.findIndex((e) => e.snapshot().meSlot === s.seats[0]);
+  const cv = all(views[ix].el).find((x) => x.localName === 'canvas');
+  cv.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 360 });
+  const at = (type, x, y) => Object.assign(new FakeEvent(type, { bubbles: true }), { clientX: x, clientY: y, pointerId: 1 });
+  for (let i = 0; i < 300; i += 1) {
+    const x = 10 + ((i * 23) % 420);
+    const y = 10 + ((i * 41) % 300);
+    cv.dispatchEvent(at('pointerdown', x, y));
+    for (let k = 1; k <= 20; k += 1) cv.dispatchEvent(at('pointermove', x + ((k * 17) % 60), y + ((k * 29) % 50)));
+    cv.dispatchEvent(at('pointerup', x, y));
+    if (i % 50 === 49) await r.clock.advance(900);
+  }
+  await r.clock.advance(1500);
+  const page = seatInk(r.hub.state, 0, s.k);
+  assert.equal(page.s.length >= 300, true, `${page.s.length} lines`);
+  assert.ok(page.bytes <= s.b);
+  assert.deepEqual(toasts, []);
+  for (const v of views) {
+    assert.equal(v.el.querySelector('.sketchduel-ink'), null);
+    assert.doesNotMatch(all(v.el).map((x) => x.textContent || '').join(' '), /Ink left|Out of ink/);
+  }
+  byKey(views[ix].el, 'undo').click();
+  await r.clock.advance(900);
+  assert.equal(seatInk(r.hub.state, 0, s.k).s.length, page.s.length - 1, 'undo removes one line');
+  byKey(views[ix].el, 'redo').click();
+  await r.clock.advance(900);
+  assert.deepEqual(seatInk(r.hub.state, 0, s.k).s, page.s, 'redo puts it back without any ink check');
   for (const v of views) v.destroy();
 });

@@ -1,4 +1,4 @@
-import odd, { REVEAL_MS, INTRO_MS, TURN_MS, VOTE_MS, GUESS_MS, PEN_SIZE, STROKE_POINTS, fitStroke } from '../games/odd.js';
+import odd, { REVEAL_MS, INTRO_MS, TURN_MS, VOTE_MS, GUESS_MS, PEN_SIZE, STROKE_POINTS, CAP_MAX, fitStroke, compact } from '../games/odd.js';
 import { GRID_W, GRID_H, COLORS, ERASER, FILL, readInk, liveMessage, applyLive, pruneLive, quantise, strokeOn as inkStroke, fillOn, createPainter } from '../games/ink.js';
 import { SCALE, LIVE_MS, LIVE_CHARS, boardRows, BOARD_MAX, fillTool, markTool, flagModel, flagButton, flagDrawing, FLAG_ICON } from './draw.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
@@ -216,10 +216,14 @@ export function createOddView({ engine, fx, toast, win, cues }) {
   }
 
   function addPoint(p) {
-    if (!cur || !p || cur.pts.length >= STROKE_POINTS) return;
+    if (!cur || !p) return;
     const last = cur.pts[cur.pts.length - 1];
     if (last && last[0] === p[0] && last[1] === p[1]) return;
     cur.pts.push(p);
+    if (cur.pts.length >= STROKE_POINTS) {
+      cur.pts = compact(cur.pts);
+      sent = 0;
+    }
   }
 
   function fillAt(p) {
@@ -278,7 +282,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
       repaint();
       return;
     }
-    const parts = fitStroke(s.pts, s.c, s.z, model.cap);
+    const parts = fitStroke(s.pts, s.c, s.z, CAP_MAX);
     if (!parts) {
       say("That line didn't take. Try again!");
       repaint();

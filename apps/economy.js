@@ -419,6 +419,39 @@ function serviceTransfer(engine, sid, fromId, toId, amount, reason) {
   });
 }
 
+export const OWNER_MODES = Object.freeze(['add', 'remove', 'set']);
+
+function ownerAdjust(engine, uid, mode, amount, reason) {
+  if (typeof uid !== 'string' || !uid || uid === botId(engine)) return null;
+  if (!OWNER_MODES.includes(mode) || !Number.isSafeInteger(amount) || amount < 0 || amount > MAX_BALANCE) return null;
+  const t = clock(engine);
+  const cfg = cfgOf(engine);
+  const label = clip(String(reason || (mode === 'add' ? 'Owner gift' : 'Owner adjustment')), MAX_REASON);
+  return mutateUsers(engine, (doc) => {
+    const u = ensureUser(doc, uid, cfg, t);
+    const before = u.bal || 0;
+    const delta = mode === 'add' ? amount : mode === 'remove' ? -amount : amount - before;
+    const real = change(u, delta, label, t);
+    return { before, bal: u.bal || 0, real };
+  });
+}
+
+function setStreak(engine, uid, n) {
+  if (typeof uid !== 'string' || !uid || uid === botId(engine)) return null;
+  const streak = Math.floor(Number(n));
+  if (!Number.isSafeInteger(streak) || streak < 0) return null;
+  const t = clock(engine);
+  const cfg = cfgOf(engine);
+  return mutateUsers(engine, (doc) => {
+    const u = ensureUser(doc, uid, cfg, t);
+    const before = u.lastDaily && t - u.lastDaily <= STREAK_GRACE_MS ? Math.max(0, Math.floor(Number(u.streak) || 0)) : 0;
+    u.streak = streak;
+    if (streak > 0 && !(u.lastDaily && t - u.lastDaily <= STREAK_GRACE_MS && t - u.lastDaily >= 0)) u.lastDaily = t - DAY;
+    u.seen = t;
+    return { before, streak };
+  });
+}
+
 function ranked(engine) {
   const me = botId(engine);
   return Object.entries(readUsers(engine).users)
@@ -1776,6 +1809,9 @@ export const { setup, teardown, check } = defineApp({
     add: (sid, uid, amount, reason) => serviceAdd(engine, sid, uid, amount, reason),
     take: (sid, uid, amount, reason) => serviceTake(engine, sid, uid, amount, reason),
     transfer: (sid, fromId, toId, amount, reason) => serviceTransfer(engine, sid, fromId, toId, amount, reason),
+    ownerAdjust: (uid, mode, amount, reason) => ownerAdjust(engine, uid, mode, amount, reason),
+    setStreak: (uid, n) => setStreak(engine, uid, n),
+    maxBalance: () => MAX_BALANCE,
     enabled: (sid) => engine.settings.isEnabled(sid, ID),
     seasonBoard: () => seasonBoard(engine, 'shards'),
     seasonScore: (uid) => seasonScore(engine, 'shards', uid),

@@ -49,6 +49,8 @@ function fixUser(d) {
   const u = d && typeof d === 'object' ? d : blankUser();
   if (!u.got || typeof u.got !== 'object' || Array.isArray(u.got)) u.got = {};
   if (!u.n || typeof u.n !== 'object' || Array.isArray(u.n)) u.n = {};
+  if (u.gifted !== undefined && (!u.gifted || typeof u.gifted !== 'object' || Array.isArray(u.gifted))) delete u.gifted;
+  if (u.revoked !== undefined && (!u.revoked || typeof u.revoked !== 'object' || Array.isArray(u.revoked))) delete u.revoked;
   if (!Array.isArray(u.unseen)) u.unseen = [];
   if (typeof u.dm !== 'boolean') u.dm = true;
   return u;
@@ -140,12 +142,13 @@ export async function evaluate(engine, uid, extra = {}) {
   try {
     const stats = statsOf(engine, uid, extra);
     const have = readUser(engine, uid).got;
-    const due = ACHIEVEMENTS.filter((a) => !have[a.id] && (stats[a.stat] || 0) >= a.goal).map((a) => a.id);
+    const off = readUser(engine, uid).revoked || {};
+    const due = ACHIEVEMENTS.filter((a) => !have[a.id] && !off[a.id] && (stats[a.stat] || 0) >= a.goal).map((a) => a.id);
     const t = nowOf(engine);
     const fresh = due.length ? mutateUser(engine, uid, (u) => {
       const got = [];
       for (const id of due) {
-        if (u.got[id]) continue;
+        if (u.got[id] || u.revoked?.[id]) continue;
         u.got[id] = t;
         u.unseen = [...u.unseen.filter((x) => x !== id), id].slice(-ACHIEVEMENTS.length);
         got.push(id);
@@ -182,6 +185,38 @@ export async function evaluate(engine, uid, extra = {}) {
   } finally {
     st.running.delete(uid);
   }
+}
+
+export function ownerGrant(engine, uid, id) {
+  if (!validId(uid) || uid === engine.bot.me?.id || !BY_ID.has(id)) return null;
+  const t = nowOf(engine);
+  return mutateUser(engine, uid, (u) => {
+    if (u.revoked) {
+      delete u.revoked[id];
+      if (!Object.keys(u.revoked).length) delete u.revoked;
+    }
+    if (u.got[id]) return false;
+    u.got[id] = t;
+    u.gifted = { ...(u.gifted || {}), [id]: t };
+    u.unseen = [...u.unseen.filter((x) => x !== id), id].slice(-ACHIEVEMENTS.length);
+    return true;
+  });
+}
+
+export function ownerRevoke(engine, uid, id) {
+  if (!validId(uid) || uid === engine.bot.me?.id || !BY_ID.has(id)) return null;
+  const t = nowOf(engine);
+  return mutateUser(engine, uid, (u) => {
+    const had = !!u.got[id];
+    delete u.got[id];
+    if (u.gifted) {
+      delete u.gifted[id];
+      if (!Object.keys(u.gifted).length) delete u.gifted;
+    }
+    u.unseen = u.unseen.filter((x) => x !== id);
+    u.revoked = { ...(u.revoked || {}), [id]: t };
+    return had;
+  });
 }
 
 export function bump(engine, uid, stat, by = 1) {
@@ -422,6 +457,9 @@ export const { setup, teardown, check } = defineApp({
     all: () => ACHIEVEMENTS.map((a) => ({ id: a.id, icon: a.icon, name: a.name, desc: a.desc })),
     stats: (uid) => statsOf(engine, uid),
     check: (uid) => evaluate(engine, uid),
+    catalog: () => ACHIEVEMENTS.map((a) => ({ id: a.id, label: a.name, emoji: a.icon, reward: rewardOf(engine, a.id) })),
+    ownerGrant: (uid, id) => ownerGrant(engine, uid, id),
+    ownerRevoke: (uid, id) => ownerRevoke(engine, uid, id),
   }),
 
   presets: {

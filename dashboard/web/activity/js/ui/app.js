@@ -11,6 +11,7 @@ import { createRecorder } from './replay.js';
 import { predictModel, predictBox, predictWaitModel, predictWait } from './predict.js';
 import { hostBarModel, hostBar, REMOVED_TEXT, LATE_LOCKED_TEXT } from './hosttools.js';
 import { tourStatus } from './tournament.js';
+import { createFullscreen } from './fullscreen.js';
 
 export const ANNOUNCE_MS = 10000;
 export const LEAVE_GRACE_MS = 6000;
@@ -74,7 +75,7 @@ export function soundCues(prev, next) {
   return cues;
 }
 
-export function headerModel(snap, { alone = false, adminOpen = false, sound = true } = {}) {
+export function headerModel(snap, { alone = false, adminOpen = false, sound = true, screen = 'off' } = {}) {
   const phase = snap.ready ? snap.room.phase : 'connecting';
   const game = snap.game;
   let status = alone ? 'Not in a call' : 'Connecting';
@@ -93,6 +94,7 @@ export function headerModel(snap, { alone = false, adminOpen = false, sound = tr
     admin: isAdminSnap(snap),
     adminOpen: Boolean(adminOpen) && isAdminSnap(snap),
     sound: Boolean(sound),
+    screen: screen === 'full' || screen === 'focus' ? screen : 'off',
   };
 }
 
@@ -166,6 +168,8 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     win.setTimeout(() => t.remove(), 3000);
   }
 
+  const fullscreen = createFullscreen({ root, win, doc: win.document || (typeof document !== 'undefined' ? document : null), toast, onChange: () => repaintHead() });
+
   const trolls = createTrolls({ shell, layer: fxLayer, marks: root, win, engine, fx, sfx: sound });
   const lobby = createLobby({ engine, toast });
   const replays = createRecorder();
@@ -207,6 +211,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
         'span',
         { class: 'top-actions' },
         soundButton(m.sound),
+        fullscreen.button(),
         m.admin
           ? button('ADMIN', {
               variant: 'admin',
@@ -257,7 +262,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   function repaintHead() {
     if (destroyed) return;
-    paintHead(head, headerModel(engine.snapshot(), { alone, adminOpen, sound: soundOn() }));
+    paintHead(head, headerModel(engine.snapshot(), { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode }));
   }
 
   function stamp() {
@@ -568,7 +573,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   function render(snap) {
     renders += 1;
-    const hm = headerModel(snap, { alone, adminOpen, sound: soundOn() });
+    const hm = headerModel(snap, { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode });
     paintHead(head, hm);
     root.dataset.phase = hm.phase;
     const tint = gameTint(snap, hm.phase);
@@ -649,6 +654,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     toast,
     panel,
     trolls,
+    fullscreen,
     get renders() {
       return renders;
     },
@@ -670,6 +676,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       juiceMod = null;
       panel.destroy();
       trolls.destroy();
+      fullscreen.destroy();
       if (typeof win.removeEventListener === 'function') win.removeEventListener(PROFILES_EVENT, onProfiles);
       if (profileTimer !== null) win.clearTimeout(profileTimer);
       profileTimer = null;

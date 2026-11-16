@@ -202,3 +202,113 @@ export function seasonBadgeText(b) {
   const medal = ['🥇', '🥈', '🥉'][b.rank - 1] || '🏅';
   return `${medal} #${b.rank} ${b.kind === 'xp' ? 'XP' : CURRENCY.name} · ${seasonName(b.month)}`;
 }
+
+export const GIFT_BADGES = Object.freeze([
+  Object.freeze({ id: 'yapos-team', label: 'YapOS team', emoji: '🛠️' }),
+  Object.freeze({ id: 'supporter', label: 'Supporter', emoji: '💖' }),
+  Object.freeze({ id: 'early-bird', label: 'Early bird', emoji: '🐣' }),
+  Object.freeze({ id: 'bug-hunter', label: 'Bug hunter', emoji: '🐛' }),
+  Object.freeze({ id: 'vip', label: 'VIP', emoji: '⭐' }),
+  Object.freeze({ id: 'event-winner', label: 'Event winner', emoji: '🎖️' }),
+  Object.freeze({ id: 'legend', label: 'YapOS legend', emoji: '🏆' }),
+]);
+
+export const BADGE_NS = 'badges';
+export const BADGE_ID_RE = /^[A-Za-z0-9_.:-]{1,48}$/;
+const SEASON_BADGE_RE = /^season-(xp|shards)-(\d{1,2})-(\d{4}-\d{2})$/;
+const BADGES_PER_USER = 40;
+
+const blankBadges = () => ({ gift: {}, hide: {} });
+
+function fixBadges(d) {
+  const doc = d && typeof d === 'object' ? d : blankBadges();
+  for (const k of ['gift', 'hide']) if (!doc[k] || typeof doc[k] !== 'object' || Array.isArray(doc[k])) doc[k] = {};
+  return doc;
+}
+
+const idsIn = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && BADGE_ID_RE.test(x)) : []);
+
+export function parseSeasonBadge(id) {
+  const m = SEASON_BADGE_RE.exec(String(id || ''));
+  if (!m) return null;
+  const rank = Number(m[2]);
+  const month = m[3];
+  const mm = Number(month.slice(5));
+  if (rank < 1 || rank > SEASON_TOP || mm < 1 || mm > 12) return null;
+  return { kind: m[1], rank, month };
+}
+
+export function badgeGifts(engine, uid) {
+  const doc = fixBadges(globalDoc(engine, BADGE_NS, null));
+  return { gift: idsIn(doc.gift[uid]), hide: idsIn(doc.hide[uid]) };
+}
+
+export function withGiftBadges(engine, uid, list) {
+  const { gift, hide } = badgeGifts(engine, uid);
+  const base = Array.isArray(list) ? list.filter((b) => typeof b === 'string') : [];
+  return [...new Set([...base, ...gift])].filter((b) => !hide.includes(b)).slice(0, BADGES_PER_USER);
+}
+
+function editSeasonBadge(engine, uid, parsed, add) {
+  return mutateGlobal(engine, SEASON_NS, (d) => {
+    fixSeason(d);
+    const list = Array.isArray(d.badges[uid]) ? d.badges[uid] : [];
+    const at = list.findIndex((b) => b && b.month === parsed.month && b.kind === parsed.kind);
+    if (add) {
+      if (at >= 0 && list[at].rank === parsed.rank) return false;
+      if (at >= 0) list.splice(at, 1);
+      list.push({ month: parsed.month, kind: parsed.kind, rank: parsed.rank, score: 0, gift: true });
+      if (list.length > SEASON_BADGES_PER_USER) list.splice(0, list.length - SEASON_BADGES_PER_USER);
+    } else {
+      if (at < 0) return false;
+      list.splice(at, 1);
+    }
+    if (list.length) d.badges[uid] = list;
+    else delete d.badges[uid];
+    return true;
+  }, blankSeason());
+}
+
+export function grantBadge(engine, uid, id) {
+  const who = asId(uid);
+  if (!who || typeof id !== 'string' || !BADGE_ID_RE.test(id)) return null;
+  const season = parseSeasonBadge(id);
+  if (season) return editSeasonBadge(engine, who, season, true);
+  return mutateGlobal(engine, BADGE_NS, (d) => {
+    fixBadges(d);
+    const gift = idsIn(d.gift[who]);
+    const hide = idsIn(d.hide[who]);
+    const had = gift.includes(id) && !hide.includes(id);
+    if (!gift.includes(id)) {
+      if (gift.length >= BADGES_PER_USER) return null;
+      gift.push(id);
+    }
+    d.gift[who] = gift;
+    const left = hide.filter((x) => x !== id);
+    if (left.length) d.hide[who] = left;
+    else delete d.hide[who];
+    return !had;
+  }, blankBadges());
+}
+
+export function revokeBadge(engine, uid, id) {
+  const who = asId(uid);
+  if (!who || typeof id !== 'string' || !BADGE_ID_RE.test(id)) return null;
+  const season = parseSeasonBadge(id);
+  if (season) return editSeasonBadge(engine, who, season, false);
+  return mutateGlobal(engine, BADGE_NS, (d) => {
+    fixBadges(d);
+    const gift = idsIn(d.gift[who]);
+    const hide = idsIn(d.hide[who]);
+    const left = gift.filter((x) => x !== id);
+    if (left.length) d.gift[who] = left;
+    else delete d.gift[who];
+    const changed = left.length !== gift.length || !hide.includes(id);
+    if (!hide.includes(id)) {
+      hide.push(id);
+      if (hide.length > BADGES_PER_USER) hide.splice(0, hide.length - BADGES_PER_USER);
+    }
+    d.hide[who] = hide;
+    return changed;
+  }, blankBadges());
+}

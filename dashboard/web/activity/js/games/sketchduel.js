@@ -1,7 +1,7 @@
 import { WORDS, TIERS, wordById } from '../../data/draw.js';
 import { shuffle } from '../engine.js';
 import { isBlockedGameWord } from '../filter.js';
-import { validInk } from './telephone.js';
+import { seatBudget, seatKey, seatOf, validChunk, readSeat, seatRoom, SEAT_CHUNKS } from './ink.js';
 import { face } from './trivia.js';
 
 export const KEY = 'sketchduel';
@@ -20,8 +20,20 @@ export const USED_MAX = 60;
 export const HID_MAX = 24;
 export const MIX = 'mix';
 
-export function inkKey(seat) {
-  return `${INK_PREFIX}${seat}`;
+export function inkKey(seat, i = 0) {
+  return seatKey(INK_PREFIX, seat, i);
+}
+
+export function seatInk(src, seat, k) {
+  return readSeat(src, INK_PREFIX, seat, k);
+}
+
+export function budgetOf(st) {
+  return st && Number.isInteger(st.b) && st.b > 0 ? st.b : seatBudget(st && Array.isArray(st.seats) ? st.seats.length : 1);
+}
+
+function clearSeat(api, seat) {
+  for (let i = 0; i < SEAT_CHUNKS; i += 1) if (api.get(inkKey(seat, i)) !== null) api.put(inkKey(seat, i), null);
 }
 
 export function drawingId(run, round, seat) {
@@ -130,6 +142,7 @@ function openRound(api, st, round) {
     phase: 'draw',
     k: nonce(api),
     seats,
+    b: seatBudget(seats.length),
     duels,
     d: 0,
     plays,
@@ -243,8 +256,10 @@ function closeDraw(api) {
   const st = api.get(KEY);
   if (!st || st.phase !== 'draw') return;
   for (let i = 0; i < st.seats.length; i += 1) {
-    const v = api.get(inkKey(i));
-    if (v !== null && !validInk(v, st.k)) api.put(inkKey(i), null);
+    for (let j = 0; j < SEAT_CHUNKS; j += 1) {
+      const v = api.get(inkKey(i, j));
+      if (v !== null && !validChunk(v, st.k)) api.put(inkKey(i, j), null);
+    }
   }
   openVote(api, { ...st, pass: 0 }, 0);
 }
@@ -264,9 +279,8 @@ function drawingList(api, st) {
   const hid = hiddenSet(st);
   const out = [];
   for (const seat of [duel[0], duel[1]]) {
-    const v = api.get(inkKey(seat));
     const d = drawingId(st.run, st.round, seat);
-    if (hid.has(d) || !validInk(v, st.k) || !v.s.length) continue;
+    if (hid.has(d) || !seatInk((key) => api.get(key), seat, st.k).s.length) continue;
     out.push({ d, drawer: st.seats[seat], seat });
   }
   return out;
@@ -276,7 +290,7 @@ function hide(api, d) {
   const st = api.get(KEY);
   const item = drawingList(api, st).find((x) => x.d === d);
   if (!item) return false;
-  api.put(inkKey(item.seat), null);
+  clearSeat(api, item.seat);
   api.put(KEY, { ...st, hid: [...hiddenSet(st)].concat([d]).slice(-HID_MAX) });
   return true;
 }
@@ -289,10 +303,10 @@ function seen(snap, st) {
   const w = wordById(duel[2]);
   const out = [];
   for (const seat of [duel[0], duel[1]]) {
-    const v = snap.state[inkKey(seat)];
     const d = drawingId(st.run, st.round, seat);
-    if (hid.has(d) || !validInk(v, st.k) || !v.s.length) continue;
-    out.push({ d, drawer: st.seats[seat], ink: v.s.slice(), word: w ? w.w : null, seat });
+    const ink = hid.has(d) ? [] : seatInk(snap.state, seat, st.k).s;
+    if (!ink.length) continue;
+    out.push({ d, drawer: st.seats[seat], ink, word: w ? w.w : null, seat });
   }
   return out;
 }
@@ -323,9 +337,9 @@ const sketchduel = {
     if (!key.startsWith(INK_PREFIX)) return false;
     const st = get(KEY);
     if (!st || st.phase !== 'draw' || !Array.isArray(st.seats)) return false;
-    const seat = Number(key.slice(INK_PREFIX.length));
-    if (!Number.isInteger(seat) || key !== inkKey(seat) || st.seats[seat] !== slot) return false;
-    return validInk(value, st.k);
+    const at = seatOf(INK_PREFIX, key);
+    if (!at || st.seats[at.seat] !== slot) return false;
+    return seatRoom(get, INK_PREFIX, at.seat, at.i, value, st.k, budgetOf(st));
   },
 
   start(api) {
@@ -473,6 +487,7 @@ const sketchduel = {
       seat,
       drawing: st.phase === 'draw' && seat >= 0,
       inkKey: seat >= 0 ? inkKey(seat) : null,
+      budget: budgetOf(st),
       word: myDuel >= 0 ? duels[myDuel].word : null,
       rival: myDuel >= 0 ? (duels[myDuel].seatA === seat ? duels[myDuel].b : duels[myDuel].a) : null,
       mineDone: seat >= 0 && done.includes(seat),
@@ -488,16 +503,16 @@ const sketchduel = {
       const res = st.res || null;
       const sideInfo = (s, seatIx, who) => {
         const d = drawingId(st.run, st.round, seatIx);
-        const v = snap.state[inkKey(seatIx)];
         const hidden = hid.has(d);
-        const strokes = !hidden && validInk(v, st.k) ? v.s.length : 0;
+        const ink = hidden ? [] : seatInk(snap.state, seatIx, st.k).s;
         return {
           side: s,
           who,
           d,
           key: inkKey(seatIx),
+          ink,
           hidden,
-          blank: !hidden && !strokes,
+          blank: !hidden && !ink.length,
           votes: res ? res[s] : null,
           voters: res ? res.by[s].map(faceOf) : [],
           pts: res ? res.pts[s] : 0,

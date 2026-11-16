@@ -164,7 +164,7 @@ test('long strokes split into joined pieces and chunks stay under 3.5 KB', () =>
   assert.equal(chunks.flatMap((c) => c.s).length, parts.length);
 });
 
-test('a busy drawing simplifies to fit the chunk and state limits, and a hopeless one is refused', () => {
+test('a busy drawing simplifies to fit the chunk and state limits, and even a hopeless one still fits', () => {
   const random = seeded(4);
   const strokes = [];
   for (let i = 0; i < 160; i += 1) strokes.push({ c: 1 + (i % 11), z: i % 4, pts: squiggle(220, random, 40 + (i % 40) * 10, 40 + (i % 28) * 10) });
@@ -181,7 +181,19 @@ test('a busy drawing simplifies to fit the chunk and state limits, and a hopeles
   const noise = [];
   const r2 = seeded(8);
   for (let i = 0; i < 7000; i += 1) noise.push({ c: 1, z: 0, pts: [[Math.floor(r2() * GRID_W), Math.floor(r2() * GRID_H)], [Math.floor(r2() * GRID_W), Math.floor(r2() * GRID_H)]] });
-  assert.equal(fitInk(noise, 9, 0), null);
+  const full = fitInk(noise, 9, 0);
+  assert.ok(full, 'drawing never stops');
+  assert.equal(full.thinned, true, 'only a truly hopeless page thins its oldest lines');
+  assert.ok(full.strokes.length > noise.length / 3, `${full.strokes.length} lines kept`);
+  assert.deepEqual(full.strokes.slice(-5), noise.slice(-5), 'the newest lines are kept');
+  assert.ok(full.chunks.length <= MAX_CHUNKS);
+  assert.ok(inkBytes(full.chunks) <= INK_BYTES);
+  const coarse = [];
+  for (let i = 0; i < 1500; i += 1) coarse.push({ c: 1 + (i % 11), z: 1, pts: squiggle(80, random, 40 + (i % 40) * 10, 40 + (i % 28) * 10) });
+  const deep = fitInk(coarse, 9, 0);
+  assert.equal(deep.thinned, false, 'a very busy page coarsens past the old levels instead of failing');
+  assert.ok(deep.level >= LEVELS.length, `level ${deep.level}`);
+  assert.ok(inkBytes(deep.chunks) <= INK_BYTES);
 });
 
 test('reading ink skips other turns and broken chunks', () => {

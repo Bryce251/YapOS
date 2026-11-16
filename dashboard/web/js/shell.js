@@ -67,6 +67,16 @@ export function packsLink(active = false) {
   }, icon('folder', { size: 16 }));
 }
 
+export function ownerLink(active = false) {
+  return h('a', {
+    href: '/owner',
+    class: ['icon-btn', 'party-link', active ? 'is-active' : ''],
+    title: 'Owner panel',
+    dataset: { link: '' },
+    attrs: { 'aria-label': 'Owner panel', 'aria-current': active ? 'page' : null },
+  }, icon('gift', { size: 16 }));
+}
+
 export function accountLink(active = false) {
   return h('a', {
     href: '/account',
@@ -86,6 +96,7 @@ function userBlock(user, onLogout, { partyOwner = false, partyAdmin = false, sec
       user?.username && user.username !== name ? h('span', { class: 'user-handle', text: `@${user.username}` }) : null),
     accountLink(section === 'account'),
     packsLink(section === 'packs' || section === 'packs-browse'),
+    partyOwner ? ownerLink(section === 'owner') : null,
     partyOwner ? partyLink(section === 'party') : null,
     partyOwner || partyAdmin ? reportsLink(section === 'party-reports') : null,
     h('button', { type: 'button', class: 'icon-btn', title: 'Log out', attrs: { 'aria-label': 'Log out' }, on: { click: onLogout } }, icon('logout', { size: 16 })));

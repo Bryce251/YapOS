@@ -1,4 +1,5 @@
 import { findBlocked, isBlockedGameWord } from './filter.js';
+import { decodeStroke, fitLevels } from './games/ink.js';
 export const ADMINS_EVENT = 'yapos:admins';
 export const ADMINS_ENDPOINT = '/api/activity/admins';
 export const ADMIN_BATCH = 40;
@@ -251,17 +252,22 @@ function cleanReportName(raw) {
   return clipReport(raw, REPORT_NAME_MAX);
 }
 
-export function reportInk(list) {
-  const out = [];
+function reportFits(parts) {
+  if (parts.length > REPORT_STROKES) return null;
   let chars = 0;
-  for (const s of Array.isArray(list) ? list : []) {
-    if (out.length >= REPORT_STROKES) break;
-    if (typeof s !== 'string' || !INK_RE.test(s)) continue;
-    if (chars + s.length > REPORT_INK_CHARS) break;
-    out.push(s);
+  for (const s of parts) {
+    if (!INK_RE.test(s)) return null;
     chars += s.length;
   }
-  return out;
+  return chars <= REPORT_INK_CHARS ? { parts } : null;
+}
+
+export function reportInk(list) {
+  const clean = (Array.isArray(list) ? list : []).filter((s) => typeof s === 'string' && INK_RE.test(s));
+  if (reportFits(clean)) return clean;
+  const strokes = clean.map(decodeStroke).filter(Boolean);
+  const fit = fitLevels(strokes, 0, reportFits);
+  return fit && Array.isArray(fit.parts) ? fit.parts : [];
 }
 
 export function reportBody(input) {

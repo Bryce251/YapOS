@@ -2,8 +2,9 @@ import { VERSION, hideSecret } from './config.js';
 import { parseBool, parseDuration } from './parse.js';
 import { avatarUrl } from './links.js';
 import { HARD_CAP } from './limits.js';
-import { canGiveCurrency, CURRENCY, GLOBAL_KEY } from './global.js';
+import { canGiveCurrency, CURRENCY, GLOBAL_KEY, withGiftBadges, badgeGifts } from './global.js';
 import { profileSync } from './profiles-sync.js';
+import { createOwnerActions } from './owner-actions.js';
 
 const IDLE_MS = 15_000;
 const HOT_MS = 2_000;
@@ -291,6 +292,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     used: new Map(), snapped: new Map(), published: new Map(), pending: [],
     gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity, profileRun: null,
     reportsOpen: 0, partyStats: new Map(), partyAcks: [], shardAcks: [], ratesDirty: true, ratesRun: null,
+    catalogDirty: true, catalogRun: null, catalogMonth: null,
   };
 
   async function request(method, path, body) {
@@ -1334,7 +1336,22 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     return { games: count(raw.games), wins: count(raw.wins), fav, byGame, badges };
   }
 
+  function withGifts(id, value) {
+    let gifts;
+    try { gifts = badgeGifts(engine, id); } catch { return value; }
+    if (!gifts.gift.length && !gifts.hide.length) return value;
+    const badges = withGiftBadges(engine, id, value?.badges);
+    if (value) return { ...value, badges };
+    return badges.length ? { games: 0, wins: 0, fav: null, byGame: {}, badges } : value;
+  }
+
   async function partyStats(list) {
+    const out = await partyStatsRaw(list);
+    for (const id of Object.keys(out)) out[id] = withGifts(id, out[id]);
+    return out;
+  }
+
+  async function partyStatsRaw(list) {
     const ids = [...new Set((Array.isArray(list) ? list : [list]).filter((x) => typeof x === 'string' && SAFE_ID.test(x)))].slice(0, PARTY_STATS_IDS);
     const out = {};
     if (!ids.length) return out;
@@ -1363,6 +1380,30 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     return out;
   }
 
+  const owner = createOwnerActions(engine, { now, partyStats: (ids) => partyStats(ids) });
+
+  async function sendCatalog() {
+    const body = owner.catalog();
+    if (!body.achievements.length && !body.badges.length) { state.catalogDirty = false; return false; }
+    const month = owner.catalogMonth();
+    const r = await request('POST', '/bot/owner/catalog', body).catch((e) => ({ ok: false, status: 0, error: e }));
+    if (r.ok) {
+      state.catalogDirty = false;
+      state.catalogMonth = month;
+    }
+    else log.debug('[dashboard] owner catalog push failed', r.status);
+    return r.ok;
+  }
+
+  async function syncOwner(rows) {
+    const results = await owner.run(Array.isArray(rows) ? rows : []);
+    if (!results.length) return { applied: 0, posted: 0 };
+    const r = await request('POST', '/bot/owner/results', { results }).catch((e) => ({ ok: false, status: 0, error: e }));
+    if (r.ok) owner.markPosted(results.map((x) => x.id));
+    else log.debug('[dashboard] owner results post failed', r.status);
+    return { applied: results.length, posted: r.ok ? results.length : 0 };
+  }
+
   async function tick() {
     if (!enabled) return null;
     if (state.busy) return state.delay;
@@ -1379,6 +1420,9 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       await postResults(results);
       if (r.data?.party !== undefined) await applyParty(r.data.party).catch((e) => log.debug('[dashboard] Party sync failed', e?.message));
       if (Array.isArray(r.data?.profileSettings) && r.data.profileSettings.length) await profileSync(engine, { fetch: fetchImpl }).applySettings(r.data.profileSettings).catch((e) => log.debug('[dashboard] profile settings sync failed', e?.message));
+      await syncOwner(r.data?.owner).catch((e) => log.debug('[dashboard] owner sync failed', e?.message));
+      if (state.catalogMonth && state.catalogMonth !== owner.catalogMonth()) state.catalogDirty = true;
+      if (state.catalogDirty && !state.catalogRun) state.catalogRun = sendCatalog().catch((e) => log.debug('[dashboard] owner catalog push failed', e?.message)).finally(() => { state.catalogRun = null; });
       if (state.ratesDirty && !state.ratesRun) state.ratesRun = sendPartyRates().catch((e) => log.debug('[dashboard] Party rates push failed', e?.message)).finally(() => { state.ratesRun = null; });
       await pushDirty();
       await refresh();
@@ -1437,6 +1481,9 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     },
     get profileWork() { return state.profileRun; },
     get ratesWork() { return state.ratesRun; },
+    get catalogWork() { return state.catalogRun; },
+    syncOwner,
+    ownerCatalog: () => owner.catalog(),
     tick,
     runJob,
     lookupProfiles,

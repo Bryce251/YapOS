@@ -2,12 +2,15 @@ const ID = '([A-Za-z0-9_-]{1,64})';
 const SLUG = '([A-Za-z0-9-]{1,64})';
 const APP = '([a-z0-9_-]{1,32})';
 const HANDLE = '([A-Za-z0-9_.-]{1,64})';
+const UUID = '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})';
 
 export const ROUTES = [
   { name: 'landing', pattern: new RegExp('^/$'), keys: [], private: false },
   { name: 'servers', pattern: new RegExp('^/servers$'), keys: [], private: true },
   { name: 'party', pattern: new RegExp('^/party$'), keys: [], private: true },
   { name: 'party-reports', pattern: new RegExp('^/party/reports$'), keys: [], private: true },
+  { name: 'owner', pattern: new RegExp('^/owner$'), keys: [], private: true },
+  { name: 'owner-user', pattern: new RegExp(`^/owner/${UUID}$`), keys: ['id'], private: true },
   { name: 'packs', pattern: new RegExp('^/packs$'), keys: [], private: true },
   { name: 'packs-browse', pattern: new RegExp('^/packs/browse$'), keys: [], private: false },
   { name: 'account', pattern: new RegExp('^/account$'), keys: [], private: true },
@@ -81,6 +84,10 @@ export function publicPath(slug) {
   return `/p/${encodeURIComponent(slug)}`;
 }
 
+export function ownerPath(id) {
+  return `/owner/${encodeURIComponent(String(id ?? '').toLowerCase())}`;
+}
+
 export function profilePath(name) {
   return `/u/${encodeURIComponent(String(name ?? '').replace(/^@/, ''))}`;
 }
@@ -99,5 +106,6 @@ export function isInternalHref(href, origin) {
 
 export function sectionFor(routeName) {
   if (routeName === 'app') return 'apps';
+  if (routeName === 'owner-user') return 'owner';
   return routeName;
 }

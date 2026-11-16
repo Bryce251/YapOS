@@ -1,6 +1,6 @@
 import { TOPICS, wordById, topicById, wordsOf } from '../../data/odd.js';
 import { shuffle } from '../engine.js';
-import { INK_PREFIX, MAX_CHUNKS, PIECE_CHARS, LEVELS, COLORS, GRID_W, GRID_H, FILL, inkKey, encodeParts, encodeStroke, decodeStroke, isFill, pack, inkBytes, dedupe } from './ink.js';
+import { INK_PREFIX, MAX_CHUNKS, PIECE_CHARS, LEVELS, COLORS, GRID_W, GRID_H, FILL, inkKey, encodeParts, encodeStroke, decodeStroke, isFill, pack, inkBytes, dedupe, simplify } from './ink.js';
 import { mask, unmask, nextSeat } from './draw.js';
 import { person } from '../players.js';
 
@@ -18,7 +18,7 @@ export const CHOICES = 6;
 export const PEN_SIZE = 1;
 export const INK_MAX = 30000;
 export const CAP_MIN = 200;
-export const CAP_MAX = 1400;
+export const CAP_MAX = 3000;
 export const STROKE_POINTS = 1500;
 export const PARTS_MAX = 6;
 export const PALETTE = Object.freeze([3, 8, 6, 9, 4, 10, 7, 11, 1, 5, 2]);
@@ -36,12 +36,26 @@ export function colorFor(i) {
   return PALETTE[((i % PALETTE.length) + PALETTE.length) % PALETTE.length];
 }
 
+export function compact(pts) {
+  let out = simplify(dedupe(Array.isArray(pts) ? pts : []), LEVELS[0]);
+  while (out.length > Math.floor(STROKE_POINTS * 0.75)) out = out.filter((_, i) => i % 2 === 0 || i === out.length - 1);
+  return out;
+}
+
+export function capFor(st, used) {
+  const total = Array.isArray(st.order) ? st.order.length * (st.laps || 1) : 1;
+  const left = Math.max(1, total - (Array.isArray(st.marks) ? st.marks.length : 0));
+  const room = Math.floor(((INK_MAX - Math.max(0, used)) * 0.9) / left);
+  return Math.max(CAP_MIN, Math.min(CAP_MAX, Math.max(st.cap || 0, room)));
+}
+
 function partsLength(parts) {
   return parts.reduce((a, s) => a + s.length, 0);
 }
 
 export function fitStroke(pts, c, z, cap) {
-  const clean = dedupe(Array.isArray(pts) ? pts.slice(0, STROKE_POINTS) : []);
+  let clean = dedupe(Array.isArray(pts) ? pts : []);
+  if (clean.length > STROKE_POINTS) clean = compact(clean);
   if (!clean.length) return null;
   for (const eps of LEVELS.concat(EXTRA_EPS)) {
     const parts = encodeParts({ c, z, pts: clean }, eps);
@@ -400,11 +414,29 @@ function writeChunks(api, chunks) {
   }
 }
 
+function fits(chunks) {
+  return Boolean(chunks && chunks.length <= MAX_CHUNKS && inkBytes(chunks) <= INK_MAX);
+}
+
+export function squeeze(raw, extra, k) {
+  for (const eps of LEVELS.slice(1).concat(EXTRA_EPS)) {
+    const thin = raw.map((s) => {
+      const d = decodeStroke(s);
+      if (!d || isFill(d)) return s;
+      const parts = encodeParts(d, eps);
+      return parts.length === 1 && parts[0].length <= s.length ? parts[0] : s;
+    });
+    const chunks = pack(thin.concat(extra), k);
+    if (fits(chunks)) return chunks;
+  }
+  return null;
+}
+
 function place(api, st, slot, chunks, added = 0) {
-  const fits = Boolean(chunks && chunks.length <= MAX_CHUNKS && inkBytes(chunks) <= INK_MAX);
-  if (fits) writeChunks(api, chunks);
+  const ok = fits(chunks);
+  if (ok) writeChunks(api, chunks);
   const lens = Array.isArray(st.lens) && st.lens.length === st.marks.length ? st.lens : null;
-  advance(api, { ...st, marks: st.marks.concat([fits ? slot : -1]), lens: lens ? lens.concat([fits ? added : 0]) : null });
+  advance(api, { ...st, marks: st.marks.concat([ok ? slot : -1]), lens: lens ? lens.concat([ok ? added : 0]) : null });
 }
 
 function hide(api, d) {
@@ -441,7 +473,10 @@ function fill(api, slot, action) {
   const at = fillPoint(action);
   if (!at) return;
   const c = st.cols[st.pos] ?? colorFor(st.pos);
-  place(api, st, slot, pack(inkOf(api, st).concat([encodeStroke({ c, z: FILL, pts: [at] })]), st.k), 1);
+  const raw = inkOf(api, st);
+  const extra = [encodeStroke({ c, z: FILL, pts: [at] })];
+  const chunks = pack(raw.concat(extra), st.k);
+  place(api, st, slot, fits(chunks) ? chunks : squeeze(raw, extra, st.k), 1);
 }
 
 function stroke(api, slot, action) {
@@ -452,11 +487,14 @@ function stroke(api, slot, action) {
   if (!pts) return;
   const c = st.cols[st.pos] ?? colorFor(st.pos);
   const raw = inkOf(api, st);
-  let parts = fitStroke(pts, c, PEN_SIZE, st.cap);
+  const used = inkBytes(pack(raw, st.k));
+  let parts = fitStroke(pts, c, PEN_SIZE, capFor(st, used));
   let chunks = parts ? pack(raw.concat(parts), st.k) : null;
-  if (!chunks || chunks.length > MAX_CHUNKS || inkBytes(chunks) > INK_MAX) {
+  if (!fits(chunks) && parts) chunks = squeeze(raw, parts, st.k);
+  if (!fits(chunks)) {
     parts = fitStroke(pts, c, PEN_SIZE, CAP_MIN);
     chunks = parts ? pack(raw.concat(parts), st.k) : null;
+    if (!fits(chunks) && parts) chunks = squeeze(raw, parts, st.k);
   }
   place(api, st, slot, chunks, parts ? parts.length : 0);
 }

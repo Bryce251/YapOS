@@ -1,9 +1,8 @@
-import sketchduel, { VOTE_MS, RESULT_MS } from '../games/sketchduel.js';
-import { INK_CHARS, INK_PARTS, validInk, inkChars } from '../games/telephone.js';
+import sketchduel, { VOTE_MS, RESULT_MS, inkKey as duelInkKey, seatInk } from '../games/sketchduel.js';
 import { GRID_W, GRID_H, SIZES, SIZE_NAMES, CUSTOM, FILL, encodeParts, decodeStroke, quantise, strokeOn as inkStroke, fillOn, paintInk, createPainter } from '../games/ink.js';
 import { fillTool, markTool, flagModel, flagButton, flagDrawing, tintOfPen, pickTint } from './draw.js';
 import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
-import { inkLeft, decodeAll, fitStroke, inkSig } from './telephone.js';
+import { decodeAll, inkSig, newSheet, emptySheet, refit, restoreSheet, writeSheet, sheetStale } from './telephone.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
 
 export const SCALE = 2;
@@ -111,7 +110,6 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
   const undoBtn = button('Undo', { variant: 'ghost', size: 'sm', key: 'undo', on: () => undo() });
   const redoBtn = button('Redo', { variant: 'ghost', size: 'sm', key: 'redo', on: () => redo() });
   const clearBtn = button('Clear', { variant: 'ghost', size: 'sm', key: 'clear', on: () => clearAll() });
-  const meter = h('div', { class: 'sketchduel-meter' });
   const tools = h(
     'div',
     { class: 'draw-tools', attrs: { role: 'toolbar', 'aria-label': 'Drawing tools' } },
@@ -121,13 +119,13 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
   );
   const doneBtn = button('Done!', { variant: 'primary', size: 'lg', key: 'duel-done', on: () => finishDrawing() });
   const editBtn = button('Keep drawing', { variant: 'ghost', key: 'duel-edit', on: () => keepDrawing() });
-  const doneRow = h('div', { class: 'sketchduel-done-row' }, meter, doneBtn, editBtn);
+  const doneRow = h('div', { class: 'sketchduel-done-row' }, doneBtn, editBtn);
   const board = h('div', { class: 'draw-board sketchduel-board sketchduel-off' }, paper, tools, doneRow);
   const arena = h('div', { class: 'sketchduel-arenawrap' });
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
   el.append(head, task, board, arena, foot);
 
-  const mine = { key: null, strokes: [], parts: [], used: 0, dirty: false };
+  const mine = newSheet();
   const local = { key: null, side: null };
   const flagged = new Set();
   let redoStack = [];
@@ -139,6 +137,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
   let heard = null;
   let warned = null;
   let ticker = null;
+  let gone = false;
   let shownArena = null;
   let cheered = null;
 
@@ -165,7 +164,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
   }
 
   function paintMine() {
-    paintStrokes(ctx, cur ? mine.strokes.concat([cur]) : mine.strokes, painter);
+    paintStrokes(ctx, cur ? mine.shown.concat([cur]) : mine.shown, painter);
   }
 
   function release(id) {
@@ -181,19 +180,10 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
     return !cur || cur.id === undefined || !e || e.pointerId === undefined || e.pointerId === cur.id;
   }
 
-  function outOfInk(text) {
-    cue.play('error');
-    say(text);
-  }
-
   function pointOf(e) {
     const r = canvas.getBoundingClientRect();
     if (!r || !r.width || !r.height) return null;
     return quantise(((e.clientX - r.left) / r.width) * GRID_W, ((e.clientY - r.top) / r.height) * GRID_H);
-  }
-
-  function count() {
-    return mine.parts.flat().length;
   }
 
   function sample(e) {
@@ -206,19 +196,13 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
 
   function fillAt(p) {
     const parts = encodeParts({ ...tintOfPen(pen), z: FILL, pts: [p] });
-    if (!parts.length || mine.used + inkChars(parts) > INK_CHARS || count() + parts.length > INK_PARTS) {
-      outOfInk('Out of ink! Undo a line or tap Done.');
-      return;
-    }
+    const s = parts.length ? decodeStroke(parts[0]) : null;
+    if (!s) return;
     paintMine();
-    const s = decodeStroke(parts[0]);
-    if (!s || fillOn(ctx, s, SCALE) === 0) return;
+    if (fillOn(ctx, s, SCALE) === 0) return;
     redoStack = [];
-    mine.parts.push(parts);
     mine.strokes.push(s);
-    mine.used += inkChars(parts);
-    mine.dirty = true;
-    paintMeter();
+    if (refit(mine, model.k, model.budget)) paintMine();
     queueWrite();
   }
 
@@ -228,10 +212,6 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
     if (pen.drop) {
       e.preventDefault();
       sample(e);
-      return;
-    }
-    if (mine.used >= INK_CHARS || count() >= INK_PARTS) {
-      outOfInk('Out of ink! Undo a line or tap Done.');
       return;
     }
     const p = pointOf(e);
@@ -293,21 +273,11 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
       paintMine();
       return false;
     }
-    const fit = fitStroke(s, mine.used, count());
-    if (!fit) {
-      outOfInk('Out of ink! That line did not fit. Undo a line or tap Done.');
-      paintMine();
-      return false;
-    }
-    if (fit.cut) outOfInk('Out of ink! That line got cut short.');
-    else if (keep) cur = { ...s, pts: [s.pts[s.pts.length - 1]], id, key, held };
+    if (keep) cur = { ...s, pts: [s.pts[s.pts.length - 1]], id, key, held };
     redoStack = [];
-    mine.parts.push(fit.parts);
-    mine.strokes.push(...decodeAll(fit.parts));
-    mine.used += inkChars(fit.parts);
-    mine.dirty = true;
+    mine.strokes.push(s);
+    refit(mine, model.k, model.budget);
     paintMine();
-    paintMeter();
     queueWrite();
     return true;
   }
@@ -325,7 +295,8 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
     if (!model || model.phase !== 'draw' || !model.drawing || !model.inkKey || mine.key !== stepKey(model)) return;
     lastWrite = Date.now();
     mine.dirty = false;
-    if (engine.direct(model.inkKey, { k: model.k, s: mine.parts.flat() }) !== false) return;
+    const seat = model.seat;
+    if (writeSheet(engine, (i) => duelInkKey(seat, i), mine)) return;
     mine.dirty = true;
     if (warned === mine.key) return;
     warned = mine.key;
@@ -333,41 +304,29 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
     say('Your drawing did not save. Keep going, it will try again.');
   }
 
-  function changed() {
-    mine.strokes = decodeAll(mine.parts.flat());
-    mine.dirty = true;
+  function changed(fresh = false) {
+    refit(mine, model.k, model.budget, fresh);
     paintMine();
-    paintMeter();
     queueWrite();
   }
 
   function undo() {
-    if (!canDraw() || cur || !mine.parts.length) return;
-    const gone = mine.parts.pop();
-    redoStack.push(gone);
-    mine.used -= inkChars(gone);
+    if (!canDraw() || cur || !mine.strokes.length) return;
+    redoStack.push(mine.strokes.pop());
     changed();
   }
 
   function redo() {
     if (!canDraw() || cur || !redoStack.length) return;
-    const back = redoStack[redoStack.length - 1];
-    if (mine.used + inkChars(back) > INK_CHARS || count() + back.length > INK_PARTS) {
-      outOfInk('Out of ink! Undo a line or tap Done.');
-      return;
-    }
-    redoStack.pop();
-    mine.parts.push(back);
-    mine.used += inkChars(back);
+    mine.strokes.push(redoStack.pop());
     changed();
   }
 
   function clearAll() {
-    if (!canDraw() || cur || !mine.parts.length) return;
+    if (!canDraw() || cur || !mine.strokes.length) return;
     redoStack = [];
-    mine.parts = [];
-    mine.used = 0;
-    changed();
+    mine.strokes = [];
+    changed(true);
   }
 
   function finishDrawing() {
@@ -507,8 +466,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
     for (const c of arena.querySelectorAll('canvas')) {
       const s = c.dataset.duel;
       const info = m.duel && m.duel[s];
-      const v = info ? state[info.key] : null;
-      paintStrokes(contextOf(c), info && !info.hidden && validInk(v, m.k) ? decodeAll(v.s) : []);
+      paintStrokes(contextOf(c), info && !info.hidden ? decodeAll(info.ink) : []);
     }
   }
 
@@ -524,18 +482,6 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
       slot.dataset.sig = sig;
       slot.replaceChildren(...[flagButton(f, () => flag(item))].filter(Boolean));
     }
-  }
-
-  function paintMeter() {
-    const left = inkLeft(mine.used, count());
-    meter.replaceChildren(
-      h(
-        'div',
-        { class: ['sketchduel-ink', left < 0.2 ? 'is-low' : null], attrs: { role: 'meter', 'aria-label': 'Ink left', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(left * 100)) } },
-        h('span', { class: 'sketchduel-ink-label', text: `Ink left ${Math.round(left * 100)}%` }),
-        h('span', { class: 'sketchduel-ink-track' }, h('span', { class: 'sketchduel-ink-fill', vars: { '--ink': left.toFixed(3) } })),
-      ),
-    );
   }
 
   function syncBoard(m) {
@@ -556,24 +502,15 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
     if (mine.key !== key) {
       cur = null;
       warned = null;
-      mine.key = key;
       redoStack = [];
-      mine.parts = [];
-      mine.strokes = [];
-      mine.used = 0;
-      mine.dirty = false;
-      const back = snap.state[m.inkKey];
-      if (validInk(back, m.k)) {
-        mine.parts = back.s.map((s) => [s]);
-        mine.strokes = decodeAll(back.s);
-        mine.used = inkChars(back.s);
-      }
+      emptySheet(mine, key);
+      restoreSheet(mine, seatInk(snap.state, m.seat, m.k));
     }
     paintMine();
-    paintMeter();
-    undoBtn.disabled = !canDraw() || !mine.parts.length;
+    if (writeTimer === null && !m.pass && sheetStale(snap.state, (i) => duelInkKey(m.seat, i), mine, m.k)) queueWrite();
+    undoBtn.disabled = !canDraw() || !mine.strokes.length;
     redoBtn.disabled = !canDraw() || !redoStack.length;
-    clearBtn.disabled = !canDraw() || !mine.parts.length;
+    clearBtn.disabled = !canDraw() || !mine.strokes.length;
     doneBtn.disabled = !canDraw();
     doneBtn.classList.toggle('sketchduel-off', m.mineDone);
     editBtn.classList.toggle('sketchduel-off', !m.mineDone || m.pass);
@@ -593,6 +530,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
   }
 
   function update(next) {
+    if (gone) return;
     snap = next;
     const m = sketchduel.model(next, local);
     model = m;
@@ -610,9 +548,9 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
       lineup: m.phase === 'draw' && !m.drawing ? m.duels.map((d) => ({ a: d.a, b: d.b })) : [],
     });
     syncBoard(m);
-    const arenaModel = m.duel ? { phase: m.phase, note: m.note, duel: { ...m.duel, a: { ...m.duel.a }, b: { ...m.duel.b } } } : null;
+    const arenaModel = m.duel ? { phase: m.phase, note: m.note, duel: { ...m.duel, a: { ...m.duel.a, ink: null }, b: { ...m.duel.b, ink: null } } } : null;
     const repainted = paintArena(arena, arenaModel);
-    const sig = m.duel ? `${m.duel.key}:${inkSig((next.state[m.duel.a.key] || {}).s)}:${inkSig((next.state[m.duel.b.key] || {}).s)}:${m.duel.a.hidden}:${m.duel.b.hidden}` : null;
+    const sig = m.duel ? `${m.duel.key}:${inkSig(m.duel.a.ink)}:${inkSig(m.duel.b.ink)}:${m.duel.a.hidden}:${m.duel.b.hidden}` : null;
     if (m.duel && (repainted || sig !== shownArena)) drawArena(next.state, m);
     shownArena = sig;
     paintFlags(next, m);
@@ -638,6 +576,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
     el,
     update,
     destroy() {
+      gone = true;
       if (ticker !== null && typeof w.clearInterval === 'function') w.clearInterval(ticker);
       if (typeof w.removeEventListener === 'function') {
         w.removeEventListener('keydown', onKeys);

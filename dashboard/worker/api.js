@@ -10,6 +10,7 @@ import { packsRoute, getPublicPack } from './party-packs.js';
 import { browsePacks, packReportsRoute } from './pack-browse.js';
 import { getPublicProfile, visibilityRoute } from './public-profiles.js';
 import { getSeasons } from './seasons.js';
+import { ownerApi } from './owner.js';
 import { parseDays, readStats } from './server-stats.js';
 import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
 
@@ -452,6 +453,8 @@ export async function handleApi(request, env, deps, url) {
     if (segs.length !== 3) return fail(404, 'not_found', "This page isn't public or doesn't exist.");
     return getPublic(request, env, segs[2], t);
   }
+
+  if (segs[1] === 'owner') return ownerApi(request, env, segs.slice(1), url, t, { csrf: csrfOk(request, env) });
 
   if (!readOnly && !mutating) return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   if (mutating && !csrfOk(request, env)) {

@@ -1,7 +1,6 @@
 import { STARTERS, starterById } from '../../data/telephone.js';
 import { shuffle } from '../engine.js';
-import { jsonBytes } from '../limits.js';
-import { decodeStroke } from './ink.js';
+import { pack, seatBudget, seatKey, seatOf, validChunk, readSeat, seatRoom, SEAT_CHUNKS } from './ink.js';
 import { mask, unmask } from './draw.js';
 import { cleanShared, plainKey } from '../text.js';
 
@@ -14,9 +13,6 @@ export const MAX_SEATS = 10;
 export const MAX_STEPS = 8;
 export const TEXT_MAX = 80;
 export const TEXT_BYTES = 160;
-export const INK_CHARS = 3000;
-export const INK_PARTS = 160;
-export const INK_BYTES = 3700;
 export const GRACE_MS = 1500;
 export const SETTLE_MS = 1200;
 export const TEXT_SHOW_MS = 9000;
@@ -125,18 +121,40 @@ export function inkChars(parts) {
 }
 
 export function validInk(v, k) {
-  if (!v || typeof v !== 'object' || v.k !== k || !Array.isArray(v.s)) return false;
-  if (v.s.length > INK_PARTS || inkChars(v.s) > INK_CHARS) return false;
-  if (jsonBytes(v) > INK_BYTES) return false;
-  return v.s.every((s) => typeof s === 'string' && decodeStroke(s) !== null);
+  return validChunk(v, k);
 }
 
-export function inkKey(seat) {
-  return `${INK_PREFIX}${seat}`;
+export function inkKey(seat, i = 0) {
+  return seatKey(INK_PREFIX, seat, i);
 }
 
-export function entryKey(i) {
-  return `${ENTRY_PREFIX}${i}`;
+export function seatInk(src, seat, k) {
+  return readSeat(src, INK_PREFIX, seat, k);
+}
+
+export function budgetOf(st) {
+  return st && Number.isInteger(st.b) && st.b > 0 ? st.b : seatBudget(st && Array.isArray(st.seats) ? st.seats.length : 1);
+}
+
+export function entryKey(i, j = 0) {
+  return j ? `${ENTRY_PREFIX}${i}.${j}` : `${ENTRY_PREFIX}${i}`;
+}
+
+export function entryInk(state, i) {
+  const e = state ? state[entryKey(i)] : null;
+  if (!e || !Array.isArray(e.s)) return [];
+  const out = e.s.filter((s) => typeof s === 'string');
+  const n = Number.isInteger(e.n) ? Math.min(e.n, SEAT_CHUNKS * 2) : 1;
+  for (let j = 1; j < n; j += 1) {
+    const x = state[entryKey(i, j)];
+    if (!x || x.c !== e.c || x.i !== e.i || x.j !== j || !Array.isArray(x.s)) break;
+    for (const s of x.s) if (typeof s === 'string') out.push(s);
+  }
+  return out;
+}
+
+function clearSeat(api, seat) {
+  for (let i = 0; i < SEAT_CHUNKS; i += 1) if (api.get(inkKey(seat, i)) !== null) api.put(inkKey(seat, i), null);
 }
 
 export function drawingId(run, c, i) {
@@ -285,6 +303,7 @@ function openStep(api, st, step) {
     next.sug = mem.sugs.map((ids) => ids.map((id) => mask(id, k)));
   }
   if (kind === 'draw') {
+    next.b = seatBudget(n);
     clearPrefix(api, INK_PREFIX);
     const t = st.seats.map((_, p) => {
       const chain = mem.chains[chainAt(p, step, n)];
@@ -318,8 +337,7 @@ function closeStep(api) {
       const sug = starterById((mem.sugs[p] || [])[0]);
       chain.push(own ? { k: 'w', by, t: own } : { k: 'w', by, t: sug ? sug.text : STARTERS[0].text, miss: 1 });
     } else if (st.phase === 'draw') {
-      const v = api.get(inkKey(p));
-      const s = validInk(v, st.k) ? v.s : [];
+      const s = seatInk((key) => api.get(key), p, st.k).s;
       if (s.length) mem.ink[by] = (mem.ink[by] || 0) + inkChars(s);
       chain.push(s.length ? { k: 'd', by, s } : { k: 'd', by, s: [], miss: 1 });
     } else {
@@ -343,14 +361,26 @@ function startReveal(api, st) {
   return showChain(api, { ...st, done: [], pass: 0, sug: null, dk: null }, 0);
 }
 
-function entryValue(chain, c, i) {
+function putEntry(api, chain, c, i) {
   const e = chain[i];
   const out = { c, i, k: e.k, by: e.by };
-  if (e.k === 'd') out.s = e.s;
-  else out.t = e.t;
+  const rest = [];
+  if (e.k === 'd') {
+    const pieces = pack(Array.isArray(e.s) ? e.s : [], 0).map((ch) => ch.s);
+    out.s = pieces[0] || [];
+    if (pieces.length > 1) out.n = pieces.length;
+    for (let j = 1; j < pieces.length; j += 1) rest.push({ c, i, j, s: pieces[j] });
+  } else {
+    out.t = e.t;
+  }
   if (e.miss) out.miss = 1;
   if (e.hid) out.hid = 1;
-  return out;
+  for (const k of api.keys()) {
+    const m = k.startsWith(`${ENTRY_PREFIX}${i}.`) ? Number(k.slice(`${ENTRY_PREFIX}${i}.`.length)) : 0;
+    if (Number.isInteger(m) && m > rest.length) api.put(k, null);
+  }
+  api.put(entryKey(i), out);
+  for (const x of rest) api.put(entryKey(i, x.j), x);
 }
 
 function drawingList(api, st) {
@@ -381,9 +411,9 @@ function hide(api, d) {
   chain[item.i] = { k: 'd', by: e.by, s: [], hid: 1 };
   const n = st.seats.length;
   if (st.phase === 'text') {
-    for (let q = 0; q < n; q += 1) if (chainAt(q, st.step - 1, n) === item.c && api.get(inkKey(q)) !== null) api.put(inkKey(q), null);
+    for (let q = 0; q < n; q += 1) if (chainAt(q, st.step - 1, n) === item.c) clearSeat(api, q);
   }
-  if (st.phase === 'reveal' && st.rv && st.rv.c === item.c && item.i <= st.rv.at) api.put(entryKey(item.i), entryValue(chain, item.c, item.i));
+  if (st.phase === 'reveal' && st.rv && st.rv.c === item.c && item.i <= st.rv.at) putEntry(api, chain, item.c, item.i);
   api.put(KEY, { ...st, hid: [...hiddenSet(st)].concat([d]).slice(-HID_MAX) });
   return true;
 }
@@ -398,7 +428,7 @@ function showChain(api, st, pos) {
   clearPrefix(api, ENTRY_PREFIX);
   const c = mem.order[pos];
   const chain = mem.chains[c];
-  api.put(entryKey(0), entryValue(chain, c, 0));
+  putEntry(api, chain, c, 0);
   const starts = api.now();
   const ends = starts + showFor(chain, 0);
   api.put(KEY, { ...st, phase: 'reveal', rv: { pos, total: mem.order.length, c, at: 0, len: chain.length, owner: chain[0].by }, rx: [REACTS.map(() => 0)], starts, ends });
@@ -412,7 +442,7 @@ function advance(api) {
   const chain = mem.chains[st.rv.c];
   const at = st.rv.at + 1;
   if (chain && at < chain.length) {
-    api.put(entryKey(at), entryValue(chain, st.rv.c, at));
+    putEntry(api, chain, st.rv.c, at);
     const starts = api.now();
     const ends = starts + showFor(chain, at);
     api.put(KEY, { ...st, rv: { ...st.rv, at }, rx: st.rx.concat([REACTS.map(() => 0)]), starts, ends });
@@ -456,7 +486,7 @@ export function pickAwards(mem, slots) {
   if (clear && clear.v > 0) add('clear', '🎯', 'Crystal clear', 'Their chain stayed closest to the start', clear);
   const fast = best(people.filter((p) => p.speed.length >= 2), (p) => p.speed.reduce((a, b) => a + b, 0) / p.speed.length, taken, true);
   add('fast', '⚡', 'Lightning hands', 'Fastest to finish each step', fast);
-  add('ink', '🖍️', 'Ink champion', 'Used the most ink', best(people, (p) => p.ink, taken));
+  add('ink', '🖍️', 'Busy pencil', 'Drew the most detail', best(people, (p) => p.ink, taken));
   return out;
 }
 
@@ -522,10 +552,10 @@ function seenDrawing(snap, st) {
     if (seat < 0 || n < 2) return null;
     const q = (seat - 1 + n) % n;
     const by = Array.isArray(st.dby) ? st.dby[q] : null;
-    const v = snap.state[inkKey(q)];
-    if (!Number.isInteger(by) || !validInk(v, st.dk) || !v.s.length) return null;
+    const ink = seatInk(snap.state, q, st.dk).s;
+    if (!Number.isInteger(by) || !ink.length) return null;
     const d = drawingId(st.run, chainAt(q, st.step - 1, n), st.step - 1);
-    return hid.has(d) ? null : { d, drawer: by, ink: v.s.slice(), word: null, viewers: [st.seats[seat]] };
+    return hid.has(d) ? null : { d, drawer: by, ink, word: null, viewers: [st.seats[seat]] };
   }
   if (st.phase === 'reveal' && st.rv) {
     for (let i = st.rv.at; i >= 0; i -= 1) {
@@ -536,7 +566,7 @@ function seenDrawing(snap, st) {
       if (hid.has(d)) return null;
       const before = snap.state[entryKey(i - 1)];
       const word = before && before.c === e.c && before.i === i - 1 && typeof before.t === 'string' ? before.t : null;
-      return { d, drawer: e.by, ink: e.s.slice(), word };
+      return { d, drawer: e.by, ink: entryInk(snap.state, i), word };
     }
   }
   return null;
@@ -588,9 +618,9 @@ const telephone = {
     if (!key.startsWith(INK_PREFIX)) return false;
     const st = get(KEY);
     if (!st || st.phase !== 'draw' || !Array.isArray(st.seats)) return false;
-    const seat = Number(key.slice(INK_PREFIX.length));
-    if (!Number.isInteger(seat) || key !== inkKey(seat) || st.seats[seat] !== slot) return false;
-    return validInk(value, st.k);
+    const at = seatOf(INK_PREFIX, key);
+    if (!at || st.seats[at.seat] !== slot) return false;
+    return seatRoom(get, INK_PREFIX, at.seat, at.i, value, st.k, budgetOf(st));
   },
 
   start(api) {
@@ -766,6 +796,7 @@ const telephone = {
       prompt: null,
       src: null,
       inkKey: null,
+      budget: 0,
       reveal: null,
       awards: [],
     };
@@ -782,13 +813,13 @@ const telephone = {
         const inp = snap.state[IN_KEY];
         out.prompt = inp && inp.k === st.k && Array.isArray(inp.t) ? uncover(inp.t[seat], st.k) || null : null;
         out.inkKey = inkKey(seat);
+        out.budget = budgetOf(st);
       }
       if (st.phase === 'text') {
-        const key = inkKey((seat - 1 + n) % n);
-        const v = snap.state[key];
         const q = (seat - 1 + n) % n;
         const hidden = st.step > 0 && hiddenSet(st).has(drawingId(st.run, chainAt(q, st.step - 1, n), st.step - 1));
-        out.src = { key, k: st.dk, blank: hidden || !validInk(v, st.dk) || !v.s.length, hidden };
+        const ink = hidden ? [] : seatInk(snap.state, q, st.dk).s;
+        out.src = { key: inkKey(q), seat: q, k: st.dk, ink, blank: hidden || !ink.length, hidden };
       }
     }
     if (st.phase === 'reveal' && st.rv) {

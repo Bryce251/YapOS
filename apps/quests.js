@@ -352,6 +352,13 @@ export const { setup, teardown, check } = defineApp({
     today: (uid) => todayOf(engine, uid),
     view: (uid) => questsView(engine, uid),
     claim: (uid, sid) => claim(engine, uid, sid),
+    resetToday: (uid) => {
+      if (!validId(uid) || uid === engine.bot.me?.id) return null;
+      return mutateToday(engine, uid, (doc) => {
+        doc.quests = fresh(doc.quests.map((q) => q.id));
+        return doc.quests.length;
+      });
+    },
   }),
 
   presets: {

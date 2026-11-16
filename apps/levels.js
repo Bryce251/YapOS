@@ -5,7 +5,7 @@ import { tokenize, didYouMean, fillTemplate, clip, normalizeName, parseBool, cha
 import { permName, explain, friendly } from '../engine/errors.js';
 import { avatarUrl } from '../engine/links.js';
 import { accept, reject, boolField, channelById, roleById, idList, plainObject } from '../engine/dashboard.js';
-import { globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, mergeOnce, canGiveCurrency, addSeason, seasonBoard, seasonScore, seasonBadges, seasonBadgeText, seasonName, rollSeason, CURRENCY } from '../engine/global.js';
+import { globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, mergeOnce, canGiveCurrency, addSeason, seasonBoard, seasonScore, seasonBadges, seasonBadgeText, seasonName, rollSeason, CURRENCY, GIFT_BADGES } from '../engine/global.js';
 
 const ID = 'levels';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -44,6 +44,7 @@ export const PARTY_BADGES = Object.freeze({
   'first-game': '🎈 First game', 'games-10': '🎲 Party regular', 'games-50': '🥳 Party animal', 'games-100': '🏟️ Party legend',
   'wins-10': '🥇 Winner', 'wins-50': '👑 Champion', 'faker-10': '🕵️ Faker caught 10 times', 'pangram-5': '🐝 Pangram hunter',
   'hottest-take-3': '🌶️ Hottest take', 'reflex-5': '⚡ Lightning reflexes', 'daily-7': '📅 Daily devotee',
+  ...Object.fromEntries(GIFT_BADGES.map((b) => [b.id, `${b.emoji} ${b.label}`])),
 });
 const TIERS = [
   { min: 30, name: 'red', color: COLORS.error, square: '🟥' },
@@ -364,6 +365,46 @@ async function addXp(engine, sid, uid, amount, extra = {}) {
     }
   }
   return res;
+}
+
+function ownerXp(engine, uid, { delta = null, level = null } = {}) {
+  if (typeof uid !== 'string' || !uid || uid === botId(engine)) return null;
+  let out = null;
+  mutateGlobal(engine, ID, (d) => {
+    d.users ||= {};
+    const u = { ...blankUser(), ...(d.users[uid] || {}) };
+    const before = { xp: Math.max(0, Math.floor(Number(u.xp) || 0)), level: levelFor(u.xp) };
+    if (level !== null) {
+      const target = Math.max(0, Math.min(MAX_LEVEL, Math.floor(Number(level) || 0)));
+      u.xp = totalXpForLevel(target);
+    } else {
+      u.xp = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, before.xp + Math.trunc(Number(delta) || 0)));
+    }
+    u.level = levelFor(u.xp);
+    d.users[uid] = u;
+    out = { before, xp: u.xp, level: u.level, leveledUp: u.level > before.level };
+  }, blankDoc());
+  return out;
+}
+
+async function rewardsEverywhere(engine, uid, level, max = 100) {
+  if (!(level > 0)) return 0;
+  const list = await Promise.resolve().then(() => engine.bot.servers?.()).catch(() => null);
+  if (!Array.isArray(list)) return 0;
+  let done = 0;
+  for (const s of list.slice(0, max)) {
+    const sid = s?.id;
+    if (!sid) continue;
+    try {
+      if (!engine.settings.isEnabled(sid, ID)) continue;
+      if (!rewardList(cfgOf(engine, sid)).some((r) => r.level <= level)) continue;
+      const r = await grantRewards(engine, sid, uid, level);
+      if (r.added.length || r.removed.length) done++;
+    } catch (e) {
+      engine.log.debug('[levels] owner rewards failed', e?.message);
+    }
+  }
+  return done;
 }
 
 async function onMessage(ctx, msg) {
@@ -1473,6 +1514,14 @@ export const { setup, teardown, check } = defineApp({
     seasonBoard: () => seasonBoard(engine, 'xp'),
     seasonScore: (uid) => seasonScore(engine, 'xp', uid),
     seasonBadges: (uid) => seasonBadges(engine, uid),
+    ownerXp: (uid, delta) => ownerXp(engine, uid, { delta }),
+    ownerLevel: (uid, level) => ownerXp(engine, uid, { level }),
+    rewardsEverywhere: (uid, level) => rewardsEverywhere(engine, uid, level),
+    maxLevel: () => MAX_LEVEL,
+    badges: () => Object.entries(PARTY_BADGES).map(([id, text]) => {
+      const at = text.indexOf(' ');
+      return { id, emoji: at > 0 ? text.slice(0, at) : '', label: at > 0 ? text.slice(at + 1) : text };
+    }),
     levelFor,
     xpForLevel,
   }),

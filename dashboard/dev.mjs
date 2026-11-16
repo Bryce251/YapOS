@@ -13,6 +13,7 @@ import { createLogger } from '../engine/log.js';
 import { monthKey, shiftMonth } from '../apps/wrapped.js';
 import { encodeStroke } from './web/activity/js/games/ink.js';
 import { dayKey } from './web/activity/js/daily.js';
+import { seedOwnerPanel, createOwnerSim, botHandlesOwner } from './dev/owner-sim.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.join(HERE, 'web');
@@ -686,6 +687,7 @@ export async function startDev({
   autoPoll = true,
   nudge = true,
   quiet = false,
+  ownerSim = 'auto',
 } = {}) {
   if (dbFile !== ':memory:') {
     await mkdir(path.dirname(dbFile), { recursive: true });
@@ -714,6 +716,7 @@ export async function startDev({
   seedPublicPacks(db);
   seedSeason(db);
   seedServerStats(db, IDS.server);
+  seedOwnerPanel(db);
 
   const oauth = createFakeOAuth({
     users: TEST_USERS,
@@ -751,6 +754,7 @@ export async function startDev({
     if (url.pathname === '/api/activity/profiles' && request.method === 'GET') return withFakeProfiles(response, url);
     if (url.pathname === '/api/activity/admins' && request.method === 'GET') return withDevPartyOwner(response, url);
     if (url.pathname.startsWith('/api/') && (response.status === 202 || response.status === 403)) poke();
+    if (url.pathname === '/api/owner/actions' && response.status === 201) poke();
     return response;
   }
 
@@ -772,6 +776,17 @@ export async function startDev({
   bot = harness.engine;
   if (autoPoll) dashboard.start();
 
+  const simulate = ownerSim === 'auto' ? !botHandlesOwner(path.join(HERE, '..', 'engine', 'dashboard.js')) : ownerSim === true;
+  const owner = createOwnerSim({
+    db,
+    send: (results) => worker.fetch(new Request(`${env.PUBLIC_URL}/bot/owner/results`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${botSecret}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ results }),
+    }), env, ctx),
+  });
+  if (simulate) owner.start();
+
   const cleanupTimer = setInterval(() => {
     worker.scheduled({ cron: '*/15 * * * *', scheduledTime: Date.now() }, env, ctx).catch(() => {});
   }, CLEANUP_EVERY_MS);
@@ -782,6 +797,7 @@ export async function startDev({
     if (closed) return;
     closed = true;
     clearInterval(cleanupTimer);
+    owner.stop();
     if (nudgeTimer) clearTimeout(nudgeTimer);
     dashboard.stop();
     harness.engine.dispose?.();
@@ -799,6 +815,8 @@ export async function startDev({
     harness,
     dashboard,
     oauth,
+    owner,
+    ownerSimulated: simulate,
     users: TEST_USERS,
     serverId: IDS.server,
     close,
@@ -817,6 +835,7 @@ async function main() {
     'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party and see a sample flagged drawing and a flagged Hot Takes answer at /party/reports.',
     `Word packs: sign in as Jolli and open /packs to edit the sample pack. Type the code ${DEV_PACK_CODE} into Draw & Guess or Trivia settings to play with it.`,
     "Daily puzzle: today's Letter Hive and Scramble already have a few scores on the leaderboard (/api/activity/daily/top?kind=hive).",
+    `Owner panel: sign in as Jolli and open /owner to give people Shards, XP, achievements and badges. ${dev.ownerSimulated ? 'A stand-in bot finishes each change about 2 seconds later.' : 'The test bot applies each change for real.'}`,
     'Community: /u/jolli is a sample public profile, /packs/browse lists 3 public packs with likes, /seasons shows last month, and Test Town has 30 days of stats on its Stats page.',
     '',
     'Test users (pick one on the sign-in page):',

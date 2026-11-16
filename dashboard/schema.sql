@@ -303,3 +303,35 @@ CREATE TABLE IF NOT EXISTS server_stats (
 );
 CREATE INDEX IF NOT EXISTS server_stats_hour ON server_stats (hour);
 CREATE INDEX IF NOT EXISTS pack_reports_reporter ON pack_reports (reporter_id, status);
+
+CREATE TABLE IF NOT EXISTS owner_actions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  value TEXT,
+  ref TEXT,
+  note TEXT,
+  notify INTEGER NOT NULL DEFAULT 0,
+  created INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  sent_at INTEGER,
+  result TEXT,
+  updated INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS owner_actions_user ON owner_actions (user_id, created);
+CREATE INDEX IF NOT EXISTS owner_actions_status ON owner_actions (status, created, id);
+CREATE INDEX IF NOT EXISTS owner_actions_created ON owner_actions (created);
+
+CREATE TABLE IF NOT EXISTS owner_catalog (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  updated INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS owner_known (
+  user_id TEXT PRIMARY KEY,
+  shards INTEGER,
+  level INTEGER,
+  xp INTEGER,
+  updated INTEGER NOT NULL
+);

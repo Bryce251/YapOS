@@ -23,8 +23,7 @@ import { cleanAdminAction, flagNeed, flagInfo, validDrawing } from '../web/activ
 import draw, { drawingId, inkStrings, mask } from '../web/activity/js/games/draw.js';
 import odd, { KEY as ODD, fitStroke as oddStroke, authors, splitLines, rawInk } from '../web/activity/js/games/odd.js';
 import telephone, { KEY as TEL, inkKey as telInk, entryKey, chainAt, drawingId as telId, validInk } from '../web/activity/js/games/telephone.js';
-import { fitStroke as telStroke } from '../web/activity/js/views/telephone.js';
-import { fitInk, inkKey, encodeStroke, GRID_W, GRID_H } from '../web/activity/js/games/ink.js';
+import { fitInk, inkKey, encodeStroke, encodeParts, decodeStroke, GRID_W, GRID_H } from '../web/activity/js/games/ink.js';
 import { flagLabel, flagModel } from '../web/activity/js/views/draw.js';
 import { VIEWS } from '../web/activity/js/views/index.js';
 import { createAdminPanel, adminModel } from '../web/activity/js/ui/admin-panel.js';
@@ -281,8 +280,8 @@ async function startTel(count = 3) {
   let s = st();
   assert.equal(s.phase, 'draw');
   s.seats.forEach((slot, seat) => {
-    const fit = telStroke({ c: 3, z: 1, pts: line(seeded(seat + 2)) }, 0, 0);
-    assert.equal(bySlot(r, slot).direct(telInk(seat), { k: s.k, s: fit.parts }), true);
+    const parts = encodeParts({ c: 3, z: 1, pts: line(seeded(seat + 2)) });
+    assert.equal(bySlot(r, slot).direct(telInk(seat), { k: s.k, s: parts }), true);
   });
   await r.clock.advance(400);
   s.seats.forEach((slot) => bySlot(r, slot).act({ type: 'done', step: s.step }));
@@ -440,6 +439,13 @@ test('reports carry the drawing, the drawer and the reporter, cleaned and capped
   assert.ok(body.ink.length <= REPORT_STROKES);
   assert.ok(body.ink.join('').length <= REPORT_INK_CHARS);
   assert.equal(reportInk(['<bad>', s]).length, 1);
+  const busy = [];
+  for (let i = 0; i < 150; i += 1) busy.push(encodeStroke({ c: 1 + (i % 9), z: 1, pts: line(seeded(i + 40), 120) }));
+  assert.ok(busy.join('').length > REPORT_INK_CHARS);
+  const fitted = reportInk(busy);
+  assert.equal(fitted.length, busy.length, 'a big page is simplified to fit the report, not chopped off');
+  assert.ok(fitted.join('').length <= REPORT_INK_CHARS);
+  assert.deepEqual(decodeStroke(fitted[fitted.length - 1]).pts.at(-1), decodeStroke(busy[busy.length - 1]).pts.at(-1));
   assert.equal(reportBody({ game: 'chain', drawer: { id: person(1).id }, reporter: { id: person(2).id } }), null);
   assert.equal(reportBody({ game: 'draw', drawer: { id: 'nope nope' }, reporter: { id: person(2).id } }), null);
   assert.equal(reportBody({ game: 'draw', drawer: { id: person(2).id }, reporter: { id: person(2).id } }), null);

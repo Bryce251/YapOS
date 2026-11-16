@@ -34,10 +34,11 @@ import {
   paintInk,
 } from '../web/activity/js/games/ink.js';
 import draw from '../web/activity/js/games/draw.js';
-import telephone, { KEY as TEL_KEY, inkKey as telKey, validInk, inkChars, INK_CHARS, INK_PARTS } from '../web/activity/js/games/telephone.js';
+import telephone, { KEY as TEL_KEY, MAX_SEATS, inkKey as telKey, validInk, inkChars } from '../web/activity/js/games/telephone.js';
+import { fitSeat, seatBudget, SEAT_CHUNK_BYTES, G_MAX } from '../web/activity/js/games/ink.js';
 import odd, { INTRO_MS } from '../web/activity/js/games/odd.js';
 import { VIEWS } from '../web/activity/js/views/index.js';
-import { createTelephoneView, fitStroke as telFit } from '../web/activity/js/views/telephone.js';
+import { createTelephoneView } from '../web/activity/js/views/telephone.js';
 import { createOddView } from '../web/activity/js/views/odd.js';
 import { configureAdmins, resetAdmins } from '../web/activity/js/admin.js';
 import { FLAG_THANKS } from '../web/activity/js/views/draw.js';
@@ -689,7 +690,7 @@ test('Draw & Guess: guessers can still flag a drawing made with custom colors', 
   resetAdmins();
 });
 
-test('Draw Telephone: custom colors and the eyedropper work and count against the ink budget', async () => {
+test('Draw Telephone: custom colors and the eyedropper work and are saved with the page', async () => {
   installDom({ url: 'https://yapos.dev/activity/' });
   clearStorage();
   const ctxs = fakeCanvases();
@@ -735,22 +736,26 @@ test('Draw Telephone: custom colors and the eyedropper work and count against th
   v.destroy();
 });
 
-test('the telephone ink budget counts custom color characters and still caps the page', () => {
+test('the telephone page budget counts custom color characters and never refuses a line', () => {
   const stroke = { c: CUSTOM, rgb: '#abcdef', z: 1, pts: [[0, 0], [10, 10]] };
   const plain = { c: 1, z: 1, pts: [[0, 0], [10, 10]] };
-  const a = telFit(stroke, 0, 0);
-  const b = telFit(plain, 0, 0);
-  assert.equal(inkChars(a.parts), inkChars(b.parts) + RGB_CHARS);
-  const used = INK_CHARS - inkChars(b.parts);
-  assert.equal(telFit(plain, used, 0).cut, false);
-  assert.equal(telFit(stroke, used, 0), null, 'the same line in a custom color would pass the budget, so it does not fit');
-  assert.equal(telFit(stroke, used - RGB_CHARS, 0).cut, false);
+  const budget = seatBudget(MAX_SEATS);
+  const a = fitSeat([stroke], 3, 0, budget);
+  const b = fitSeat([plain], 3, 0, budget);
+  assert.equal(inkChars(a.pieces.flat()), inkChars(b.pieces.flat()) + RGB_CHARS);
   const many = [];
-  while (inkChars(many) + CUSTOM_FILL_CHARS <= INK_CHARS && many.length < INK_PARTS) many.push(encodeStroke({ c: CUSTOM, rgb: '#010101', z: FILL, pts: [[many.length % 480, 7]] }));
-  assert.equal(validInk({ k: 3, s: many }, 3), true);
-  assert.equal(validInk({ k: 3, s: many.concat([encodeStroke({ c: CUSTOM, rgb: '#020202', z: FILL, pts: [[1, 1]] })]) }, 3), false);
+  for (let i = 0; i < 900; i += 1) many.push({ c: CUSTOM, rgb: '#010101', z: FILL, pts: [[i % 480, 7]] });
+  const fit = fitSeat(many, 3, 0, budget);
+  assert.ok(fit.bytes <= budget, `${fit.bytes} bytes`);
+  assert.ok(fit.strokes.length > 0 && fit.strokes.length < many.length, 'an absurd page quietly keeps what fits');
+  assert.deepEqual(fit.strokes[fit.strokes.length - 1], many[many.length - 1], 'the newest fill always lands');
+  for (const s of fit.pieces) assert.ok(validInk({ k: 3, g: G_MAX, s }, 3));
+  const huge = [];
+  while (huge.join('').length < SEAT_CHUNK_BYTES) huge.push(encodeStroke({ c: CUSTOM, rgb: '#020202', z: FILL, pts: [[1, 1]] }));
+  assert.equal(validInk({ k: 3, s: huge }, 3), false, 'one value can never pass the per key limit');
   assert.equal(validInk({ k: 3, s: ['MAAAAEAoAo'] }, 3), true);
   assert.equal(validInk({ k: 3, s: ['MAAAAEAoA'] }, 3), false);
+  assert.equal(validInk({ k: 3, g: -1, s: ['MAAAAEAoAo'] }, 3), false);
 });
 
 function customOps() {

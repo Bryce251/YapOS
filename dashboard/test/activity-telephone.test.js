@@ -8,8 +8,6 @@ import telephone, {
   IN_KEY,
   INK_PREFIX,
   ENTRY_PREFIX,
-  INK_CHARS,
-  INK_PARTS,
   TEXT_MAX,
   TEXT_BYTES,
   GRACE_MS,
@@ -28,15 +26,18 @@ import telephone, {
   kindOf,
   stepsFor,
   chainAt,
+  STEP_PHASES,
   inkKey,
   entryKey,
   inkChars,
   validInk,
+  seatInk,
+  entryInk,
   likeness,
   pickAwards,
 } from '../web/activity/js/games/telephone.js';
-import { createTelephoneView, fitStroke, footText, telephoneMoments } from '../web/activity/js/views/telephone.js';
-import { GRID_W, GRID_H, paintInk, decodeStroke, encodeParts } from '../web/activity/js/games/ink.js';
+import { createTelephoneView, footText, telephoneMoments } from '../web/activity/js/views/telephone.js';
+import { GRID_W, GRID_H, SEAT_POOL, SEAT_CHUNKS, paintInk, decodeStroke, encodeParts, fitSeat, seatBudget } from '../web/activity/js/games/ink.js';
 import { STARTERS, starterById } from '../web/activity/data/telephone.js';
 import { jsonBytes, MAX_VALUE_BYTES } from '../web/activity/js/limits.js';
 import { readFileSync } from 'node:fs';
@@ -81,22 +82,24 @@ function scribble(seed, count = 50) {
   return pts;
 }
 
-function bigInk(k, seed = 1) {
-  let used = 0;
-  const parts = [];
-  for (let n = 0; n < 400; n += 1) {
-    const fit = fitStroke({ c: 1 + (n % 11), z: n % 4, pts: scribble(seed * 1000 + n) }, used, parts.length);
-    if (!fit) break;
-    parts.push(...fit.parts);
-    used += inkChars(fit.parts);
-    if (fit.cut) break;
-  }
-  return { k, s: parts };
+function bigStrokes(seed = 1, count = 400) {
+  const out = [];
+  for (let n = 0; n < count; n += 1) out.push({ c: 1 + (n % 11), z: n % 4, pts: scribble(seed * 1000 + n) });
+  return out;
+}
+
+function bigInk(k, seed = 1, seats = MAX_SEATS) {
+  const fit = fitSeat(bigStrokes(seed), k, 0, seatBudget(seats));
+  return fit.pieces.map((s) => ({ k, g: 1, s }));
 }
 
 function smallInk(k, seed = 1) {
-  const fit = fitStroke({ c: 3, z: 1, pts: scribble(seed, 8) }, 0, 0);
-  return { k, s: fit.parts };
+  return { k, s: encodeParts({ c: 3, z: 1, pts: scribble(seed, 8) }) };
+}
+
+function pageOf(r, seat) {
+  const first = r.hub.state[inkKey(seat)];
+  return seatInk(r.hub.state, seat, first ? first.k : null);
 }
 
 async function writeAll(r, texts) {
@@ -112,11 +115,18 @@ async function writeAll(r, texts) {
 async function drawAll(r, make = smallInk) {
   const s = st(r);
   assert.equal(s.phase, 'draw');
+  for (let guard = 0; guard < 40 && !r.engines.every((e) => (e.snapshot().state[KEY] || {}).k === s.k); guard += 1) await r.clock.advance(500);
+  const want = [];
   s.seats.forEach((slot, seat) => {
     const e = bySlot(r, slot);
-    assert.equal(e.direct(inkKey(seat), make(s.k, seat + 1)), true, `seat ${seat} can draw`);
+    const ink = make(s.k, seat + 1, s.seats.length);
+    (Array.isArray(ink) ? ink : [ink]).forEach((v, i) => {
+      assert.equal(e.direct(inkKey(seat, i), v), true, `seat ${seat} can draw part ${i}`);
+      want.push([inkKey(seat, i), JSON.stringify(v)]);
+    });
   });
   await r.clock.advance(400);
+  for (let guard = 0; guard < 40 && !want.every(([key, v]) => JSON.stringify(r.hub.state[key]) === v); guard += 1) await r.clock.advance(500);
   s.seats.forEach((slot) => bySlot(r, slot).act({ type: 'done', step: s.step }));
   await r.clock.advance(400);
 }
@@ -222,15 +232,25 @@ test('helpers hide text, cap length and bytes, and rotate the chains fairly', ()
   assert.equal(likeness('A cat on a boat', 'Volcano party'), 0);
 });
 
-test('the ink budget is tight enough that every drawing fits in one value', () => {
-  const ink = bigInk(77, 3);
-  assert.ok(inkChars(ink.s) > INK_CHARS * 0.9, `${inkChars(ink.s)}`);
-  assert.ok(inkChars(ink.s) <= INK_CHARS);
-  assert.equal(validInk(ink, 77), true);
-  assert.equal(validInk(ink, 78), false);
-  assert.ok(jsonBytes(ink) < MAX_VALUE_BYTES);
-  assert.equal(fitStroke({ c: 1, z: 1, pts: scribble(9, 40) }, INK_CHARS, 0), null);
-  assert.equal(validInk({ k: 1, s: ['x'.repeat(INK_CHARS + 1)] }, 1), false);
+test('big pages spread over a few keys and always fit a budget shared by every seat', () => {
+  for (const seats of [3, 8, 10]) {
+    const budget = seatBudget(seats);
+    assert.ok(budget * seats <= SEAT_POOL, `${seats} seats`);
+    const values = bigInk(77, 3, seats);
+    assert.ok(values.length >= 2 && values.length <= SEAT_CHUNKS, `${seats} seats use ${values.length} keys`);
+    let total = 0;
+    for (const v of values) {
+      assert.equal(validInk(v, 77), true);
+      assert.equal(validInk(v, 78), false);
+      assert.ok(jsonBytes(v) < MAX_VALUE_BYTES);
+      total += jsonBytes(v);
+    }
+    assert.ok(total <= budget, `${total} of ${budget}`);
+    const fit = fitSeat(bigStrokes(3, 2000), 77, 0, budget);
+    assert.ok(fit.bytes <= budget);
+    assert.ok(fit.level > 0, 'a huge page coarsens instead of stopping');
+  }
+  assert.equal(validInk({ k: 1, s: ['x'.repeat(5000)] }, 1), false);
 });
 
 test('a full game: write, draw, describe, reveal with reactions, awards and results', async () => {
@@ -270,7 +290,7 @@ test('a full game: write, draw, describe, reveal with reactions, awards and resu
   const mb = telephone.model(b.snapshot());
   assert.equal(mb.src.key, inkKey(1));
   assert.equal(mb.src.blank, false);
-  assert.equal(validInk(r.hub.state[inkKey(1)], s.dk), true, 'the drawings stay in state to be described');
+  assert.ok(seatInk(r.hub.state, 1, s.dk).s.length > 0, 'the drawings stay in state to be described');
   host.act({ type: 'text', step: 2, text: 'Fish flipping waffles' });
   a.act({ type: 'text', step: 2, text: 'A toaster with arms' });
   b.act({ type: 'text', step: 2, text: 'Something with a crown' });
@@ -585,7 +605,7 @@ test('the view walks through every phase with no inline styles', async () => {
   const drawer = seatView(1);
   assert.match(text(drawer.el), /Draw this phrase/);
   assert.match(text(drawer.el), /A llama on a lighthouse/);
-  assert.match(text(drawer.el), /Ink left 100%/);
+  assert.doesNotMatch(text(drawer.el), /Ink left|Out of ink/);
   assert.equal(text(seatView(0).el).includes('A llama on a lighthouse'), false, 'only the drawer sees the phrase');
   const canvas = all(drawer.el).find((x) => x.localName === 'canvas');
   canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 360 });
@@ -596,7 +616,7 @@ test('the view walks through every phase with no inline styles', async () => {
   const k = st(r).k;
   assert.equal(validInk(r.hub.state[inkKey(1)], k), true);
   assert.ok(r.hub.state[inkKey(1)].s.length >= 1);
-  assert.doesNotMatch(text(drawer.el), /Ink left 100%/);
+  assert.doesNotMatch(text(drawer.el), /Ink left|Out of ink/);
   assert.ok(calls.some(([name]) => name === 'lineTo'));
   byKey(drawer.el, 'draw-done').click();
   for (const seat of [0, 2]) {
@@ -897,6 +917,7 @@ function drawLine(v, s, id = 1) {
 }
 
 function partsOf(ink) {
+  if (ink && Array.isArray(ink.values)) return ink.s.map(decodeStroke);
   return (ink && Array.isArray(ink.s) ? ink.s : []).map(decodeStroke);
 }
 
@@ -955,7 +976,7 @@ async function playChecked(r, players, views, canvases) {
       players.forEach((_, i) => {
         const seat = seatOf(i);
         const want = [lineFor(step, seat)].concat(seat === step % n ? [held] : []);
-        assert.deepEqual(partsOf(r.hub.state[inkKey(seat)]).map(plain), want, `n=${n} step ${step} seat ${seat} ink was saved, held line included`);
+        assert.deepEqual(partsOf(pageOf(r, seat)).map(plain), want, `n=${n} step ${step} seat ${seat} ink was saved, held line included`);
         drawn.set(`${step}:${seat}`, want);
       });
       await r.clock.advance(GRACE_MS + 400);
@@ -1088,7 +1109,7 @@ test('a player who reloads mid-drawing or joins late gets their own saved drawin
   const more = { c: 4, z: 1, pts: [[30, 330], [300, 330]] };
   drawLine(again, more);
   await r.clock.advance(900);
-  assert.deepEqual(partsOf(r.hub.state[inkKey(seat)]).map(plain), [lineFor(1, seat), more], 'the reloaded drawing keeps the earlier lines');
+  assert.deepEqual(partsOf(pageOf(r, seat)).map(plain), [lineFor(1, seat), more], 'the reloaded drawing keeps the earlier lines');
   for (const e of [r.engines[0], r.engines[2]]) byKey(views[r.engines.indexOf(e)].el, 'draw-done').click();
   byKey(again.el, 'draw-done').click();
   await r.clock.advance(SETTLE_MS + 600);
@@ -1157,7 +1178,7 @@ test('a stroke never leaks across pointers, released buttons or the Done button'
     { c: 1, z: 1, pts: [[20, 100], [220, 100]] },
     { c: 1, z: 1, pts: [[20, 160], [220, 160]] },
   ];
-  assert.deepEqual(partsOf(r.hub.state[inkKey(seat)]).map(plain), want);
+  assert.deepEqual(partsOf(pageOf(r, seat)).map(plain), want);
   assert.deepEqual(canvases.get(cv).scene, sceneOf(want));
   cv.dispatchEvent(pen('pointermove', 300, 300, 1));
   cv.dispatchEvent(pen('pointerup', 300, 300, 1));
@@ -1166,7 +1187,7 @@ test('a stroke never leaks across pointers, released buttons or the Done button'
   for (const x of views) x.destroy();
 });
 
-test('running out of ink or failing to save always tells the drawer', async () => {
+test('drawing never runs out of ink, and a failed save always tells the drawer', async () => {
   installDom({ url: 'https://yapos.dev/activity/' });
   const r = await start(3, { draw: 50 });
   const { views, toasts } = await telephoneTable(r, r.engines);
@@ -1174,12 +1195,23 @@ test('running out of ink or failing to save always tells the drawer', async () =
   await r.clock.advance(600);
   const v = views[0];
   const cv = mainCanvas(v);
-  for (let i = 0; i < INK_PARTS + 5; i += 1) {
-    cv.dispatchEvent(pen('pointerdown', 10 + (i % 40) * 11, 10 + Math.floor(i / 40) * 40, 1));
-    cv.dispatchEvent(pen('pointerup', 10 + (i % 40) * 11, 10 + Math.floor(i / 40) * 40, 1));
+  const seat = st(r).seats.indexOf(r.engines[0].snapshot().meSlot);
+  for (let i = 0; i < 400; i += 1) {
+    const x = 10 + (i % 40) * 11;
+    const y = 10 + Math.floor(i / 40) * 34;
+    cv.dispatchEvent(pen('pointerdown', x, y, 1));
+    for (let k = 1; k <= 12; k += 1) cv.dispatchEvent(pen('pointermove', x + ((k * 37) % 90), y + ((k * 53) % 70), 1));
+    cv.dispatchEvent(pen('pointerup', x + 5, y + 5, 1));
+    if (i % 40 === 39) await r.clock.advance(900);
   }
-  assert.ok(toasts.some((t) => /Out of ink/.test(t)), 'hitting the stroke cap says so');
-  assert.match(text(v.el), /Ink left 0%/, 'the meter shows the real limit');
+  await r.clock.advance(900);
+  assert.deepEqual(toasts, [], 'no ink warnings, ever');
+  assert.doesNotMatch(text(v.el), /Ink left|Out of ink/);
+  const page = pageOf(r, seat);
+  assert.ok(page.s.length >= 400, `${page.s.length} lines saved`);
+  assert.ok(page.bytes <= seatBudget(3));
+  assert.ok(page.values.length >= 2, 'the page spread over several keys');
+  checkLimits(r);
   const before = toasts.length;
   const real = r.engines[0].direct;
   r.engines[0].direct = () => false;
@@ -1220,8 +1252,8 @@ test('six to eight players scribbling nonstop stay inside the op budget and ever
     assert.deepEqual(r.hub.violations, []);
     r.engines.forEach((e, i) => {
       const seat = s.seats.indexOf(e.snapshot().meSlot);
-      const ink = r.hub.state[inkKey(seat)];
-      assert.equal(validInk(ink, s.k), true, `seat ${seat}`);
+      const ink = pageOf(r, seat);
+      assert.ok(ink.values.every((x) => validInk(x, s.k)), `seat ${seat}`);
       assert.ok(ink.s.length > 0);
       assert.deepEqual(canvases.get(mainCanvas(views[i])).scene, sceneOf(partsOf(ink)), `seat ${seat} saved exactly what is on their screen`);
     });
@@ -1266,13 +1298,13 @@ test('a touch whose lift never reached the canvas does not freeze the next touch
     { c: 1, z: 1, pts: [[20, 160], [220, 160]] },
     { c: 1, z: 1, pts: [[20, 220], [220, 220]] },
   ];
-  assert.deepEqual(partsOf(r.hub.state[inkKey(seat)]).map(plain), want);
+  assert.deepEqual(partsOf(pageOf(r, seat)).map(plain), want);
   assert.deepEqual(canvases.get(cv).scene, sceneOf(want));
   assert.deepEqual(toasts, []);
   for (const x of views) x.destroy();
 });
 
-test('redo brings back an undone line, refills the meter and is cleared by a new line', async () => {
+test('redo brings back an undone line without any ink check and is cleared by a new line', async () => {
   installDom({ url: 'https://yapos.dev/activity/' });
   const r = await start(3, { draw: 50 });
   const { views } = await telephoneTable(r, r.engines);
@@ -1288,15 +1320,16 @@ test('redo brings back an undone line, refills the meter and is cleared by a new
   line(20);
   line(200);
   await r.clock.advance(900);
-  const meter = () => text(v.el).match(/Ink left (\d+)%/)[1];
-  const full = meter();
+  const seat = st(r).seats.indexOf(r.engines[0].snapshot().meSlot);
+  const saved = () => pageOf(r, seat).s.join('|');
+  const full = saved();
   byKey(v.el, 'undo').click();
   await r.clock.advance(900);
-  assert.notEqual(meter(), full);
+  assert.notEqual(saved(), full);
   assert.equal(byKey(v.el, 'redo').disabled, false);
   byKey(v.el, 'redo').click();
   await r.clock.advance(900);
-  assert.equal(meter(), full, 'redo puts the ink back');
+  assert.equal(saved(), full, 'redo puts the line back');
   assert.equal(byKey(v.el, 'redo').disabled, true);
   byKey(v.el, 'undo').click();
   await r.clock.advance(900);
@@ -1304,4 +1337,114 @@ test('redo brings back an undone line, refills the meter and is cleared by a new
   await r.clock.advance(900);
   assert.equal(byKey(v.el, 'redo').disabled, true, 'a new line clears redo');
   for (const x of views) x.destroy();
+});
+
+for (const n of [3, 8, 10]) {
+  test(`${n} seats with full pages stay under every limit and every reveal shows the whole page`, async () => {
+    const r = await start(n);
+    const drawn = new Map();
+    let spread = 0;
+    await writeAll(r, st(r).seats.map((_, i) => `${'🦄'.repeat(10)} phrase ${i} ${'z'.repeat(30)}`));
+    for (let guard = 0; guard < 20 && STEP_PHASES.includes(st(r).phase); guard += 1) {
+      const s = st(r);
+      if (s.phase === 'draw') {
+        assert.equal(s.b, seatBudget(n));
+        await r.clock.advance(10000);
+        await drawAll(r, bigInk);
+        checkLimits(r);
+        s.seats.forEach((_, seat) => {
+          const page = pageOf(r, seat);
+          assert.ok(page.values.length >= 1 && page.s.length > 0, `seat ${seat} saved a page`);
+          if (page.values.length >= 2) spread += 1;
+          assert.ok(page.bytes <= s.b);
+          drawn.set(`${chainAt(seat, s.step, n)}.${s.step}`, page.s.join('|'));
+        });
+        await r.clock.advance(SETTLE_MS + 300);
+      } else {
+        await writeAll(r, s.seats.map((_, i) => `described ${i} ${'q'.repeat(50)}`));
+      }
+      checkLimits(r);
+    }
+    assert.ok(spread > 0, 'big pages spread over more than one key');
+    assert.equal(st(r).phase, 'reveal');
+    let seen = 0;
+    for (let guard = 0; guard < 200 && st(r).phase === 'reveal'; guard += 1) {
+      const rv = st(r).rv;
+      const e = r.hub.state[entryKey(rv.at)];
+      if (e && e.k === 'd' && !e.miss) {
+        assert.equal(entryInk(r.hub.state, rv.at).join('|'), drawn.get(`${rv.c}.${rv.at}`), `chain ${rv.c} entry ${rv.at} shows the whole page`);
+        const item = telephone.drawingOf(r.engines[0].snapshot());
+        assert.equal(item.ink.join('|'), drawn.get(`${rv.c}.${rv.at}`), 'reports and replays get the whole page');
+        seen += 1;
+      }
+      checkLimits(r);
+      r.engines[0].act({ type: 'next', c: rv.c, at: rv.at });
+      await r.clock.advance(NEXT_MIN_MS + 300);
+    }
+    assert.ok(seen >= n * Math.floor(stepsFor(n) / 2) - 1, `${seen} drawings revealed`);
+    assert.deepEqual(r.hub.violations, []);
+  });
+}
+
+test('a reloaded drawer rebuilds a page spread over several keys and keeps drawing on it', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await start(3, { draw: 90 });
+  const { canvases, views, toasts } = await telephoneTable(r, r.engines);
+  r.engines.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Phrase ${i}` }));
+  await r.clock.advance(600);
+  const seat = st(r).seats.indexOf(r.engines[1].snapshot().meSlot);
+  const scrawl = (v, count, off) => {
+    const cv = mainCanvas(v);
+    for (let i = 0; i < count; i += 1) {
+      const x = 10 + ((i * 23 + off) % 420);
+      const y = 10 + ((i * 41 + off) % 300);
+      cv.dispatchEvent(pen('pointerdown', x, y, 1));
+      for (let k = 1; k <= 25; k += 1) cv.dispatchEvent(pen('pointermove', x + ((k * 17) % 60), y + ((k * 29) % 50), 1));
+      cv.dispatchEvent(pen('pointerup', x, y, 1));
+    }
+  };
+  scrawl(views[1], 120, 0);
+  await r.clock.advance(1500);
+  const before = pageOf(r, seat);
+  assert.ok(before.values.length >= 2, `${before.values.length} keys`);
+  views[1].destroy();
+  const again = createTelephoneView({ engine: r.engines[1], toast: (t) => toasts.push(t), win: clockWin(r), cues: { play() {}, burst() {}, float() {} } });
+  r.engines[1].on('change', (s) => again.update(s));
+  again.update(r.engines[1].snapshot());
+  assert.deepEqual(canvases.get(mainCanvas(again)).scene, sceneOf(partsOf(before)), 'the page is rebuilt from every key');
+  scrawl(again, 60, 7);
+  await r.clock.advance(1500);
+  const after = pageOf(r, seat);
+  assert.equal(after.s.length, 180, 'every old and new line is on the page');
+  assert.ok(after.bytes <= st(r).b);
+  assert.deepEqual(canvases.get(mainCanvas(again)).scene, sceneOf(partsOf(after)));
+  assert.deepEqual(toasts, []);
+  for (const v of [views[0], views[2], again]) v.destroy();
+});
+
+test('if a late clear wipes part of a page, the drawer quietly puts it back', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await start(3, { draw: 90 });
+  const { views, toasts } = await telephoneTable(r, r.engines);
+  r.engines.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Phrase ${i}` }));
+  await r.clock.advance(600);
+  const seat = st(r).seats.indexOf(r.engines[1].snapshot().meSlot);
+  const cv = mainCanvas(views[1]);
+  for (let i = 0; i < 150; i += 1) {
+    const x = 10 + ((i * 29) % 420);
+    const y = 10 + ((i * 43) % 300);
+    cv.dispatchEvent(pen('pointerdown', x, y, 1));
+    for (let k = 1; k <= 25; k += 1) cv.dispatchEvent(pen('pointermove', x + ((k * 19) % 60), y + ((k * 31) % 50), 1));
+    cv.dispatchEvent(pen('pointerup', x, y, 1));
+  }
+  await r.clock.advance(1500);
+  const before = pageOf(r, seat);
+  assert.ok(before.values.length >= 2);
+  byKey(views[1].el, 'draw-done').click();
+  await r.clock.advance(300);
+  r.hub.set(r.engines[0].snapshot().me, inkKey(seat, 1), null);
+  await r.clock.advance(1500);
+  assert.deepEqual(pageOf(r, seat).s, before.s, 'the missing part was written again');
+  assert.deepEqual(toasts, []);
+  for (const v of views) v.destroy();
 });

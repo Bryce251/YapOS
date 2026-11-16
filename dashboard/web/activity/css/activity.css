@@ -379,6 +379,25 @@ img {
   opacity: 0.7;
 }
 
+.btn-screen {
+  min-width: var(--control-sm);
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+}
+
+.btn-screen-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.btn-screen.is-on {
+  color: var(--accent-text);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
 .host-short,
 .top .btn-icon {
   display: none;

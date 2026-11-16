@@ -1,0 +1,613 @@
+import { h, nextId, replace } from '../dom.js';
+import { icon } from '../icons.js';
+import { avatar, badge, button, card, confirmDialog, emptyState, linkButton, loadingRegion, pageHeader, setBusy, skeleton, toast } from '../ui.js';
+import { ApiError } from '../api.js';
+import { formatNumber, relativeTime } from '../format.js';
+import { ownerPath, profilePath } from '../router.js';
+import { state } from '../state.js';
+import { mountAsync } from './common.js';
+
+export const OWNER_USERS_PATH = '/api/owner/users';
+export const OWNER_ACTIONS_PATH = '/api/owner/actions';
+export const POLL_MS = 3000;
+export const SEARCH_DELAY_MS = 250;
+export const QUICK_AMOUNTS = [100, 1000, 10000];
+export const LOG_LIMIT = 30;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const OPEN = new Set(['queued', 'sent']);
+const REMOVALS = new Set(['shards.remove', 'xp.remove', 'achievement.revoke', 'badge.revoke', 'giver.revoke', 'quests.reset']);
+const GIFTS = new Set(['shards.add', 'xp.add', 'achievement.grant', 'badge.grant', 'giver.grant']);
+
+export const STATUS_TEXT = {
+  queued: { label: 'Waiting for YapOS', tone: 'neutral', icon: 'clock' },
+  sent: { label: 'YapOS is on it', tone: 'caution', icon: 'refresh' },
+  done: { label: 'Done', tone: 'success', icon: 'check' },
+  failed: { label: 'Failed', tone: 'danger', icon: 'alert' },
+};
+
+const str = (v) => (typeof v === 'string' && v ? v : '');
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+export function readUser(u) {
+  if (!u || typeof u !== 'object' || typeof u.id !== 'string') return null;
+  return {
+    id: u.id,
+    username: str(u.username),
+    name: str(u.name),
+    avatar: str(u.avatar),
+    level: num(u.level),
+    shards: num(u.shards),
+    xp: num(u.xp),
+    seen: num(u.seen),
+    badges: Array.isArray(u.badges) ? u.badges.filter((b) => typeof b === 'string') : [],
+    earnedBadges: Array.isArray(u.earnedBadges) ? u.earnedBadges.filter((b) => typeof b === 'string') : [],
+    achievements: Array.isArray(u.achievements) ? u.achievements.filter((a) => typeof a === 'string') : [],
+    clan: u.clan && typeof u.clan === 'object' && typeof u.clan.name === 'string' ? { name: u.clan.name, tag: str(u.clan.tag) } : null,
+    party: { games: num(u.party?.games) || 0, wins: num(u.party?.wins) || 0 },
+    known: u.known !== false,
+  };
+}
+
+export function readUsers(data) {
+  return Array.isArray(data?.users) ? data.users.map(readUser).filter(Boolean) : [];
+}
+
+export function readAction(a) {
+  if (!a || typeof a !== 'object' || typeof a.id !== 'string' || typeof a.kind !== 'string') return null;
+  return {
+    id: a.id,
+    user: str(a.user),
+    kind: a.kind,
+    value: a.value ?? null,
+    ref: str(a.ref),
+    note: str(a.note),
+    notify: a.notify === true,
+    created: num(a.created) || 0,
+    status: STATUS_TEXT[a.status] ? a.status : 'queued',
+    result: str(a.result),
+    who: a.who && typeof a.who === 'object' ? { username: str(a.who.username), name: str(a.who.name) } : null,
+  };
+}
+
+export function readActions(list) {
+  return Array.isArray(list) ? list.map(readAction).filter(Boolean) : [];
+}
+
+function readEntry(e) {
+  if (!e || typeof e !== 'object' || typeof e.id !== 'string') return null;
+  return { id: e.id, label: str(e.label) || e.id, emoji: str(e.emoji), reward: num(e.reward) || 0, source: str(e.source) };
+}
+
+export function readCatalog(c) {
+  return {
+    achievements: Array.isArray(c?.achievements) ? c.achievements.map(readEntry).filter(Boolean) : [],
+    badges: Array.isArray(c?.badges) ? c.badges.map(readEntry).filter(Boolean) : [],
+  };
+}
+
+export function readDetail(data) {
+  return {
+    user: readUser(data?.user),
+    actions: readActions(data?.actions),
+    catalog: readCatalog(data?.catalog),
+  };
+}
+
+export const hasOpen = (actions) => actions.some((a) => OPEN.has(a.status));
+
+function entryName(list, id) {
+  const e = list.find((x) => x.id === id);
+  return e ? `${e.emoji ? `${e.emoji} ` : ''}${e.label}` : id;
+}
+
+export function describeAction(a, catalog = { achievements: [], badges: [] }) {
+  const n = typeof a.value === 'number' ? formatNumber(a.value) : '';
+  switch (a.kind) {
+    case 'shards.add': return `Give ${n} 💎 Shards`;
+    case 'shards.remove': return `Take ${n} 💎 Shards`;
+    case 'shards.set': return `Set Shards to ${n}`;
+    case 'xp.add': return `Give ${n} XP`;
+    case 'xp.remove': return `Take ${n} XP`;
+    case 'level.set': return `Set level to ${n}`;
+    case 'achievement.grant': return `Give achievement ${entryName(catalog.achievements, a.ref)}`;
+    case 'achievement.revoke': return `Take achievement ${entryName(catalog.achievements, a.ref)}`;
+    case 'badge.grant': return `Give badge ${entryName(catalog.badges, a.ref)}`;
+    case 'badge.revoke': return `Take badge ${entryName(catalog.badges, a.ref)}`;
+    case 'giver.grant': return 'Let them create Shards';
+    case 'giver.revoke': return 'Stop them creating Shards';
+    case 'quests.reset': return "Reset today's quests";
+    case 'streak.set': return `Set daily streak to ${n}`;
+    case 'party.stats.add': {
+      const g = Number(a.value?.games) || 0;
+      const w = Number(a.value?.wins) || 0;
+      return `Add ${formatNumber(g)} Party ${g === 1 ? 'game' : 'games'} and ${formatNumber(w)} ${w === 1 ? 'win' : 'wins'}`;
+    }
+    default: return a.kind;
+  }
+}
+
+export function confirmText(kind, value, user, label = describeAction({ kind, value, ref: '' })) {
+  const name = user?.name || user?.username || 'this person';
+  if (REMOVALS.has(kind)) return { title: `${label.trim()}?`, body: `This takes something away from ${name}. It can't be undone from here, but you can give it back later.` };
+  if (kind === 'shards.set' && user?.shards !== null && user?.shards !== undefined && value < user.shards) {
+    return { title: `Lower ${name}'s Shards?`, body: `They have ${formatNumber(user.shards)} 💎 Shards now. Setting it to ${formatNumber(value)} takes ${formatNumber(user.shards - value)} away.` };
+  }
+  if (kind === 'level.set' && user?.level !== null && user?.level !== undefined && value < user.level) {
+    return { title: `Lower ${name}'s level?`, body: `They are level ${formatNumber(user.level)} now. Setting level ${formatNumber(value)} lowers it.` };
+  }
+  if (kind === 'giver.grant') return { title: `Let ${name} create Shards?`, body: 'They can make new Shards out of nothing, hand them to anyone, and change earn rates, achievement rewards and clan prices, just like you. Only do this for people you fully trust.' };
+  if (kind === 'streak.set' && value === 0) return { title: `Clear ${name}'s daily streak?`, body: 'Their /daily streak goes back to zero.' };
+  return null;
+}
+
+export function parseWhole(text) {
+  const raw = String(text ?? '').trim().replace(/[,_ ]/g, '');
+  if (!raw) return { error: 'Type a number first.' };
+  if (/^[+-]?(inf|infinity|∞)$/i.test(raw)) return { error: 'Use a normal whole number. Infinity is not allowed.' };
+  const short = /^(\d+(?:\.\d+)?)([km])$/i.exec(raw);
+  const n = short ? Number(short[1]) * (short[2].toLowerCase() === 'k' ? 1000 : 1000000) : (/^\d+$/.test(raw) ? Number(raw) : NaN);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return { error: 'Type a whole number, like 500.' };
+  return { value: n };
+}
+
+export function bumpAmount(text, add) {
+  const now = parseWhole(text);
+  return String((now.value || 0) + add);
+}
+
+function quickLabel(n) {
+  return n >= 1000 ? `+${n / 1000}k` : `+${n}`;
+}
+
+function personName(u) {
+  return u.name || u.username || 'Unknown person';
+}
+
+function statusBadge(status) {
+  const s = STATUS_TEXT[status] || STATUS_TEXT.queued;
+  return badge(s.label, s.tone, s.icon);
+}
+
+function ownerOnlyView() {
+  return emptyState({
+    icon: 'eye-off',
+    title: 'Page not found',
+    body: "That address doesn't lead anywhere. Check the link or head back home.",
+    action: linkButton({ label: 'Back to home', href: '/' }),
+  });
+}
+
+function staffLinks() {
+  return h('div', { class: 'owner-links' },
+    linkButton({ label: 'Party reports and bans', href: '/party/reports', icon: 'flag', size: 'sm' }),
+    linkButton({ label: 'Party admins', href: '/party', icon: 'crown', size: 'sm' }));
+}
+
+function userRow(u) {
+  const facts = [];
+  if (u.level !== null) facts.push(`Level ${formatNumber(u.level)}`);
+  if (u.shards !== null) facts.push(`${formatNumber(u.shards)} 💎`);
+  if (u.seen) facts.push(`seen ${relativeTime(u.seen)}`);
+  return h('li', null, h('a', { href: ownerPath(u.id), class: 'owner-result', dataset: { link: '', id: u.id } },
+    avatar({ name: personName(u), url: u.avatar, id: u.id, size: 'md' }),
+    h('span', { class: 'owner-result-main' },
+      h('span', { class: ['owner-result-name', u.name || u.username ? '' : 'muted'], text: u.name || u.username ? personName(u) : 'Not seen yet' }),
+      u.username ? h('span', { class: 'owner-result-sub', text: `@${u.username}` }) : h('code', { class: 'owner-result-sub', text: u.id })),
+    h('span', { class: 'owner-result-facts', text: facts.join(' · ') }),
+    icon('chevron-right', { size: 16 })));
+}
+
+function rowsSkeleton(n = 3) {
+  return loadingRegion('Loading', h('ul', { class: 'owner-results' }, ...Array.from({ length: n }, () => h('li', { class: 'owner-result is-skeleton' },
+    skeleton('skeleton-avatar'),
+    h('span', { class: 'owner-result-main' }, skeleton('skeleton-text skeleton-w-40'), skeleton('skeleton-text skeleton-w-60'))))));
+}
+
+function logRow(a, { catalog, showWho = false } = {}) {
+  const who = showWho ? (a.who?.name || a.who?.username || a.user) : '';
+  return h('li', { class: ['owner-log-row', `is-${a.status}`], dataset: { id: a.id } },
+    h('span', { class: 'owner-log-main' },
+      h('span', { class: 'owner-log-what', text: describeAction(a, catalog) }),
+      h('span', { class: 'owner-log-sub' },
+        showWho ? h('a', { href: ownerPath(a.user), dataset: { link: '' }, text: who }) : null,
+        showWho ? ' · ' : null,
+        relativeTime(a.created),
+        a.notify ? ' · told them' : '',
+        a.note ? ` · “${a.note}”` : ''),
+      a.result ? h('span', { class: ['owner-log-result', a.status === 'failed' ? 'is-danger' : ''], text: a.result }) : null),
+    statusBadge(a.status));
+}
+
+function schedule(signal, fn, ms) {
+  let timer = null;
+  const stop = () => clearTimeout(timer);
+  signal?.addEventListener?.('abort', stop, { once: true });
+  return {
+    later() {
+      clearTimeout(timer);
+      if (signal?.aborted) return;
+      timer = setTimeout(fn, ms);
+    },
+    stop,
+  };
+}
+
+export function renderOwner(ctx) {
+  const { api, main } = ctx;
+  ctx.setChrome({ variant: 'plain', section: 'owner', crumbs: [{ label: 'Servers', href: '/servers' }, { label: 'Owner panel' }] });
+  if (!state.partyOwner) {
+    main.replaceChildren(h('div', { class: 'page page-narrow' }, ownerOnlyView()));
+    return;
+  }
+  const inputId = nextId('owner-q');
+  const input = h('input', {
+    type: 'search',
+    id: inputId,
+    class: 'input',
+    placeholder: 'Name, @username or user id',
+    maxLength: 64,
+    autocomplete: 'off',
+    spellcheck: false,
+  });
+  const results = h('div', { class: 'owner-results-wrap', attrs: { 'aria-live': 'polite' } });
+  const log = h('div', { class: 'owner-log-wrap' });
+  main.replaceChildren(h('div', { class: 'page page-narrow owner-page' },
+    pageHeader({
+      title: 'Owner panel',
+      description: 'Give anyone Shards, XP, levels, achievements, badges and more. Only you can see this page.',
+      actions: staffLinks(),
+    }),
+    card({ title: 'Find someone', icon: 'search' },
+      h('label', { class: 'field-label', htmlFor: inputId, text: 'Search people' }),
+      input,
+      h('p', { class: 'field-help', text: 'Anyone who used YapOS, signed in here or has a profile shows up. Paste a user id to reach someone YapOS has never seen.' }),
+      results),
+    card({ title: 'Recent changes', icon: 'clock' }, log)));
+
+  let token = 0;
+  let typing = null;
+  async function search() {
+    const mine = ++token;
+    const q = input.value.trim();
+    if (!results.firstChild) replace(results, rowsSkeleton());
+    try {
+      const data = await api.get(`${OWNER_USERS_PATH}?q=${encodeURIComponent(q)}`, { signal: ctx.signal });
+      if (mine !== token || ctx.signal?.aborted) return;
+      const users = readUsers(data);
+      if (!users.length) {
+        replace(results, h('p', { class: 'owner-empty muted', text: q ? `Nobody matches “${q}”. Try their user id.` : 'Nobody has used YapOS yet.' }));
+        return;
+      }
+      replace(results, h('ul', { class: 'owner-results' }, ...users.map(userRow)));
+    } catch (err) {
+      if (mine !== token || ctx.signal?.aborted) return;
+      replace(results, h('p', { class: 'field-error', attrs: { role: 'alert' }, text: err instanceof ApiError ? err.message : 'Search did not work. Try again.' }));
+    }
+  }
+  input.addEventListener('input', () => {
+    clearTimeout(typing);
+    typing = setTimeout(search, SEARCH_DELAY_MS);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const q = input.value.trim();
+    if (UUID_RE.test(q)) ctx.navigate(ownerPath(q.toLowerCase()));
+  });
+  ctx.signal?.addEventListener?.('abort', () => clearTimeout(typing), { once: true });
+  search();
+
+  const poller = schedule(ctx.signal, () => loadLog(), POLL_MS);
+  async function loadLog() {
+    try {
+      const data = await api.get(`${OWNER_ACTIONS_PATH}?limit=${LOG_LIMIT}`, { signal: ctx.signal });
+      if (ctx.signal?.aborted) return;
+      const actions = readActions(data?.actions);
+      replace(log, actions.length
+        ? h('ul', { class: 'owner-log' }, ...actions.map((a) => logRow(a, { showWho: true })))
+        : h('p', { class: 'owner-empty muted', text: 'Nothing yet. Pick someone above to give them something.' }));
+      if (hasOpen(actions)) poller.later();
+    } catch (err) {
+      if (ctx.signal?.aborted) return;
+      replace(log, h('p', { class: 'field-error', attrs: { role: 'alert' }, text: err instanceof ApiError ? err.message : 'Could not load recent changes.' }));
+    }
+  }
+  replace(log, rowsSkeleton(2));
+  loadLog();
+}
+
+function amountField({ label, id, placeholder = '0', chips = false }) {
+  const input = h('input', { type: 'text', id, class: 'input owner-amount', inputMode: 'numeric', placeholder, maxLength: 20, autocomplete: 'off' });
+  const wrap = h('div', { class: 'owner-field' },
+    h('label', { class: 'field-label', htmlFor: id, text: label }),
+    input,
+    chips ? h('div', { class: 'owner-chips' }, ...QUICK_AMOUNTS.map((n) => h('button', {
+      type: 'button',
+      class: 'owner-chip',
+      text: quickLabel(n),
+      attrs: { 'aria-label': `Add ${formatNumber(n)} to ${label}` },
+      on: { click: () => { input.value = bumpAmount(input.value, n); input.focus(); } },
+    }))) : null);
+  return { wrap, input };
+}
+
+function stat(label, value) {
+  return h('div', { class: 'owner-stat' }, h('span', { class: 'owner-stat-label', text: label }), h('span', { class: 'owner-stat-value', text: value }));
+}
+
+function pills(ids, list, empty) {
+  if (!ids.length) return h('p', { class: 'owner-empty muted', text: empty });
+  return h('ul', { class: 'owner-pills' }, ...ids.map((id) => {
+    const e = list.find((x) => x.id === id);
+    return h('li', { class: 'owner-pill', title: id }, e?.emoji ? h('span', { attrs: { 'aria-hidden': 'true' }, text: e.emoji }) : null, h('span', { text: e ? e.label : id }));
+  }));
+}
+
+export function renderOwnerUser(ctx) {
+  const { api, main } = ctx;
+  const id = String(ctx.params?.id || '').toLowerCase();
+  const crumbs = (name) => [{ label: 'Servers', href: '/servers' }, { label: 'Owner panel', href: '/owner' }, { label: name }];
+  ctx.setChrome({ variant: 'plain', section: 'owner', crumbs: crumbs('Person') });
+  if (!state.partyOwner) {
+    main.replaceChildren(h('div', { class: 'page page-narrow' }, ownerOnlyView()));
+    return;
+  }
+  const body = h('div', { class: 'owner-user-wrap' });
+  main.replaceChildren(h('div', { class: 'page owner-page owner-user-page' }, body));
+  let detail = null;
+  let pageParts = null;
+  const poller = schedule(ctx.signal, () => refresh(), POLL_MS);
+
+  async function refresh() {
+    try {
+      const data = await api.get(`${OWNER_USERS_PATH}/${encodeURIComponent(id)}`, { signal: ctx.signal });
+      if (ctx.signal?.aborted) return;
+      const before = detail ? new Map(detail.actions.map((a) => [a.id, a.status])) : new Map();
+      detail = readDetail(data);
+      for (const a of detail.actions) {
+        const was = before.get(a.id);
+        if (was && OPEN.has(was) && a.status === 'done') toast(`${describeAction(a, detail.catalog)}: done.`);
+        if (was && OPEN.has(was) && a.status === 'failed') toast(a.result || 'YapOS could not do that.', { tone: 'danger', title: describeAction(a, detail.catalog) });
+      }
+      pageParts?.update(detail);
+      if (hasOpen(detail.actions)) poller.later();
+    } catch {
+      if (!ctx.signal?.aborted) poller.later();
+    }
+  }
+
+  mountAsync(body, {
+    signal: ctx.signal,
+    skeleton: () => rowsSkeleton(3),
+    load: async ({ signal }) => api.get(`${OWNER_USERS_PATH}/${encodeURIComponent(id)}`, { signal }),
+    render: (data) => {
+      detail = readDetail(data);
+      if (!detail.user) {
+        replace(body, emptyState({ icon: 'user', title: 'Nobody here', body: "That person couldn't be loaded.", action: linkButton({ label: 'Back to the owner panel', href: '/owner', icon: 'chevron-left' }) }));
+        return;
+      }
+      const name = personName(detail.user);
+      ctx.setTitle(`${name} · Owner panel`);
+      ctx.setChrome({ variant: 'plain', section: 'owner', crumbs: crumbs(name) });
+      pageParts = buildUserPage(ctx, body, detail, { send, getDetail: () => detail });
+      if (hasOpen(detail.actions)) poller.later();
+    },
+  });
+
+  async function send(kind, { value, ref, btn, notify } = {}) {
+    const ask = confirmText(kind, value, detail?.user, describeAction({ kind, value, ref }, detail?.catalog));
+    if (ask) {
+      const ok = await confirmDialog({ title: ask.title, body: ask.body, confirmLabel: 'Yes, do it' });
+      if (!ok || ctx.signal?.aborted) return false;
+    }
+    const payload = { user: id, kind };
+    if (value !== undefined) payload.value = value;
+    if (ref) payload.id = ref;
+    if (GIFTS.has(kind) && notify) payload.notify = true;
+    const note = pageParts?.note();
+    if (note) payload.note = note;
+    if (btn?.isConnected) setBusy(btn, true, 'Sending');
+    try {
+      const data = await api.post(OWNER_ACTIONS_PATH, payload, { signal: ctx.signal });
+      if (ctx.signal?.aborted) return false;
+      const action = readAction(data?.action);
+      if (action) {
+        detail.actions = [action, ...detail.actions.filter((a) => a.id !== action.id)];
+        pageParts?.update(detail);
+        toast(action.status === 'done' ? `${describeAction(action, detail.catalog)}: done.` : `${describeAction(action, detail.catalog)}: sent to YapOS.`);
+      }
+      poller.later();
+      return true;
+    } catch (err) {
+      if (ctx.signal?.aborted) return false;
+      toast(err instanceof ApiError ? err.message : 'That did not work. Try again.', { tone: 'danger', title: "Couldn't do that" });
+      return false;
+    } finally {
+      if (btn?.isConnected) setBusy(btn, false);
+    }
+  }
+}
+
+function buildUserPage(ctx, body, first, { send, getDetail }) {
+  const u0 = first.user;
+  const tellId = nextId('owner-tell');
+  const tell = h('input', { type: 'checkbox', id: tellId, class: 'owner-check' });
+  const noteId = nextId('owner-note');
+  const note = h('input', { type: 'text', id: noteId, class: 'input', maxLength: 200, placeholder: 'Why? Only you see this', autocomplete: 'off' });
+  const notifyOn = () => tell.checked;
+
+  const head = h('div', { class: 'owner-card-head' });
+  const stats = h('div', { class: 'owner-stats' });
+  const badgesBox = h('div', { class: 'owner-section' });
+  const achBox = h('div', { class: 'owner-section' });
+
+  const shardsField = amountField({ label: 'Shards', id: nextId('owner-shards'), chips: true });
+  const giveShards = button({ label: 'Give', icon: 'gift', variant: 'primary' });
+  const takeShards = button({ label: 'Take', icon: 'x' });
+  const setShards = button({ label: 'Set to this', icon: 'check' });
+  const xpField = amountField({ label: 'XP', id: nextId('owner-xp'), chips: true });
+  const giveXp = button({ label: 'Give XP', icon: 'gift', variant: 'primary' });
+  const takeXp = button({ label: 'Take XP', icon: 'x' });
+  const levelField = amountField({ label: 'Level', id: nextId('owner-level') });
+  const setLevel = button({ label: 'Set level', icon: 'check' });
+  const streakField = amountField({ label: 'Daily streak (days)', id: nextId('owner-streak') });
+  const setStreak = button({ label: 'Set streak', icon: 'check' });
+  const resetQuests = button({ label: "Reset today's quests", icon: 'refresh' });
+  const allowGive = button({ label: 'Let them create Shards', icon: 'check' });
+  const stopGive = button({ label: 'Stop them creating Shards', icon: 'ban' });
+  const gamesField = amountField({ label: 'Games', id: nextId('owner-games') });
+  const winsField = amountField({ label: 'Wins', id: nextId('owner-wins') });
+  const addParty = button({ label: 'Add to Party stats', icon: 'plus' });
+
+  const achSearchId = nextId('owner-ach-q');
+  const achSearch = h('input', { type: 'search', id: achSearchId, class: 'input', placeholder: 'Search achievements', autocomplete: 'off' });
+  const achList = h('div', { class: 'owner-checklist-wrap' });
+  const badgeSearchId = nextId('owner-badge-q');
+  const badgeSearch = h('input', { type: 'search', id: badgeSearchId, class: 'input', placeholder: 'Search badges', autocomplete: 'off' });
+  const badgeList = h('div', { class: 'owner-checklist-wrap' });
+  const userLog = h('div', { class: 'owner-log-wrap' });
+
+  function amountOrSay(field) {
+    const r = parseWhole(field.input.value);
+    if (r.error) {
+      toast(r.error, { tone: 'danger', title: 'Check the number' });
+      field.input.focus();
+      return null;
+    }
+    return r.value;
+  }
+
+  const act = (kind, field, btn) => async () => {
+    const value = amountOrSay(field);
+    if (value === null) return;
+    const ok = await send(kind, { value, btn, notify: notifyOn() });
+    if (ok) field.input.value = '';
+  };
+  giveShards.addEventListener('click', act('shards.add', shardsField, giveShards));
+  takeShards.addEventListener('click', act('shards.remove', shardsField, takeShards));
+  setShards.addEventListener('click', act('shards.set', shardsField, setShards));
+  giveXp.addEventListener('click', act('xp.add', xpField, giveXp));
+  takeXp.addEventListener('click', act('xp.remove', xpField, takeXp));
+  setLevel.addEventListener('click', act('level.set', levelField, setLevel));
+  setStreak.addEventListener('click', act('streak.set', streakField, setStreak));
+  resetQuests.addEventListener('click', () => send('quests.reset', { btn: resetQuests }));
+  allowGive.addEventListener('click', () => send('giver.grant', { btn: allowGive, notify: notifyOn() }));
+  stopGive.addEventListener('click', () => send('giver.revoke', { btn: stopGive }));
+  addParty.addEventListener('click', async () => {
+    const g = gamesField.input.value.trim() ? amountOrSay(gamesField) : 0;
+    if (g === null) return;
+    const w = winsField.input.value.trim() ? amountOrSay(winsField) : 0;
+    if (w === null) return;
+    if (!g && !w) return toast('Add at least one game or win.', { tone: 'danger', title: 'Check the numbers' });
+    const ok = await send('party.stats.add', { value: { games: g, wins: w }, btn: addParty });
+    if (ok) {
+      gamesField.input.value = '';
+      winsField.input.value = '';
+    }
+  });
+
+  function checklist(wrap, list, owned, { grant, revoke, earned = new Set(), filter = '', what, pending }) {
+    const q = filter.trim().toLowerCase();
+    const shown = list.filter((e) => !q || e.label.toLowerCase().includes(q) || e.id.includes(q));
+    if (!list.length) {
+      replace(wrap, h('p', { class: 'owner-empty muted', text: what === 'achievement' ? "YapOS hasn't sent its list of achievements yet. Start the bot and reload this page in a minute." : 'No badges to give yet.' }));
+      return;
+    }
+    if (!shown.length) {
+      replace(wrap, h('p', { class: 'owner-empty muted', text: `Nothing matches “${filter.trim()}”.` }));
+      return;
+    }
+    replace(wrap, h('ul', { class: 'owner-checklist' }, ...shown.map((e) => {
+      const has = owned.has(e.id);
+      const auto = earned.has(e.id);
+      const busy = pending.has(e.id);
+      const btn = has
+        ? button({ label: 'Take', icon: 'x', size: 'sm', disabled: auto || busy, ariaLabel: `Take ${e.label}` })
+        : button({ label: 'Give', icon: 'gift', size: 'sm', variant: 'primary', disabled: busy, ariaLabel: `Give ${e.label}` });
+      btn.addEventListener('click', () => send(has ? revoke : grant, { ref: e.id, btn, notify: !has && notifyOn() }));
+      return h('li', { class: ['owner-check-row', has ? 'is-owned' : ''] },
+        h('span', { class: 'owner-check-mark', attrs: { 'aria-hidden': 'true' } }, has ? icon('check', { size: 14 }) : null),
+        h('span', { class: 'owner-check-emoji', attrs: { 'aria-hidden': 'true' }, text: e.emoji || '•' }),
+        h('span', { class: 'owner-check-main' },
+          h('span', { class: 'owner-check-label', text: e.label }),
+          h('span', { class: 'owner-check-sub', text: auto ? 'Earned from Party stats' : busy ? 'Waiting for YapOS' : has ? 'They have this' : (e.reward ? `Normally pays ${formatNumber(e.reward)} 💎, not paid when you give it` : e.id) })),
+        btn);
+    })));
+  }
+
+  function pendingRefs(actions, kinds) {
+    return new Set(actions.filter((a) => OPEN.has(a.status) && kinds.includes(a.kind)).map((a) => a.ref));
+  }
+
+  function update(d) {
+    const u = d.user;
+    const name = personName(u);
+    replace(head,
+      avatar({ name, url: u.avatar, id: u.id, size: 'lg' }),
+      h('div', { class: 'owner-card-who' },
+        h('h1', { class: 'owner-card-name', text: u.name || u.username ? name : 'Someone YapOS has not seen yet' }),
+        u.username ? h('span', { class: 'owner-card-handle', text: `@${u.username}` }) : null,
+        h('code', { class: 'owner-card-id', text: u.id }),
+        u.clan ? h('span', { class: 'owner-card-clan' }, icon('shield', { size: 14 }), h('span', { text: u.clan.tag ? `${u.clan.name} [${u.clan.tag}]` : u.clan.name })) : null),
+      u.username ? linkButton({ label: 'Public profile', href: profilePath(u.username), icon: 'user', size: 'sm' }) : null);
+    replace(stats,
+      stat('Level', u.level === null ? 'Not known' : formatNumber(u.level)),
+      stat('XP', u.xp === null ? 'Not known' : formatNumber(u.xp)),
+      stat('Shards', u.shards === null ? 'Hidden or not known' : `${formatNumber(u.shards)} 💎`),
+      stat('Party games', formatNumber(u.party.games)),
+      stat('Party wins', formatNumber(u.party.wins)));
+    replace(badgesBox, h('h3', { class: 'owner-section-title', text: 'Badges' }), pills(u.badges, d.catalog.badges, 'No badges yet.'));
+    replace(achBox, h('h3', { class: 'owner-section-title', text: 'Achievements' }), pills(u.achievements, d.catalog.achievements, 'No achievements yet.'));
+    checklist(achList, d.catalog.achievements, new Set(u.achievements), { grant: 'achievement.grant', revoke: 'achievement.revoke', filter: achSearch.value, what: 'achievement', pending: pendingRefs(d.actions, ['achievement.grant', 'achievement.revoke']) });
+    checklist(badgeList, d.catalog.badges, new Set(u.badges), { grant: 'badge.grant', revoke: 'badge.revoke', earned: new Set(u.earnedBadges), filter: badgeSearch.value, what: 'badge', pending: pendingRefs(d.actions, ['badge.grant', 'badge.revoke']) });
+    replace(userLog, d.actions.length
+      ? h('ul', { class: 'owner-log' }, ...d.actions.map((a) => logRow(a, { catalog: d.catalog })))
+      : h('p', { class: 'owner-empty muted', text: 'Nothing given or taken yet.' }));
+  }
+
+  achSearch.addEventListener('input', () => update(getDetail()));
+  badgeSearch.addEventListener('input', () => update(getDetail()));
+
+  const row = (...kids) => h('div', { class: 'owner-actions-row' }, ...kids);
+  replace(body,
+    h('section', { class: 'card owner-card' }, h('div', { class: 'card-body' }, head, stats, h('div', { class: 'owner-sections' }, badgesBox, achBox))),
+    h('div', { class: 'owner-tell' },
+      h('label', { class: 'owner-tell-check', htmlFor: tellId }, tell, h('span', { text: 'Tell them' })),
+      h('span', { class: 'owner-tell-help muted', text: 'When you give something, YapOS sends them a short friendly DM. Never for take-aways.' }),
+      h('div', { class: 'owner-field owner-note' }, h('label', { class: 'field-label', htmlFor: noteId, text: 'Note for the log (optional)' }), note)),
+    h('div', { class: 'owner-grid' },
+      card({ title: 'Shards', icon: 'coins' },
+        shardsField.wrap,
+        row(giveShards, takeShards, setShards),
+        h('p', { class: 'field-help', text: 'Gifts count as given by you, not earned, so they never move the season board or quests.' })),
+      card({ title: 'XP and level', icon: 'star' },
+        xpField.wrap,
+        row(giveXp, takeXp),
+        levelField.wrap,
+        row(setLevel),
+        h('p', { class: 'field-help', text: 'Level-up rewards like roles still happen. Season XP does not change.' })),
+      card({ title: 'Shard powers', icon: 'gift' },
+        h('p', { class: 'owner-text', text: 'Lets them create Shards for anyone and change earn rates, like you can. Everyone can already send their own Shards to friends.' }),
+        row(allowGive, stopGive)),
+      card({ title: 'Quests and streak', icon: 'clock' },
+        row(resetQuests),
+        streakField.wrap,
+        row(setStreak)),
+      card({ title: 'Party stats', icon: 'trophy' },
+        h('div', { class: 'owner-pair' }, gamesField.wrap, winsField.wrap),
+        row(addParty),
+        h('p', { class: 'field-help', text: 'Added straight away. Party badges follow these numbers.' }))),
+    h('div', { class: 'owner-grid owner-grid-wide' },
+      card({ title: 'Achievements', icon: 'trophy' },
+        h('label', { class: 'sr-only', htmlFor: achSearchId, text: 'Search achievements' }), achSearch, achList),
+      card({ title: 'Badges', icon: 'sparkles' },
+        h('label', { class: 'sr-only', htmlFor: badgeSearchId, text: 'Search badges' }), badgeSearch, badgeList)),
+    card({ title: 'Changes for this person', icon: 'list', actions: linkButton({ label: 'All changes', href: '/owner', size: 'sm' }) }, userLog),
+    staffLinks());
+  update(first);
+  return {
+    update,
+    note: () => note.value.trim(),
+  };
+}

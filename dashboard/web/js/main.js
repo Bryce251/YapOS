@@ -24,6 +24,7 @@ import { renderProfile } from './pages/profile.js';
 import { renderSeasons } from './pages/seasons.js';
 import { renderStats } from './pages/stats.js';
 import { renderAccount } from './pages/account.js';
+import { renderOwner, renderOwnerUser } from './pages/owner.js';
 import { spotlight } from './spotlight.js';
 
 const root = document.getElementById('app');
@@ -39,6 +40,8 @@ const TITLES = {
   servers: 'Servers',
   party: 'Party admins',
   'party-reports': 'Party reports',
+  owner: 'Owner panel',
+  'owner-user': 'Owner panel',
   packs: 'Word packs',
   'packs-browse': 'Browse word packs',
   account: 'Your account',
@@ -61,6 +64,8 @@ const PAGES = {
   servers: renderServers,
   party: renderParty,
   'party-reports': renderPartyReports,
+  owner: renderOwner,
+  'owner-user': renderOwnerUser,
   packs: renderPacks,
   account: renderAccount,
   stats: renderStats,

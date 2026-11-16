@@ -506,12 +506,9 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
 
   function commit(added) {
     const fit = fitInk(mine.strokes, mine.k, mine.level);
-    if (!fit) {
-      if (added) mine.strokes.pop();
-      toast('The canvas is full. Undo or clear to keep drawing.');
-      engine.broadcast({ t: 'ink', k: mine.k, cut: mine.count });
-      repaint();
-      return;
+    if (fit.thinned) {
+      mine.strokes = fit.strokes;
+      redoStack = [];
     }
     mine.level = fit.level;
     mine.chunks = fit.chunks;

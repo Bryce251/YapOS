@@ -6,6 +6,7 @@ import { postRates, getRates } from './party-shards.js';
 import { MAX_SNAPSHOTS, isSnapshot, cleanSnapshot, snapshotStatements, settingsPoll } from './public-profiles.js';
 import { postSeason } from './seasons.js';
 import { postStats } from './server-stats.js';
+import { ownerPoll, postOwnerResults, postOwnerCatalog } from './owner.js';
 
 const RESULTS_LIMIT = 2 * 1024 * 1024;
 const PROFILE_UPLOAD_LIMIT = 256 * 1024;
@@ -65,10 +66,11 @@ async function poll(env, t) {
   await expireJobs(env.DB, t);
   const jobs = await claimJobs(env.DB, t, 25);
   const wanted = await claimWanted(env.DB, t);
-  const hot = wanted.length > 0 || (await isHot(env.DB, t)) || (await hasWanted(env.DB, t));
+  const owner = await ownerPoll(env.DB, t);
+  const hot = wanted.length > 0 || owner.length > 0 || (await isHot(env.DB, t)) || (await hasWanted(env.DB, t));
   const party = await partyPoll(env.DB);
   const profileSettings = await settingsPoll(env.DB, t);
-  return json({ jobs, hot, wanted, party, profileSettings });
+  return json({ jobs, hot, wanted, party, profileSettings, owner });
 }
 
 async function results(request, env, t) {
@@ -292,6 +294,10 @@ export async function handleBot(request, env, deps, url) {
     if (method === 'POST') return postRates(request, env, t);
     if (method === 'GET') return getRates(env);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  }
+  if (segs.length === 3 && segs[1] === 'owner' && (segs[2] === 'results' || segs[2] === 'catalog')) {
+    if (method !== 'POST') return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+    return segs[2] === 'results' ? postOwnerResults(request, env, t) : postOwnerCatalog(request, env, t);
   }
   if (segs.length === 2 && segs[1] === 'seasons') {
     if (method === 'POST') return postSeason(request, env, t);

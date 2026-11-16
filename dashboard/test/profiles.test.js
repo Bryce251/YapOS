@@ -160,6 +160,28 @@ test('a change made after the bot polled is not lost by an ack', async () => {
   assert.equal((await view(h, 'alice')).status, 200);
 });
 
+test('turning Shards on stays on after the bot picks it up, before its next snapshot', async () => {
+  const h = createHarness();
+  await push(h, [snap({ shards: null })]);
+  const { cookie } = await h.login(ALICE);
+  advance(h, 1000);
+  const set = await (await h.api('POST', '/api/me/profile-visibility', cookie, { showShards: true })).json();
+  assert.equal(set.showShards, true);
+  await h.poll();
+  const ack = await (await h.bot('POST', '/bot/party/ack', { profileIds: [ALICE.id] })).json();
+  assert.equal(ack.profilesAcked, 1);
+  const after = await (await h.api('GET', '/api/me/profile-visibility', cookie)).json();
+  assert.equal(after.showShards, true);
+  assert.equal(after.pending, false);
+  advance(h, 1000);
+  await push(h, [snap({ shards: 750 })]);
+  assert.equal((await (await view(h, 'alice')).json()).profile.shards, 750);
+  assert.equal((await (await h.api('GET', '/api/me/profile-visibility', cookie)).json()).showShards, true);
+  advance(h, 1000);
+  await push(h, [snap({ shards: null })]);
+  assert.equal((await (await h.api('GET', '/api/me/profile-visibility', cookie)).json()).showShards, false, 'a newer choice made in the bot wins');
+});
+
 test('someone with no profile yet gets the defaults', async () => {
   const h = createHarness();
   const { cookie } = await h.login(BOB);
