@@ -342,15 +342,17 @@ export function createSignin({ win, engine = null, toast = () => {}, dev = false
   async function copy() {
     if (!link || !link.code) return;
     const btn = card.querySelector('.signin-copy');
-    let ok = false;
-    try {
-      const clip = win && win.navigator && win.navigator.clipboard;
-      if (clip && typeof clip.writeText === 'function') {
-        await clip.writeText(link.code);
-        ok = true;
+    let ok = legacyCopy();
+    if (!ok) {
+      try {
+        const clip = win && win.navigator && win.navigator.clipboard;
+        if (clip && typeof clip.writeText === 'function') {
+          await clip.writeText(link.code);
+          ok = true;
+        }
+      } catch {
+        ok = false;
       }
-    } catch {
-      ok = false;
     }
     if (ok && btn) {
       btn.classList.add('is-copied');
@@ -364,6 +366,28 @@ export function createSignin({ win, engine = null, toast = () => {}, dev = false
     }
     selectCode();
     setStatus('Press Ctrl+C to copy the code.');
+  }
+
+  function legacyCopy() {
+    if (!doc || typeof doc.execCommand !== 'function' || typeof doc.createElement !== 'function') return false;
+    const box = doc.createElement('textarea');
+    box.value = link.code;
+    box.setAttribute('readonly', '');
+    box.setAttribute('aria-hidden', 'true');
+    box.className = 'signin-copy-box';
+    const host = card || doc.body;
+    const back = doc.activeElement;
+    try {
+      host.appendChild(box);
+      if (typeof box.select === 'function') box.select();
+      if (typeof box.setSelectionRange === 'function') box.setSelectionRange(0, box.value.length);
+      return doc.execCommand('copy') === true;
+    } catch {
+      return false;
+    } finally {
+      box.remove();
+      if (back && typeof back.focus === 'function') back.focus();
+    }
   }
 
   function selectCode() {

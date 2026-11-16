@@ -319,6 +319,24 @@ test('copy uses the clipboard when it is allowed', async () => {
   assert.match(text(s.gate.el), /Copied/);
 });
 
+test('copy still works when the call frame blocks the clipboard API', async () => {
+  const s = setup();
+  s.win.navigator.clipboard = { writeText: async () => { throw new Error('NotAllowedError'); } };
+  const copied = [];
+  s.document.execCommand = (cmd) => {
+    const box = s.gate.el.querySelector('.signin-copy-box');
+    if (cmd === 'copy' && box) copied.push(box.value);
+    return cmd === 'copy' && Boolean(box);
+  };
+  s.gate.update(s.snap);
+  await flush();
+  byKey(s.gate.el, 'signin-copy').click();
+  await flush();
+  assert.deepEqual(copied, ['K7QM-2XPA']);
+  assert.match(text(s.gate.el), /Copied/);
+  assert.equal(s.gate.el.querySelector('.signin-copy-box'), null);
+});
+
 test('if the dashboard cannot be reached, nobody is locked out of playing', async () => {
   const s = setup({ meResult: () => ({ ok: false, status: 0, user: null }) });
   s.gate.update(s.snap);
