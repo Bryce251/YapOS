@@ -11,6 +11,9 @@ export const REPORT_INK_CHARS = 16000;
 export const REPORT_NAME_MAX = 64;
 export const REPORT_WORD_MAX = 80;
 export const REPORT_SENT_MAX = 200;
+export const TEXT_REPORT_GAMES = Object.freeze(['draw', 'hottakes', 'truths', 'telephone', 'chain']);
+export const REPORT_TEXT_MAX = 300;
+export const REPORT_CONTEXT_MAX = 200;
 const INK_RE = /^[A-Za-z0-9_-]{6,4096}$/;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -236,10 +239,14 @@ export function refreshAdmins(list, opts = {}) {
   });
 }
 
-function cleanReportName(raw) {
+function clipReport(raw, max) {
   if (typeof raw !== 'string') return '';
   const text = raw.replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim();
-  return Array.from(text).slice(0, REPORT_NAME_MAX).join('');
+  return Array.from(text).slice(0, max).join('');
+}
+
+function cleanReportName(raw) {
+  return clipReport(raw, REPORT_NAME_MAX);
 }
 
 export function reportInk(list) {
@@ -285,6 +292,45 @@ export async function sendReport(key, input) {
   if (!body || typeof env.fetch !== 'function') return false;
   reported.add(key);
   while (reported.size > REPORT_SENT_MAX) reported.delete(reported.values().next().value);
+  try {
+    const res = await env.fetch(REPORTS_ENDPOINT, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return Boolean(res && res.ok);
+  } catch {
+    return false;
+  }
+}
+
+export function textReportBody(input) {
+  const x = input && typeof input === 'object' ? input : {};
+  if (!TEXT_REPORT_GAMES.includes(x.game)) return null;
+  const a = x.author && typeof x.author === 'object' ? x.author : {};
+  const r = x.reporter && typeof x.reporter === 'object' ? x.reporter : {};
+  const authorId = idOf(a.id);
+  const reporterId = idOf(r.id);
+  if (!validId(authorId) || !validId(reporterId) || authorId === reporterId) return null;
+  const text = clipReport(x.text, REPORT_TEXT_MAX).trim();
+  if (!text) return null;
+  const handle = typeof a.username === 'string' ? cleanReportName(a.username.replace(/^@+/, '')).replace(/\s/g, '') : '';
+  const context = clipReport(x.context, REPORT_CONTEXT_MAX).trim();
+  return {
+    kind: 'text',
+    game: x.game,
+    author: { id: authorId, name: cleanReportName(a.name) || 'Player', username: handle || null },
+    reporter: { id: reporterId, name: cleanReportName(r.name) || 'Player' },
+    text,
+    context: context || null,
+    at: Number.isFinite(x.at) ? Math.round(x.at) : env.now(),
+  };
+}
+
+export async function sendTextReport(input) {
+  const body = textReportBody(input);
+  if (!body || typeof env.fetch !== 'function') return false;
   try {
     const res = await env.fetch(REPORTS_ENDPOINT, {
       method: 'POST',

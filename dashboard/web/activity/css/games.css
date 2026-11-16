@@ -1177,3 +1177,108 @@
   font-size: var(--text-sm);
   text-align: center;
 }
+
+.has-flag {
+  position: relative;
+}
+
+.text-flag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-width: 28px;
+  height: 28px;
+  margin: 0 0 0 auto;
+  padding: 0 var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.text-flag-icon {
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.text-flag-label {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.text-flag-label:empty {
+  display: none;
+}
+
+.text-flag:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  opacity: 1;
+}
+
+.text-flag.is-corner {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  z-index: 1;
+  margin: 0;
+  border-color: var(--border);
+  background: var(--surface-float);
+}
+
+.text-flag.is-reported {
+  padding: 0 var(--space-2);
+  color: var(--danger);
+  cursor: default;
+  opacity: 1;
+}
+
+.text-flag.is-corner.is-reported {
+  border-color: var(--danger-line);
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface-float));
+}
+
+.hottakes-item.has-flag .hottakes-card,
+.truths-row .truths-statement {
+  padding-right: calc(var(--space-4) + 32px);
+}
+
+.chain-word.has-flag {
+  padding-right: calc(var(--space-3) + 28px);
+}
+
+.truths-row {
+  display: grid;
+  min-width: 0;
+}
+
+.telephone-said .text-flag,
+.telephone-prompt .text-flag {
+  margin-left: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .text-flag {
+    opacity: 0;
+  }
+
+  .has-flag:hover .text-flag,
+  .has-flag:focus-within .text-flag,
+  .text-flag.is-reported {
+    opacity: 1;
+  }
+
+  .text-flag:hover:not(:disabled) {
+    color: var(--danger);
+    border-color: var(--danger-line);
+    background: var(--surface-3);
+  }
+}

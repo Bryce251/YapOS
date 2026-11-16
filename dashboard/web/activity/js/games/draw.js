@@ -160,6 +160,14 @@ export function drawingId(st) {
   return `draw.${st.nonce}.${st.n}`;
 }
 
+export function guessRef(st, id) {
+  return `${drawingId(st)}.g${id}`;
+}
+
+export function reportableGuess(text, kind) {
+  return kind === 'guess' && typeof text === 'string' && Boolean(text) && text !== '•••';
+}
+
 export function inkStrings(state, k) {
   const out = [];
   for (let i = 0; i < MAX_CHUNKS; i += 1) {
@@ -368,6 +376,15 @@ const draw = {
     return showsInk(st) ? [{ d: drawingId(st), drawer: st.drawer }] : [];
   },
 
+  texts(api) {
+    const st = api.get(KEY);
+    if (!st || !Array.isArray(st.feed)) return [];
+    const word = wordOf(st);
+    return st.feed
+      .filter((f) => Array.isArray(f) && reportableGuess(f[2], f[3]))
+      .map(([id, slot, text]) => ({ r: guessRef(st, id), author: slot, text, context: word ? `Word to draw: ${word}` : null }));
+  },
+
   drawingOf(snap) {
     const st = snap && snap.state ? snap.state[KEY] : null;
     if (!showsInk(st)) return null;
@@ -468,7 +485,7 @@ const draw = {
       gotMe: Boolean(gotMe),
       myPts: gotMe ? gotMe[1] : 0,
       canGuess: st.phase === 'draw' && !amDrawer && playing && !gotMe,
-      feed: (st.feed || []).map(([id, slot, text, kind]) => ({ id, ...who(slot), text: kind === 'close' && slot !== mine ? '' : text, kind, mine: slot === mine })),
+      feed: (st.feed || []).map(([id, slot, text, kind]) => ({ id, ...who(slot), fid: id, text: kind === 'close' && slot !== mine ? '' : text, kind, mine: slot === mine })),
       gained: mine !== null && st.gained ? st.gained[mine] || 0 : 0,
       drawerGain: st.gained ? st.gained[st.drawer] || 0 : 0,
       note: st.note,

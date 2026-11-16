@@ -1,6 +1,7 @@
-import chain, { checkWord, usedFrom, PROBLEMS, MAX_LETTERS } from '../games/chain.js';
+import chain, { checkWord, usedFrom, PROBLEMS, MAX_LETTERS, wordRef } from '../games/chain.js';
 import { load as loadDictionary } from '../dictionary.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { textFlag } from '../ui/report.js';
 
 export function eventText(m) {
   const e = m.last;
@@ -173,9 +174,10 @@ export function createChainView({ engine, toast, cues }) {
           m.words.map((w) =>
             h(
               'li',
-              { class: ['chain-word', w.latest ? 'is-latest' : null, w.isMe ? 'is-me' : null] },
+              { class: ['chain-word', w.latest ? 'is-latest' : null, w.isMe ? 'is-me' : 'has-flag'] },
               h('span', { class: 'chain-word-text' }, h('strong', { text: w.word.slice(0, 1).toUpperCase() }), w.word.slice(1, -1), h('strong', { class: 'chain-tail', text: w.word.length > 1 ? w.word.slice(-1) : '' })),
               h('span', { class: 'chain-by', text: w.isMe ? 'you' : w.name }),
+              w.isMe ? null : textFlag(engine, wordRef(w.n), { toast, corner: true }),
             ),
           ),
         )

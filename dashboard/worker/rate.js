@@ -11,6 +11,7 @@ export const LIMITS = {
   profileAsks: 200,
   partyAdmins: 60,
   reports: 5,
+  textReports: 10,
   reportsAll: 60,
 };
 

@@ -348,10 +348,171 @@ test('nobody can ban the owner, admins cannot ban admins, and the owner banning 
   assert.equal((await h.api('DELETE', `/api/party/bans/${encodeURIComponent('bad id!')}`, a.cookie)).status, 400);
 });
 
+function textReport(over = {}) {
+  return {
+    kind: 'text',
+    game: 'hottakes',
+    author: { id: uid(11), name: 'Rex', username: '@rexplorer' },
+    reporter: { id: uid(12), name: 'Mila' },
+    text: 'pineapple people are the worst',
+    context: 'What is the worst food opinion?',
+    at: Date.UTC(2026, 10, 12, 11, 59),
+    ...over,
+  };
+}
+
+const textRows = (h) => h.db.raw.prepare('SELECT r.*, x.text, x.context, x.ip_hash AS text_ip FROM party_reports r JOIN party_report_texts x ON x.id = r.id ORDER BY r.created ASC, r.id ASC').all();
+
+test('text reports are stored cleaned up next to the author and reporter', async () => {
+  const h = party();
+  const res = await send(h, textReport({ text: '  pineapple\u0000  people \n are   the worst ', context: `  ${'c'.repeat(250)} ` }));
+  assert.equal(res.status, 201);
+  assert.deepEqual(await res.json(), { ok: true });
+  const [row] = textRows(h);
+  assert.equal(row.game, 'hottakes');
+  assert.equal(row.drawer_id, uid(11));
+  assert.equal(row.drawer_name, 'Rex');
+  assert.equal(row.drawer_username, 'rexplorer');
+  assert.equal(row.reporter_id, uid(12));
+  assert.equal(row.text, 'pineapple people are the worst');
+  assert.equal(row.context.length, 200);
+  assert.equal(row.ink, '[]');
+  assert.equal(row.word, null);
+  assert.equal(row.status, 'open');
+  assert.equal(row.text_ip, row.ip_hash);
+  assert.ok(!JSON.stringify(row).includes('198.51.100.9'));
+  assert.equal((await send(h, textReport({ game: 'chain', text: 'x'.repeat(300), context: null, reporter: { id: uid(13), name: 'Bo' } }), { ip: '192.0.2.50' })).status, 201);
+  assert.equal(textRows(h).find((r) => r.game === 'chain').context, null);
+});
+
+test('every text report field is checked and bad ones get a friendly 400', async () => {
+  const h = party();
+  const cases = [
+    [{ kind: 'video' }, 'bad_kind'],
+    [{ kind: 7 }, 'bad_kind'],
+    [{ game: 'reflex' }, 'bad_game'],
+    [{ game: null }, 'bad_game'],
+    [{ author: null }, 'bad_person'],
+    [{ author: { id: 'no no', name: 'Rex' } }, 'bad_id'],
+    [{ author: { id: uid(11), name: 'Rex', username: 9 } }, 'bad_username'],
+    [{ reporter: { id: uid(11), name: 'Rex' } }, 'own_text'],
+    [{ text: 5 }, 'bad_text'],
+    [{ text: '   \u0000 ' }, 'bad_text'],
+    [{ text: 'x'.repeat(301) }, 'bad_text'],
+    [{ context: 12 }, 'bad_context'],
+    [{ at: 'later' }, 'bad_time'],
+  ];
+  let ip = 0;
+  for (const [over, code] of cases) {
+    ip += 1;
+    const res = await send(h, textReport(over), { ip: `192.0.2.${ip}` });
+    assert.equal(res.status, 400, JSON.stringify(over).slice(0, 80));
+    const data = await res.json();
+    assert.equal(data.error, code, JSON.stringify(over).slice(0, 80));
+    assert.ok(data.message.length > 5);
+  }
+  assert.equal(rows(h).length, 0);
+  assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM party_report_texts').get().n, 0);
+  assert.equal((await send(h, report({ kind: 'drawing' }), { ip: '192.0.2.100' })).status, 201);
+  assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM party_report_texts').get().n, 0);
+});
+
+test('the same reporter flagging the same words by the same author is stored once in 10 minutes', async () => {
+  const h = party();
+  assert.equal((await send(h, textReport())).status, 201);
+  const again = await send(h, textReport({ text: '  pineapple people are the   worst', context: 'other' }));
+  assert.deepEqual([again.status, await again.json()], [200, { ok: true, duplicate: true }]);
+  assert.equal((await send(h, textReport({ text: 'a different answer' }))).status, 201);
+  assert.equal((await send(h, textReport({ reporter: { id: uid(13), name: 'Bo' } }))).status, 201);
+  assert.equal((await send(h, report({ drawer: { id: uid(11), name: 'Rex' }, reporter: { id: uid(12), name: 'Mila' } }))).status, 201);
+  const drawingAgain = await send(h, report({ drawer: { id: uid(11), name: 'Rex' }, reporter: { id: uid(12), name: 'Mila' } }));
+  assert.deepEqual(await drawingAgain.json(), { ok: true, duplicate: true });
+  assert.equal(textRows(h).length, 3);
+  assert.equal(rows(h).length, 4);
+  advance(h, 10 * MIN + 1);
+  assert.equal((await send(h, textReport())).status, 201);
+});
+
+test('text reports from the call host have their own budget per address', async () => {
+  const h = party();
+  const from = (i) => textReport({ reporter: { id: uid(700 + i), name: 'R' } });
+  for (let i = 0; i < 5; i++) assert.equal((await send(h, report({ reporter: { id: uid(800 + i), name: 'R' } }))).status, 201);
+  for (let i = 0; i < 10; i++) assert.equal((await send(h, from(i))).status, 201);
+  const fast = await send(h, from(10));
+  assert.equal(fast.status, 429);
+  assert.match((await fast.json()).message, /a lot of reports/);
+  for (let m = 0; m < 2; m++) {
+    advance(h, MIN);
+    for (let i = 0; i < 10; i++) assert.equal((await send(h, from(20 + m * 10 + i))).status, 201);
+  }
+  advance(h, MIN);
+  const slow = await send(h, from(50));
+  assert.equal(slow.status, 429);
+  assert.ok(Number(slow.headers.get('Retry-After')) > 60);
+  assert.equal((await send(h, report({ reporter: { id: uid(900), name: 'R' } }))).status, 201);
+});
+
+test('staff can filter drawings and text, and text reports come back with the words and context', async () => {
+  const h = party();
+  await send(h, report());
+  advance(h, 1000);
+  await send(h, textReport());
+  const { cookie } = await h.login(OWNER);
+  const all = await (await h.api('GET', '/api/party/reports', cookie)).json();
+  assert.equal(all.kind, 'all');
+  assert.deepEqual(all.reports.map((r) => r.kind), ['text', 'drawing']);
+  const [t, d] = all.reports;
+  assert.deepEqual([t.game, t.text, t.context, t.word, t.ink], ['hottakes', 'pineapple people are the worst', 'What is the worst food opinion?', null, []]);
+  assert.deepEqual([t.drawer.id, t.drawer.name, t.drawer.username], [uid(11), 'Rex', 'rexplorer']);
+  assert.deepEqual([t.reporter.id, t.reporter.name], [uid(12), 'Mila']);
+  assert.deepEqual([d.text, d.context, d.word], [null, null, 'cactus']);
+  const texts = await (await h.api('GET', '/api/party/reports?kind=text', cookie)).json();
+  assert.deepEqual(texts.reports.map((r) => r.kind), ['text']);
+  const drawings = await (await h.api('GET', '/api/party/reports?kind=drawing&status=all', cookie)).json();
+  assert.deepEqual(drawings.reports.map((r) => r.kind), ['drawing']);
+  assert.equal(drawings.open, 2);
+  assert.equal((await h.api('GET', '/api/party/reports?kind=video', cookie)).status, 400);
+  const ban = await (await h.api('POST', '/api/party/bans', cookie, { id: t.drawer.id, reason: 'Reported text in Hot Takes', name: 'Rex' })).json();
+  assert.equal(ban.banned, true);
+  assert.equal((await (await h.api('GET', '/api/party/reports?kind=text', cookie)).json()).reports[0].drawer.banned, true);
+  assert.deepEqual(await (await h.api('POST', `/api/party/reports/${t.id}/dismiss`, cookie, {})).json(), { ok: true, dismissed: true });
+  assert.equal((await (await h.api('GET', '/api/party/reports?kind=text', cookie)).json()).reports.length, 0);
+  assert.deepEqual(await (await h.api('DELETE', `/api/party/reports/${t.id}`, cookie)).json(), { ok: true, deleted: true });
+  assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM party_report_texts').get().n, 0);
+});
+
+test('trimming and cleanup never leave the words of a removed report behind', async () => {
+  const h = party();
+  await send(h, textReport());
+  h.db.raw.prepare("UPDATE party_reports SET status = 'dismissed', dismissed_at = ?").run(h.clock.t - 31 * DAY);
+  h.db.raw.prepare("INSERT INTO party_report_texts (id, text, context, ip_hash, created) VALUES ('orphan01', 'left over', NULL, 'x', 1)").run();
+  await h.worker.scheduled({}, h.env, {});
+  assert.equal(rows(h).length, 0);
+  assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM party_report_texts').get().n, 0);
+  for (let i = 1; i <= MAX_REPORTS; i++) seed(h, i, { status: i === 1 ? 'dismissed' : 'open', dismissedAt: i === 1 ? h.clock.t : null });
+  h.db.raw.prepare("INSERT INTO party_report_texts (id, text, context, ip_hash, created) VALUES ('seed0001', 'old words', NULL, 'x', 1)").run();
+  assert.equal((await send(h, textReport())).status, 201);
+  assert.equal(rows(h).length, MAX_REPORTS);
+  assert.deepEqual(h.db.raw.prepare('SELECT text FROM party_report_texts').all().map((r) => r.text), ['pineapple people are the worst']);
+});
+
+test('the local dev server seeds a sample text report next to the sample drawing', async () => {
+  const h = party();
+  const { seedPartyReport, DEV_TEXT_REPORT_ID } = await import('../dev.mjs');
+  seedPartyReport(h.db, h.clock.t);
+  seedPartyReport(h.db, h.clock.t);
+  const { cookie } = await h.login(OWNER);
+  const data = await (await h.api('GET', '/api/party/reports?kind=text', cookie)).json();
+  assert.equal(data.reports.length, 1);
+  const [r] = data.reports;
+  assert.deepEqual([r.id, r.kind, r.game, r.drawer.name], [DEV_TEXT_REPORT_ID, 'text', 'hottakes', 'Rex']);
+  assert.ok(r.text.length > 10 && r.context);
+});
+
 const { document } = installDom({ url: 'https://dash.example.test/party/reports' });
 document.documentElement = document.createElement('html');
 const { state } = await import('../web/js/state.js');
-const { renderPartyReports, readReports, readBans, decodeInk, gameName, paintReport, REPORTS_PATH, BANS_PATH } = await import('../web/js/pages/party-reports.js');
+const { renderPartyReports, readReports, readBans, decodeInk, gameName, banReason, paintReport, REPORTS_PATH, BANS_PATH } = await import('../web/js/pages/party-reports.js');
 const { matchRoute } = await import('../web/js/router.js');
 const { createShell } = await import('../web/js/shell.js');
 const { ApiError } = await import('../web/js/api.js');
@@ -600,4 +761,81 @@ test('the Party reports link shows for the owner and party admins only', () => {
   assert.equal(shell.root.querySelectorAll('a').filter((x) => x.href === '/party').length, 0);
   shell.update({ variant: 'plain', user: ME, partyOwner: true, partyAdmin: true });
   assert.ok(links().length >= 1);
+});
+
+function textItem(over = {}) {
+  return item({ id: 'txt1', kind: 'text', game: 'hottakes', word: null, ink: [], text: 'pineapple people are the worst', context: 'What is the worst food opinion?', ...over });
+}
+
+test('text reports show the quoted words, the context and who wrote them, with no drawing', async () => {
+  state.user = ME;
+  state.partyOwner = true;
+  state.partyAdmin = true;
+  const a = api({ reports: [textItem(), item()], open: 2 });
+  const ctx = makeCtx(a);
+  renderPartyReports(ctx);
+  await flush();
+  const [one, two] = ctx.main.querySelectorAll('.report-item');
+  assert.equal(one.querySelectorAll('canvas').length, 0);
+  assert.equal(one.querySelector('.report-quote-text').textContent, 'pineapple people are the worst');
+  assert.match(one.querySelector('.report-quote-context').textContent, /What is the worst food opinion\?/);
+  assert.match(one.textContent, /Hot Takes/);
+  assert.match(one.textContent, /Wrote it/);
+  assert.match(one.textContent, /@rexplorer/);
+  assert.match(one.textContent, new RegExp(uid(1)));
+  assert.match(one.textContent, /Mila/);
+  assert.doesNotMatch(one.textContent, /No drawing was sent/);
+  assert.equal(buttons(one, /Ban from Party/).length, 1);
+  assert.equal(buttons(one, /Dismiss/).length, 1);
+  assert.equal(buttons(one, /Delete/).length, 1);
+  assert.match(two.textContent, /Drew it/);
+  assert.equal(two.querySelectorAll('canvas').length, 1);
+  assert.equal(readReports({ reports: [textItem({ ink: [STROKE] })] }).reports[0].ink.length, 0);
+  assert.equal(readReports({ reports: [item({ text: 'sneaky' })] }).reports[0].text, '');
+  assert.equal(gameName('truths', 'text'), 'Two Truths and a Lie');
+  assert.equal(gameName('x', 'text'), 'YapOS Party');
+  ctx.abort();
+});
+
+test('banning from a text report sends a short quote as the reason and delete talks about the words', async () => {
+  state.partyOwner = true;
+  const long = `${'word '.repeat(40)}end`;
+  const a = api({ reports: [textItem({ text: long })], open: 1 });
+  const ctx = makeCtx(a);
+  renderPartyReports(ctx);
+  await flush();
+  buttons(ctx.main, /Ban from Party/)[0].click();
+  await confirmWith('Ban');
+  const post = a.calls.find((c) => c[0] === 'POST');
+  assert.equal(post[1], BANS_PATH);
+  assert.match(post[2].reason, /^Reported text in Hot Takes: "word word/);
+  assert.ok(post[2].reason.length <= 200);
+  assert.ok(post[2].reason.endsWith('…"'));
+  assert.equal(banReason({ kind: 'text', game: 'chain', text: 'hi' }), 'Reported text in Word Chain: "hi"');
+  assert.equal(banReason({ kind: 'drawing', game: 'draw', word: 'cactus' }), 'Reported drawing in Draw & Guess (word: cactus)');
+  buttons(ctx.main, /Delete/)[0].click();
+  assert.match(await confirmWith('Delete'), /reported words are gone for good/);
+  ctx.abort();
+});
+
+test('the Drawings and Text filters reload the list with the right kind', async () => {
+  state.partyOwner = true;
+  const a = api({ reports: [], open: 0 });
+  const ctx = makeCtx(a);
+  renderPartyReports(ctx);
+  await flush();
+  const group = ctx.main.querySelector('[aria-label="Show what was reported"]');
+  assert.ok(group);
+  assert.equal(buttons(group, /^All$/)[0].getAttribute('aria-pressed'), 'true');
+  buttons(ctx.main, /^Text$/)[0].click();
+  await flush();
+  assert.ok(a.calls.some((c) => c[1] === `${REPORTS_PATH}?status=open&kind=text`));
+  assert.match(ctx.main.textContent, /Flagged guesses, answers and other words show up here/);
+  buttons(ctx.main, /^Drawings$/)[0].click();
+  await flush();
+  assert.ok(a.calls.some((c) => c[1] === `${REPORTS_PATH}?status=open&kind=drawing`));
+  buttons(ctx.main.querySelector('[aria-label="Show reports"]'), /^All$/)[0].click();
+  await flush();
+  assert.ok(a.calls.some((c) => c[1] === `${REPORTS_PATH}?status=all&kind=drawing`));
+  ctx.abort();
 });

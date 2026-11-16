@@ -1271,3 +1271,37 @@ test('a touch whose lift never reached the canvas does not freeze the next touch
   assert.deepEqual(toasts, []);
   for (const x of views) x.destroy();
 });
+
+test('redo brings back an undone line, refills the meter and is cleared by a new line', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await start(3, { draw: 50 });
+  const { views } = await telephoneTable(r, r.engines);
+  r.engines.forEach((e, i) => e.act({ type: 'text', step: 0, text: `Phrase ${i}` }));
+  await r.clock.advance(600);
+  const v = views[0];
+  const cv = mainCanvas(v);
+  const line = (x) => {
+    cv.dispatchEvent(pen('pointerdown', x, 40, 1));
+    for (let k = 1; k <= 80; k += 1) cv.dispatchEvent(pen('pointermove', x + (k % 2) * 60, 40 + k * 6, 1));
+    cv.dispatchEvent(pen('pointerup', x, 520, 1));
+  };
+  line(20);
+  line(200);
+  await r.clock.advance(900);
+  const meter = () => text(v.el).match(/Ink left (\d+)%/)[1];
+  const full = meter();
+  byKey(v.el, 'undo').click();
+  await r.clock.advance(900);
+  assert.notEqual(meter(), full);
+  assert.equal(byKey(v.el, 'redo').disabled, false);
+  byKey(v.el, 'redo').click();
+  await r.clock.advance(900);
+  assert.equal(meter(), full, 'redo puts the ink back');
+  assert.equal(byKey(v.el, 'redo').disabled, true);
+  byKey(v.el, 'undo').click();
+  await r.clock.advance(900);
+  line(400);
+  await r.clock.advance(900);
+  assert.equal(byKey(v.el, 'redo').disabled, true, 'a new line clears redo');
+  for (const x of views) x.destroy();
+});

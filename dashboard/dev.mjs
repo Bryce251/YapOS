@@ -35,6 +35,7 @@ export const DEV_PARTY_ADMIN = 'de7e0000-0000-4000-8000-000000000002';
 export const DEV_REPORT_ID = 'devreport0001';
 export const DEV_REPORT_DRAWER = 'de7e0000-0000-4000-8000-000000000003';
 export const DEV_REPORT_REPORTER = 'de7e0000-0000-4000-8000-000000000004';
+export const DEV_TEXT_REPORT_ID = 'devreport0002';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -244,6 +245,10 @@ export function seedPartyReport(db, t = Date.now()) {
   stmt.run(mila.id, mila.username, mila.display_name, t);
   db.raw.prepare("INSERT INTO party_reports (id, game, drawer_id, drawer_name, drawer_username, reporter_id, reporter_name, ink, word, at, created, ip_hash, status) VALUES (?, 'draw', ?, ?, ?, ?, ?, ?, 'sunflower', ?, ?, 'dev', 'open') ON CONFLICT (id) DO NOTHING")
     .run(DEV_REPORT_ID, rex.id, rex.display_name, rex.username, mila.id, mila.display_name, JSON.stringify(devReportInk()), t - 5 * 60_000, t - 5 * 60_000);
+  db.raw.prepare("INSERT INTO party_reports (id, game, drawer_id, drawer_name, drawer_username, reporter_id, reporter_name, ink, word, at, created, ip_hash, status) VALUES (?, 'hottakes', ?, ?, ?, ?, ?, '[]', NULL, ?, ?, 'dev', 'open') ON CONFLICT (id) DO NOTHING")
+    .run(DEV_TEXT_REPORT_ID, rex.id, rex.display_name, rex.username, mila.id, mila.display_name, t - 2 * 60_000, t - 2 * 60_000);
+  db.raw.prepare("INSERT INTO party_report_texts (id, text, context, ip_hash, created) VALUES (?, ?, ?, 'dev', ?) ON CONFLICT (id) DO NOTHING")
+    .run(DEV_TEXT_REPORT_ID, 'Pineapple on pizza people should be kicked out of every call, no exceptions', 'What is the worst food opinion?', t - 2 * 60_000);
 }
 
 async function activityDev(request) {
@@ -677,7 +682,7 @@ async function main() {
     `Fake Yapin' sign-in is at ${dev.oauthUrl}`,
     `YapOS Party test call is at ${dev.url}/activity-dev/`,
     `Test server: Test Town (${dev.serverId})`,
-    'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party and see a sample flagged drawing at /party/reports.',
+    'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party and see a sample flagged drawing and a flagged Hot Takes answer at /party/reports.',
     '',
     'Test users (pick one on the sign-in page):',
     ...dev.users.map((u) => `  ${u.display_name.padEnd(8)} @${u.username.padEnd(8)} ${u.role}`),

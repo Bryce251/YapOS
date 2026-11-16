@@ -285,6 +285,10 @@ function answersFrom(state, st) {
   return out;
 }
 
+export function answerRef(n, nonce, id) {
+  return `hot.${n}.${nonce}.${id}`;
+}
+
 export function promptParts(text) {
   const at = String(text || '').indexOf('____');
   if (at < 0) return { before: String(text || ''), after: '' };
@@ -336,6 +340,30 @@ const hottakes = {
       return true;
     }
     return false;
+  },
+
+  texts(api) {
+    const st = api.get(KEY);
+    if (!st || (st.phase !== 'vote' && st.phase !== 'reveal')) return [];
+    const authors = {};
+    if (st.phase === 'vote') {
+      const cur = fresh(api, st);
+      if (cur && cur.authors) Object.assign(authors, cur.authors);
+    } else if (Array.isArray(st.res)) {
+      for (const row of st.res) if (Array.isArray(row)) authors[row[0]] = row[1];
+    }
+    const out = [];
+    for (let i = 0; i < (st.chunks || 0); i += 1) {
+      const part = api.get(answerKey(i));
+      if (!Array.isArray(part)) continue;
+      for (const row of part) {
+        if (!Array.isArray(row) || !Number.isInteger(row[0]) || typeof row[1] !== 'string') continue;
+        const author = authors[row[0]];
+        if (!Number.isInteger(author)) continue;
+        out.push({ r: answerRef(st.n, st.nonce, row[0]), author, text: row[1], context: st.p && st.p.t ? `Prompt: ${st.p.t}` : null });
+      }
+    }
+    return out;
   },
 
   resume(api) {

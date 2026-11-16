@@ -143,6 +143,46 @@ export function drawingId(run, c, i) {
   return `tel.${run}.${c}.${i}`;
 }
 
+export function textRef(run, c, i) {
+  return `tel.${run}.${c}.${i}.t`;
+}
+
+let starterTexts = null;
+
+export function isStarterText(t) {
+  if (!starterTexts) starterTexts = new Set(STARTERS.map((s) => s.text));
+  return starterTexts.has(t);
+}
+
+export function promptRef(st, seat) {
+  if (!st || !Array.isArray(st.seats) || st.phase !== 'draw' || !(st.step > 0) || !Number.isInteger(seat) || seat < 0) return null;
+  return textRef(st.run, chainAt(seat, st.step, st.seats.length), st.step - 1);
+}
+
+function textContext(chain, e, i) {
+  if (e.k === 'w') return 'Draw Telephone, opening phrase';
+  const src = i >= 2 && chain[i - 2] && chain[i - 2].t ? chain[i - 2].t : null;
+  return src ? `Draw Telephone, description of a drawing of “${src}”` : 'Draw Telephone, description of a drawing';
+}
+
+function textList(api, st) {
+  if (!st || !Array.isArray(st.seats) || !owned(api, st)) return [];
+  const mem = api.memory;
+  const n = st.seats.length;
+  const out = [];
+  const add = (c, i, viewers = null) => {
+    const chain = mem.chains[c] || [];
+    const e = chain[i];
+    if (!e || e.k === 'd' || e.miss || typeof e.t !== 'string' || !e.t || isStarterText(e.t)) return;
+    const item = { r: textRef(st.run, c, i), author: e.by, text: e.t, context: textContext(chain, e, i) };
+    if (viewers) item.viewers = viewers;
+    out.push(item);
+  };
+  if (st.phase === 'draw' && st.step > 0) for (let p = 0; p < n; p += 1) add(chainAt(p, st.step, n), st.step - 1, [st.seats[p]]);
+  else if (st.phase === 'reveal' && st.rv) for (let i = 0; i <= st.rv.at; i += 1) add(st.rv.c, i);
+  return out;
+}
+
 function hiddenSet(st) {
   return new Set(Array.isArray(st && st.hid) ? st.hid : []);
 }
@@ -617,6 +657,10 @@ const telephone = {
 
   drawings(api) {
     return drawingList(api, api.get(KEY)).map((x) => (x.viewers ? { d: x.d, drawer: x.drawer, viewers: x.viewers } : { d: x.d, drawer: x.drawer }));
+  },
+
+  texts(api) {
+    return textList(api, api.get(KEY));
   },
 
   drawingOf(snap) {

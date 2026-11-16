@@ -13,6 +13,10 @@ export const MAX_TRIES = 6;
 export const WIN_BONUS = 250;
 export const START_LETTERS = 'abcdefghilmnoprstw';
 
+export function wordRef(n) {
+  return `chain.${n}`;
+}
+
 const HI = 1679616;
 const LO = 46656;
 
@@ -287,6 +291,14 @@ const chain = {
     const st = { v: 2, order, lives, max: api.settings.lives, out: [], letter, words: [], n: 0, count: 0, vote: null, bad: null, dict: dictFailed && !dictReady ? 0 : 1, last: null, t: 0, cur: null, phase: 'turn' };
     const first = order[Math.floor(api.random() * order.length)];
     startTurn(api, st, first, 'first');
+  },
+
+  texts(api) {
+    const st = api.get(KEY);
+    if (!st || !Array.isArray(st.words)) return [];
+    return st.words
+      .filter((x) => Array.isArray(x) && Number.isInteger(x[0]) && Number.isInteger(x[1]) && typeof x[2] === 'string' && x[2])
+      .map(([n, s, w], i, all) => ({ r: wordRef(n), author: s, text: w, context: i > 0 ? `Word Chain, played after “${all[i - 1][2]}”` : 'Word Chain' }));
   },
 
   intent(api, slot, action) {

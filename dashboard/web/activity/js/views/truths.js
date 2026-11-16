@@ -1,8 +1,9 @@
-import truths, { KEY, STATEMENT_MAX, PROBLEMS, mask, problemOf } from '../games/truths.js';
+import truths, { KEY, STATEMENT_MAX, PROBLEMS, mask, problemOf, statementRef } from '../games/truths.js';
 import { ideaAt, sampleAt, IDEAS } from '../../data/truths.js';
 import { cleanShared, hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
 import { h, memo, timer, avatar, who, button, plural } from '../ui/dom.js';
+import { textFlag } from '../ui/report.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
 
@@ -80,7 +81,7 @@ export function truthsMoment(was, m) {
   return { now, cues };
 }
 
-export function createTruthsView({ engine, fx, cues }) {
+export function createTruthsView({ engine, fx, cues, toast }) {
   const cue = cues && typeof cues.play === 'function' ? cues : QUIET;
   const el = h('section', { class: 'game game-truths', attrs: { 'aria-label': 'Two Truths and a Lie' } });
   const head = h('div', { class: 'truths-headwrap' });
@@ -256,6 +257,12 @@ export function createTruthsView({ engine, fx, cues }) {
   });
 
   function statement(m, s) {
+    const card = statementCard(m, s);
+    const flag = m.isWriter || m.watching ? null : textFlag(engine, statementRef(m.n, m.v, s.i), { toast, corner: true });
+    return flag ? h('div', { class: 'truths-row has-flag' }, card, flag) : card;
+  }
+
+  function statementCard(m, s) {
     const reveal = m.phase === 'reveal';
     const known = reveal && !m.lost;
     return h(

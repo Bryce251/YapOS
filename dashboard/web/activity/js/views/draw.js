@@ -1,4 +1,4 @@
-import draw, { GUESS_CHARS, REVEAL_MS, PICK_MS } from '../games/draw.js';
+import draw, { GUESS_CHARS, REVEAL_MS, PICK_MS, guessRef, reportableGuess } from '../games/draw.js';
 import { GRID_W, GRID_H, COLORS, SIZES, SIZE_NAMES, ERASER, CUSTOM, MAX_CHUNKS, FILL, inkKey, fitInk, readInk, liveMessage, applyLive, pruneLive, quantise, decodeStroke, strokeOn as inkStroke, fillOn, createPainter } from '../games/ink.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
 import { board as scoreBoard, standings } from '../ui/board.js';
@@ -7,6 +7,7 @@ import { hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
 import { flagInfo } from '../engine.js';
 import { sendReport } from '../admin.js';
+import { textFlag } from '../ui/report.js';
 import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
 
 export const SCALE = 2;
@@ -84,6 +85,10 @@ export function flagDrawing({ engine, snap, game, item, local, toast }) {
   if (body) sendReport(item.d, body).catch(() => false);
   say(FLAG_THANKS);
   return true;
+}
+
+export function feedRefs(m) {
+  return m.feed.map((f) => ({ ...f, ref: !f.mine && !f.isMe && reportableGuess(f.text, f.kind) ? guessRef({ nonce: m.k, n: m.n }, f.fid) : null }));
 }
 
 export function footText(m) {
@@ -276,13 +281,14 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   const fillBtn = fillTool(pen.fill, () => setPen({ fill: !pen.fill, drop: false }));
   const dropBtn = dropTool(pen.drop, () => setPen({ drop: !pen.drop }));
   const undoBtn = button('Undo', { variant: 'ghost', size: 'sm', key: 'undo', on: () => undo() });
+  const redoBtn = button('Redo', { variant: 'ghost', size: 'sm', key: 'redo', on: () => redo() });
   const clearBtn = button('Clear', { variant: 'ghost', size: 'sm', key: 'clear', on: () => clearAll() });
   const tools = h(
     'div',
     { class: 'draw-tools', attrs: { role: 'toolbar', 'aria-label': 'Drawing tools' } },
     palette.el,
     palette.pop,
-    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes, fillBtn, dropBtn), h('div', { class: 'tool-actions' }, undoBtn, clearBtn)),
+    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes, fillBtn, dropBtn), h('div', { class: 'tool-actions' }, undoBtn, redoBtn, clearBtn)),
   );
   const board = h('div', { class: 'draw-board' }, paper, tools);
   const feedBox = h('div', { class: 'feed-wrap' });
@@ -305,6 +311,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
   const flagged = new Set();
 
   const mine = { k: null, strokes: [], shown: [], level: 0, count: 0, chunks: [] };
+  let redoStack = [];
   const live = new Map();
   const seen = { k: null, sig: null, strokes: [] };
   let cur = null;
@@ -415,6 +422,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     if (fillOn(ctx, s, SCALE) === 0) return;
     const msg = liveMessage(mine.k, mine.count, 0, s.pts, s);
     engine.broadcast(msg);
+    redoStack = [];
     mine.strokes.push(s);
     commit(true);
   }
@@ -464,6 +472,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     sendLive();
     cur = null;
     if (!canDraw()) return;
+    redoStack = [];
     mine.strokes.push(s.c === CUSTOM ? { c: s.c, rgb: s.rgb, z: s.z, pts: s.pts } : { c: s.c, z: s.z, pts: s.pts });
     commit(true);
   }
@@ -514,14 +523,22 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
 
   function undo() {
     if (!canDraw() || cur || !mine.strokes.length) return;
-    mine.strokes.pop();
+    redoStack.push(mine.strokes.pop());
     commit(false);
     engine.broadcast({ t: 'ink', k: mine.k, cut: mine.count });
     repaint();
   }
 
+  function redo() {
+    if (!canDraw() || cur || !redoStack.length) return;
+    mine.strokes.push(redoStack.pop());
+    commit(true);
+    repaint();
+  }
+
   function clearAll() {
     if (!canDraw() || cur || !mine.strokes.length) return;
+    redoStack = [];
     mine.strokes = [];
     mine.level = 0;
     commit(false);
@@ -554,6 +571,21 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
       submit();
     }
   });
+
+  function onKeys(e) {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const tag = e.target && e.target.tagName ? String(e.target.tagName).toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) return;
+    const k = String(e.key || '').toLowerCase();
+    if (k === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      undo();
+    } else if ((k === 'z' && e.shiftKey) || k === 'y') {
+      e.preventDefault();
+      redo();
+    }
+  }
+  if (typeof win.addEventListener === 'function') win.addEventListener('keydown', onKeys);
   canvas.addEventListener('pointerdown', onDown);
   canvas.addEventListener('pointermove', onMove);
   canvas.addEventListener('pointerup', onUp);
@@ -656,10 +688,11 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
         ? m.feed.map((f) =>
             h(
               'li',
-              { class: ['feed-item', `is-${f.kind}`, f.mine ? 'is-me' : null] },
+              { class: ['feed-item', `is-${f.kind}`, f.mine ? 'is-me' : null, f.ref ? 'has-flag' : null] },
               avatar(f, 'xs'),
               h('span', { class: 'feed-name', text: f.isMe ? 'You' : f.name }),
               h('span', { class: 'feed-text', text: feedLine(f) }),
+              f.ref ? textFlag(engine, f.ref, { toast }) : null,
             ),
           )
         : h('li', { class: 'feed-empty muted', text: m.phase === 'draw' ? 'Guesses show up here.' : 'Get ready to guess!' }),
@@ -697,6 +730,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
       if (mine.k !== m.k) {
         if (cur) cur = null;
         const back = readInk(state, m.k);
+        redoStack = [];
         mine.k = m.k;
         mine.strokes = back.strokes;
         mine.level = 0;
@@ -744,7 +778,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     paintScores(boardBox, { rows: boardRows(next, m.drawer.slot), badge: { slot: m.drawer.slot, id: m.drawer.id, icon: PENCIL, label: 'Drawing now' } });
     paintGot(gotBox, { phase: m.phase, got: m.got.map((g) => ({ id: g.id, slot: g.slot, name: g.name, initials: g.initials, hue: g.hue, avatar: g.avatar, isMe: g.isMe })) });
     paintPick(pickBox, { phase: m.phase, amDrawer: m.amDrawer, choices: m.choices, n: m.n });
-    paintFeed(feedBox, { feed: m.feed, phase: m.phase });
+    paintFeed(feedBox, { feed: feedRefs(m), phase: m.phase });
     paintFoot(foot, m);
     el.dataset.phase = m.phase;
     board.classList.toggle('is-drawing', canDraw() || (m.amDrawer && m.phase === 'draw'));
@@ -758,6 +792,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     if (m.hidden !== wasHidden) repaint();
     paintFlag(flagBox, flagModel(next, draw.drawingOf(next), flagged));
     undoBtn.disabled = !m.amDrawer || !mine.strokes.length;
+    redoBtn.disabled = !m.amDrawer || !redoStack.length;
     clearBtn.disabled = !m.amDrawer || !mine.strokes.length;
     if (feedTurn !== m.n) {
       feedTurn = m.n;
@@ -786,6 +821,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     el,
     update,
     destroy() {
+      if (typeof win.removeEventListener === 'function') win.removeEventListener('keydown', onKeys);
       offMessage();
       if (ticker !== null && typeof win.clearInterval === 'function') win.clearInterval(ticker);
       if (liveTimer !== null) win.clearTimeout(liveTimer);

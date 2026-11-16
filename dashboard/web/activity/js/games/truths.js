@@ -78,6 +78,10 @@ export function best(tally) {
   return { slots: slots.sort((a, b) => a - b), n: top };
 }
 
+export function statementRef(n, v, i) {
+  return `truths.${n}.${v}.${i}`;
+}
+
 function bump(tally, slot, by = 1) {
   const out = { ...(tally || {}) };
   out[slot] = (out[slot] || 0) + by;
@@ -334,6 +338,22 @@ const truths = {
 
   deadline(api) {
     return advance(api);
+  },
+
+  texts(api) {
+    const st = api.get(KEY);
+    if (!st || (st.phase !== 'vote' && st.phase !== 'reveal') || !Array.isArray(st.s) || !Number.isInteger(st.writer)) return [];
+    const cur = api.memory.cur;
+    let lie = null;
+    if (st.phase === 'reveal' && Number.isInteger(st.lie)) lie = st.lie;
+    else if (cur && cur.v === st.v && Number.isInteger(cur.lieAt)) lie = cur.lieAt;
+    return st.s
+      .map((text, i) => {
+        if (typeof text !== 'string' || !text) return null;
+        const kind = lie === null ? '' : lie === i ? ', their lie' : ', one of their truths';
+        return { r: statementRef(st.n, st.v || 0, i), author: st.writer, text, context: `Two Truths and a Lie, statement ${i + 1} of ${st.s.length}${kind}` };
+      })
+      .filter(Boolean);
   },
 
   admin(api, action) {

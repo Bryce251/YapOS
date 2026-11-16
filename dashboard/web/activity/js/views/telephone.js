@@ -1,8 +1,9 @@
-import telephone, { REACTS, REACT_NAMES, NEXT_MIN_MS, TEXT_MAX, INK_CHARS, INK_PARTS, fitText, validInk, inkChars, entryKey } from '../games/telephone.js';
+import telephone, { KEY as TEL_KEY, REACTS, REACT_NAMES, NEXT_MIN_MS, TEXT_MAX, INK_CHARS, INK_PARTS, fitText, validInk, inkChars, entryKey, textRef, promptRef, isStarterText } from '../games/telephone.js';
 import { GRID_W, GRID_H, SIZES, SIZE_NAMES, CUSTOM, LEVELS, FILL, encodeParts, decodeStroke, quantise, strokeOn as inkStroke, fillOn, paintInk, createPainter } from '../games/ink.js';
 import { fillTool, markTool, flagModel, flagButton, flagDrawing, tintOfPen, pickTint } from './draw.js';
 import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { textFlag } from '../ui/report.js';
 import { hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
 
@@ -188,6 +189,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   const fillBtn = fillTool(pen.fill, () => setPen({ fill: !pen.fill, drop: false }));
   const dropBtn = dropTool(pen.drop, () => setPen({ drop: !pen.drop }));
   const undoBtn = button('Undo', { variant: 'ghost', size: 'sm', key: 'undo', on: () => undo() });
+  const redoBtn = button('Redo', { variant: 'ghost', size: 'sm', key: 'redo', on: () => redo() });
   const clearBtn = button('Clear', { variant: 'ghost', size: 'sm', key: 'clear', on: () => clearAll() });
   const meter = h('div', { class: 'telephone-meter' });
   const tools = h(
@@ -195,7 +197,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     { class: 'draw-tools', attrs: { role: 'toolbar', 'aria-label': 'Drawing tools' } },
     palette.el,
     palette.pop,
-    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes, fillBtn, dropBtn), h('div', { class: 'tool-actions' }, undoBtn, clearBtn)),
+    h('div', { class: 'tool-row' }, h('div', { class: 'sizes' }, sizes, fillBtn, dropBtn), h('div', { class: 'tool-actions' }, undoBtn, redoBtn, clearBtn)),
   );
   const doneBtn = button('Done!', { variant: 'primary', size: 'lg', key: 'draw-done', on: () => finishDrawing() });
   const editBtn = button('Keep drawing', { variant: 'ghost', key: 'draw-edit', on: () => keepDrawing() });
@@ -220,6 +222,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   el.append(head, track, task, board, entry, waitBox, revealBox, flagShow, awardBox, foot);
 
   const mine = { key: null, strokes: [], parts: [], used: 0, dirty: false };
+  let redoStack = [];
   const local = { stepKey: null, sent: null, reacted: new Set() };
   let cur = null;
   let model = null;
@@ -344,6 +347,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     paintMine();
     const s = decodeStroke(parts[0]);
     if (!s || fillOn(ctx, s, SCALE) === 0) return;
+    redoStack = [];
     mine.parts.push(parts);
     mine.strokes.push(s);
     mine.used += inkChars(parts);
@@ -431,6 +435,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     }
     if (fit.cut) outOfInk('Out of ink! That line got cut short.');
     else if (keep) cur = { ...s, pts: [s.pts[s.pts.length - 1]], id, key, held };
+    redoStack = [];
     mine.parts.push(fit.parts);
     mine.strokes.push(...decodeAll(fit.parts));
     mine.used += inkChars(fit.parts);
@@ -470,7 +475,25 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
   function undo() {
     if (!canDraw() || cur || !mine.parts.length) return;
     const gone = mine.parts.pop();
+    redoStack.push(gone);
     mine.used -= inkChars(gone);
+    mine.strokes = decodeAll(mine.parts.flat());
+    mine.dirty = true;
+    paintMine();
+    paintMeter();
+    queueWrite();
+  }
+
+  function redo() {
+    if (!canDraw() || cur || !redoStack.length) return;
+    const back = redoStack[redoStack.length - 1];
+    if (mine.used + inkChars(back) > INK_CHARS || mine.parts.flat().length + back.length > INK_PARTS) {
+      outOfInk('Out of ink! Undo a line or tap Done.');
+      return;
+    }
+    redoStack.pop();
+    mine.parts.push(back);
+    mine.used += inkChars(back);
     mine.strokes = decodeAll(mine.parts.flat());
     mine.dirty = true;
     paintMine();
@@ -480,6 +503,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
 
   function clearAll() {
     if (!canDraw() || cur || !mine.parts.length) return;
+    redoStack = [];
     mine.parts = [];
     mine.strokes = [];
     mine.used = 0;
@@ -555,6 +579,21 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     engine.act({ type: 'next', c: r.c, at: r.at });
   }
 
+
+  function onKeys(e) {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const tag = e.target && e.target.tagName ? String(e.target.tagName).toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) return;
+    const k = String(e.key || '').toLowerCase();
+    if (k === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      undo();
+    } else if ((k === 'z' && e.shiftKey) || k === 'y') {
+      e.preventDefault();
+      redo();
+    }
+  }
+  if (typeof w.addEventListener === 'function') w.addEventListener('keydown', onKeys);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -603,7 +642,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       'div',
       { class: ['telephone-task-card', m.prompt ? 'telephone-has-prompt' : null] },
       h('p', { class: 'telephone-lead', text: m.text }),
-      m.prompt ? h('p', { class: 'telephone-prompt' }, h('span', { class: 'telephone-quote', text: m.prompt })) : null,
+      m.prompt ? h('p', { class: ['telephone-prompt', m.ref ? 'has-flag' : null, m.ref ? 'telephone-flagged' : null] }, h('span', { class: 'telephone-quote', text: m.prompt }), m.ref ? textFlag(engine, m.ref, { toast }) : null) : null,
       m.from ? h('p', { class: 'telephone-from muted' }, h('span', { text: m.prompt ? 'Written by ' : 'Drawn by ' }), h('strong', { text: m.from })) : null,
     );
   });
@@ -669,6 +708,8 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
             h('div', { class: 'telephone-entry-who' }, faceRow(e.by, verbOf(e), 'xs'), e.miss ? h('span', { class: 'telephone-miss muted', text: e.k === 'd' ? '(ran out of time)' : '(no answer, so it carried over)' }) : null),
             e.k === 'd'
               ? h('div', { class: ['paper', 'telephone-mini', e.hidden ? 'is-hidden' : null] }, h('canvas', { class: 'ink-canvas', dataset: { draw: e.i }, attrs: { width: GRID_W * SCALE, height: GRID_H * SCALE, role: 'img', 'aria-label': e.hidden ? 'Hidden drawing' : `Drawing by ${e.by.isMe ? 'you' : e.by.name}` } }), e.hidden ? h('p', { class: 'telephone-blank telephone-hidden', text: 'Hidden' }) : e.strokes ? null : h('p', { class: 'telephone-blank', text: 'Blank page!' }))
+              : e.ref
+              ? h('div', { class: 'telephone-said has-flag' }, h('p', { class: 'telephone-bubble', text: e.t }), textFlag(engine, e.ref, { toast }))
               : h('p', { class: 'telephone-bubble', text: e.t }),
             h(
               'div',
@@ -756,6 +797,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
         cur = null;
         warned = null;
         mine.key = key;
+        redoStack = [];
         mine.parts = [];
         mine.strokes = [];
         mine.used = 0;
@@ -774,6 +816,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       blankNote.classList.add('telephone-off');
       paintMeter();
       undoBtn.disabled = !canDraw() || !mine.parts.length;
+      redoBtn.disabled = !canDraw() || !redoStack.length;
       clearBtn.disabled = !canDraw() || !mine.parts.length;
       doneBtn.disabled = !canDraw();
       doneBtn.classList.toggle('telephone-off', m.mineDone);
@@ -866,6 +909,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
       text: stepping && !m.playing ? (m.waiting ? 'Hang tight! You can jump in if a seat opens up.' : 'Everyone is busy writing and drawing.') : headline(m, sent),
       prompt: m.phase === 'draw' && m.playing ? m.prompt || '???' : null,
       from: stepping && m.playing && m.phase !== 'write' ? fromName : null,
+      ref: m.phase === 'draw' && m.playing && m.prompt && !isStarterText(m.prompt) && m.from && !m.from.isMe ? promptRef(next.state[TEL_KEY], m.seat) : null,
     });
     const typing = (m.phase === 'write' || m.phase === 'text') && m.playing;
     entry.classList.toggle('telephone-off', !typing || sent);
@@ -875,7 +919,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     syncBoard(m);
     paintWait(waitBox, { show: stepping && (sent || !m.playing || m.pass), sent, working: m.working.map((p) => ({ id: p.id, name: p.name, initials: p.initials, hue: p.hue, avatar: p.avatar })) });
     const r = m.reveal
-      ? { ...m.reveal, entries: m.reveal.entries.map((e) => ({ ...e, did: REACTS.map((_, x) => local.reacted.has(`${m.run}.${m.reveal.c}.${e.i}.${x}`)) })) }
+      ? { ...m.reveal, entries: m.reveal.entries.map((e) => ({ ...e, did: REACTS.map((_, x) => local.reacted.has(`${m.run}.${m.reveal.c}.${e.i}.${x}`)), ref: e.k !== 'd' && !e.mine && !e.miss && e.t && !isStarterText(e.t) ? textRef(m.run, m.reveal.c, e.i) : null })) }
       : null;
     if (paintReveal(revealBox, r)) drawEntries(next.state);
     paintAwards(awardBox, { phase: m.phase, note: m.note, awards: m.awards });
@@ -895,6 +939,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
     destroy() {
       if (ticker !== null && typeof w.clearInterval === 'function') w.clearInterval(ticker);
       if (typeof w.removeEventListener === 'function') {
+        w.removeEventListener('keydown', onKeys);
         w.removeEventListener('pointerup', lifted);
         w.removeEventListener('pointercancel', lifted);
       }

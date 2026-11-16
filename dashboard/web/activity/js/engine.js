@@ -1,7 +1,7 @@
 import { OpBudget, OPS_WINDOW_MS, MAX_VALUE_BYTES, checkSet, jsonBytes, validKey } from './limits.js';
 import { idOf, people, person, cleanName, initials, hueOf } from './players.js';
 import { censor } from './filter.js';
-import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins } from './admin.js';
+import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins, sendTextReport } from './admin.js';
 
 export const FLUSH_MS = 120;
 export const SOFT_OPS = 60;
@@ -35,6 +35,12 @@ export const TARGET_FX = Object.freeze(['spotlight', 'clown', 'fake-win']);
 export const ADMIN_ACTIONS = Object.freeze(['start', 'end', 'skip', 'time', 'points', 'kick', 'ban', 'unban', 'lock', 'announce', 'clearDrawing']);
 export const FLAG_KEEP = 12;
 export const DRAWING_RE = /^[A-Za-z0-9_.:-]{1,48}$/;
+export const TEXT_REF_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+export const TEXT_REPORT_LIMIT = 5;
+export const TEXT_REPORT_WINDOW_MS = 60000;
+export const TEXT_REPORT_KEEP = 400;
+export const TEXT_REPORT_CHARS = 300;
+export const TEXT_CONTEXT_CHARS = 200;
 const USER_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const STRIP_RE = /[\u0000-\u001f\u007f​-‏‪-‮⁦-⁩]/g;
 const EMOJI_RE = /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u;
@@ -43,6 +49,15 @@ const DEFAULT_ADMINS = Object.freeze({ isAdmin: cachedAdmin, knows: cachedKnows,
 
 export function validDrawing(d) {
   return typeof d === 'string' && DRAWING_RE.test(d);
+}
+
+export function validTextRef(r) {
+  return typeof r === 'string' && TEXT_REF_RE.test(r);
+}
+
+function clip(raw, max) {
+  if (typeof raw !== 'string') return '';
+  return Array.from(raw.replace(STRIP_RE, '').replace(/\s+/g, ' ').trim()).slice(0, max).join('').trim();
 }
 
 export function flagNeed(guessers) {
@@ -245,6 +260,11 @@ export function createEngine(opts) {
   const flushMs = Math.max(FLUSH_MS, opts.flushMs ?? FLUSH_MS);
   const admins = { ...DEFAULT_ADMINS, ...(opts.admins || {}) };
   const fxSeen = new Map();
+  const postText = typeof opts.reportText === 'function' ? opts.reportText : sendTextReport;
+  const textSeen = new Set();
+  const textTimes = new Map();
+  const myReports = new Set();
+  let myTimes = [];
   let annTimer = null;
   const budget = opts.budget || new OpBudget(opts.softOps ?? SOFT_OPS, OPS_WINDOW_MS);
   const pending = new Map();
@@ -830,6 +850,8 @@ export function createEngine(opts) {
         const slot = slotOf(from);
         if (slot === null) return;
         flagDrawing(games.get(room.game), data.d, slot);
+      } else if (data.t === 'rpt') {
+        reportText(from, data);
       } else if (data.t === 'in') {
         if (!presentIds().has(from) || isBanned(from) || partyBanned(from)) return;
         const room = read(ROOM);
@@ -951,6 +973,65 @@ export function createEngine(opts) {
       .slice(-(FLAG_KEEP - 1));
     patchRoom({ flags: Object.fromEntries(kept.concat([[d, by.concat([slot])]])) });
     checkFlag(game, item);
+    return true;
+  }
+
+  function textsOf(game) {
+    if (!game || typeof game.texts !== 'function') return [];
+    let list = [];
+    try {
+      list = game.texts(gameApi(game));
+    } catch (e) {
+      fail(e);
+      return [];
+    }
+    return (Array.isArray(list) ? list : [])
+      .filter((x) => x && validTextRef(x.r) && Number.isInteger(x.author) && typeof x.text === 'string')
+      .map((x) => ({ r: x.r, author: x.author, text: clip(x.text, TEXT_REPORT_CHARS), context: clip(x.context, TEXT_CONTEXT_CHARS) || null, viewers: viewerSet(x.viewers) }))
+      .filter((x) => x.text);
+  }
+
+  function personFor(id) {
+    const live = presentList().find((p) => p.id === id);
+    const entry = playersState().p[id];
+    const name = live ? live.name : entry && entry.n ? entry.n : 'Player';
+    const look = live || person({ id, name }) || {};
+    return { id, name, username: look.username || null };
+  }
+
+  function textMark(room, r) {
+    return `${room.round || 0}|${room.game}|${r}`;
+  }
+
+  function reportText(from, data) {
+    const room = read(ROOM);
+    if (!room || room.phase !== 'game' || data.g !== room.game || !validTextRef(data.r)) return false;
+    if (!presentIds().has(from) || partyBanned(from)) return false;
+    const slot = slotOf(from);
+    if (slot === null || slot === undefined) return false;
+    const game = games.get(room.game);
+    const item = textsOf(game).find((x) => x.r === data.r);
+    if (!item || item.author === slot || (item.viewers && !item.viewers.has(slot))) return false;
+    const authorId = idOfSlot(item.author);
+    if (!authorId || authorId === from) return false;
+    const mark = `${textMark(room, data.r)}|${from}`;
+    if (textSeen.has(mark)) return false;
+    const at = now();
+    const times = (textTimes.get(from) || []).filter((x) => at - x < TEXT_REPORT_WINDOW_MS);
+    if (times.length >= TEXT_REPORT_LIMIT) {
+      textTimes.set(from, times);
+      return false;
+    }
+    textSeen.add(mark);
+    while (textSeen.size > TEXT_REPORT_KEEP) textSeen.delete(textSeen.values().next().value);
+    textTimes.delete(from);
+    textTimes.set(from, times.concat([at]));
+    while (textTimes.size > TEXT_REPORT_KEEP) textTimes.delete(textTimes.keys().next().value);
+    const me = personFor(from);
+    const body = { kind: 'text', game: game.id, author: personFor(authorId), reporter: { id: me.id, name: me.name }, text: item.text, context: item.context, at };
+    try {
+      Promise.resolve(postText(body)).catch(() => false);
+    } catch {}
     return true;
   }
 
@@ -1466,6 +1547,35 @@ export function createEngine(opts) {
     return broadcast(msg);
   }
 
+  function report(r) {
+    const room = read(ROOM);
+    const id = meId();
+    if (destroyed || !room || room.phase !== 'game' || !validTextRef(r) || !id || slotOf(id) === null) return 'no';
+    const mark = textMark(room, r);
+    if (myReports.has(mark)) return 'done';
+    const at = now();
+    myTimes = myTimes.filter((x) => at - x < TEXT_REPORT_WINDOW_MS);
+    if (myTimes.length >= TEXT_REPORT_LIMIT) return 'slow';
+    const msg = { t: 'rpt', g: room.game, r };
+    const ok = isHost() ? reportText(id, msg) : broadcast(msg);
+    if (!ok) return 'no';
+    myReports.add(mark);
+    while (myReports.size > TEXT_REPORT_KEEP) myReports.delete(myReports.values().next().value);
+    myTimes.push(at);
+    return 'sent';
+  }
+
+  function canReport() {
+    const room = read(ROOM);
+    const id = meId();
+    return Boolean(!destroyed && room && room.phase === 'game' && id && slotOf(id) !== null);
+  }
+
+  function reported(r) {
+    const room = read(ROOM);
+    return Boolean(room && validTextRef(r) && myReports.has(textMark(room, r)));
+  }
+
   function leave() {
     return setWant('out');
   }
@@ -1623,6 +1733,9 @@ export function createEngine(opts) {
     leave,
     act,
     flag,
+    report,
+    reported,
+    canReport,
     direct,
     drop,
     broadcast,

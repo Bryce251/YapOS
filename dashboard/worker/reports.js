@@ -4,6 +4,11 @@ import { lookupProfiles, cleanText, MAX_PROFILE_IDS } from './profiles.js';
 import { isPartyOwner } from './party.js';
 
 export const REPORT_GAMES = new Set(['draw', 'odd', 'telephone']);
+export const TEXT_GAMES = new Set(['draw', 'odd', 'telephone', 'hottakes', 'truths', 'chain', 'emoji', 'scramble', 'trivia', 'wyr', 'hive']);
+export const REPORT_KINDS = new Set(['drawing', 'text']);
+export const TEXT_MAX = 300;
+export const CONTEXT_MAX = 200;
+export const TEXT_REPORTS_PER_WINDOW = 30;
 export const MAX_STROKES = 200;
 export const MAX_INK_CHARS = 16 * 1024;
 export const REPORT_BODY_LIMIT = 24 * 1024;
@@ -18,11 +23,13 @@ export const REPORTS_PAGE = 20;
 const INK_RE = /^[A-Za-z0-9_-]{6,4096}$/;
 const CURSOR_RE = /^(\d{1,16})\.([A-Za-z0-9_-]{1,64})$/;
 const STATUSES = new Set(['open', 'dismissed', 'all']);
+const KIND_FILTERS = new Set(['drawing', 'text', 'all']);
 const NAME_MAX = 64;
 const WORD_MAX = 64;
 const REASON_MAX = 200;
 const STAFF_ONLY = 'Only the owner of YapOS Party and party admins can see reports.';
-const REPORT_COLUMNS = 'id, game, drawer_id, drawer_name, drawer_username, reporter_id, reporter_name, ink, word, at, created, status, dismissed_at, dismissed_by';
+const REPORT_COLUMNS = 'r.id, r.game, r.drawer_id, r.drawer_name, r.drawer_username, r.reporter_id, r.reporter_name, r.ink, r.word, r.at, r.created, r.status, r.dismissed_at, r.dismissed_by, x.id AS text_id, x.text, x.context';
+const DROP_ORPHAN_TEXTS = 'DELETE FROM party_report_texts WHERE id NOT IN (SELECT id FROM party_reports)';
 
 function bad(code, message) {
   return new HttpError(400, code, message);
@@ -37,9 +44,9 @@ function cleanName(value) {
   return cleanText(value, NAME_MAX) || 'Player';
 }
 
-function cleanHandle(value) {
+function cleanHandle(value, what = 'drawer') {
   if (value === null || value === undefined) return null;
-  if (typeof value !== 'string') throw bad('bad_username', "The drawer's username doesn't look right.");
+  if (typeof value !== 'string') throw bad('bad_username', `The ${what}'s username doesn't look right.`);
   const text = cleanText(value.replace(/^@+/, ''), NAME_MAX);
   return text ? text.replace(/\s+/g, '') : null;
 }
@@ -47,7 +54,7 @@ function cleanHandle(value) {
 function cleanPerson(value, what, withHandle) {
   if (!isPlainObject(value)) throw bad('bad_person', `Say who the ${what} is.`);
   const out = { id: cleanId(value.id, what), name: cleanName(value.name) };
-  if (withHandle) out.username = cleanHandle(value.username);
+  if (withHandle) out.username = cleanHandle(value.username, what);
   return out;
 }
 
@@ -63,6 +70,35 @@ export function cleanInk(value) {
   return value.slice();
 }
 
+function cleanAt(value) {
+  const at = Number(value);
+  if (!Number.isFinite(at) || at < 0 || at > 1e15) throw bad('bad_time', "The report time doesn't look right.");
+  return Math.floor(at);
+}
+
+export function cleanTextReport(body) {
+  if (typeof body.game !== 'string' || !TEXT_GAMES.has(body.game)) throw bad('bad_game', 'Only text from YapOS Party games can be reported.');
+  const author = cleanPerson(body.author, 'author', true);
+  const reporter = cleanPerson(body.reporter, 'reporter', false);
+  if (author.id === reporter.id) throw bad('own_text', "You can't report your own words.");
+  if (typeof body.text !== 'string') throw bad('bad_text', 'Say what was written.');
+  const text = cleanText(body.text, TEXT_MAX + 1);
+  if (!text) throw bad('bad_text', 'Say what was written.');
+  if (Array.from(text).length > TEXT_MAX) throw bad('bad_text', `That text is too long to report. Keep it under ${TEXT_MAX} characters.`);
+  let context = null;
+  if (body.context !== null && body.context !== undefined) {
+    if (typeof body.context !== 'string') throw bad('bad_context', "The context doesn't look right.");
+    context = cleanText(body.context, CONTEXT_MAX);
+  }
+  return { kind: 'text', game: body.game, author, reporter, text, context, at: cleanAt(body.at) };
+}
+
+export function cleanAnyReport(body) {
+  const kind = body.kind === undefined || body.kind === null ? 'drawing' : body.kind;
+  if (typeof kind !== 'string' || !REPORT_KINDS.has(kind)) throw bad('bad_kind', 'Only drawings and text can be reported.');
+  return kind === 'text' ? cleanTextReport(body) : { kind: 'drawing', ...cleanReport(body) };
+}
+
 export function cleanReport(body) {
   if (typeof body.game !== 'string' || !REPORT_GAMES.has(body.game)) throw bad('bad_game', 'Only drawings from the drawing games can be reported.');
   const drawer = cleanPerson(body.drawer, 'drawer', true);
@@ -74,9 +110,7 @@ export function cleanReport(body) {
     if (typeof body.word !== 'string') throw bad('bad_word', "The word doesn't look right.");
     word = cleanText(body.word, WORD_MAX);
   }
-  const at = Number(body.at);
-  if (!Number.isFinite(at) || at < 0 || at > 1e15) throw bad('bad_time', "The report time doesn't look right.");
-  return { game: body.game, drawer, reporter, ink, word, at: Math.floor(at) };
+  return { game: body.game, drawer, reporter, ink, word, at: cleanAt(body.at) };
 }
 
 export function ipBucket(ip) {
@@ -103,22 +137,37 @@ export async function postActivityReport(request, env, t) {
     return fail(403, 'forbidden', 'This report was blocked for your safety. Reload the game and try again.');
   }
   const ipHash = await reportIpHash(env, clientIp(request));
-  const limit = await hit(env.DB, `reports:ip:${ipHash}`, LIMITS.reports, t);
+  const body = await readJson(request, REPORT_BODY_LIMIT);
+  const isText = body.kind === 'text';
+  const limit = await hit(env.DB, isText ? `reports:text:ip:${ipHash}` : `reports:ip:${ipHash}`, isText ? LIMITS.textReports : LIMITS.reports, t);
   if (!limit.ok) return tooMany(limit.retryAfter, "You've sent a lot of reports. Try again in a few minutes.");
-  const report = cleanReport(await readJson(request, REPORT_BODY_LIMIT));
-  const recent = await env.DB.prepare('SELECT COUNT(*) AS n, MIN(created) AS first FROM party_reports WHERE ip_hash = ? AND created > ?').bind(ipHash, t - REPORT_WINDOW).first();
-  if (Number(recent && recent.n) >= REPORTS_PER_WINDOW) {
+  const report = cleanAnyReport(body);
+  const recent = isText
+    ? await env.DB.prepare('SELECT COUNT(*) AS n, MIN(created) AS first FROM party_report_texts WHERE ip_hash = ? AND created > ?').bind(ipHash, t - REPORT_WINDOW).first()
+    : await env.DB.prepare('SELECT COUNT(*) AS n, MIN(created) AS first FROM party_reports WHERE ip_hash = ? AND created > ? AND id NOT IN (SELECT id FROM party_report_texts WHERE ip_hash = ?)').bind(ipHash, t - REPORT_WINDOW, ipHash).first();
+  if (Number(recent && recent.n) >= (isText ? TEXT_REPORTS_PER_WINDOW : REPORTS_PER_WINDOW)) {
     const wait = Math.max(1, Math.ceil((Number(recent.first) + REPORT_WINDOW - t) / 1000));
     return tooMany(wait, "You've sent a lot of reports. Try again in a few minutes.");
   }
-  const dupe = await env.DB.prepare('SELECT id FROM party_reports WHERE reporter_id = ? AND drawer_id = ? AND created > ? LIMIT 1').bind(report.reporter.id, report.drawer.id, t - DEDUPE_WINDOW).first();
+  const who = isText ? report.author : report.drawer;
+  const dupe = isText
+    ? await env.DB.prepare('SELECT r.id FROM party_reports r JOIN party_report_texts x ON x.id = r.id WHERE r.reporter_id = ? AND r.drawer_id = ? AND r.created > ? AND x.text = ? LIMIT 1').bind(report.reporter.id, who.id, t - DEDUPE_WINDOW, report.text).first()
+    : await env.DB.prepare('SELECT r.id FROM party_reports r LEFT JOIN party_report_texts x ON x.id = r.id WHERE r.reporter_id = ? AND r.drawer_id = ? AND r.created > ? AND x.id IS NULL LIMIT 1').bind(report.reporter.id, who.id, t - DEDUPE_WINDOW).first();
   if (dupe) return json({ ok: true, duplicate: true }, 200);
   const all = await hit(env.DB, 'reports:all', LIMITS.reportsAll, t);
   if (!all.ok) return tooMany(all.retryAfter, 'Lots of reports are coming in right now. Try again in a minute.');
   const id = randomToken(12);
-  await env.DB.prepare(
+  const insert = env.DB.prepare(
     `INSERT INTO party_reports (id, game, drawer_id, drawer_name, drawer_username, reporter_id, reporter_name, ink, word, at, created, ip_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
-  ).bind(id, report.game, report.drawer.id, report.drawer.name, report.drawer.username, report.reporter.id, report.reporter.name, JSON.stringify(report.ink), report.word, report.at, t, ipHash).run();
+  ).bind(id, report.game, who.id, who.name, who.username, report.reporter.id, report.reporter.name, isText ? '[]' : JSON.stringify(report.ink), isText ? null : report.word, report.at, t, ipHash);
+  if (isText) {
+    await env.DB.batch([
+      insert,
+      env.DB.prepare('INSERT INTO party_report_texts (id, text, context, ip_hash, created) VALUES (?, ?, ?, ?, ?)').bind(id, report.text, report.context, ipHash, t),
+    ]);
+  } else {
+    await insert.run();
+  }
   await trimReports(env.DB);
   return json({ ok: true }, 201);
 }
@@ -127,7 +176,10 @@ export async function trimReports(db) {
   const row = await db.prepare('SELECT COUNT(*) AS n FROM party_reports').first();
   const extra = Number(row && row.n) - MAX_REPORTS;
   if (extra <= 0) return 0;
-  const res = await db.prepare("DELETE FROM party_reports WHERE id IN (SELECT id FROM party_reports ORDER BY (status = 'open') ASC, created ASC, id ASC LIMIT ?)").bind(extra).run();
+  const [res] = await db.batch([
+    db.prepare("DELETE FROM party_reports WHERE id IN (SELECT id FROM party_reports ORDER BY (status = 'open') ASC, created ASC, id ASC LIMIT ?)").bind(extra),
+    db.prepare(DROP_ORPHAN_TEXTS),
+  ]);
   return Number((res && res.meta && res.meta.changes) || 0);
 }
 
@@ -135,6 +187,7 @@ export function cleanupStatements(db, t) {
   return [
     db.prepare("DELETE FROM party_reports WHERE status = 'dismissed' AND dismissed_at < ?").bind(t - DISMISSED_KEEP),
     db.prepare("DELETE FROM party_reports WHERE id IN (SELECT id FROM party_reports ORDER BY (status = 'open') DESC, created DESC, id DESC LIMIT -1 OFFSET ?)").bind(MAX_REPORTS),
+    db.prepare(DROP_ORPHAN_TEXTS),
   ];
 }
 
@@ -171,6 +224,8 @@ function profileOut(p) {
 async function listReports(request, env, url, role, t) {
   const status = url.searchParams.get('status') || 'open';
   if (!STATUSES.has(status)) throw bad('bad_status', 'Pick open, dismissed or all reports.');
+  const kind = url.searchParams.get('kind') || 'all';
+  if (!KIND_FILTERS.has(kind)) throw bad('bad_kind', 'Pick drawings, text or all reports.');
   const before = url.searchParams.get('before');
   let cursor = null;
   if (before) {
@@ -181,14 +236,16 @@ async function listReports(request, env, url, role, t) {
   const where = [];
   const args = [];
   if (status !== 'all') {
-    where.push('status = ?');
+    where.push('r.status = ?');
     args.push(status);
   }
+  if (kind === 'drawing') where.push('x.id IS NULL');
+  if (kind === 'text') where.push('x.id IS NOT NULL');
   if (cursor) {
-    where.push('(created < ? OR (created = ? AND id < ?))');
+    where.push('(r.created < ? OR (r.created = ? AND r.id < ?))');
     args.push(cursor.created, cursor.created, cursor.id);
   }
-  const sql = `SELECT ${REPORT_COLUMNS} FROM party_reports${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created DESC, id DESC LIMIT ?`;
+  const sql = `SELECT ${REPORT_COLUMNS} FROM party_reports r LEFT JOIN party_report_texts x ON x.id = r.id${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY r.created DESC, r.id DESC LIMIT ?`;
   const res = await env.DB.prepare(sql).bind(...args, REPORTS_PAGE + 1).all();
   const rows = (res && res.results) || [];
   const more = rows.length > REPORTS_PAGE;
@@ -203,10 +260,14 @@ async function listReports(request, env, url, role, t) {
   ]);
   const reports = [];
   for (const r of page) {
-    const ink = parseJsonSafe(r.ink, []);
+    const isText = r.text_id !== null && r.text_id !== undefined;
+    const ink = isText ? [] : parseJsonSafe(r.ink, []);
     reports.push({
       id: r.id,
+      kind: isText ? 'text' : 'drawing',
       game: r.game,
+      text: isText ? r.text : null,
+      context: isText ? r.context || null : null,
       word: r.word || null,
       at: Number(r.at),
       created: Number(r.created),
@@ -231,6 +292,7 @@ async function listReports(request, env, url, role, t) {
     next: more && last ? `${Number(last.created)}.${last.id}` : null,
     open: Number(open && open.n) || 0,
     status,
+    kind,
     role,
     pending: found.pending,
   });
@@ -252,7 +314,10 @@ async function dismissReport(env, session, raw, t) {
 
 async function deleteReport(env, raw) {
   const id = reportId(raw);
-  const res = await env.DB.prepare('DELETE FROM party_reports WHERE id = ?').bind(id).run();
+  const [res] = await env.DB.batch([
+    env.DB.prepare('DELETE FROM party_reports WHERE id = ?').bind(id),
+    env.DB.prepare('DELETE FROM party_report_texts WHERE id = ?').bind(id),
+  ]);
   return json({ ok: true, deleted: Boolean(res && res.meta && res.meta.changes) });
 }
 

@@ -123,6 +123,15 @@ CREATE INDEX IF NOT EXISTS party_reports_status ON party_reports (status, create
 CREATE INDEX IF NOT EXISTS party_reports_pair ON party_reports (reporter_id, drawer_id, created);
 CREATE INDEX IF NOT EXISTS party_reports_ip ON party_reports (ip_hash, created);
 
+CREATE TABLE IF NOT EXISTS party_report_texts (
+  id TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  context TEXT,
+  ip_hash TEXT NOT NULL,
+  created INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_report_texts_ip ON party_report_texts (ip_hash, created);
+
 CREATE TABLE IF NOT EXISTS party_bans (
   id TEXT PRIMARY KEY,
   name TEXT,

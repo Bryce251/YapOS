@@ -1,7 +1,8 @@
-import hottakes, { KEY, ANSWER_MAX, seal, promptParts } from '../games/hottakes.js';
+import hottakes, { KEY, ANSWER_MAX, seal, promptParts, answerRef } from '../games/hottakes.js';
 import { cleanText, hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
 import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { textFlag } from '../ui/report.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
 export const VOTE_WAIT_MS = 6000;
@@ -199,6 +200,14 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
     return [promptLine(m, best ? best.text : null), notice];
   });
 
+  function reportable(m, c) {
+    return !m.lost && !c.isMine && Boolean(c.author);
+  }
+
+  function flagFor(m, c) {
+    return textFlag(engine, answerRef(m.n, m.nonce, c.id), { toast, corner: true });
+  }
+
   function writeStage(m) {
     if (m.wrote) {
       return h(
@@ -221,7 +230,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
       m.cards.map((c, i) =>
         h(
           'li',
-          { class: 'hottakes-item' },
+          { class: ['hottakes-item', c.isMine ? null : 'has-flag'] },
           h(
             'button',
             {
@@ -235,6 +244,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
             h('span', { class: 'hottakes-text', text: `“${c.text}”` }),
             c.isMine ? h('span', { class: 'hottakes-tag', text: 'Yours' }) : m.myVote === c.id ? h('span', { class: 'hottakes-tag is-vote', text: 'Your vote' }) : null,
           ),
+          c.isMine ? null : flagFor(m, c),
         ),
       ),
     );
@@ -249,7 +259,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
       m.cards.map((c, i) =>
         h(
           'li',
-          { class: 'hottakes-item' },
+          { class: ['hottakes-item', reportable(m, c) ? 'has-flag' : null] },
           h(
             'div',
             { class: ['hottakes-card', 'hottakes-result', `hottakes-tone-${i % 4}`, c.top ? 'is-top' : null, c.isMine ? 'is-own' : null], dataset: { key: `res-${c.id}` }, vars: { '--hottakes-order': i } },
@@ -274,6 +284,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
                   faces(c.voters, 6),
                 ),
           ),
+          reportable(m, c) ? flagFor(m, c) : null,
         ),
       ),
     );

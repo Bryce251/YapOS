@@ -511,6 +511,12 @@ test('the Draw & Guess toolbar has a bucket that fills on tap and live previews 
   byKey(drawer.v.el, 'undo').click();
   await r.clock.advance(1500);
   assert.equal(readInk(guesser.engine.snapshot().state, st.nonce).strokes.length, 1, 'undo removes a fill');
+  byKey(drawer.v.el, 'redo').click();
+  await r.clock.advance(1500);
+  assert.equal(readInk(guesser.engine.snapshot().state, st.nonce).strokes.length, 2, 'redo brings the fill back');
+  byKey(drawer.v.el, 'undo').click();
+  await r.clock.advance(1500);
+  assert.equal(readInk(guesser.engine.snapshot().state, st.nonce).strokes.length, 1);
   assert.deepEqual(drawer.ctx.at(10, 10), [34, 197, 94, 255]);
   byKey(drawer.v.el, 'size-2').click();
   assert.equal(tool.getAttribute('aria-pressed'), 'false', 'tapping a pen size goes back to drawing');

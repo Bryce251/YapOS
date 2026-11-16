@@ -495,3 +495,21 @@
 .telephone-hidden {
   color: var(--danger);
 }
+
+.telephone-said {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.telephone-said .telephone-bubble {
+  min-width: 0;
+}
+
+.telephone-prompt.telephone-flagged {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}

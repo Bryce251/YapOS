@@ -8,9 +8,23 @@ import { decodeStroke, paintInk, GRID_W, GRID_H } from '../../activity/js/games/
 
 export const REPORTS_PATH = '/api/party/reports';
 export const BANS_PATH = '/api/party/bans';
-export const GAME_NAMES = Object.freeze({ draw: 'Draw & Guess', odd: 'Odd One Out', telephone: 'Draw Telephone' });
+export const GAME_NAMES = Object.freeze({
+  draw: 'Draw & Guess',
+  odd: 'Odd One Out',
+  telephone: 'Draw Telephone',
+  hottakes: 'Hot Takes',
+  truths: 'Two Truths and a Lie',
+  chain: 'Word Chain',
+  emoji: 'Emoji Decode',
+  scramble: 'Scramble Race',
+  trivia: 'Trivia',
+  wyr: 'Would You Rather',
+  hive: 'Letter Hive',
+});
 export const ART_SCALE = 2;
 const FILTERS = [['open', 'Open'], ['dismissed', 'Dismissed'], ['all', 'All']];
+const KINDS = [['all', 'All'], ['drawing', 'Drawings'], ['text', 'Text']];
+const SNIPPET_MAX = 80;
 
 const str = (v) => (typeof v === 'string' && v ? v : '');
 
@@ -23,13 +37,17 @@ function readReport(r) {
   if (!r || typeof r !== 'object' || typeof r.id !== 'string') return null;
   const d = r.drawer && typeof r.drawer === 'object' ? r.drawer : {};
   const p = r.reporter && typeof r.reporter === 'object' ? r.reporter : {};
+  const kind = r.kind === 'text' ? 'text' : 'drawing';
   return {
     id: r.id,
+    kind,
     game: str(r.game),
     word: str(r.word),
+    text: kind === 'text' ? str(r.text) : '',
+    context: kind === 'text' ? str(r.context) : '',
     created: Number(r.created) || 0,
     status: r.status === 'dismissed' ? 'dismissed' : 'open',
-    ink: Array.isArray(r.ink) ? r.ink.filter((s) => typeof s === 'string') : [],
+    ink: kind === 'drawing' && Array.isArray(r.ink) ? r.ink.filter((s) => typeof s === 'string') : [],
     drawer: {
       id: str(d.id),
       name: str(d.name),
@@ -68,8 +86,18 @@ export function decodeInk(list) {
   return (Array.isArray(list) ? list : []).map(decodeStroke).filter(Boolean);
 }
 
-export function gameName(id) {
-  return GAME_NAMES[id] || 'Drawing game';
+export function gameName(id, kind = 'drawing') {
+  return GAME_NAMES[id] || (kind === 'text' ? 'YapOS Party' : 'Drawing game');
+}
+
+export function snippet(text, max = SNIPPET_MAX) {
+  const chars = Array.from(str(text));
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : chars.join('');
+}
+
+export function banReason(r) {
+  if (r.kind === 'text') return `Reported text in ${gameName(r.game, 'text')}${r.text ? `: "${snippet(r.text)}"` : ''}`;
+  return `Reported drawing in ${gameName(r.game)}${r.word ? ` (word: ${r.word})` : ''}`;
 }
 
 export function paintReport(canvas, ink) {
@@ -118,35 +146,42 @@ export function renderPartyReports(ctx) {
   }
 
   let filter = 'open';
+  let kind = 'all';
   let view = readReports(null);
   let bans = readBans(null);
 
   const openCount = h('span', { class: 'party-count' });
   const filterBar = h('div', { class: 'segmented', attrs: { role: 'group', 'aria-label': 'Show reports' } });
+  const kindBar = h('div', { class: 'segmented', attrs: { role: 'group', 'aria-label': 'Show what was reported' } });
   const listBody = h('div', { class: 'report-wrap' });
   const banCount = h('span', { class: 'party-count' });
   const banBody = h('div', { class: 'party-list-wrap' });
   const page = h('div', { class: 'page page-narrow party-page report-page' },
     pageHeader({
       title: 'Party reports',
-      description: 'When players flag a drawing in YapOS Party, a copy lands here with the name of whoever drew it. Ban someone to stop them joining games in every server. They can still watch.',
+      description: 'When players flag a drawing or something another player wrote in YapOS Party, a copy lands here with the name of whoever made it. Ban someone to stop them joining games in every server. They can still watch.',
       actions: state.partyOwner ? linkButton({ label: 'Party admins', href: '/party', icon: 'crown', size: 'sm' }) : null,
     }),
-    card({ title: 'Reports', icon: 'flag', actions: h('div', { class: 'report-tools' }, openCount, filterBar) }, listBody),
+    card({ title: 'Reports', icon: 'flag', actions: h('div', { class: 'report-tools' }, openCount, kindBar, filterBar) }, listBody),
     card({ title: 'Banned from Party', icon: 'ban', actions: banCount }, banBody));
   main.replaceChildren(page);
 
-  function drawFilters() {
-    replace(filterBar, ...FILTERS.map(([v, label]) => {
-      const b = button({ label, size: 'sm', variant: filter === v ? 'segment-active' : 'segment', onClick: () => {
-        if (filter === v) return;
-        filter = v;
+  function segments(bar, list, current, pick) {
+    replace(bar, ...list.map(([v, label]) => {
+      const b = button({ label, size: 'sm', variant: current === v ? 'segment-active' : 'segment', onClick: () => {
+        if (current === v) return;
+        pick(v);
         drawFilters();
         loadReports();
       } });
-      b.setAttribute('aria-pressed', filter === v ? 'true' : 'false');
+      b.setAttribute('aria-pressed', current === v ? 'true' : 'false');
       return b;
     }));
+  }
+
+  function drawFilters() {
+    segments(filterBar, FILTERS, filter, (v) => { filter = v; });
+    segments(kindBar, KINDS, kind, (v) => { kind = v; });
   }
 
   function failToast(err, title) {
@@ -166,10 +201,18 @@ export function renderPartyReports(ctx) {
 
   function reportItem(r) {
     const d = r.drawer;
-    const canvas = h('canvas', { class: 'report-canvas', width: GRID_W * ART_SCALE, height: GRID_H * ART_SCALE, attrs: { role: 'img', 'aria-label': `Reported drawing by ${drawerName(d)}` } });
-    const art = r.ink.length ? h('div', { class: 'report-art' }, canvas) : h('div', { class: 'report-art is-empty' }, h('span', { class: 'muted', text: 'No drawing was sent with this report.' }));
-    if (r.ink.length) paintReport(canvas, r.ink);
-    const tags = [badge(gameName(r.game), 'accent')];
+    const isText = r.kind === 'text';
+    let art;
+    if (isText) {
+      art = h('figure', { class: 'report-quote' },
+        h('blockquote', { class: 'report-quote-text', text: r.text || 'No text was sent with this report.' }),
+        r.context ? h('figcaption', { class: 'report-quote-context' }, h('span', { class: 'report-label', text: 'Context' }), h('span', { text: r.context })) : null);
+    } else {
+      const canvas = h('canvas', { class: 'report-canvas', width: GRID_W * ART_SCALE, height: GRID_H * ART_SCALE, attrs: { role: 'img', 'aria-label': `Reported drawing by ${drawerName(d)}` } });
+      art = r.ink.length ? h('div', { class: 'report-art' }, canvas) : h('div', { class: 'report-art is-empty' }, h('span', { class: 'muted', text: 'No drawing was sent with this report.' }));
+      if (r.ink.length) paintReport(canvas, r.ink);
+    }
+    const tags = [badge(gameName(r.game, r.kind), 'accent'), badge(isText ? 'Text' : 'Drawing', 'neutral', isText ? 'message' : 'palette')];
     if (r.status === 'dismissed') tags.push(badge('Dismissed', 'neutral'));
     if (d.banned) tags.push(badge('Banned', 'danger', 'ban'));
     if (d.role === 'owner') tags.push(badge('Owner', 'neutral', 'crown'));
@@ -181,15 +224,17 @@ export function renderPartyReports(ctx) {
     const note = d.role === 'admin' && view.role !== 'owner'
       ? h('p', { class: 'report-note', text: 'Only the owner can ban a party admin.' })
       : null;
-    return h('li', { class: ['report-item', r.status === 'dismissed' ? 'is-dismissed' : ''], dataset: { id: r.id } },
+    return h('li', { class: ['report-item', isText ? 'is-text' : '', r.status === 'dismissed' ? 'is-dismissed' : ''], dataset: { id: r.id, kind: r.kind } },
       art,
       h('div', { class: 'report-info' },
         h('div', { class: 'report-head' }, ...tags, h('time', { class: 'report-time', attrs: { datetime: new Date(r.created || 0).toISOString(), title: formatDate(r.created) }, text: relativeTime(r.created) })),
         h('dl', { class: 'report-facts' },
-          person('Drew it', d),
+          person(isText ? 'Wrote it' : 'Drew it', d),
           person('Reported by', r.reporter),
-          r.word ? h('div', { class: 'report-person' }, h('dt', { class: 'report-label', text: 'Word' }), h('dd', { class: 'report-word', text: r.word })) : null),
-        h('p', { class: 'report-note', text: "Names and ids come from the reporter's game, so treat them as claims. The line under an id shows what Yapin' says, when we know it." }),
+          !isText && r.word ? h('div', { class: 'report-person' }, h('dt', { class: 'report-label', text: 'Word' }), h('dd', { class: 'report-word', text: r.word })) : null),
+        h('p', { class: 'report-note', text: isText
+          ? "The game that saw these words sent this report, so treat names and ids as claims. The line under an id shows what Yapin' says, when we know it."
+          : "Names and ids come from the reporter's game, so treat them as claims. The line under an id shows what Yapin' says, when we know it." }),
         note,
         h('div', { class: 'report-actions' }, ...actions)));
   }
@@ -200,7 +245,7 @@ export function renderPartyReports(ctx) {
       replace(listBody, emptyState({
         icon: 'flag',
         title: filter === 'open' ? 'No open reports' : 'No reports here',
-        body: filter === 'open' ? 'Nothing needs a look right now. Flagged drawings show up here.' : 'Reports you dismiss stay here for 30 days.',
+        body: filter === 'open' ? `Nothing needs a look right now. ${kind === 'text' ? 'Flagged guesses, answers and other words' : kind === 'drawing' ? 'Flagged drawings' : 'Flagged drawings and words'} show up here.` : 'Reports you dismiss stay here for 30 days.',
         compact: true,
       }));
       return;
@@ -211,6 +256,7 @@ export function renderPartyReports(ctx) {
 
   function reportsUrl(before) {
     const q = new URLSearchParams({ status: filter });
+    if (kind !== 'all') q.set('kind', kind);
     if (before) q.set('before', before);
     return `${REPORTS_PATH}?${q}`;
   }
@@ -245,7 +291,7 @@ export function renderPartyReports(ctx) {
     });
     if (!ok || ctx.signal?.aborted) return;
     if (btn?.isConnected) setBusy(btn, true, 'Banning');
-    const reason = `Reported drawing in ${gameName(r.game)}${r.word ? ` (word: ${r.word})` : ''}`;
+    const reason = banReason(r);
     try {
       const data = await api.post(BANS_PATH, { id: d.id, reason, name: d.name || undefined, username: d.username || undefined }, { signal: ctx.signal });
       if (ctx.signal?.aborted) return;
@@ -293,7 +339,7 @@ export function renderPartyReports(ctx) {
   async function remove(r, btn) {
     const ok = await confirmDialog({
       title: 'Delete this report?',
-      body: 'The drawing and the report are gone for good. This does not ban or unban anyone.',
+      body: `The report and the ${r.kind === 'text' ? 'reported words' : 'drawing'} are gone for good. This does not ban or unban anyone.`,
       confirmLabel: 'Delete',
     });
     if (!ok || ctx.signal?.aborted) return;
