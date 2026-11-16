@@ -65,6 +65,11 @@ const BAD_LENGTH = "I couldn't read that length. Try something like 10m, 2h or 3
 const OWNER_ONLY = 'Only the bot owner can change this.';
 const MAX_WANTED = 25;
 const PROFILE_WORKERS = 4;
+const PEOPLE_TTL_MS = 12 * 60 * 60 * 1000;
+const PEOPLE_GONE_TTL_MS = 6 * 60 * 60 * 1000;
+const PEOPLE_PER_BOARD = 80;
+const PEOPLE_MAX = 2000;
+const PEOPLE_WAIT_MS = 15_000;
 const PROFILE_LOOKUP_MS = 5_000;
 const PROFILE_TEXT_MAX = 64;
 const PARTY_ROWS = 100;
@@ -292,7 +297,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     used: new Map(), snapped: new Map(), published: new Map(), pending: [],
     gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity, profileRun: null,
     reportsOpen: 0, partyStats: new Map(), partyAcks: [], shardAcks: [], ratesDirty: true, ratesRun: null,
-    catalogDirty: true, catalogRun: null, catalogMonth: null,
+    catalogDirty: true, catalogRun: null, catalogMonth: null, people: new Map(), peopleRun: null,
   };
 
   async function request(method, path, body) {
@@ -486,17 +491,56 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     return out;
   }
 
+  function freshPerson(id, t) {
+    const hit = state.people.get(id);
+    return hit && t - hit.at < (hit.user ? PEOPLE_TTL_MS : PEOPLE_GONE_TTL_MS) ? hit : null;
+  }
+
+  async function lookUpPeople(ids) {
+    if (typeof engine.bot?.user !== 'function') return;
+    const t = now();
+    const todo = [...new Set(ids)].filter((id) => SAFE_ID.test(id) && !freshPerson(id, t)).slice(0, PEOPLE_PER_BOARD);
+    let next = 0;
+    async function worker() {
+      while (next < todo.length) {
+        const id = todo[next++];
+        const out = await lookupProfile(id);
+        if (out.user) state.people.set(id, { at: now(), user: { name: profileText(out.user.display_name ?? out.user.displayName ?? null) || profileText(out.user.username), avatar: out.user.avatar_url ?? out.user.avatar_path ?? null } });
+        else if (out.gone) state.people.set(id, { at: now(), user: null });
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PROFILE_WORKERS, todo.length) }, worker));
+    if (state.people.size > PEOPLE_MAX) {
+      for (const key of [...state.people.keys()].slice(0, state.people.size - PEOPLE_MAX)) state.people.delete(key);
+    }
+  }
+
   async function globalBoard() {
     const known = await knownPeople();
-    const who = (u) => {
-      const m = known.get(u.id);
-      const saved = typeof u.name === 'string' && u.name.trim() ? plainName(u.name) : null;
-      return { name: m ? memberName(m) : saved || 'Someone', avatar_url: avatarUrl(m?.avatar_path ?? u.avatar_path ?? null) };
-    };
     const levelsSvc = engine.service('levels');
     const econSvc = engine.service('economy');
-    const levels = (levelsSvc?.ranked?.() || []).slice(0, TOP).map((u, i) => ({ rank: i + 1, id: u.id, ...who(u), level: u.level, xp: u.xp, messages: u.messages || 0 }));
-    const economy = (econSvc?.ranked?.() || []).slice(0, TOP).map((u, i) => ({ rank: i + 1, id: u.id, ...who(u), balance: u.bal }));
+    const levelRows = (levelsSvc?.ranked?.() || []).slice(0, TOP);
+    const econRows = (econSvc?.ranked?.() || []).slice(0, TOP);
+    const unknown = [...levelRows, ...econRows].map((u) => u.id).filter((id) => typeof id === 'string' && !known.has(id));
+    if (unknown.length) {
+      if (!state.peopleRun) state.peopleRun = lookUpPeople(unknown).catch(() => null).finally(() => { state.peopleRun = null; });
+      let timer;
+      const wait = new Promise((resolve) => {
+        timer = setTimeout(resolve, PEOPLE_WAIT_MS);
+        timer.unref?.();
+      });
+      await Promise.race([state.peopleRun, wait]);
+      clearTimeout(timer);
+    }
+    const who = (u) => {
+      const m = known.get(u.id);
+      const found = m ? null : state.people.get(u.id)?.user || null;
+      const saved = typeof u.name === 'string' && u.name.trim() ? plainName(u.name) : null;
+      const name = m ? memberName(m) : found?.name ? plainName(found.name) : saved || 'Someone';
+      return { name, avatar_url: avatarUrl(m?.avatar_path ?? found?.avatar ?? u.avatar_path ?? null) };
+    };
+    const levels = levelRows.map((u, i) => ({ rank: i + 1, id: u.id, ...who(u), level: u.level, xp: u.xp, messages: u.messages || 0 }));
+    const economy = econRows.map((u, i) => ({ rank: i + 1, id: u.id, ...who(u), balance: u.bal }));
     return { levels, economy, currency: { ...CURRENCY }, updatedAt: now() };
   }
 

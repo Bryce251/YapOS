@@ -1395,6 +1395,28 @@ test('one global board is published, with no server id and nobody dropped', asyn
   assert.deepEqual(w.board.economy[0].balance, 500);
 });
 
+test('people on the global board who are in none of the bot servers are looked up on Yapin once and cached', async () => {
+  const { h, dash } = await setup({ harness: { apps: ['levels'] } });
+  const far = 'b0000000-0000-4000-8000-0000000000aa';
+  const left = 'b0000000-0000-4000-8000-0000000000ab';
+  const asked = [];
+  h.engine.bot.user = async (id) => {
+    asked.push(id);
+    if (id === far) return { id, username: 'faraway', display_name: 'Far Away', avatar_path: 'far.png', email: 'x@example.test' };
+    throw Object.assign(new Error('nope'), { status: 404 });
+  };
+  h.engine.services.set('levels', { ranked: () => [{ id: far, level: 9, xp: 4000, messages: 50 }, { id: left, name: 'Old Name', level: 3, xp: 300 }, { id: IDS.member, level: 2, xp: 120 }] });
+  h.engine.services.set('economy', { ranked: () => [{ id: far, bal: 10 }] });
+  h.engine.settings.setEnabled(S, 'levels', true);
+  const board = await dash.globalBoard();
+  assert.deepEqual(board.levels.map((u) => u.name), ['Far Away', 'Old Name', 'Sam']);
+  assert.ok(board.levels[0].avatar_url && board.levels[0].avatar_url.includes('far.png'));
+  assert.equal(JSON.stringify(board).includes('x@example.test'), false);
+  assert.deepEqual(asked.sort(), [far, left].sort());
+  await dash.globalBoard();
+  assert.equal(asked.length, 2, 'cached between boards');
+});
+
 test('profiles the dashboard asks for are looked up with bot.user and uploaded with public fields only', async () => {
   const { h, w, dash } = await setup();
   const asked = [];
