@@ -3,6 +3,7 @@ import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanText, cleanUsername, cleanAvatar } from './profiles.js';
 import { PARTY_BADGES, badgesFor } from './party-badges.js';
 import { findBlocked } from '../web/activity/js/filter.js';
+import { readCatalog } from './owner.js';
 
 export const MAX_SNAPSHOTS = 50;
 export const MAX_BADGES = 64;
@@ -156,11 +157,12 @@ export async function getPublicProfile(request, env, raw, t) {
     .bind(name.toLowerCase())
     .first();
   if (!row) return missing();
-  const [settings, stats, streak, prof] = await Promise.all([
+  const [settings, stats, streak, prof, catalog] = await Promise.all([
     env.DB.prepare('SELECT hidden, show_shards, claimed, updated FROM profile_settings WHERE user_id = ?').bind(row.user_id).first(),
     env.DB.prepare('SELECT games, wins, by_game, counters FROM party_stats WHERE user_id = ?').bind(row.user_id).first(),
     env.DB.prepare('SELECT best FROM party_daily_streaks WHERE user_id = ?').bind(row.user_id).first(),
     env.DB.prepare('SELECT avatar_url, missing FROM profiles WHERE id = ?').bind(row.user_id).first(),
+    readCatalog(env.DB).catch(() => ({ achievements: [], badges: [] })),
   ]);
   const view = applySettings(row, settings);
   if (view.hidden) return missing();
@@ -188,7 +190,8 @@ export async function getPublicProfile(request, env, raw, t) {
     party,
     updatedAt: Number(row.updated) || null,
   };
-  return json({ profile, partyBadges: PARTY_BADGES }, 200, { 'Cache-Control': 'public, max-age=30' });
+  const pick = (list) => (Array.isArray(list) ? list : []).filter((x) => x && typeof x.id === 'string').map((x) => ({ id: x.id, label: x.label, emoji: x.emoji || null }));
+  return json({ profile, partyBadges: PARTY_BADGES, catalog: { achievements: pick(catalog.achievements), badges: pick(catalog.badges) } }, 200, { 'Cache-Control': 'public, max-age=30' });
 }
 
 async function readVisibility(env, userId) {

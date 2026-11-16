@@ -208,9 +208,9 @@ export const GIFT_BADGES = Object.freeze([
   Object.freeze({ id: 'supporter', label: 'Supporter', emoji: '💖' }),
   Object.freeze({ id: 'early-bird', label: 'Early bird', emoji: '🐣' }),
   Object.freeze({ id: 'bug-hunter', label: 'Bug hunter', emoji: '🐛' }),
-  Object.freeze({ id: 'vip', label: 'VIP', emoji: '⭐' }),
-  Object.freeze({ id: 'event-winner', label: 'Event winner', emoji: '🎖️' }),
-  Object.freeze({ id: 'legend', label: 'YapOS legend', emoji: '🏆' }),
+  Object.freeze({ id: 'vip', label: 'VIP', emoji: '🎩' }),
+  Object.freeze({ id: 'event-winner', label: 'Event winner', emoji: '🎊' }),
+  Object.freeze({ id: 'legend', label: 'YapOS legend', emoji: '🌠' }),
 ]);
 
 export const BADGE_NS = 'badges';

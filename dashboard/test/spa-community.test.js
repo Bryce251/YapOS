@@ -101,7 +101,7 @@ test('profile data is read kindly, with badge names from the worker catalog', ()
   assert.equal(p.wins, 11);
   assert.equal(p.shards, null);
   assert.deepEqual(p.badges.map((b) => b.label), ['First game', 'Winner', 'Brand new']);
-  assert.deepEqual(p.achievements.map((a) => a.label), ['Sent 10k messages', 'Custom one']);
+  assert.deepEqual(p.achievements.map((a) => a.label), ['Town crier', 'Custom one']);
   assert.deepEqual(p.season.map((s) => s.month), ['2026-10', '2026-09']);
   assert.equal(p.clan.colour, '#7c5cff');
   assert.deepEqual(p.favourites.map((f) => [f.name, f.plays, f.won]), [['Draw & Guess', 20, 6], ['Letter Hive', 8, 0]]);
@@ -400,4 +400,39 @@ test('pack reports come from their own list and keep the reason as text', () => 
   assert.equal(v.reports[0].pack.public, true);
   assert.equal(v.reports[1].pack.gone, true);
   assert.equal(v.reports[1].status, 'dismissed');
+});
+
+test('every achievement and badge YapOS can give has its own emoji and name, not the plain medal', async () => {
+  const { normalizeProfile, ACHIEVEMENTS, BADGES } = await import('../web/js/community-data.js');
+  const { GIFT_BADGES } = await import('../../engine/global.js');
+  const src = (await import('node:fs')).readFileSync(new URL('../../apps/achievements.js', import.meta.url), 'utf8');
+  const botAchievements = [...src.matchAll(/\{ id: '([a-z0-9]+)', icon: '([^']+)', name: '([^']+)'/g)].map((m) => ({ id: m[1], emoji: m[2], label: m[3] }));
+  assert.ok(botAchievements.length >= 17);
+  const p = normalizeProfile({
+    profile: {
+      name: 'Jakens',
+      username: 'Jakens',
+      level: 1,
+      badges: [...GIFT_BADGES.map((b) => b.id), 'season-xp-1-2026-10', 'season-shards-3-2026-09'],
+      achievements: botAchievements.map((a) => a.id),
+    },
+  });
+  for (const a of p.achievements) {
+    const bot = botAchievements.find((x) => x.id === a.id);
+    assert.equal(a.label, bot.label, a.id);
+    assert.equal(a.emoji, bot.emoji, a.id);
+    assert.equal(ACHIEVEMENTS[a.id].emoji, bot.emoji, a.id);
+  }
+  for (const b of GIFT_BADGES) {
+    const got = p.badges.find((x) => x.id === b.id);
+    assert.equal(got.emoji, b.emoji, b.id);
+    assert.equal(BADGES[b.id].emoji, b.emoji, b.id);
+  }
+  assert.deepEqual(p.badges.find((x) => x.id === 'season-xp-1-2026-10'), { id: 'season-xp-1-2026-10', label: '#1 XP · October 2026', emoji: '🥇' });
+  assert.equal(p.badges.find((x) => x.id === 'season-shards-3-2026-09').emoji, '🥉');
+  const all = [...p.badges, ...p.achievements];
+  assert.equal(all.filter((x) => x.emoji === '🏅' || x.emoji === '🎖️').length, 0);
+  const named = normalizeProfile({ profile: { name: 'A', achievements: ['newthing'], badges: ['shiny'] }, catalog: { achievements: [{ id: 'newthing', label: 'New thing', emoji: '🦄' }], badges: [{ id: 'shiny', label: 'Shiny', emoji: '✨' }] } });
+  assert.equal(named.achievements[0].emoji, '🦄');
+  assert.equal(named.badges[0].label, 'Shiny');
 });

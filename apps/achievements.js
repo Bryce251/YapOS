@@ -27,7 +27,7 @@ export const ACHIEVEMENTS = Object.freeze([
   { id: 'streak100', icon: '🌋', name: 'Unstoppable', desc: 'Reach a 100-day /daily streak', stat: 'streak', goal: 100, reward: 750 },
   { id: 'casino50', icon: '🎰', name: 'High roller', desc: 'Win 50 casino games', stat: 'casino', goal: 50, reward: 150 },
   { id: 'party10', icon: '🎉', name: 'Party starter', desc: 'Play 10 YapOS Party games', stat: 'party', goal: 10, reward: 50 },
-  { id: 'party100', icon: '🥳', name: 'Party animal', desc: 'Play 100 YapOS Party games', stat: 'party', goal: 100, reward: 300 },
+  { id: 'party100', icon: '🪩', name: 'Party animal', desc: 'Play 100 YapOS Party games', stat: 'party', goal: 100, reward: 300 },
   { id: 'partywin25', icon: '🏆', name: 'Party champion', desc: 'Win 25 YapOS Party games', stat: 'partyWins', goal: 25, reward: 200 },
   { id: 'quests10', icon: '📜', name: 'Errand runner', desc: 'Complete 10 daily quests', stat: 'quests', goal: 10, reward: 50 },
   { id: 'quests50', icon: '🗺️', name: 'Quest master', desc: 'Complete 50 daily quests', stat: 'quests', goal: 50, reward: 250 },

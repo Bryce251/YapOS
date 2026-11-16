@@ -35,19 +35,37 @@ export const BADGES = Object.freeze({
   'hottest-take-3': { label: 'Hottest take', emoji: '🌶️' },
   'reflex-5': { label: 'Lightning reflexes', emoji: '⚡' },
   'daily-7': { label: 'Daily devotee', emoji: '📅' },
+  'yapos-team': { label: 'YapOS team', emoji: '🛠️' },
+  supporter: { label: 'Supporter', emoji: '💖' },
+  'early-bird': { label: 'Early bird', emoji: '🐣' },
+  'bug-hunter': { label: 'Bug hunter', emoji: '🐛' },
+  vip: { label: 'VIP', emoji: '🎩' },
+  'event-winner': { label: 'Event winner', emoji: '🎊' },
+  legend: { label: 'YapOS legend', emoji: '🌠' },
 });
 
 export const ACHIEVEMENTS = Object.freeze({
-  'messages-1k': { label: 'Sent 1k messages', emoji: '💬' },
-  'messages-10k': { label: 'Sent 10k messages', emoji: '📣' },
-  'casino-50': { label: 'Won 50 casino games', emoji: '🎰' },
-  'tickets-100': { label: 'Opened 100 tickets', emoji: '🎫' },
-  'daily-7': { label: '7 day streak', emoji: '🔥' },
-  'daily-30': { label: '30 day streak', emoji: '🔥' },
-  'daily-100': { label: '100 day streak', emoji: '🌋' },
-  'level-10': { label: 'Reached level 10', emoji: '⭐' },
-  'level-50': { label: 'Reached level 50', emoji: '🌟' },
-  'tournament-1': { label: 'Won a tournament', emoji: '🏆' },
+  msgs1k: { label: 'Chatterbox', emoji: '💬' },
+  msgs10k: { label: 'Town crier', emoji: '📣' },
+  level10: { label: 'Rising star', emoji: '📈' },
+  level25: { label: 'Regular', emoji: '🌟' },
+  level50: { label: 'Legend', emoji: '👑' },
+  streak7: { label: 'On a roll', emoji: '🔥' },
+  streak30: { label: 'Devoted', emoji: '☄️' },
+  streak100: { label: 'Unstoppable', emoji: '🌋' },
+  casino50: { label: 'High roller', emoji: '🎰' },
+  party10: { label: 'Party starter', emoji: '🎉' },
+  party100: { label: 'Party animal', emoji: '🪩' },
+  partywin25: { label: 'Party champion', emoji: '🏆' },
+  quests10: { label: 'Errand runner', emoji: '📜' },
+  quests50: { label: 'Quest master', emoji: '🗺️' },
+  tickets100: { label: 'Frequent flyer', emoji: '🎫' },
+  clanfound: { label: 'Founder', emoji: '🛡️' },
+  clanjoin: { label: 'Better together', emoji: '🤝' },
+  'messages-1k': { label: 'Chatterbox', emoji: '💬' },
+  'messages-10k': { label: 'Town crier', emoji: '📣' },
+  'casino-50': { label: 'High roller', emoji: '🎰' },
+  'tickets-100': { label: 'Frequent flyer', emoji: '🎫' },
 });
 
 export const SEASON_KINDS = Object.freeze({
@@ -83,17 +101,30 @@ function catalogFrom(list, base) {
   return out;
 }
 
+const SEASON_BADGE_RE = /^season-(xp|shards)-(\d{1,2})-(\d{4}-\d{2})$/;
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+export function seasonBadge(id) {
+  const m = SEASON_BADGE_RE.exec(str(id));
+  if (!m) return null;
+  const rank = Number(m[2]);
+  const [y, mo] = m[3].split('-').map(Number);
+  if (!rank || mo < 1 || mo > 12) return null;
+  const medal = ['🥇', '🥈', '🥉'][rank - 1] || '🎖️';
+  return { label: `#${rank} ${m[1] === 'xp' ? 'XP' : 'Shards'} · ${MONTHS[mo - 1]} ${y}`, emoji: medal };
+}
+
 function catalogItem(entry, catalog, fallbackEmoji) {
   if (typeof entry === 'string') {
     const id = entry.trim();
     if (!id) return null;
-    const known = catalog[id];
+    const known = catalog[id] || seasonBadge(id);
     return { id, label: known?.label || humanize(id), emoji: known?.emoji || fallbackEmoji };
   }
   if (!entry || typeof entry !== 'object') return null;
   const id = str(entry.id);
   if (!id) return null;
-  const known = catalog[id];
+  const known = catalog[id] || seasonBadge(id);
   const emoji = str(entry.emoji);
   return { id, label: str(entry.label) || str(entry.name) || known?.label || humanize(id), emoji: emoji && Array.from(emoji).length <= 4 ? emoji : (known?.emoji || fallbackEmoji) };
 }
@@ -102,8 +133,8 @@ export function badgeInfo(entry, catalog = BADGES) {
   return catalogItem(entry, catalog, '🏅');
 }
 
-export function achievementInfo(entry) {
-  return catalogItem(entry, ACHIEVEMENTS, '🎖️');
+export function achievementInfo(entry, catalog = ACHIEVEMENTS) {
+  return catalogItem(entry, catalog, '🎖️');
 }
 
 export function xpForLevel(level) {
@@ -162,10 +193,11 @@ export function normalizeProfile(input) {
   const shards = toNumber(p.shards);
   const party = p.party && typeof p.party === 'object' ? p.party : {};
   const seenBadges = new Set();
-  const catalog = catalogFrom(input?.partyBadges, BADGES);
+  const catalog = catalogFrom(input?.catalog?.badges, catalogFrom(input?.partyBadges, BADGES));
   const badges = (Array.isArray(p.badges) ? p.badges : []).map((b) => badgeInfo(b, catalog)).filter((b) => b && !seenBadges.has(b.id) && seenBadges.add(b.id));
   const seenAch = new Set();
-  const achievements = (Array.isArray(p.achievements) ? p.achievements : []).map(achievementInfo).filter((a) => a && !seenAch.has(a.id) && seenAch.add(a.id));
+  const achCatalog = catalogFrom(input?.catalog?.achievements, ACHIEVEMENTS);
+  const achievements = (Array.isArray(p.achievements) ? p.achievements : []).map((a) => achievementInfo(a, achCatalog)).filter((a) => a && !seenAch.has(a.id) && seenAch.add(a.id));
   return {
     id: str(p.id),
     name,
