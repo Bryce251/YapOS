@@ -382,3 +382,30 @@ CREATE TABLE IF NOT EXISTS party_games_day (
   PRIMARY KEY (user_id, day)
 );
 CREATE INDEX IF NOT EXISTS party_games_day_day ON party_games_day (day);
+
+CREATE TABLE IF NOT EXISTS activity_links (
+  code_hash TEXT PRIMARY KEY,
+  poll_hash TEXT NOT NULL UNIQUE,
+  expect TEXT,
+  user_id TEXT,
+  username TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+  created INTEGER NOT NULL,
+  expires INTEGER NOT NULL,
+  approved INTEGER
+);
+CREATE INDEX IF NOT EXISTS activity_links_expires ON activity_links (expires);
+
+CREATE TABLE IF NOT EXISTS activity_sessions (
+  id_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  username TEXT NOT NULL,
+  display_name TEXT,
+  avatar_url TEXT,
+  created INTEGER NOT NULL,
+  expires INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS activity_sessions_user ON activity_sessions (user_id);
+CREATE INDEX IF NOT EXISTS activity_sessions_expires ON activity_sessions (expires);

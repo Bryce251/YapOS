@@ -84,7 +84,9 @@ export function markNames(root, marks = {}) {
 }
 
 export function avatar(p, size = 'md') {
-  const wrap = h('span', { class: ['avatar', `avatar-${size}`], vars: { '--hue': p.hue ?? 20 }, attrs: { 'aria-hidden': 'true', 'data-uid': uidOf(p) } });
+  const uid = uidOf(p);
+  const named = typeof p.name === 'string' && p.name ? p.name.slice(0, 64) : null;
+  const wrap = h('span', { class: ['avatar', `avatar-${size}`], vars: { '--hue': p.hue ?? 20 }, attrs: { 'aria-hidden': 'true', 'data-uid': uid, 'data-profile-id': uid, 'data-profile-name': uid ? named : null } });
   if (p.avatar) {
     wrap.classList.add('has-img');
     const img = h('img', { alt: '', attrs: { loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', draggable: 'false' } });
@@ -101,11 +103,45 @@ export function avatar(p, size = 'md') {
   return wrap;
 }
 
-export function who(p, { size = 'md', you = true, extra = null } = {}) {
+export function profileLabel(p) {
+  if (p && p.isMe) return 'View your profile';
+  const name = p && p.name ? String(p.name) : 'this player';
+  return `View ${name}'s profile`;
+}
+
+function pressOnKey(e) {
+  if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+  if (typeof e.preventDefault === 'function') e.preventDefault();
+  if (e.repeat) return;
+  e.currentTarget.click();
+}
+
+export function profileButton(p, size = 'md', { host = false, status = null, ring = null } = {}) {
+  const id = uidOf(p);
+  const face = avatar(p, size);
+  const kids = [
+    face,
+    host ? h('span', { class: 'avatar-crown', text: '👑', attrs: { 'aria-hidden': 'true' } }) : null,
+    status ? h('span', { class: ['avatar-status', status === 'on' ? 'is-on' : 'is-off'], attrs: { 'aria-hidden': 'true' } }) : null,
+  ];
+  const cls = ['avatar-btn', `avatar-btn-${size}`, p && p.isMe ? 'is-you' : null, host ? 'is-host' : null, ring ? `ring-${ring}` : null, p && p.present === false ? 'is-offline' : null];
+  if (!id) return h('span', { class: cls.concat('is-static') }, kids);
+  return h(
+    'span',
+    {
+      class: cls,
+      attrs: { role: 'button', tabindex: '0', 'aria-label': profileLabel(p), 'aria-haspopup': 'dialog', 'data-profile-id': id },
+      on: { keydown: pressOnKey },
+    },
+    kids,
+  );
+}
+
+export function who(p, { size = 'md', you = true, extra = null, profile = false, host = false } = {}) {
   return h(
     'span',
     { class: 'who' },
-    avatar(p, size),
+    profile ? profileButton(p, size, { host }) : avatar(p, size),
     h(
       'span',
       { class: 'who-text' },

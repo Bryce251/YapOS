@@ -1,4 +1,5 @@
-import { h, button, avatar } from './dom.js';
+import { h, button } from './dom.js';
+import { pfp } from './pfp.js';
 
 export const PRESETS_KEY = 'yapos.party.presets';
 export const PRESETS_MAX = 5;
@@ -142,7 +143,7 @@ export function hostBar(m, { onOpen, onLate, onRemove }) {
               h(
                 'li',
                 { class: 'host-player' },
-                avatar(p, 'xs'),
+                pfp(p, 'sm'),
                 h('span', { class: 'host-player-name', text: p.name }),
                 p.safe ? null : button('Remove', { variant: 'ghost', size: 'sm', key: `remove-${p.slot}`, on: () => onRemove(p.slot), attrs: { title: `Move ${p.name} to watching for this game` } }),
               ),

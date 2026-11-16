@@ -1,7 +1,6 @@
-import { h, avatar, uidOf } from './dom.js';
+import { h, uidOf, profileButton } from './dom.js';
 import { floatText, burstFrom } from './juice.js';
 
-const MEDALS = ['🥇', '🥈', '🥉'];
 export const COUNT_MS = 650;
 export const TOP_COUNT = 3;
 const seen = new Map();
@@ -94,7 +93,7 @@ function cheer(el, gain, rankUp, mine) {
     if (!el.isConnected) return;
     const spot = el.querySelector('.board-num, .board-pts') || el;
     if (gain) floatText(spot, `+${fmt(gain)}`);
-    if (rankUp) burstFrom(el, { count: 8, spread: 46, size: 6, colors: ['var(--amber)', '#ffd76a', 'var(--accent-text)'] });
+    if (rankUp) burstFrom(el, { count: 8, spread: 46, size: 6, colors: ['var(--gold)', 'var(--glow-a)', 'var(--glow-b)'] });
   });
 }
 
@@ -129,7 +128,7 @@ function face(r, size, mark) {
   return h(
     'span',
     { class: 'board-face' },
-    avatar(r, size),
+    profileButton(r, size, { ring: r.place === 1 && r.pts > 0 ? 'lead' : null }),
     mark ? h('span', { class: 'board-badge', text: mark.icon, dataset: { badge: mark.label || 'marked' }, attrs: { title: mark.label || '', 'aria-label': mark.label || '' } }) : null,
   );
 }
@@ -151,7 +150,7 @@ function card(r, opts, scope, idx, count) {
       attrs: { title: r.username ? `${r.name} (@${r.username})` : r.name },
       vars: { '--rise': Math.max(0, count - 1 - idx), '--shift': move.shift || null },
     },
-    h('span', { class: 'board-medal', text: MEDALS[r.place - 1] || String(r.place), attrs: { 'aria-label': `Place ${r.place}` } }),
+    h('span', { class: ['board-medal', 'medal', `medal-${Math.min(r.place, 4)}`], text: String(r.place), attrs: { 'aria-label': `Place ${r.place}` } }),
     face(r, 'md', mark),
     h(
       'span',

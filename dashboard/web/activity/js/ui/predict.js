@@ -1,4 +1,5 @@
 import { h, avatar, countdown } from './dom.js';
+import { pfp } from './pfp.js';
 import { PARTY_SHARDS_PREDICTION } from '../admin.js';
 
 export const PREDICT_TITLE = 'Who wins this round?';
@@ -20,7 +21,7 @@ export function predictBox(m, onPick) {
   return h(
     'div',
     { class: 'predict', attrs: { role: 'group', 'aria-label': PREDICT_TITLE } },
-    h('div', { class: 'predict-head' }, h('strong', { class: 'predict-title', text: PREDICT_TITLE }), h('span', { class: 'predict-hint muted', text: `Free pick. Get it right for +${PARTY_SHARDS_PREDICTION} 💎.` })),
+    h('div', { class: 'predict-head' }, h('span', { class: 'predict-icon', text: '🔮', attrs: { 'aria-hidden': 'true' } }), h('strong', { class: 'predict-title', text: PREDICT_TITLE }), h('span', { class: 'predict-hint muted', text: `Free pick. Get it right for +${PARTY_SHARDS_PREDICTION} 💎.` })),
     countdown(m.from, m.until, { lead: 'Picks close in', label: 'Time left to pick' }),
     h(
       'div',
@@ -35,8 +36,9 @@ export function predictBox(m, onPick) {
             attrs: { 'aria-pressed': m.mine === p.slot ? 'true' : 'false' },
             on: { click: () => onPick(p.slot) },
           },
-          avatar(p, 'xs'),
+          avatar(p, 'sm'),
           h('span', { class: 'predict-name', text: p.name }),
+          m.mine === p.slot ? h('span', { class: 'predict-check', text: '✓', attrs: { 'aria-hidden': 'true' } }) : null,
         ),
       ),
     ),
@@ -65,7 +67,7 @@ export function predictResultsModel(snap) {
   const rows = pr.picks.map((x) => {
     const who = byId.get(x.id);
     const pick = bySlot.get(x.slot);
-    return { id: x.id, name: who ? who.name : 'Watcher', isMe: Boolean(who && who.isMe), pick: pick ? pick.name : 'Player', right: wins.includes(x.slot) };
+    return { id: x.id, name: who ? who.name : 'Watcher', isMe: Boolean(who && who.isMe), initials: who ? who.initials : 'W', hue: who ? who.hue : 20, avatar: who ? who.avatar || null : null, pick: pick ? pick.name : 'Player', right: wins.includes(x.slot) };
   });
   rows.sort((a, b) => Number(b.right) - Number(a.right) || a.name.localeCompare(b.name));
   return { rows, right: rows.filter((r) => r.right).length, counted: Array.isArray(last.ps) && last.ps.length >= 2 };
@@ -76,7 +78,7 @@ export function predictResults(m) {
   return h(
     'div',
     { class: 'card glass predict-card' },
-    h('div', { class: 'card-head' }, h('h3', { class: 'card-title', text: 'Watcher picks' }), h('span', { class: 'count-pill', text: `${m.right} of ${m.rows.length} right` })),
+    h('div', { class: 'card-head' }, h('span', { class: 'card-icon', text: '🔮', attrs: { 'aria-hidden': 'true' } }), h('h3', { class: 'card-title', text: 'Watcher picks' }), h('span', { class: 'count-pill', text: `${m.right} of ${m.rows.length} right` })),
     h(
       'ul',
       { class: 'predict-list' },
@@ -85,6 +87,7 @@ export function predictResults(m) {
           'li',
           { class: ['predict-row', r.right ? 'is-right' : 'is-wrong', r.isMe ? 'is-me' : null] },
           h('span', { class: 'predict-mark', text: r.right ? '✓' : '✗', attrs: { 'aria-hidden': 'true' } }),
+          pfp(r, 'sm'),
           h('span', { class: 'predict-who', text: r.isMe ? `${r.name} (you)` : r.name }),
           h('span', { class: 'predict-arrow muted', text: 'picked' }),
           h('strong', { class: 'predict-on', text: r.pick }),

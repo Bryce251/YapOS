@@ -1,5 +1,17 @@
+.scramble-game {
+  --scramble-glow: color-mix(in srgb, var(--game) 75%, white);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.scramble-headwrap:empty,
+.scramble-result:empty {
+  display: none;
+}
+
 .scramble-board {
-  margin: var(--space-4) 0 var(--space-2);
+  margin: var(--space-4) 0 0;
 }
 
 .scramble-stage {
@@ -7,10 +19,28 @@
   flex-direction: column;
   align-items: center;
   gap: var(--space-4);
+  padding: var(--space-6) var(--space-5) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--game) 20%, transparent), transparent 70%), var(--surface);
+  box-shadow: var(--shadow-sm), var(--inset-hi);
 }
 
-.scramble-stage .eyebrow {
-  margin-top: 0;
+.scramble-stage.is-reveal {
+  background: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--success) 18%, transparent), transparent 70%), var(--surface);
+}
+
+.scramble-stage .scramble-eyebrow {
+  margin: 0;
+  color: color-mix(in srgb, var(--game) 70%, var(--text));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.scramble-stage.is-reveal .scramble-eyebrow {
+  color: color-mix(in srgb, var(--success) 70%, var(--text));
 }
 
 .scramble-tiles,
@@ -24,35 +54,35 @@
 }
 
 .scramble-tile {
-  --size: clamp(30px, 8.4vw, 54px);
+  --size: clamp(44px, 9vw, 60px);
   display: inline-grid;
   place-items: center;
   width: var(--size);
   height: var(--size);
   padding: 0;
-  border: 1px solid var(--border-strong);
-  border-bottom-width: 3px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-3);
+  border: 1px solid color-mix(in srgb, var(--game) 35%, var(--border-strong));
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--game) 10%, var(--surface-3)), var(--surface-2));
+  box-shadow: var(--inset-hi), inset 0 -4px 0 color-mix(in srgb, var(--game) 55%, transparent), 0 6px 16px -10px var(--game);
   color: var(--text);
   font: inherit;
-  font-size: clamp(20px, 5vw, var(--text-xl));
+  font-size: clamp(22px, 5vw, var(--text-xl));
   font-weight: var(--weight-heavy);
   line-height: 1;
   text-transform: uppercase;
   cursor: pointer;
   touch-action: manipulation;
-  transition: transform var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
+  transition: transform var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
 }
 
 .scramble-tile:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .scramble-tile:active:not(:disabled) {
-  transform: translateY(2px);
-  border-bottom-width: 1px;
+  transform: translateY(2px) scale(var(--press-scale));
+  box-shadow: var(--inset-hi), inset 0 -1px 0 color-mix(in srgb, var(--game) 55%, transparent);
 }
 
 .scramble-tile:disabled {
@@ -60,14 +90,15 @@
 }
 
 .scramble-tile.is-used {
-  opacity: 0.28;
-  transform: scale(0.92);
+  opacity: 0.25;
+  transform: scale(0.9);
+  box-shadow: none;
 }
 
 .scramble-tile.is-answer {
   border-color: var(--success-line);
-  border-bottom-color: var(--success);
-  background: var(--success-soft);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--success) 22%, var(--surface-3)), var(--success-soft));
+  box-shadow: var(--inset-hi), inset 0 -4px 0 color-mix(in srgb, var(--success) 60%, transparent), 0 8px 20px -12px var(--success);
   color: var(--success);
   cursor: default;
 }
@@ -84,46 +115,60 @@
 
 .scramble-slots {
   gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
 }
 
 .scramble-slot {
   display: inline-grid;
-  place-items: end center;
-  width: clamp(26px, 6.5vw, 38px);
-  height: clamp(34px, 8vw, 44px);
-  padding-bottom: var(--space-1);
-  border-bottom: 2px solid var(--border-strong);
+  place-items: center;
+  width: clamp(30px, 7vw, 42px);
+  height: clamp(38px, 8.5vw, 50px);
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  border-bottom: 3px solid var(--border-strong);
+  background: var(--surface);
   color: var(--text);
   font-size: clamp(20px, 5vw, 26px);
   font-weight: var(--weight-heavy);
   line-height: 1;
   text-transform: uppercase;
-  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
 }
 
 .scramble-slot.is-filled {
+  border-color: var(--game-line);
   border-bottom-color: var(--game);
+  background: var(--game-soft);
 }
 
 .scramble-slot.is-off {
+  border-color: var(--danger-line);
   border-bottom-color: var(--danger);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
 .scramble-slot.is-hint {
+  border-color: var(--warning-line);
   border-bottom-color: var(--warning);
+  background: var(--warning-soft);
   color: var(--warning);
 }
 
 .scramble-slot.is-solved {
+  border-color: var(--success-line);
   border-bottom-color: var(--success);
+  background: var(--success-soft);
   color: var(--success);
 }
 
 .scramble-hint {
   margin: 0;
   padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   border: 1px solid var(--warning-line);
   background: var(--warning-soft);
   color: var(--warning);
@@ -132,8 +177,9 @@
 }
 
 .scramble-entry {
-  max-width: 460px;
-  margin: var(--space-4) auto 0;
+  width: 100%;
+  max-width: 520px;
+  margin: var(--space-5) auto 0;
 }
 
 .scramble-entry.is-hidden {
@@ -145,14 +191,24 @@
 }
 
 .scramble-input {
+  min-height: var(--control-xl);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-heavy);
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   text-align: center;
+}
+
+.scramble-entry .entry-row .btn {
+  min-height: var(--control-xl);
+  min-width: 72px;
 }
 
 .scramble-input::placeholder {
   text-transform: none;
   letter-spacing: normal;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
 }
 
 .scramble-tools {
@@ -161,6 +217,16 @@
   justify-content: center;
   gap: var(--space-2);
   margin-top: var(--space-3);
+}
+
+.scramble-tools .btn {
+  min-height: var(--touch);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.scramble-entry .entry-hint {
+  text-align: center;
 }
 
 .scramble-result {
@@ -179,10 +245,11 @@
 
 .scramble-alt {
   padding: 2px var(--space-3);
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-strong);
   background: var(--surface-2);
   font-weight: var(--weight-bold);
+  letter-spacing: 0.04em;
   overflow-wrap: anywhere;
 }
 
@@ -193,6 +260,7 @@
 
 .scramble-none {
   margin: 0;
+  color: var(--text-2);
   text-align: center;
 }
 
@@ -212,22 +280,28 @@
   gap: var(--space-2);
   min-width: 0;
   max-width: 100%;
+  min-height: var(--touch);
   padding: var(--space-1) var(--space-3) var(--space-1) var(--space-2);
   border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: var(--surface-2);
+  box-shadow: var(--inset-hi);
   font-size: var(--text-xs);
+  animation: scramble-in var(--dur-enter) var(--ease-out);
 }
 
 .scramble-solver.is-me {
-  border-color: var(--game);
-  box-shadow: inset 0 0 0 1px var(--game);
+  border-color: var(--accent-line);
+  background: linear-gradient(90deg, var(--accent-soft), var(--surface-2) 70%);
+}
+
+.scramble-solver:first-child {
+  border-color: color-mix(in srgb, var(--gold) 45%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 12%, transparent), var(--surface-2) 70%);
 }
 
 .scramble-medal {
-  min-width: 18px;
-  text-align: center;
-  font-weight: var(--weight-heavy);
+  flex: none;
 }
 
 .scramble-solver-name {
@@ -235,6 +309,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
 }
 
@@ -266,14 +341,29 @@
   }
 }
 
+@keyframes scramble-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--enter-y)) scale(var(--enter-scale));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (hover: hover) {
   .scramble-tile:hover:not(:disabled) {
     border-color: var(--game);
-    transform: translateY(-2px);
+    transform: translateY(var(--hover-lift));
   }
 }
 
 @media (max-width: 420px) {
+  .scramble-stage {
+    padding: var(--space-5) var(--space-3) var(--space-4);
+  }
+
   .scramble-tiles,
   .scramble-answer {
     gap: var(--space-1);
@@ -281,12 +371,24 @@
 
   .scramble-slots {
     gap: var(--space-1);
+    padding: var(--space-2);
+  }
+}
+
+@media (max-width: 360px) {
+  .scramble-entry .entry-row {
+    flex-wrap: wrap;
+  }
+
+  .scramble-entry .entry-row .btn {
+    width: 100%;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .scramble-tiles.is-fresh .scramble-tile,
-  .scramble-answer.is-fresh .scramble-tile {
+  .scramble-answer.is-fresh .scramble-tile,
+  .scramble-solver {
     animation: none;
   }
 

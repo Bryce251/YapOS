@@ -203,6 +203,17 @@ function all(root) {
   return out;
 }
 
+function profileFaces(root, min) {
+  const faces = all(root).filter((n) => n.classList && n.classList.contains('avatar-btn') && n.getAttribute('data-profile-id'));
+  assert.ok(faces.length >= min, `expected at least ${min} profile avatars, got ${faces.length}`);
+  for (const f of faces) {
+    assert.equal(f.getAttribute('role'), 'button');
+    assert.equal(f.getAttribute('tabindex'), '0');
+    assert.match(f.getAttribute('aria-label'), /^View (your|.+'s) profile$/);
+  }
+  return faces;
+}
+
 function byKey(root, key) {
   return all(root).find((el) => el.dataset && el.dataset.key === key) || null;
 }
@@ -221,6 +232,7 @@ test('the view shows tiles, a keyboard and the other players, and taps send lett
   const el = views[0].el;
   assert.equal(all(el).filter((n) => n.classList && n.classList.contains('hangman-tile')).length, word.length);
   for (const n of all(el)) assert.equal(n.hasAttribute && n.hasAttribute('style'), false);
+  profileFaces(el, 2);
   const key = byKey(el, `letter-${word[0]}`);
   assert.ok(key);
   key.click();

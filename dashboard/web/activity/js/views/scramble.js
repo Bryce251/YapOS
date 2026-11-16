@@ -1,10 +1,9 @@
 import scramble, { REVEAL_MS, sameLetters, cleanGuess, blocked } from '../games/scramble.js';
 import { ready as dictReady, isWord, load as loadDictionary } from '../dictionary.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, profileButton, button, plural } from '../ui/dom.js';
 import { noteDaily, finishDaily, createDailyBox } from '../ui/daily.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
-const MEDALS = ['🥇', '🥈', '🥉'];
 export const RETRY_MS = 4000;
 
 export function ordinal(n) {
@@ -97,8 +96,8 @@ function faceRow(list) {
       h(
         'li',
         { class: ['scramble-solver', g.isMe ? 'is-me' : null], attrs: { title: g.isMe ? 'You' : g.name } },
-        h('span', { class: 'scramble-medal', text: MEDALS[g.place - 1] || `${g.place}`, attrs: { 'aria-hidden': 'true' } }),
-        avatar(g, 'xs'),
+        h('span', { class: ['medal', g.place <= 3 ? `medal-${g.place}` : null, 'scramble-medal'], text: String(g.place), attrs: { 'aria-label': `${ordinal(g.place)} place` } }),
+        profileButton(g, 'sm'),
         h('span', { class: 'scramble-solver-name', text: g.isMe ? 'You' : g.name }),
         h('span', { class: 'scramble-solver-pts', text: `+${g.pts}` }),
       ),
@@ -242,7 +241,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
       return h(
         'div',
         { class: 'scramble-stage is-reveal' },
-        h('span', { class: 'eyebrow', text: 'The word was' }),
+        h('span', { class: 'eyebrow scramble-eyebrow', text: 'The word was' }),
         h(
           'div',
           { class: ['scramble-answer', v.fresh ? 'is-fresh' : null], attrs: { 'aria-label': v.answer || '' } },
@@ -279,7 +278,7 @@ export function createScrambleView({ engine, fx, win, cues }) {
     return h(
       'div',
       { class: 'scramble-stage' },
-      h('span', { class: 'eyebrow', text: v.solved ? 'You unscrambled it!' : 'Unscramble this word' }),
+      h('span', { class: 'eyebrow scramble-eyebrow', text: v.solved ? 'You unscrambled it!' : 'Unscramble this word' }),
       h('div', { class: ['scramble-tiles', v.fresh ? 'is-fresh' : null], attrs: { role: 'group', 'aria-label': 'Scrambled letters' } }, tiles),
       h('div', { class: 'scramble-slots', attrs: { 'aria-hidden': 'true' } }, slots),
       v.hint && !v.solved ? h('p', { class: 'scramble-hint', text: `Hint: it starts with ${v.hint.toUpperCase()}` }) : null,

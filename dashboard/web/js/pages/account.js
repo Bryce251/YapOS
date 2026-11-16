@@ -4,6 +4,7 @@ import { ApiError } from '../api.js';
 import { profilePath } from '../router.js';
 import { state } from '../state.js';
 import { mountAsync } from './common.js';
+import { partySigninsCard } from './link.js';
 
 export const VISIBILITY_API = '/api/me/profile-visibility';
 
@@ -50,7 +51,8 @@ export function renderAccount(ctx) {
           h('span', { class: 'account-name', text: name }),
           user.username ? h('span', { class: 'account-handle', text: `@${user.username}` }) : null),
         viewLink)),
-    card({ title: 'Public profile', icon: 'globe' }, body, note)));
+    card({ title: 'Public profile', icon: 'globe' }, body, note),
+    partySigninsCard(ctx)));
 
   function draw(data) {
     let current = readVisibility(data);

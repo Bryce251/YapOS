@@ -1,5 +1,5 @@
 import hangman, { REVEAL_MS, WORD_COST, cleanLetter, cleanGuess } from '../games/hangman.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, profileButton, button, plural } from '../ui/dom.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
 const MEDALS = ['🥇', '🥈', '🥉'];
@@ -165,10 +165,10 @@ export function createHangmanView({ engine, fx, toast, win, cues }) {
         h(
           'li',
           { class: ['hangman-other', o.face.isMe ? 'is-me' : null, o.rank ? 'is-solved' : null, o.out ? 'is-out' : null], vars: { '--found': o.share } },
-          avatar(o.face, 'xs'),
+          profileButton(o.face, 'sm'),
           h('span', { class: 'hangman-other-name', text: o.face.isMe ? 'You' : o.face.name }),
           h('span', { class: 'hangman-other-bar', attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'hangman-other-fill' })),
-          o.rank ? h('span', { class: 'hangman-other-rank', text: rankText(o.rank) }) : hearts(o.lives, 6, 'xs'),
+          o.rank ? h('span', { class: ['medal', o.rank <= 3 ? `medal-${o.rank}` : null, 'hangman-other-rank'], text: String(o.rank), attrs: { role: 'img', 'aria-label': `Solved in place ${o.rank}` } }) : hearts(o.lives, 6, 'xs'),
           o.gain ? h('span', { class: 'hangman-gain', text: `+${o.gain}` }) : null,
         ),
       ),

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { room, person } from './activity-kit.test.js';
 import { installDom } from './dom-shim.js';
+import { checkProfileFaces } from './talk-faces.js';
 import { configureAdmins, resetAdmins, refreshAdmins } from '../web/activity/js/admin.js';
 import hottakes, { KEY, ANSWER_PREFIX, ANSWER_MAX, RECAP_MS, VOTE_MS, VOTE_POINTS, TOP_BONUS, LATE_MIN_MS, seal, unseal, tally, chunk, revealMs, promptParts, buildDeck } from '../web/activity/js/games/hottakes.js';
 import { createHottakesView, footText, hottakesMoment } from '../web/activity/js/views/hottakes.js';
@@ -509,6 +510,7 @@ test('the view walks through writing, voting and the reveal with cues and no inl
     assert.ok(v.el.querySelector('.hottakes-blank.is-filled'));
     assert.match(v.el.querySelector('.hottakes-blank.is-filled').textContent, /my left shoe/);
     noInlineStyle(v.el);
+    checkProfileFaces(v.el, 6);
   }
   assert.match(text(views[2].el), /Yours was the hottest take/);
   assert.equal(confetti[2], 1);

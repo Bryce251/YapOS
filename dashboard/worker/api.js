@@ -11,6 +11,8 @@ import { browsePacks, packReportsRoute } from './pack-browse.js';
 import { getPublicProfile, visibilityRoute } from './public-profiles.js';
 import { getSeasons } from './seasons.js';
 import { getLeaderboard } from './party-leaderboard.js';
+import { getPartyProfile } from './party-profile.js';
+import { activityAuthRoute, isActivityAuthPath, linkSessionRoute } from './activity-auth.js';
 import { ownerApi } from './owner.js';
 import { parseDays, readStats } from './server-stats.js';
 import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
@@ -438,6 +440,8 @@ export async function handleApi(request, env, deps, url) {
     if (segs.length === 3 && segs[2] === 'leaderboard') return getLeaderboard(request, env, url, t);
     if (segs[2] === 'daily') return dailyRoute(request, env, segs, url, t);
     if (segs.length === 4 && segs[2] === 'pack') return getPublicPack(request, env, segs[3], t);
+    if (segs.length === 4 && segs[2] === 'profile') return getPartyProfile(request, env, segs[3], t);
+    if (isActivityAuthPath(segs)) return activityAuthRoute(request, env, segs, t) || fail(404, 'not_found', "That page of the dashboard doesn't exist.");
     return profileRoute(request, env, segs, url, t);
   }
 
@@ -487,6 +491,7 @@ export async function handleApi(request, env, deps, url) {
     return json({ user: publicUser(session), partyOwner: role === 'owner', partyAdmin: Boolean(role) });
   }
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-visibility') return visibilityRoute(request, env, session, t);
+  if (n === 2 && (route[0] === 'link' || (route[0] === 'me' && route[1] === 'party-signins'))) return linkSessionRoute(request, env, session, route, t);
   if (route[0] === 'party' && route[1] === 'pack-reports') return packReportsRoute(request, env, session, route, url, t);
   if (route[0] === 'party' && (route[1] === 'reports' || route[1] === 'bans')) return partyStaffRoute(request, env, session, route, url, t);
   if (route[0] === 'party') return partyRoute(request, env, session, route, t);

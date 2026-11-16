@@ -1,7 +1,7 @@
 import odd, { REVEAL_MS, INTRO_MS, TURN_MS, VOTE_MS, GUESS_MS, PEN_SIZE, STROKE_POINTS, CAP_MAX, fitStroke, compact } from '../games/odd.js';
 import { GRID_W, GRID_H, COLORS, ERASER, FILL, readInk, liveMessage, applyLive, pruneLive, quantise, strokeOn as inkStroke, fillOn, createPainter } from '../games/ink.js';
 import { SCALE, LIVE_MS, LIVE_CHARS, boardRows, BOARD_MAX, fillTool, markTool, flagModel, flagButton, flagDrawing, FLAG_ICON } from './draw.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, avatar, profileButton, button, plural } from '../ui/dom.js';
 import { board as scoreBoard } from '../ui/board.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
@@ -109,7 +109,7 @@ function faces(list) {
   return h(
     'span',
     { class: 'faces', attrs: { title: list.map((p) => (p.isMe ? 'You' : p.name)).join(', ') } },
-    list.slice(0, 7).map((p) => avatar(p, 'xs')),
+    list.slice(0, 7).map((p) => profileButton(p, 'xs')),
     list.length > 7 ? h('span', { class: 'faces-more', text: `+${list.length - 7}` }) : null,
   );
 }
@@ -392,7 +392,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
           'li',
           { class: ['odd-seat', s.up ? 'is-up' : null, s.present ? null : 'is-away', s.isMe ? 'is-me' : null, s.isOdd ? 'is-odd' : null], attrs: { title: s.isMe ? 'You' : s.name } },
           dot(s.color),
-          avatar(s, 'xs'),
+          profileButton(s, 'xs'),
           h('span', { class: 'odd-seat-name', text: s.isMe ? 'You' : s.name }),
           s.lines ? h('span', { class: 'odd-seat-lines', text: `✏️${s.lines}`, attrs: { 'aria-label': plural(s.lines, 'line', 'lines') } }) : null,
           s.voted ? h('span', { class: 'got-tick', text: '✓', attrs: { 'aria-label': 'Voted' } }) : null,
@@ -457,7 +457,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
       'div',
       { class: ['reveal-card', 'odd-reveal', m.caught && !m.stole ? 'is-caught' : 'is-escaped'], attrs: { 'aria-label': 'How the round went' } },
       h('p', { class: 'odd-reveal-head', text: headline(m) }),
-      m.odd ? h('div', { class: 'odd-reveal-who' }, avatar(m.odd, 'md'), h('span', { class: 'odd-reveal-name', text: m.odd.isMe ? 'You were the Odd One Out' : `${m.odd.name} was the Odd One Out` })) : null,
+      m.odd ? h('div', { class: 'odd-reveal-who' }, profileButton(m.odd, 'md'), h('span', { class: 'odd-reveal-name', text: m.odd.isMe ? 'You were the Odd One Out' : `${m.odd.name} was the Odd One Out` })) : null,
       h('p', { class: 'word-line' }, h('span', { class: 'muted', text: 'The word was ' }), h('strong', { class: 'word-reveal', text: m.word || '???' })),
       line ? h('p', { class: 'odd-reveal-guess', text: line }) : null,
       m.tally.length
@@ -468,7 +468,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
               h(
                 'li',
                 { class: ['odd-tally-row', t.isOdd ? 'is-odd' : null] },
-                avatar(t, 'xs'),
+                profileButton(t, 'xs'),
                 h('span', { class: 'odd-tally-name', text: t.isMe ? 'You' : t.name }),
                 h('span', { class: 'odd-tally-count', text: plural(t.count, 'vote', 'votes') }),
                 faces(t.by),
@@ -482,7 +482,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
         ? h(
             'ul',
             { class: 'reveal-got', attrs: { 'aria-label': 'Points this round' } },
-            m.gains.map((g) => h('li', { class: ['reveal-guess', g.isMe ? 'is-me' : null] }, avatar(g, 'xs'), h('span', { class: 'reveal-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'reveal-pts', text: `+${g.pts}` }))),
+            m.gains.map((g) => h('li', { class: ['reveal-guess', g.isMe ? 'is-me' : null] }, profileButton(g, 'xs'), h('span', { class: 'reveal-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'reveal-pts', text: `+${g.pts}` }))),
           )
         : null,
       won ? h('p', { class: 'odd-won', text: m.role === 'odd' ? 'Faker wins!' : 'Team win!' }) : null,

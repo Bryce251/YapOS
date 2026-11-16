@@ -228,7 +228,36 @@ test('the results screen shows awards, the reel, the upset line and both host bu
   find('again').click();
   assert.deepEqual(starts, [{ sameTeams: true }, null]);
   assert.ok(find('report-hl.0'), 'other people can report a highlight');
+  const faces = res.el.querySelectorAll('[data-profile-id]').filter((n) => n.getAttribute('role') === 'button');
+  const ids = new Set(host.snapshot().players.map((p) => p.id));
+  assert.ok(faces.length >= 2, 'the winner and the award winners open profiles');
+  for (const f of faces) {
+    assert.ok(ids.has(f.getAttribute('data-profile-id')), f.getAttribute('data-profile-id'));
+    assert.equal(f.getAttribute('tabindex'), '0');
+    assert.match(f.getAttribute('aria-label'), /^View (.+'s|your) profile$/);
+  }
+  const winner = res.el.querySelector('.winner-faces .avatar-btn');
+  assert.ok(winner && winner.className.includes('ring-glow'));
+  assert.ok(winner.querySelector('.avatar-crown'));
+  assert.ok(res.el.querySelector('.award-person .avatar-btn'));
+  assert.ok(find('again').className.includes('btn-cta'), 'Play again is the one glowing button');
   res.destroy();
+});
+
+test('tournament standings, watcher picks and host tools use clickable profile pictures', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const { tourCard } = await import('../web/activity/js/ui/tournament.js');
+  const { predictResults } = await import('../web/activity/js/ui/predict.js');
+  const { hostBar } = await import('../web/activity/js/ui/hosttools.js');
+  const p = (id, name, extra = {}) => ({ id, name, initials: name.slice(0, 1), hue: 40, avatar: null, isMe: false, ...extra });
+  const tour = tourCard({ i: 2, total: 3, done: true, games: [{ id: 'a', name: 'A', emoji: '🅰️' }], next: null, rows: [{ ...p('u1', 'Pip'), slot: 0, pts: 20, firsts: 1, gain: 10, place: 1 }, { ...p('u2', 'Juno'), slot: 1, pts: 12, firsts: 0, gain: 0, place: 2 }], champ: { ...p('u1', 'Pip'), slot: 0 } });
+  assert.equal(tour.querySelector('.tour-champ-face [data-profile-id]').getAttribute('data-profile-id'), 'u1');
+  assert.ok(tour.querySelector('.tour-place').className.includes('medal-1'));
+  for (const row of tour.querySelectorAll('.tour-row')) assert.ok(row.querySelector('.avatar-btn[data-profile-id]'));
+  const picks = predictResults({ rows: [{ ...p('w1', 'Watcher'), pick: 'Pip', right: true }], right: 1, counted: true });
+  assert.equal(picks.querySelector('.predict-row .avatar-btn').getAttribute('aria-label'), "View Watcher's profile");
+  const bar = hostBar({ open: true, lateLocked: false, players: [{ ...p('u2', 'Juno'), slot: 1, safe: false }] }, { onOpen() {}, onLate() {}, onRemove() {} });
+  assert.equal(bar.querySelector('.host-player .avatar-btn').getAttribute('data-profile-id'), 'u2');
 });
 
 test('the leaderboard link loads lazily and hides when the module is missing', async () => {

@@ -2,7 +2,7 @@ import telephone, { KEY as TEL_KEY, REACTS, REACT_NAMES, NEXT_MIN_MS, TEXT_MAX, 
 import { GRID_W, GRID_H, SIZES, SIZE_NAMES, CUSTOM, FILL, SEAT_CHUNKS, G_MAX, encodeParts, decodeStroke, quantise, fitSeat, strokeOn as inkStroke, fillOn, paintInk, createPainter } from '../games/ink.js';
 import { fillTool, markTool, flagModel, flagButton, flagDrawing, tintOfPen, pickTint } from './draw.js';
 import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, profileButton, button, plural } from '../ui/dom.js';
 import { textFlag } from '../ui/report.js';
 import { hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
@@ -149,7 +149,7 @@ function faceRow(p, verb, size = 'sm') {
   return h(
     'span',
     { class: 'who' },
-    avatar(p, size),
+    profileButton(p, size),
     h('span', { class: 'who-text' }, h('span', { class: 'who-line' }, h('strong', { class: 'who-name', text: p.isMe ? 'You' : p.name }), verb ? h('span', { class: 'who-verb', text: ` ${verb}` }) : null)),
   );
 }
@@ -643,7 +643,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
             'div',
             { class: 'telephone-working' },
             h('span', { class: 'muted', text: 'Still working:' }),
-            h('span', { class: 'faces' }, m.working.slice(0, 10).map((p) => avatar(p, 'xs'))),
+            h('span', { class: 'faces' }, m.working.slice(0, 10).map((p) => profileButton(p, 'xs'))),
           )
         : null,
     );

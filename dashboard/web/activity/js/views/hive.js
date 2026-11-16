@@ -1,5 +1,5 @@
 import hive, { checkWord, cleanWord, problemText, wordPoints, isPangram, knownWord, warm, veil, rankOf, MAX_LETTERS, REVEAL_MS } from '../games/hive.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, profileButton, button, plural } from '../ui/dom.js';
 import { noteDaily, finishDaily, createDailyBox } from '../ui/daily.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
@@ -702,7 +702,7 @@ export function createHiveView({ engine, fx, cues, timers }) {
     return h(
       'div',
       { class: 'hive-found' },
-      h('span', { class: 'eyebrow', text: f.words.length ? `You found ${plural(f.words.length, 'word', 'words')}` : 'Your words show up here' }),
+      h('span', { class: 'eyebrow hive-eyebrow', text: f.words.length ? `You found ${plural(f.words.length, 'word', 'words')}` : 'Your words show up here' }),
       f.words.length
         ? h(
             'ul',
@@ -722,7 +722,7 @@ export function createHiveView({ engine, fx, cues, timers }) {
         h(
           'li',
           { class: ['hive-player', p.isMe ? 'is-me' : null, p.present ? null : 'is-away', i === 0 && p.pts > 0 ? 'is-top' : null] },
-          avatar(p, 'sm'),
+          profileButton(p, 'sm', { ring: i === 0 && p.pts > 0 ? 'lead' : null }),
           h('span', { class: 'hive-player-name', text: p.isMe ? `${p.name} (you)` : p.name }),
           p.pangrams ? h('span', { class: 'hive-star', text: '🌟', attrs: { title: 'Found a pangram', 'aria-label': 'Found a pangram' } }) : null,
           h('span', { class: 'hive-player-stat', text: `${plural(p.count, 'word', 'words')} · ${p.pts}` }),
@@ -759,7 +759,7 @@ export function createHiveView({ engine, fx, cues, timers }) {
                 h(
                   'div',
                   { class: 'hive-card-head' },
-                  avatar(p, 'sm'),
+                  profileButton(p, 'md'),
                   h('strong', { class: 'hive-card-name', text: p.isMe ? `${p.name} (you)` : p.name }),
                   h('span', { class: 'hive-card-score', text: `${plural(p.count, 'word', 'words')} · ${plural(p.pts, 'point', 'points')}` }),
                 ),
@@ -773,7 +773,7 @@ export function createHiveView({ engine, fx, cues, timers }) {
         ? h(
             'div',
             { class: 'hive-missed' },
-            h('span', { class: 'eyebrow', text: r.lost ? 'Some great words in this hive' : 'Best words nobody found' }),
+            h('span', { class: 'eyebrow hive-eyebrow', text: r.lost ? 'Some great words in this hive' : 'Best words nobody found' }),
             h('ul', { class: 'hive-words' }, r.missed.map((x) => wordChip(x, 'is-missed'))),
             r.missedCount > r.missed.length ? h('p', { class: 'muted hive-more', text: `and ${r.missedCount - r.missed.length} more` }) : null,
           )

@@ -130,6 +130,17 @@ function all(node, out = []) {
   return out;
 }
 
+function profileFaces(root, min) {
+  const faces = all(root).filter((n) => n.classList && n.classList.contains('avatar-btn') && n.getAttribute('data-profile-id'));
+  assert.ok(faces.length >= min, `expected at least ${min} profile avatars, got ${faces.length}`);
+  for (const f of faces) {
+    assert.equal(f.getAttribute('role'), 'button');
+    assert.equal(f.getAttribute('tabindex'), '0');
+    assert.match(f.getAttribute('aria-label'), /^View (your|.+'s) profile$/);
+  }
+  return faces;
+}
+
 function text(node) {
   if (node.data !== undefined && !node.localName) return node.data;
   return (node.childNodes || []).map(text).join(' ');
@@ -722,6 +733,7 @@ test('the view: honeycomb typing, instant feedback, scores, reveal, all without 
   const s = st(r);
   const mine = views[0];
   noInlineStyles(mine.el);
+  profileFaces(mine.el, 2);
   assert.equal(played[0].includes('start'), false);
   assert.ok(text(mine.el).includes(`Make words with ${s.c.toUpperCase()}`));
   assert.ok(byKey(mine.el, 'hive-centre'));

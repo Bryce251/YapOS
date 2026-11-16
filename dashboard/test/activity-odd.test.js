@@ -858,3 +858,37 @@ test('each turn gets a fair share of what is left, and a full canvas re-simplifi
   assert.equal(all.length, raw.length + extra.length, 'every line keeps its place, so authors still line up');
   assert.deepEqual(all.slice(-extra.length), extra, 'the new line lands whole');
 });
+
+test('seat faces open the profile card, and vote buttons never nest another button', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = room(3, { games: [odd], seed: 11 });
+  await r.clock.advance(500);
+  const make2d = document.createElement.bind(document);
+  document.createElement = (tag) => {
+    const el = make2d(tag);
+    if (tag === 'canvas') el.getContext = () => new Proxy({}, { get: () => () => {}, set: () => true });
+    return el;
+  };
+  const win = { setTimeout: r.clock.setTimeout, clearTimeout: r.clock.clearTimeout };
+  const host = r.engines[0];
+  host.lobby.pick('odd');
+  host.lobby.setting('laps', 1);
+  host.lobby.setting('rounds', 1);
+  host.lobby.start();
+  await r.clock.advance(400);
+  const v = createOddView({ engine: r.engines[1], fx: { confetti() {} }, toast() {}, win });
+  v.update(r.engines[1].snapshot());
+  const seats = all(v.el).filter((x) => x.classList && x.classList.contains('odd-seat'));
+  assert.ok(seats.length >= 3);
+  for (const seat of seats) {
+    const face = all(seat).find((x) => x.getAttribute && x.getAttribute('role') === 'button');
+    assert.ok(face, 'each seat has a face button');
+    assert.ok(face.getAttribute('data-profile-id'));
+    assert.equal(face.getAttribute('tabindex'), '0');
+    assert.match(face.getAttribute('aria-label'), /^View (your profile|.+'s profile)$/);
+  }
+  for (const btn of all(v.el).filter((x) => x.localName === 'button')) {
+    assert.equal(all(btn).some((x) => x.getAttribute && x.getAttribute('role') === 'button'), false, 'no button inside a button');
+  }
+  v.destroy();
+});

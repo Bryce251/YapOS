@@ -3,7 +3,7 @@ import { GRID_W, GRID_H, SIZES, SIZE_NAMES, CUSTOM, FILL, encodeParts, decodeStr
 import { fillTool, markTool, flagModel, flagButton, flagDrawing, tintOfPen, pickTint } from './draw.js';
 import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
 import { decodeAll, inkSig, newSheet, emptySheet, refit, restoreSheet, writeSheet, sheetStale } from './telephone.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, profileButton, button, plural } from '../ui/dom.js';
 
 export const SCALE = 2;
 export const WRITE_GAP_MS = 700;
@@ -401,12 +401,12 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
       { class: ['sketchduel-task-card', m.word ? 'has-word' : null] },
       h('p', { class: 'sketchduel-lead', text: m.text }),
       m.word ? h('p', { class: 'sketchduel-word', text: m.word }) : null,
-      m.rival ? h('p', { class: 'sketchduel-rival muted' }, h('span', { text: 'Versus ' }), avatar(m.rival, 'xs'), h('strong', { text: m.rival.name })) : null,
+      m.rival ? h('p', { class: 'sketchduel-rival muted' }, h('span', { text: 'Versus ' }), profileButton(m.rival, 'xs'), h('strong', { text: m.rival.name })) : null,
       m.lineup.length
         ? h(
             'ul',
             { class: 'sketchduel-lineup' },
-            m.lineup.map((d) => h('li', { class: 'sketchduel-pair' }, avatar(d.a, 'xs'), h('span', { class: 'sketchduel-vs', text: 'vs' }), avatar(d.b, 'xs'), h('span', { class: 'sketchduel-pair-names', text: `${d.a.isMe ? 'You' : d.a.name} and ${d.b.isMe ? 'you' : d.b.name}` }))),
+            m.lineup.map((d) => h('li', { class: 'sketchduel-pair' }, profileButton(d.a, 'xs'), h('span', { class: 'sketchduel-vs', text: 'vs' }), profileButton(d.b, 'xs'), h('span', { class: 'sketchduel-pair-names', text: `${d.a.isMe ? 'You' : d.a.name} and ${d.b.isMe ? 'you' : d.b.name}` }))),
           )
         : null,
     ),
@@ -420,7 +420,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
     return h(
       'div',
       { class: ['sketchduel-side', `sketchduel-side-${s}`, picked ? 'is-picked' : null, reveal && info.win ? 'is-win' : null, reveal && !info.win && d.win ? 'is-lose' : null], dataset: { side: s } },
-      h('div', { class: 'sketchduel-who' }, avatar(info.who, 'sm'), h('strong', { class: 'sketchduel-name', text: info.who.isMe ? 'You' : info.who.name }), reveal && info.win ? h('span', { class: 'sketchduel-crown', text: d.win === 'tie' ? '🤝' : '👑', attrs: { 'aria-hidden': 'true' } }) : null),
+      h('div', { class: 'sketchduel-who' }, profileButton(info.who, 'sm'), h('strong', { class: 'sketchduel-name', text: info.who.isMe ? 'You' : info.who.name }), reveal && info.win ? h('span', { class: 'sketchduel-crown', text: d.win === 'tie' ? '🤝' : '👑', attrs: { 'aria-hidden': 'true' } }) : null),
       h(
         'div',
         { class: ['paper', 'sketchduel-mini', info.hidden ? 'is-hidden' : null] },
@@ -442,7 +442,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
             { class: 'sketchduel-score' },
             h('span', { class: 'sketchduel-votes', text: plural(info.votes || 0, 'vote', 'votes') }),
             info.pts ? h('span', { class: 'sketchduel-gain', text: `+${info.pts}` }) : null,
-            info.voters.length ? h('span', { class: 'faces' }, info.voters.slice(0, 6).map((p) => avatar(p, 'xs'))) : null,
+            info.voters.length ? h('span', { class: 'faces' }, info.voters.slice(0, 6).map((p) => profileButton(p, 'xs'))) : null,
           )
         : null,
       h('div', { class: 'flag-slot', dataset: { flag: s } }),

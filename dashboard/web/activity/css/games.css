@@ -44,8 +44,14 @@
 
 .word-input:focus-visible {
   outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 1px var(--focus);
+  border-color: var(--game, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--game, var(--accent)) 22%, transparent);
+}
+
+.word-input.is-invalid,
+.word-input[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
 }
 
 .word-input:disabled {
@@ -108,7 +114,22 @@
   display: inline-flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: var(--space-2);
+  gap: var(--space-3) var(--space-5);
+  max-width: 100%;
+}
+
+.blank-word {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.blank-word .blank {
+  flex: 0 1 auto;
+  min-width: 10px;
 }
 
 .blank {
@@ -1261,6 +1282,16 @@
   display: none;
 }
 
+.text-flag::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+}
+
+.text-flag:not(.is-corner) {
+  position: relative;
+}
+
 .text-flag:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -1530,5 +1561,15 @@
 
   .team-pts {
     font-size: var(--text-md);
+  }
+}
+
+@media (max-width: 360px) {
+  .entry-row {
+    flex-direction: column;
+  }
+
+  .entry-row .btn {
+    width: 100%;
   }
 }

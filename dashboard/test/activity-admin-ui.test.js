@@ -191,6 +191,7 @@ test('the ADMIN button shows only for admins and always sits next to End game', 
     assert.ok(btn, `owner sees ADMIN in ${phase}`);
     assert.match(text(btn), /ADMIN/);
     assert.match(btn.className, /btn-admin/);
+    assert.ok(btn.children.some((n) => n.classList && n.classList.contains('btn-icon')), 'ADMIN keeps an icon when the label is hidden on narrow frames');
     const actions = btn.parentNode;
     assert.match(actions.className, /top-actions/);
     if (phase === 'game') {

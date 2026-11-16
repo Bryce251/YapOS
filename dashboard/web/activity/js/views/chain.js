@@ -1,6 +1,6 @@
 import chain, { checkWord, usedFrom, PROBLEMS, MAX_LETTERS, wordRef, catProblem } from '../games/chain.js';
 import { load as loadDictionary } from '../dictionary.js';
-import { h, memo, timer, avatar, button, plural, clock } from '../ui/dom.js';
+import { h, memo, timer, profileButton, button, plural, clock } from '../ui/dom.js';
 import { textFlag } from '../ui/report.js';
 
 export function speedText(span) {
@@ -61,6 +61,11 @@ function hearts(n, max) {
 }
 
 const QUIET = { play() {}, burst() {}, float() {} };
+
+function idOf(snap, slot) {
+  const p = snap && Array.isArray(snap.players) ? snap.players.find((x) => x.slot === slot) : null;
+  return p && p.id !== undefined && p.id !== null ? p.id : null;
+}
 
 export function chainMoments(was, m) {
   const lives = new Map(m.players.map((p) => [p.slot, p.lives]));
@@ -199,7 +204,7 @@ export function createChainView({ engine, toast, cues, fx }) {
         h(
           'li',
           { class: ['chain-player', p.isCur ? 'is-up' : null, p.out ? 'is-out' : null, p.isMe ? 'is-me' : null, p.present ? null : 'is-away'] },
-          avatar(p, 'sm'),
+          profileButton(p, 'sm'),
           h('span', { class: 'chain-name', text: p.isMe ? `${p.name} (you)` : p.name }),
           hearts(p.lives, m.max),
         ),
@@ -219,7 +224,7 @@ export function createChainView({ engine, toast, cues, fx }) {
     h(
       'div',
       { class: ['chain-letter-wrap', m.hard ? 'is-hard' : null] },
-      h('span', { class: 'eyebrow', text: 'Next word starts with' }),
+      h('span', { class: 'eyebrow chain-eyebrow', text: 'Next word starts with' }),
       h('span', { class: 'chain-letter', text: (m.letter || '?').toUpperCase(), attrs: { 'aria-live': 'polite' } }),
     ),
     m.words.length
@@ -270,7 +275,7 @@ export function createChainView({ engine, toast, cues, fx }) {
       return;
     }
     paintHead(head, { count: m.count, phase: m.phase, starts: m.starts, ends: m.ends, until: m.until, span: m.span, fast: m.fast, sped: m.sped, bonus: m.bonus, extra: m.extra });
-    paintRing(ring, m);
+    paintRing(ring, { max: m.max, players: m.players.map((p) => ({ ...p, id: idOf(next, p.slot) })) });
     paintStage(stage, { letter: m.letter, words: m.words, cat: m.phase === 'turn' ? m.cat : null, catOn: m.catOn, hard: m.bonus && 'qxz'.includes(m.letter || '-') });
     paintVote(voteBox, { vote: m.vote, phase: m.phase, dict: m.dict });
     const badKey = m.bad ? `${m.t}:${m.bad.k}` : null;

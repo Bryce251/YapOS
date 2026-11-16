@@ -1,36 +1,67 @@
 .emoji-stage {
-  margin: var(--space-5) 0 var(--space-3);
+  margin: var(--space-4) 0 var(--space-3);
 }
 
 .emoji-card {
+  position: relative;
   display: grid;
   justify-items: center;
   gap: var(--space-4);
-  padding: var(--space-6) var(--space-4);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-strong);
-  background: var(--surface-2);
-  box-shadow: inset 0 3px 0 var(--game-line);
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  padding: var(--space-8) var(--space-5) var(--space-6);
+  border-radius: var(--radius-xl);
+  border: 1px solid color-mix(in srgb, var(--game) 24%, var(--border-strong));
+  background: radial-gradient(70% 90% at 50% 0%, color-mix(in srgb, var(--game) 20%, transparent), transparent 70%), var(--surface-2);
+  box-shadow: var(--inset-hi), inset 0 -3px 0 color-mix(in srgb, var(--game) 35%, transparent);
+  overflow: hidden;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+
+.emoji-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--stage-dots);
+  background-size: var(--stage-dots-size);
+  -webkit-mask-image: radial-gradient(70% 60% at 50% 0%, #000, transparent 75%);
+  mask-image: radial-gradient(70% 60% at 50% 0%, #000, transparent 75%);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.emoji-card > * {
+  position: relative;
 }
 
 .emoji-card.is-solved {
   border-color: var(--success);
-  box-shadow: inset 0 3px 0 var(--success), inset 0 0 0 1px var(--success);
+  background: radial-gradient(70% 90% at 50% 0%, var(--success-soft), transparent 70%), var(--surface-2);
+  box-shadow: var(--inset-hi), inset 0 0 0 1px var(--success), 0 0 40px -16px var(--success);
+}
+
+.emoji-card.is-reveal:not(.is-solved) {
+  border-color: var(--border-strong);
 }
 
 .emoji-row {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: var(--space-2) var(--space-3);
+  gap: var(--space-3);
   margin: 0;
-  font-size: clamp(40px, 11vw, 64px);
-  line-height: 1.15;
+  font-size: clamp(36px, 10vw, 60px);
+  line-height: 1;
 }
 
 .emoji-tile {
-  display: inline-block;
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.45em;
+  height: 1.45em;
+  padding: 0 0.15em;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--inset-hi), inset 0 -3px 0 color-mix(in srgb, var(--game) 40%, transparent), var(--shadow-sm);
   animation: emoji-in 400ms var(--pop) both;
   animation-delay: calc(var(--i, 0) * 100ms);
 }
@@ -40,20 +71,40 @@
   animation: none;
 }
 
+.emoji-card.is-solved .emoji-tile {
+  box-shadow: var(--inset-hi), inset 0 -3px 0 color-mix(in srgb, var(--success) 50%, transparent), var(--shadow-sm);
+}
+
 .emoji-answer {
   display: grid;
   justify-items: center;
   gap: var(--space-2);
   text-align: center;
+  animation: emoji-up var(--dur-enter) var(--ease-out) both;
+}
+
+.emoji-answer .eyebrow {
+  color: color-mix(in srgb, var(--game) 70%, var(--text));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.emoji-card.is-solved .emoji-answer .eyebrow {
+  color: var(--success);
 }
 
 .emoji-answer-text {
+  font-size: var(--text-hero);
+  letter-spacing: var(--tracking-tight);
   overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .emoji-hints {
   min-height: var(--control-md);
-  margin: 0 0 var(--space-3);
+  margin: 0 0 var(--space-4);
 }
 
 .emoji-hintrow {
@@ -64,27 +115,43 @@
   gap: var(--space-3) var(--space-4);
 }
 
+.emoji-cat {
+  border-color: var(--game-line);
+  background: var(--game-soft);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
 .emoji-cat.is-fresh {
   animation: pop 360ms var(--pop);
 }
 
 .emoji-cat.is-locked {
-  color: var(--text-3);
+  border-color: var(--border-strong);
   border-style: dashed;
+  background: transparent;
+  color: var(--text-3);
 }
 
 .emoji-blanks {
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
   animation: pop 360ms var(--pop);
 }
 
 .emoji-blanks .blank {
   width: 16px;
   height: 26px;
+  border-bottom-color: color-mix(in srgb, var(--game) 55%, var(--border-strong));
   font-size: var(--text-md);
 }
 
 .emoji-blanks .blank.is-gap {
   width: 14px;
+  border-bottom-color: transparent;
 }
 
 .emoji-blanks .blank.emoji-mark {
@@ -99,15 +166,35 @@
   text-align: center;
 }
 
+.emoji-entry {
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  box-shadow: var(--inset-hi);
+}
+
+.emoji-entry .entry-hint {
+  margin-bottom: 0;
+}
+
+.emoji-entry .entry-hint:empty {
+  display: none;
+}
+
 .emoji-entry.is-hidden {
   display: none;
+}
+
+.emoji-input {
+  background: var(--surface);
 }
 
 .emoji-tries {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin: var(--space-1) 0 0;
+  margin: var(--space-3) 0 0;
   padding: 0;
   list-style: none;
 }
@@ -117,11 +204,13 @@
   align-items: center;
   gap: var(--space-2);
   max-width: 100%;
+  min-height: 32px;
   padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--surface);
   font-size: var(--text-sm);
+  animation: emoji-up var(--dur-enter) var(--ease-out) both;
 }
 
 .emoji-try-text {
@@ -139,6 +228,8 @@
   color: var(--text-3);
   font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
 }
 
 .emoji-try.is-close,
@@ -164,7 +255,9 @@
 
 .emoji-none {
   margin: 0;
+  color: var(--text-3);
   font-size: var(--text-sm);
+  text-align: center;
 }
 
 .emoji-medal {
@@ -173,6 +266,8 @@
 
 .got-item.emoji-first {
   border-color: var(--gold);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 16%, transparent), var(--success-soft));
+  box-shadow: 0 0 18px -8px var(--gold);
 }
 
 @keyframes emoji-in {
@@ -187,9 +282,25 @@
   }
 }
 
+@keyframes emoji-up {
+  0% {
+    opacity: 0;
+    transform: translateY(var(--enter-y));
+  }
+
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (max-width: 480px) {
   .emoji-card {
-    padding: var(--space-5) var(--space-3);
+    padding: var(--space-6) var(--space-3) var(--space-5);
+  }
+
+  .emoji-row {
+    gap: var(--space-2);
   }
 
   .emoji-blanks .blank {
@@ -198,10 +309,26 @@
   }
 }
 
+@media (max-width: 360px) {
+  .emoji-entry {
+    padding: var(--space-2);
+  }
+
+  .emoji-entry .entry-row {
+    flex-wrap: wrap;
+  }
+
+  .emoji-entry .entry-row .btn {
+    flex: 1 1 100%;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .emoji-tile,
   .emoji-cat.is-fresh,
-  .emoji-blanks {
+  .emoji-blanks,
+  .emoji-answer,
+  .emoji-try {
     animation: none;
   }
 

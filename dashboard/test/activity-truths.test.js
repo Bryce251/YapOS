@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { room, seeded } from './activity-kit.test.js';
 import { installDom } from './dom-shim.js';
+import { checkProfileFaces } from './talk-faces.js';
 import truths, { KEY, cleanSet, problemOf, score, best, mask, unmask, SPOT_POINTS, FOOL_POINTS, REVEAL_MS, END_MS, STATEMENT_MAX, RESUME_MIN_MS, PROBLEMS } from '../web/activity/js/games/truths.js';
 import { createTruthsView, verdict, truthsMoment } from '../web/activity/js/views/truths.js';
 import { IDEAS, SAMPLES } from '../web/activity/data/truths.js';
@@ -593,6 +594,9 @@ test('the view renders every phase without inline styles and plays cues once', a
   assert.match(text(good), /You spotted/);
   assert.equal(good.querySelector('.truths-is-lie').dataset.key, `truths-pick-${lie}`);
   assert.equal(good.querySelectorAll('.truths-is-true').length, 2);
+  checkProfileFaces(good, 3);
+  assert.equal(good.querySelectorAll('.truths-voters').length, 3);
+  checkProfileFaces(writerView.el, 3);
   assert.match(text(views[voterIdx[1]].el), /fooled you/);
   assert.match(text(writerView.el), /You fooled 1 person/);
   assert.equal(played[voterIdx[0]].filter((x) => x === 'reveal').length, 1);

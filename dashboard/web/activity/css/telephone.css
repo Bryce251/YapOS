@@ -22,6 +22,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: var(--space-2);
   margin: 0;
   padding: 0;
@@ -29,17 +30,18 @@
 }
 
 .telephone-dot {
+  position: relative;
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: var(--surface-2);
   font-size: var(--text-sm);
   line-height: 1;
   opacity: 0.5;
-  transition: opacity var(--dur) var(--ease), border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+  transition: opacity var(--dur) var(--ease), border-color var(--dur) var(--ease), background-color var(--dur) var(--ease), transform var(--dur) var(--pop);
 }
 
 .telephone-dot.telephone-past {
@@ -52,42 +54,61 @@
   opacity: 1;
   border-color: var(--game);
   background: var(--game-soft);
-  box-shadow: inset 0 0 0 1px var(--game);
+  box-shadow: inset 0 0 0 1px var(--game), 0 0 18px -6px var(--game);
+  transform: scale(1.12);
 }
 
 .telephone-task-card {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: var(--space-2);
-  padding: var(--space-4);
-  border-radius: var(--radius);
+  padding: var(--space-5);
+  border-radius: var(--radius-xl);
   border: 1px solid var(--border);
-  background: var(--surface-2);
+  background: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--game) 20%, transparent), transparent 70%), var(--surface);
+  box-shadow: var(--shadow-sm), var(--inset-hi);
+  text-align: center;
 }
 
 .telephone-lead {
   margin: 0;
   color: var(--text);
-  font-size: var(--text-md);
-  font-weight: var(--weight-bold);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-tight);
   line-height: var(--leading-tight);
+  text-wrap: balance;
+}
+
+.telephone-has-prompt .telephone-lead {
+  color: color-mix(in srgb, var(--game) 70%, var(--text));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
 }
 
 .telephone-prompt {
+  max-width: 100%;
   margin: var(--space-1) 0 0;
 }
 
 .telephone-quote {
   display: inline-block;
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-sm);
+  max-width: 100%;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius);
   border: 1px solid var(--game-line);
-  background: var(--game-soft);
+  background: color-mix(in srgb, var(--game) 14%, var(--surface-2));
+  box-shadow: var(--inset-hi), 0 12px 30px -18px var(--game);
   color: var(--text);
-  font-size: clamp(var(--text-lg), 4vw, 24px);
-  font-weight: var(--weight-heavy);
-  line-height: 1.25;
+  font-size: var(--text-hero);
+  font-weight: var(--weight-display);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
   overflow-wrap: anywhere;
+  text-wrap: balance;
   animation: pop 360ms var(--pop);
 }
 
@@ -156,11 +177,14 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: var(--space-3) var(--space-4);
+  min-height: 56px;
   padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   border: 1px dashed var(--border-strong);
   background: var(--surface-2);
+  text-align: center;
 }
 
 .telephone-sent:empty {
@@ -168,7 +192,15 @@
 }
 
 .telephone-sent {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--success-line);
+  background: var(--success-soft);
   color: var(--success);
+  font-size: var(--text-sm);
   font-weight: var(--weight-bold);
 }
 
@@ -184,7 +216,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: var(--space-4);
+  padding: var(--space-5);
+  border-radius: var(--radius-xl);
+  background: radial-gradient(60% 50% at 50% 0%, color-mix(in srgb, var(--game) 14%, transparent), transparent 70%), var(--surface);
 }
 
 .telephone-chain-head {
@@ -196,27 +230,46 @@
 }
 
 .telephone-entries {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .telephone-entry-item {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border-radius: var(--radius);
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface-2);
+  box-shadow: var(--inset-hi);
+}
+
+.telephone-entry-item + .telephone-entry-item::before {
+  content: "";
+  position: absolute;
+  top: calc(-1 * var(--space-4));
+  left: calc(var(--space-4) + 9px);
+  width: 2px;
+  height: var(--space-4);
+  border-radius: var(--radius-full);
+  background: var(--game-line);
 }
 
 .telephone-entry-item.telephone-new {
   border-color: var(--game-line);
-  animation: telephone-in 360ms var(--ease);
+  box-shadow: var(--inset-hi), 0 0 0 1px var(--game-line), 0 14px 34px -22px var(--game);
+  animation: telephone-in 360ms var(--ease-out);
+}
+
+.telephone-mini {
+  box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-sm);
 }
 
 .telephone-entry-who {
@@ -264,9 +317,10 @@
 .telephone-react {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-1);
   min-width: var(--control-md);
-  min-height: 40px;
+  min-height: var(--control-md);
   padding: 0 var(--space-3);
   border-radius: var(--radius-full);
   border: 1px solid var(--border-strong);
@@ -287,8 +341,13 @@
 }
 
 .telephone-react.is-on {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
+  border-color: var(--game-line);
+  background: var(--game-soft);
+}
+
+.telephone-react:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .telephone-react.telephone-has-count {
@@ -296,7 +355,7 @@
 }
 
 .telephone-react:active:not(:disabled) {
-  transform: scale(0.95);
+  transform: scale(var(--press-scale));
 }
 
 .telephone-react-emoji {
@@ -334,29 +393,33 @@
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-4);
-  animation: telephone-in 400ms var(--ease) both;
+  border-radius: var(--radius-lg);
+  background: radial-gradient(80% 60% at 0% 0%, var(--accent-soft), transparent 70%), var(--surface);
+  animation: telephone-in 400ms var(--ease-out) both;
   animation-delay: calc(var(--i, 0) * 120ms);
 }
 
 .telephone-award.is-me {
   border-color: var(--game);
-  box-shadow: inset 0 3px 0 var(--game);
+  box-shadow: inset 0 3px 0 var(--game), 0 16px 36px -22px var(--game);
 }
 
 .telephone-award-emoji {
   display: grid;
   place-items: center;
-  width: 52px;
-  height: 52px;
+  width: 56px;
+  height: 56px;
   border-radius: var(--radius);
+  border: 1px solid var(--hairline-hi);
   background: var(--surface-2);
-  font-size: 30px;
+  font-size: 32px;
   line-height: 1;
 }
 
 .telephone-award-title {
   font-size: var(--text-md);
-  font-weight: var(--weight-bold);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-tight);
 }
 
 .telephone-award-why {
@@ -390,14 +453,14 @@
 
 @media (hover: hover) {
   .telephone-react:hover:not(:disabled) {
-    border-color: var(--text-3);
-    transform: translateY(-1px);
+    border-color: var(--game-line);
+    transform: translateY(var(--hover-lift));
   }
 }
 
 @media (max-width: 420px) {
   .telephone-quote {
-    font-size: 19px;
+    padding: var(--space-3) var(--space-4);
   }
 
   .telephone-bubble {
@@ -412,6 +475,11 @@
 
   .telephone-task-card,
   .telephone-chain {
+    padding: var(--space-4);
+    border-radius: var(--radius-lg);
+  }
+
+  .telephone-entry-item {
     padding: var(--space-3);
   }
 
@@ -434,6 +502,10 @@
   .telephone-dot,
   .telephone-react {
     transition: none;
+  }
+
+  .telephone-dot.telephone-now {
+    transform: none;
   }
 
   .telephone-react:hover:not(:disabled),

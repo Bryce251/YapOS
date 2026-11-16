@@ -1,6 +1,6 @@
 import emoji, { judge, puzzleOf, scramble, GUESS_CHARS, KEY } from '../games/emoji.js';
 import { cleanText, plainKey } from '../text.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, button, plural, profileButton } from '../ui/dom.js';
 
 export const TRIES_SHOWN = 4;
 export const RESEND_MS = 2500;
@@ -66,7 +66,7 @@ function gotList(list) {
       h(
         'li',
         { class: ['got-item', p.isMe ? 'is-me' : null, p.first ? 'emoji-first' : null], attrs: { title: p.username ? `${p.name} (@${p.username})` : p.name } },
-        avatar(p, 'xs'),
+        profileButton(p, 'xs'),
         h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }),
         p.first ? h('span', { class: 'emoji-medal', text: '🥇', attrs: { 'aria-label': 'First' } }) : null,
         h('span', { class: 'got-tick', text: `+${p.pts.toLocaleString('en-US')}` }),
@@ -77,11 +77,7 @@ function gotList(list) {
 }
 
 function blanks(words) {
-  const cells = [];
-  words.forEach((w, wi) => {
-    if (wi) cells.push(h('span', { class: 'blank is-gap', attrs: { 'aria-hidden': 'true' } }));
-    for (const ch of w) cells.push(h('span', { class: ['blank', ch === '_' ? null : 'emoji-mark'], text: ch === '_' ? '' : ch }));
-  });
+  const cells = words.map((w) => h('span', { class: 'blank-word' }, [...w].map((ch) => h('span', { class: ['blank', ch === '_' ? null : 'emoji-mark'], text: ch === '_' ? '' : ch }))));
   return h('span', { class: 'blanks emoji-blanks', attrs: { 'aria-hidden': 'true' } }, cells);
 }
 

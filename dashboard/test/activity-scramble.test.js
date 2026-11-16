@@ -567,6 +567,14 @@ test('the view renders play, solved and reveal without inline styles or leaking 
   assert.ok(played.includes('pop'));
   assert.equal(confetti.length, 1);
   noInlineStyles(guestView.el);
+  const solver = all(hostView.el).find((x) => x.classList && x.classList.contains('scramble-solver'));
+  assert.ok(solver);
+  const face = all(solver).find((x) => x.classList && x.classList.contains('avatar-btn'));
+  assert.equal(face.getAttribute('role'), 'button');
+  assert.equal(face.getAttribute('tabindex'), '0');
+  assert.ok(face.getAttribute('data-profile-id'));
+  assert.match(face.getAttribute('aria-label'), /^View .+'s profile$/);
+  assert.ok(all(solver).some((x) => x.classList && x.classList.contains('medal-1')));
   await r.clock.advance(ROUND_MS / 2);
   hostView.update(host.snapshot());
   assert.match(text(hostView.el), new RegExp(`Hint: it starts with ${word[0].toUpperCase()}`));

@@ -202,6 +202,17 @@ function all(root) {
   return out;
 }
 
+function profileFaces(root, min) {
+  const faces = all(root).filter((n) => n.classList && n.classList.contains('avatar-btn') && n.getAttribute('data-profile-id'));
+  assert.ok(faces.length >= min, `expected at least ${min} profile avatars, got ${faces.length}`);
+  for (const f of faces) {
+    assert.equal(f.getAttribute('role'), 'button');
+    assert.equal(f.getAttribute('tabindex'), '0');
+    assert.match(f.getAttribute('aria-label'), /^View (your|.+'s) profile$/);
+  }
+  return faces;
+}
+
 function byKey(root, key) {
   return all(root).find((el) => el.dataset && el.dataset.key === key) || null;
 }
@@ -226,6 +237,7 @@ test('the view lets the writer type a line and others vote on it', async () => {
   await r.clock.advance(400);
   assert.equal(st(r).lines, 1);
   assert.match(views[1 - wi].el.textContent, /The goat started to dance\./);
+  profileFaces(views[1 - wi].el, 2);
   for (const v of views) for (const n of all(v.el)) assert.equal(n.hasAttribute && n.hasAttribute('style'), false);
   for (const v of views) v.destroy();
 });

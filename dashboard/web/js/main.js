@@ -25,6 +25,7 @@ import { renderSeasons } from './pages/seasons.js';
 import { renderPartyLeaderboard } from './pages/party-leaderboard.js';
 import { renderStats } from './pages/stats.js';
 import { renderAccount } from './pages/account.js';
+import { renderLink } from './pages/link.js';
 import { renderOwner, renderOwnerUser } from './pages/owner.js';
 import { spotlight } from './spotlight.js';
 
@@ -46,6 +47,7 @@ const TITLES = {
   packs: 'Word packs',
   'packs-browse': 'Browse word packs',
   account: 'Your account',
+  link: 'Link YapOS Party',
   seasons: 'Past seasons',
   'party-leaderboard': 'Party leaderboard',
   profile: 'Profile',
@@ -70,6 +72,7 @@ const PAGES = {
   'owner-user': renderOwnerUser,
   packs: renderPacks,
   account: renderAccount,
+  link: renderLink,
   stats: renderStats,
   overview: renderOverview,
   apps: renderApps,

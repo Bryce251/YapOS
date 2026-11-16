@@ -1,7 +1,7 @@
 import hottakes, { KEY, ANSWER_MAX, seal, promptParts, answerRef } from '../games/hottakes.js';
 import { cleanText, hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, button, plural, profileButton } from '../ui/dom.js';
 import { textFlag } from '../ui/report.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
@@ -11,12 +11,12 @@ function nameOf(p) {
   return p.isMe ? 'You' : p.username ? `${p.name} (@${p.username})` : p.name;
 }
 
-function faces(list, max = 8) {
+function faces(list, max = 8, size = 'xs') {
   if (!list || !list.length) return null;
   return h(
     'span',
-    { class: 'faces', attrs: { title: list.map(nameOf).join(', ') } },
-    list.slice(0, max).map((p) => avatar(p, 'xs')),
+    { class: ['faces', `faces-${size}`], attrs: { title: list.map(nameOf).join(', ') } },
+    list.slice(0, max).map((p) => profileButton(p, size)),
     list.length > max ? h('span', { class: 'faces-more', text: `+${list.length - max}` }) : null,
   );
 }
@@ -44,6 +44,14 @@ export function footText(m) {
   if (m.iTopped) return `Yours was the hottest take! +${m.myGain}`;
   if (m.myGain) return `Nice! Your answer earned +${m.myGain}.`;
   return 'Votes are in!';
+}
+
+export function heroLabel(m) {
+  if (!m) return '';
+  if (m.phase === 'recap') return 'Hall of fame';
+  if (m.phase === 'write') return 'Fill in the blank';
+  if (m.phase === 'vote') return 'Vote for the funniest';
+  return m.lost ? 'Everyone wrote' : 'The hottest take';
 }
 
 export function hottakesMoment(was, m) {
@@ -193,7 +201,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
 
   const paintTop = memo((m) => {
     if (!m) return h('p', { class: 'waiting', text: 'Warming up the first prompt…' });
-    if (m.phase === 'recap') return h('h2', { class: 'question hottakes-prompt', text: 'Who voted for what' });
+    if (m.phase === 'recap') return h('div', { class: 'hottakes-hero' }, h('p', { class: 'hottakes-eyebrow', text: heroLabel(m) }), h('h2', { class: 'question hottakes-prompt', text: 'Who voted for what' }));
     const best = m.phase === 'reveal' && m.topIds.length === 1 ? m.cards.find((c) => c.top) : null;
     const notice =
       m.note === 'host' && m.phase === 'write'
@@ -201,7 +209,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
         : m.lost
         ? h('p', { class: 'notice', text: 'The host changed mid-vote, so the authors got lost. Here is what everyone wrote.' })
         : null;
-    return [promptLine(m, best ? best.text : null), notice];
+    return [h('div', { class: 'hottakes-hero' }, h('p', { class: 'hottakes-eyebrow', text: heroLabel(m) }), promptLine(m, best ? best.text : null)), notice];
   });
 
   function reportable(m, c) {
@@ -217,7 +225,8 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
       return h(
         'div',
         { class: 'hottakes-sent' },
-        h('span', { class: 'eyebrow', text: 'Your answer' }),
+        h('span', { class: 'hottakes-sent-icon', text: '🌶️', attrs: { 'aria-hidden': 'true' } }),
+        h('span', { class: 'hottakes-eyebrow', text: 'Your answer' }),
         h('p', { class: 'hottakes-sent-text', text: m.mySent ? `“${m.mySent}”` : 'Sent and hidden until the vote.' }),
         h('p', { class: 'muted', text: m.done >= m.players ? 'Everyone is in!' : `Waiting for ${plural(Math.max(0, m.players - m.done), 'more answer', 'more answers')}…` }),
       );
@@ -273,7 +282,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
               ? h(
                   'div',
                   { class: 'hottakes-by' },
-                  avatar(c.author, 'sm'),
+                  profileButton(c.author, 'sm'),
                   h('span', { class: 'hottakes-name', text: c.author.isMe ? 'You' : c.author.name }),
                   c.gained ? h('span', { class: 'hottakes-gain', text: `+${c.gained}` }) : null,
                 )
@@ -307,7 +316,7 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
             { class: ['hottakes-card', 'hottakes-recap-card', `hottakes-tone-${i % 4}`, r.isMine ? 'is-own' : null], vars: { '--hottakes-order': i } },
             h('span', { class: 'hottakes-recap-prompt', text: r.prompt }),
             h('span', { class: 'hottakes-text', text: `“${r.text}”` }),
-            h('div', { class: 'hottakes-by' }, avatar(r.author, 'sm'), h('span', { class: 'hottakes-name', text: r.author.isMe ? 'You' : r.author.name }), h('span', { class: 'hottakes-count', text: plural(r.votes, 'vote', 'votes') })),
+            h('div', { class: 'hottakes-by' }, profileButton(r.author, 'sm'), h('span', { class: 'hottakes-name', text: r.author.isMe ? 'You' : r.author.name }), h('span', { class: 'hottakes-count', text: plural(r.votes, 'vote', 'votes') })),
             r.voters.length
               ? h('div', { class: 'hottakes-recap-voters' }, h('span', { class: 'muted', text: r.iVoted ? 'Voted for by you and' : 'Voted for by' }), faces(r.voters.filter((p) => !p.isMe), 8) || h('span', { class: 'muted', text: 'nobody else' }))
               : null,
@@ -329,7 +338,8 @@ export function createHottakesView({ engine, fx, cues, toast, win }) {
   const paintFoot = memo((m) => {
     if (!m) return null;
     const list = m.phase === 'write' ? m.doneBy : m.phase === 'vote' ? m.votedBy : null;
-    return [h('span', { class: 'foot-text', text: footText(m) }), faces(list)];
+    const locked = (m.phase === 'write' && m.wrote) || (m.phase === 'vote' && m.hasVoted);
+    return [locked ? h('span', { class: 'hottakes-locked', text: '✓ Locked in' }) : null, h('span', { class: 'foot-text', text: footText(m) }), faces(list, 8, 'sm')];
   });
 
   function cardFor(id) {

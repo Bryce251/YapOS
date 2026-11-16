@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { room } from './activity-kit.test.js';
 import { installDom } from './dom-shim.js';
+import { checkProfileFaces } from './talk-faces.js';
 import { VIEWS, cueKit } from '../web/activity/js/views/index.js';
 import { chainMoments } from '../web/activity/js/views/chain.js';
 import { drawMoments, feedIds } from '../web/activity/js/views/draw.js';
@@ -326,6 +327,8 @@ test('the would you rather view plays send on a vote, reveal for all and correct
     const won = st.side === picks[i] || st.side === 'tie';
     assert.deepEqual(x.rec.plays(), won ? ['reveal', 'correct'] : ['reveal'], `voter ${i}`);
     assert.equal(x.rec.count('burst'), won ? 1 : 0);
+    checkProfileFaces(x.v.el, 3);
+    assert.equal(x.v.el.querySelectorAll('.wyr-voters').length, 2);
   });
   for (const x of views) x.v.destroy();
 });

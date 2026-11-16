@@ -1,5 +1,5 @@
 import musicquiz, { REVEAL_MS, schedule, clipLength } from '../games/musicquiz.js';
-import { h, memo, timer, avatar, plural, button } from '../ui/dom.js';
+import { h, memo, timer, plural, button, profileButton } from '../ui/dom.js';
 import { sfx as defaultSfx } from '../ui/sfx.js';
 
 const LETTERS = ['A', 'B', 'C', 'D'];
@@ -222,7 +222,7 @@ export function createTunePlayer({ sfx, win } = {}) {
 
 function faces(list) {
   if (!list.length) return null;
-  return h('span', { class: 'faces' }, list.slice(0, 7).map((p) => avatar(p, 'xs')), list.length > 7 ? h('span', { class: 'faces-more', text: `+${list.length - 7}` }) : null);
+  return h('span', { class: 'faces' }, list.slice(0, 7).map((p) => profileButton(p, 'sm')), list.length > 7 ? h('span', { class: 'faces-more', text: `+${list.length - 7}` }) : null);
 }
 
 export function musicMoment(was, m) {
@@ -347,7 +347,7 @@ export function createMusicquizView({ engine, fx, cues, sfx, win }) {
         h('span', { class: 'foot-text', text: footText(m) }),
         !reveal ? faces(m.answeredBy) : null,
         reveal && m.right.length
-          ? h('ul', { class: 'got-list' }, m.right.slice(0, 8).map((p) => h('li', { class: ['got-item', p.isMe ? 'is-me' : null] }, avatar(p, 'xs'), h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }), h('span', { class: 'got-tick', text: `+${p.pts.toLocaleString('en-US')}` }))))
+          ? h('ul', { class: 'got-list' }, m.right.slice(0, 8).map((p) => h('li', { class: ['got-item', p.isMe ? 'is-me' : null] }, profileButton(p, 'xs'), h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }), h('span', { class: 'got-tick', text: `+${p.pts.toLocaleString('en-US')}` }))))
           : null,
       ),
     ];

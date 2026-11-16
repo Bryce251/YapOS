@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { room, person, seeded } from './activity-kit.test.js';
 import { installDom, type } from './dom-shim.js';
+import { checkProfileFaces } from './talk-faces.js';
 import { configureAdmins, resetAdmins, refreshAdmins } from '../web/activity/js/admin.js';
 import bluff, { KEY, OPTION_PREFIX, FAKE_MAX, PICK_MS, TRUTH_POINTS, FOOL_POINTS, seal, tally, groupFakes, isTruth, revealMs, factParts, buildDeck, optionsFrom, fakeRef } from '../web/activity/js/games/bluff.js';
 import { createBluffView, footText, bluffMoment, TRUTH_REFUSAL } from '../web/activity/js/views/bluff.js';
@@ -291,6 +292,7 @@ test('the view refuses the real answer, sends a fake and lets you pick', async (
     assert.match(text(v.el), /The truth/);
     assert.match(text(v.el), /You found the truth! \+100/);
     assert.ok(v.el.querySelector('.bluff-result.is-truth'));
+    checkProfileFaces(v.el, 6);
   }
   for (const v of views) v.destroy();
 });

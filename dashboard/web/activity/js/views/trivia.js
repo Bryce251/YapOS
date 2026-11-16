@@ -1,6 +1,6 @@
 import trivia, { REVEAL_MS, BOLT_SHOW_MS } from '../games/trivia.js';
 import { TEAM_MS } from '../games/teams.js';
-import { h, memo, timer, avatar, plural } from '../ui/dom.js';
+import { h, memo, timer, plural, profileButton } from '../ui/dom.js';
 import { teamBar, teamFinal, packChip } from './teams.js';
 
 const LETTERS = ['A', 'B', 'C', 'D'];
@@ -61,7 +61,7 @@ function faces(list) {
   return h(
     'span',
     { class: 'faces', attrs: { title: list.map((p) => (p.isMe ? 'You' : p.username ? `${p.name} (@${p.username})` : p.name)).join(', ') } },
-    list.slice(0, 7).map((p) => avatar(p, 'xs')),
+    list.slice(0, 7).map((p) => profileButton(p, 'sm')),
     list.length > 7 ? h('span', { class: 'faces-more', text: `+${list.length - 7}` }) : null,
   );
 }
@@ -74,7 +74,7 @@ function gotList(list) {
       h(
         'li',
         { class: ['got-item', p.isMe ? 'is-me' : null, p.team ? `team-${p.team}` : null], attrs: { title: p.username ? `${p.name} (@${p.username})` : p.name } },
-        avatar(p, 'xs'),
+        profileButton(p, 'xs'),
         h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }),
         h('span', { class: 'got-tick', text: `+${num(p.pts)}` }),
       ),
@@ -227,7 +227,7 @@ export function createTriviaView({ engine, fx, cues }) {
         ? h(
             'ul',
             { class: 'got-list qz-bolt-board' },
-            m.board.slice(0, 8).map((p) => h('li', { class: ['got-item', p.isMe ? 'is-me' : null] }, avatar(p, 'xs'), h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }), h('span', { class: 'got-tick', text: `${p.right}/${m.count} · +${num(p.pts)}` }))),
+            m.board.slice(0, 8).map((p) => h('li', { class: ['got-item', p.isMe ? 'is-me' : null] }, profileButton(p, 'xs'), h('span', { class: 'got-name', text: p.isMe ? 'You' : p.name }), h('span', { class: 'got-tick', text: `${p.right}/${m.count} · +${num(p.pts)}` }))),
           )
         : null,
       foot(m, show && m.myRight > 0, show ? null : faces(m.doneBy)),
@@ -261,7 +261,7 @@ export function createTriviaView({ engine, fx, cues }) {
             'p',
             { class: 'qz-wager-line' },
             m.myWager ? h('span', { class: 'qz-wager-mine', text: `💰 You bet ${num(m.myWager)}` }) : null,
-            bigBets.map((w) => h('span', { class: 'qz-wager-other' }, avatar(w.who, 'xs'), h('span', { text: `${w.who.name} bet ${num(w.amt)}` }))),
+            bigBets.map((w) => h('span', { class: 'qz-wager-other' }, profileButton(w.who, 'xs'), h('span', { text: `${w.who.name} bet ${num(w.amt)}` }))),
           )
         : null,
       h('h2', { class: 'question', text: m.text }),
@@ -285,7 +285,7 @@ export function createTriviaView({ engine, fx, cues }) {
           ),
         ),
       ),
-      reveal && m.steal ? h('p', { class: 'qz-steal', attrs: { role: 'status' } }, avatar(m.steal.by, 'xs'), h('span', { text: stealText(m.steal) })) : null,
+      reveal && m.steal ? h('p', { class: 'qz-steal', attrs: { role: 'status' } }, profileButton(m.steal.by, 'xs'), h('span', { text: stealText(m.steal) })) : null,
       h(
         'div',
         { class: ['game-foot', reveal && m.gotIt ? 'is-good' : null], attrs: { role: 'status', 'aria-live': 'polite' } },

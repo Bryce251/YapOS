@@ -1,4 +1,4 @@
-import { h, memo, avatar, button, plural, who, countdown, uidOf } from './dom.js';
+import { h, memo, button, plural, who, countdown, uidOf, profileButton } from './dom.js';
 import { board, standings } from './board.js';
 import { sfx as defaultSfx } from './sfx.js';
 import { burstFrom } from './juice.js';
@@ -107,7 +107,7 @@ function playerRow(p, fresh) {
   return h(
     'li',
     { class: ['player', p.isMe ? 'is-me' : null, fresh ? 'juice-in' : null] },
-    who(p, { size: 'md' }),
+    who(p, { size: 'md', profile: true, host: p.isHost }),
     p.isHost ? h('span', { class: 'tag tag-host', text: 'Host' }) : null,
   );
 }
@@ -116,7 +116,7 @@ function watcher(p) {
   return h(
     'li',
     { class: ['watcher', p.isMe ? 'is-me' : null], attrs: { title: p.username ? `${p.name} (@${p.username})` : p.name } },
-    avatar(p, 'xs'),
+    profileButton(p, 'xs', { host: p.isHost }),
     h('span', { class: 'watcher-name', text: p.isMe ? `${p.name} (you)` : p.name, attrs: { 'data-uid': uidOf(p) } }),
     p.isHost ? h('span', { class: 'watcher-host', text: 'Host' }) : null,
   );
@@ -128,12 +128,19 @@ export function joinButton(m, { size = 'xl', key = 'join' } = {}) {
     return button(busy ? 'Leaving…' : 'Leave game', { variant: 'ghost', size: 'sm', key: 'leave-game', disabled: busy });
   }
   const busy = m.joining === 'in';
-  return button(busy ? 'Joining…' : 'Join game', {
+  const btn = button(busy ? 'Joining…' : 'Join game', {
     variant: 'primary',
     size,
     key,
     disabled: busy,
   });
+  if (size === 'xl') btn.classList.add('btn-glow');
+  return btn;
+}
+
+function glow(btn) {
+  btn.classList.add('btn-glow');
+  return btn;
 }
 
 function codeControl(spec, value, isHost, onSet, drafts) {
@@ -240,14 +247,15 @@ function settingControl(spec, value, isHost, onSet, drafts) {
     return h(
       'button',
       {
-        class: ['chip', value ? 'is-on' : null, 'spot'],
+        class: ['chip', 'chip-switch', value ? 'is-on' : null],
         type: 'button',
         disabled: !isHost,
         dataset: { key: `set-${spec.id}` },
-        attrs: { 'aria-pressed': value ? 'true' : 'false' },
+        attrs: { 'aria-pressed': value ? 'true' : 'false', 'aria-label': spec.label },
         on: { click: () => onSet(spec.id, !value) },
       },
-      value ? 'On' : 'Off',
+      h('span', { class: 'switch-text', text: value ? 'On' : 'Off' }),
+      h('span', { class: 'switch-track', attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'switch-thumb' })),
     );
   }
   return h(
@@ -271,7 +279,39 @@ function settingControl(spec, value, isHost, onSet, drafts) {
 }
 
 function waiting(text) {
-  return h('p', { class: 'waiting', attrs: { role: 'status' } }, h('span', { class: 'pulse-dot', attrs: { 'aria-hidden': 'true' } }), text);
+  return h(
+    'p',
+    { class: 'waiting', attrs: { role: 'status' } },
+    h('span', { class: 'waiting-dots', attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'pulse-dot' }), h('span', { class: 'pulse-dot' }), h('span', { class: 'pulse-dot' })),
+    h('span', { class: 'waiting-text', text }),
+  );
+}
+
+export const FACES_MAX = 6;
+
+function heroBlock(m, gameMeta) {
+  const faces = m.playing.slice(0, FACES_MAX);
+  const more = m.playing.length - faces.length;
+  return h(
+    'section',
+    { class: 'card glass lobby-hero', attrs: { 'aria-labelledby': 'lobby-hero-title' } },
+    h('span', { class: 'lobby-hero-emoji', text: gameMeta.emoji, attrs: { 'aria-hidden': 'true' } }),
+    h(
+      'div',
+      { class: 'lobby-hero-text' },
+      h('p', { class: 'eyebrow-caps', text: m.tour.on ? 'Tournament' : 'Up next' }),
+      h('h2', { class: 'lobby-hero-title', text: gameMeta.name, attrs: { id: 'lobby-hero-title' } }),
+      gameMeta.blurb ? h('p', { class: 'lobby-hero-blurb', text: gameMeta.blurb }) : null,
+    ),
+    h(
+      'div',
+      { class: 'lobby-hero-side' },
+      faces.length
+        ? h('span', { class: 'faces lobby-faces' }, faces.map((p) => profileButton(p, 'sm', { host: p.isHost })), more > 0 ? h('span', { class: 'faces-more', text: `+${more}` }) : null)
+        : null,
+      h('span', { class: 'lobby-hero-count' }, h('strong', { text: String(m.playing.length) }), h('span', { text: m.playing.length === 1 ? ' player in' : ' players in' })),
+    ),
+  );
 }
 
 function cue(sound, name, opts) {
@@ -447,6 +487,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
 
   function joinBlock(m) {
     const btn = joinButton(m);
+    if (m.isHost) btn.classList.remove('btn-glow');
     btn.addEventListener('click', onJoinTap);
     const hint = m.meJoined ? "You're in! Have fun." : "You're watching. Join to play in the next game.";
     return h('div', { class: ['join-row', m.meJoined ? 'is-in' : null] }, btn, h('p', { class: 'join-hint', text: hint }));
@@ -458,11 +499,11 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
         'div',
         { class: 'auto-row' },
         countdown(m.countdown.from, m.countdown.at, { lead: 'Starting in', label: `${gameMeta.name} starts soon` }),
-        m.isHost ? button('Start now', { variant: 'primary', size: 'lg', key: 'start', on: start }) : null,
+        m.isHost ? glow(button('Start now', { variant: 'primary', size: 'lg', key: 'start', on: start })) : null,
       );
     }
     if (m.auto && m.need > 0) return waiting(needText(m.need));
-    if (m.isHost) return button(m.tour.on ? 'Start tournament' : `Start ${gameMeta.name}`, { variant: 'primary', size: 'xl', key: 'start', on: start });
+    if (m.isHost) return glow(button(m.tour.on ? 'Start tournament' : `Start ${gameMeta.name}`, { variant: 'primary', size: 'xl', key: 'start', on: start }));
     return waiting(m.tour.on ? `Waiting for ${m.hostName} to start the tournament` : `Waiting for ${m.hostName} to start`);
   }
 
@@ -536,7 +577,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       'div',
       { class: 'settings' },
       (game.settings || []).filter((spec) => !isTwist(spec)).map((spec) =>
-        h('div', { class: ['setting', spec.type === 'code' ? 'is-code' : null] }, h('span', { class: 'setting-label', text: spec.label }), settingControl(spec, m.settings[spec.id], m.isHost, setSetting, drafts)),
+        h('div', { class: ['setting', spec.type === 'code' ? 'is-code' : null, `is-${spec.type || 'choice'}`] }, h('span', { class: 'setting-label', text: spec.label }), settingControl(spec, m.settings[spec.id], m.isHost, setSetting, drafts)),
       ),
       twistBlock((game.settings || []).filter(isTwist), m.settings, m.isHost, setSetting),
     );
@@ -545,7 +586,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     const gameCard = h(
       'div',
       { class: 'card glass game-card' },
-      h('div', { class: 'card-head' }, h('h2', { class: 'card-title', text: m.isHost ? 'Pick a game' : 'Up next' }), upNext),
+      h('div', { class: 'card-head' }, h('h2', { class: 'card-title', text: m.isHost ? 'Pick a game' : 'Games' }), upNext),
       tabRow,
       panel,
       settings,
@@ -568,7 +609,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       board(m.totals, { empty: 'Play a game to get on the board.', label: 'Session scores' }),
       m.isHost && m.totals.some((t) => t.pts > 0) ? button(RESET_LABEL, { variant: 'ghost', size: 'sm', key: 'reset', on: resetTap }) : null,
     );
-    return h('div', { class: 'lobby-grid' }, gameCard, playersCard, scoreCard);
+    return h('div', { class: 'lobby-grid' }, heroBlock(m, gameMeta), gameCard, playersCard, scoreCard);
   }
 
   return {

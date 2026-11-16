@@ -6,14 +6,14 @@
 }
 
 .app.is-full {
-  background: var(--bg);
+  background: var(--stage-bg);
 }
 
 .app.is-focus .top-inner {
   flex-wrap: nowrap;
   gap: var(--space-1);
   max-width: none;
-  min-height: 44px;
+  min-height: 48px;
   padding: var(--space-1) var(--gutter);
 }
 
@@ -57,6 +57,7 @@
   padding: var(--space-2) var(--gutter) var(--space-3);
 }
 
+.app.is-focus .lobby-hero,
 .app.is-focus .score-card,
 .app.is-focus .players-card .group-title,
 .app.is-focus .players-card .players,
@@ -70,7 +71,13 @@
 }
 
 .app.is-focus .lobby-grid {
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
   grid-template-areas: "game players";
+}
+
+.app.is-focus .aurora,
+.app.is-focus::before {
+  opacity: 0.6;
 }
 
 .app.is-focus[data-phase='game'] .play {
@@ -129,8 +136,23 @@
   aspect-ratio: 1;
 }
 
+@media (min-width: 1120px) {
+  .app.is-full[data-phase='game'] .question {
+    font-size: var(--text-display);
+  }
+
+  .app.is-full[data-phase='game'] .option {
+    min-height: 72px;
+  }
+
+  .app.is-full[data-phase='game'] .timer-track {
+    height: 10px;
+  }
+}
+
 @media (max-width: 860px) {
   .app.is-focus .lobby-grid {
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "game" "players";
   }
 }

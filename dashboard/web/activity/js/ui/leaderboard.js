@@ -1,4 +1,5 @@
-import { h, avatar, swap } from './dom.js';
+import { h, swap } from './dom.js';
+import { pfp } from './pfp.js';
 import { GAMES } from '../games/index.js';
 import { initials, hueOf } from '../players.js';
 
@@ -14,7 +15,6 @@ export const LEADERBOARD_TABS = Object.freeze([
 
 const TAB_IDS = LEADERBOARD_TABS.map((t) => t.id);
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-const MEDALS = ['🥇', '🥈', '🥉'];
 const AVATAR_HOSTS = new Set(['files.yapper.website', 'www.yapin.gg']);
 
 let env = defaults();
@@ -161,8 +161,8 @@ function detail(board, r) {
 function rowEl(board, r, meId) {
   const top = r.rank <= 3;
   return h('li', { class: ['lb-row', top ? `is-top-${r.rank}` : null, meId && r.id.toLowerCase() === meId ? 'is-me' : null] },
-    h('span', { class: 'lb-rank', attrs: { 'aria-label': `Rank ${r.rank}` }, text: top ? MEDALS[r.rank - 1] : `#${r.rank}` }),
-    avatar(r, 'sm'),
+    h('span', { class: ['lb-rank', top ? `lb-medal medal medal-${r.rank}` : null], attrs: { 'aria-label': `Rank ${r.rank}` }, text: top ? String(r.rank) : `#${r.rank}` }),
+    pfp({ ...r, isMe: Boolean(meId && r.id.toLowerCase() === meId) }, 'md'),
     h('span', { class: 'lb-who' },
       h('strong', { class: 'lb-name', text: r.name }),
       h('span', { class: 'lb-meta', text: detail(board, r) })),
@@ -188,9 +188,12 @@ export function openLeaderboard(container, { engine = null, me = null } = {}) {
   const body = h('div', { class: 'lb-body', attrs: { role: 'tabpanel', 'aria-live': 'polite' } });
   const mine = h('div', { class: 'lb-me' });
   const card = h('div', { class: 'lb-card', attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId } },
+    h('span', { class: 'lb-grab', attrs: { 'aria-hidden': 'true' } }),
     h('div', { class: 'lb-head' },
       h('span', { class: 'lb-crest', attrs: { 'aria-hidden': 'true' }, text: '🏆' }),
-      h('h2', { class: 'lb-title', attrs: { id: titleId }, text: 'Party leaderboard' }),
+      h('span', { class: 'lb-heading' },
+        h('span', { class: 'lb-eyebrow', text: 'Everyone, everywhere' }),
+        h('h2', { class: 'lb-title', attrs: { id: titleId }, text: 'Party leaderboard' })),
       closeBtn),
     h('div', { class: 'lb-tools' }, tabs, select),
     body,
@@ -252,6 +255,7 @@ export function openLeaderboard(container, { engine = null, me = null } = {}) {
   function onKey(e) {
     if (closed) return;
     if (e.key === 'Escape') {
+      if (typeof document !== 'undefined' && document.querySelectorAll && [...document.querySelectorAll('.pcard-layer')].some((n) => !n.hidden && !n.hasAttribute('hidden'))) return;
       e.preventDefault();
       e.stopPropagation();
       close();
@@ -273,7 +277,9 @@ export function openLeaderboard(container, { engine = null, me = null } = {}) {
     token += 1;
     if (typeof document !== 'undefined') document.removeEventListener('keydown', onKey, true);
     el.remove();
-    if (before && typeof before.focus === 'function' && before.isConnected !== false) before.focus();
+    let back = before;
+    if (back && back.isConnected === false && back.dataset && back.dataset.key && typeof document !== 'undefined' && document.querySelector) back = document.querySelector(`[data-key="${back.dataset.key}"]`) || back;
+    if (back && typeof back.focus === 'function' && back.isConnected !== false) back.focus();
   }
 
   select.addEventListener('change', () => {

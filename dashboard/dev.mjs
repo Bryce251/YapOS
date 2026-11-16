@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { createWorker } from './worker/app.js';
+import { approveCode } from './worker/activity-auth.js';
 import { D1Database } from './test/d1-shim.js';
 import { createHarness, IDS } from '../test/harness.js';
 import { createDashboard } from '../engine/dashboard.js';
@@ -151,6 +152,31 @@ export function allowDevFraming(response, url) {
   const out = new Response(response.body, response);
   out.headers.set('Content-Security-Policy', csp.replace('frame-ancestors ', "frame-ancestors 'self' "));
   return out;
+}
+
+export const DEV_LINK_PATH = '/dev/link/approve';
+
+export function devLinkUser(id) {
+  const known = TEST_USERS.find((u) => u.id === id);
+  if (known) return { id: known.id, username: known.username, display_name: known.display_name, avatar_url: null };
+  const fake = fakeProfile(id);
+  return fake ? { id: fake.id, username: fake.username, display_name: fake.display_name, avatar_url: null } : null;
+}
+
+export async function devLinkApprove(request, db, t = Date.now()) {
+  const reply = (status, data) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+  if (request.method !== 'POST') return reply(405, { error: 'method_not_allowed', message: 'Use POST.' });
+  let body = null;
+  try {
+    body = await request.json();
+  } catch {
+    body = null;
+  }
+  const user = body && typeof body.id === 'string' ? devLinkUser(body.id) : null;
+  if (!user) return reply(400, { error: 'bad_user', message: 'Pick a person from the test call.' });
+  const result = await approveCode(db, body.code, user, t, { confirm: true });
+  if (!result.ok) return reply(result.status, { error: result.error, message: result.message });
+  return reply(200, { ok: true, user });
 }
 
 export function fakeProfile(id) {
@@ -788,6 +814,7 @@ export async function startDev({
   async function route(request) {
     const url = new URL(request.url);
     if (url.pathname === '/activity-dev' || url.pathname.startsWith('/activity-dev/')) return activityDev(request);
+    if (url.pathname === DEV_LINK_PATH) return devLinkApprove(request, db);
     const workerFirst = WORKER_FIRST.some((re) => re.test(url.pathname));
     if (!workerFirst && (request.method === 'GET' || request.method === 'HEAD')) {
       const asset = await env.ASSETS.fetch(request);

@@ -1,7 +1,7 @@
 import reflex, { MIN_MS, MAX_MS } from '../games/reflex.js';
 import { EARLY, FOOLED, GUESS, SLOW, NONE, TIPS, FAKE_TIPS, rating, pickLine } from '../../data/reflex.js';
 import { koLine } from '../games/knockout.js';
-import { h, memo, timer, avatar, plural } from '../ui/dom.js';
+import { h, memo, timer, plural, profileButton } from '../ui/dom.js';
 import { koBar } from './knockout.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
@@ -98,7 +98,7 @@ function faces(list) {
   return h(
     'span',
     { class: 'faces', attrs: { title: list.map((p) => (p.isMe ? 'You' : p.name)).join(', ') } },
-    list.slice(0, 7).map((p) => avatar(p, 'xs')),
+    list.slice(0, 7).map((p) => profileButton(p, 'sm')),
     list.length > 7 ? h('span', { class: 'faces-more', text: `+${list.length - 7}` }) : null,
   );
 }
@@ -113,7 +113,7 @@ function resultRow(x) {
     'li',
     { class: ['reflex-row', `is-${x.kind}`, x.isMe ? 'is-me' : null, x.fastest ? 'is-fast' : null] },
     h('span', { class: 'reflex-place', text: placeMark(x), attrs: { 'aria-hidden': 'true' } }),
-    avatar(x, 'xs'),
+    profileButton(x, 'sm'),
     h('span', { class: 'reflex-name', text: x.isMe ? 'You' : x.name }),
     h('span', { class: 'reflex-time', text: kindText(x) }),
     x.kind === 'ok' ? h('span', { class: 'reflex-rate', text: rating(x.ms).emoji, attrs: { title: rating(x.ms).label } }) : null,
@@ -138,7 +138,7 @@ function bestList(m) {
           'li',
           { class: ['reflex-best-row', x.isMe ? 'is-me' : null] },
           h('span', { class: 'reflex-best-place', text: MEDALS[x.place - 1] || `${x.place}.` }),
-          avatar(x, 'xs'),
+          profileButton(x, 'xs'),
           h('span', { class: 'reflex-name', text: x.isMe ? 'You' : x.name }),
           h('span', { class: 'reflex-time', text: `${x.ms} ms` }),
         ),

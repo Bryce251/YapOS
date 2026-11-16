@@ -1,5 +1,5 @@
 import wyr, { REVEAL_MS } from '../games/wyr.js';
-import { h, memo, timer, avatar, plural } from '../ui/dom.js';
+import { h, memo, timer, plural, profileButton } from '../ui/dom.js';
 
 export function twinText(t) {
   if (!t) return '';
@@ -27,13 +27,17 @@ export function verdict(m) {
   return `${label} picked ${m.side.toUpperCase()}.${tail}`;
 }
 
-function faces(list) {
-  if (!list.length) return null;
+export function scoreHint(mode) {
+  return mode === 'minority' ? 'Points go to the side fewer people pick.' : 'Points go to the side most people pick.';
+}
+
+function faces(list, size = 'xs', max = 7) {
+  if (!list || !list.length) return null;
   return h(
     'span',
-    { class: 'faces', attrs: { title: list.map((p) => (p.isMe ? 'You' : p.username ? `${p.name} (@${p.username})` : p.name)).join(', ') } },
-    list.slice(0, 7).map((p) => avatar(p, 'xs')),
-    list.length > 7 ? h('span', { class: 'faces-more', text: `+${list.length - 7}` }) : null,
+    { class: ['faces', `faces-${size}`], attrs: { title: list.map((p) => (p.isMe ? 'You' : p.username ? `${p.name} (@${p.username})` : p.name)).join(', ') } },
+    list.slice(0, max).map((p) => profileButton(p, size)),
+    list.length > max ? h('span', { class: 'faces-more', text: `+${list.length - max}` }) : null,
   );
 }
 
@@ -69,7 +73,8 @@ export function createWyrView({ engine, fx, cues }) {
     const reveal = m.phase === 'reveal';
     const pct = side === 'a' ? m.pctA : m.pctB;
     const winner = reveal && (m.side === side || m.side === 'tie');
-    return h(
+    const mine = m.myVote === side;
+    const btn = h(
       'button',
       {
         class: ['choice', `choice-${side}`, 'spot', m.myVote === side ? 'is-mine' : null, winner ? 'is-win' : null, reveal && !winner ? 'is-dim' : null],
@@ -79,10 +84,17 @@ export function createWyrView({ engine, fx, cues }) {
         attrs: { 'aria-pressed': m.myVote === side ? 'true' : 'false' },
         on: { click: () => vote(m, side) },
       },
-      h('span', { class: 'choice-letter', text: side.toUpperCase(), attrs: { 'aria-hidden': 'true' } }),
+      reveal ? h('span', { class: 'wyr-fill', vars: { '--pct': pct }, attrs: { 'aria-hidden': 'true' } }) : null,
+      h('span', { class: 'wyr-choice-top' }, h('span', { class: 'choice-letter', text: side.toUpperCase(), attrs: { 'aria-hidden': 'true' } }), mine ? h('span', { class: 'wyr-pick-tag', text: 'Your pick' }) : null),
       h('span', { class: 'choice-text', text: m[side] }),
       reveal ? h('span', { class: 'choice-pct', text: `${pct}%` }) : null,
-      reveal ? faces(m.voters[side]) : null,
+    );
+    const list = m.voters[side];
+    return h(
+      'div',
+      { class: ['wyr-side', `wyr-side-${side}`, winner ? 'is-win' : null] },
+      btn,
+      reveal ? h('div', { class: 'wyr-voters' }, faces(list) || h('span', { class: 'wyr-voters-none', text: 'No votes' }), list.length ? h('span', { class: 'wyr-voters-count', text: plural(list.length, 'vote', 'votes') }) : null) : null,
     );
   }
 
@@ -107,9 +119,9 @@ export function createWyrView({ engine, fx, cues }) {
         h('span', { class: 'game-count', text: plural(m.rounds.length, 'prompt', 'prompts') }),
         timer(m.starts, m.ends, 'Results in'),
       ),
-      h('h2', { class: 'question wyr-title', text: 'Who picked what' }),
-      twin ? h('p', { class: 'wyr-twin' }, avatar(m.twin, 'sm'), h('span', { text: twin })) : null,
-      pair ? h('p', { class: 'wyr-twin' }, h('span', { text: pair })) : null,
+      h('div', { class: 'wyr-hero' }, h('p', { class: 'wyr-eyebrow', text: 'The recap' }), h('h2', { class: 'question wyr-title', text: 'Who picked what' })),
+      twin ? h('p', { class: 'wyr-twin' }, profileButton(m.twin, 'sm'), h('span', { class: 'wyr-twin-text', text: twin })) : null,
+      pair ? h('p', { class: 'wyr-twin' }, h('span', { class: 'faces' }, m.pair.people.slice(0, 2).map((p) => profileButton(p, 'sm'))), h('span', { class: 'wyr-twin-text', text: pair })) : null,
       h(
         'ol',
         { class: 'wyr-recap', attrs: { 'aria-label': 'Every prompt and who picked each side' } },
@@ -131,9 +143,9 @@ export function createWyrView({ engine, fx, cues }) {
         h('span', { class: 'game-count', text: `Prompt ${m.number} of ${m.total}` }),
         timer(reveal ? m.ends - REVEAL_MS : m.starts, m.ends, reveal ? 'Next prompt in' : 'Time left to vote'),
       ),
-      h('h2', { class: 'question wyr-title', text: 'Would you rather…' }),
+      h('div', { class: 'wyr-hero' }, h('p', { class: 'wyr-eyebrow', text: m.mode === 'minority' ? 'Rebels round' : 'Crowd round' }), h('h2', { class: 'question wyr-title', text: 'Would you rather…' }), h('p', { class: 'wyr-hint', text: scoreHint(m.mode) })),
       m.note === 'host' && !reveal ? h('p', { class: 'notice', text: 'The host changed, so this one starts again. Vote again!' }) : null,
-      h('div', { class: 'choices' }, choice(m, 'a'), h('span', { class: 'or', text: 'or', attrs: { 'aria-hidden': 'true' } }), choice(m, 'b')),
+      h('div', { class: ['choices', 'wyr-choices', reveal ? 'is-reveal' : null, m.myVote && !reveal ? 'is-voted' : null] }, choice(m, 'a'), h('span', { class: 'or', text: 'or', attrs: { 'aria-hidden': 'true' } }), choice(m, 'b')),
       reveal
         ? h(
             'div',
@@ -145,8 +157,9 @@ export function createWyrView({ engine, fx, cues }) {
       h(
         'div',
         { class: ['game-foot', reveal && m.myGain ? 'is-good' : null], attrs: { role: 'status', 'aria-live': 'polite' } },
+        !reveal && m.myVote ? h('span', { class: 'wyr-locked', text: '✓ Locked in' }) : null,
         h('span', { class: 'foot-text', text: verdict(m) }),
-        !reveal ? faces(m.votedBy) : null,
+        !reveal ? faces(m.votedBy, 'sm', 8) : null,
       ),
     ];
   }

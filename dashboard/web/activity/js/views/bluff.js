@@ -2,7 +2,7 @@ import bluff, { KEY, FAKE_MAX, seal, factParts, fakeRef, isTruth } from '../game
 import { factById } from '../../data/bluff.js';
 import { cleanText, hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, button, plural, profileButton } from '../ui/dom.js';
 import { textFlag } from '../ui/report.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
@@ -19,12 +19,14 @@ function names(list) {
   return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
 }
 
-function faces(list, max = 8) {
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+function faces(list, max = 8, size = 'xs') {
   if (!list || !list.length) return null;
   return h(
     'span',
-    { class: 'faces', attrs: { title: list.map(nameOf).join(', ') } },
-    list.slice(0, max).map((p) => avatar(p, 'xs')),
+    { class: ['faces', `faces-${size}`], attrs: { title: list.map(nameOf).join(', ') } },
+    list.slice(0, max).map((p) => profileButton(p, size)),
     list.length > max ? h('span', { class: 'faces-more', text: `+${list.length - max}` }) : null,
   );
 }
@@ -52,6 +54,13 @@ export function footText(m) {
   if (m.fooledCount) bits.push(`Your fake fooled ${plural(m.fooledCount, 'player', 'players')}.`);
   if (m.myGain) bits.push(`+${m.myGain}`);
   return bits.length ? bits.join(' ') : 'Here is the truth!';
+}
+
+export function heroLabel(m) {
+  if (!m) return '';
+  if (m.phase === 'write') return 'Strange but true';
+  if (m.phase === 'pick') return 'One of these is real';
+  return 'The real answer';
 }
 
 export function bluffMoment(was, m) {
@@ -208,7 +217,7 @@ export function createBluffView({ engine, fx, cues, toast, win }) {
       m.note === 'host' && m.phase === 'write'
         ? h('p', { class: 'notice', text: 'The host changed, so this fact starts again. Send your fake again!' })
         : null;
-    return [factLine(m, m.phase === 'reveal' ? m.answer : null), notice];
+    return [h('div', { class: ['bluff-hero', m.phase === 'reveal' ? 'is-reveal' : null] }, h('p', { class: 'bluff-eyebrow', text: heroLabel(m) }), factLine(m, m.phase === 'reveal' ? m.answer : null)), notice];
   });
 
   function writeStage(m) {
@@ -216,7 +225,8 @@ export function createBluffView({ engine, fx, cues, toast, win }) {
       return h(
         'div',
         { class: 'bluff-sent' },
-        h('span', { class: 'eyebrow', text: 'Your fake' }),
+        h('span', { class: 'bluff-sent-icon', text: '🃏', attrs: { 'aria-hidden': 'true' } }),
+        h('span', { class: 'bluff-eyebrow', text: 'Your fake' }),
         h('p', { class: 'bluff-sent-text', text: m.mySent ? `“${m.mySent}”` : 'Sent and hidden until everyone picks.' }),
         h('p', { class: 'muted', text: m.done >= m.players ? 'Everyone is in!' : `Waiting for ${plural(Math.max(0, m.players - m.done), 'more fake', 'more fakes')}…` }),
       );
@@ -248,6 +258,7 @@ export function createBluffView({ engine, fx, cues, toast, win }) {
               attrs: { 'aria-pressed': m.myPick === c.id ? 'true' : 'false' },
               on: { click: () => choose(m, c) },
             },
+            h('span', { class: 'bluff-letter', text: LETTERS[i % LETTERS.length], attrs: { 'aria-hidden': 'true' } }),
             h('span', { class: 'bluff-text', text: c.text }),
             c.isMine ? h('span', { class: 'bluff-tag', text: 'Yours' }) : m.myPick === c.id ? h('span', { class: 'bluff-tag is-pick', text: 'Your pick' }) : null,
           ),
@@ -273,7 +284,7 @@ export function createBluffView({ engine, fx, cues, toast, win }) {
             h('span', { class: ['bluff-badge', c.truth ? 'is-truth' : null], text: c.truth ? '✅ The truth' : '🃏 Fake' }),
             h('span', { class: 'bluff-text', text: c.text }),
             c.owners.length
-              ? h('div', { class: 'bluff-by' }, faces(c.owners, 4), h('span', { class: 'bluff-name', text: `by ${names(c.owners)}` }), c.fooled ? h('span', { class: 'bluff-gain', text: `fooled ${c.fooled}` }) : null)
+              ? h('div', { class: 'bluff-by' }, faces(c.owners, 4, 'sm'), h('span', { class: 'bluff-name', text: `by ${names(c.owners)}` }), c.fooled ? h('span', { class: 'bluff-gain', text: `fooled ${c.fooled}` }) : null)
               : null,
             c.pickers.length ? h('div', { class: 'bluff-pickers' }, h('span', { class: 'bluff-count', text: `${plural(c.pickers.length, 'pick', 'picks')}` }), faces(c.pickers, 6)) : null,
           ),
@@ -293,7 +304,8 @@ export function createBluffView({ engine, fx, cues, toast, win }) {
   const paintFoot = memo((m) => {
     if (!m) return null;
     const list = m.phase === 'write' ? m.doneBy : m.phase === 'pick' ? m.pickedBy : null;
-    return [h('span', { class: 'foot-text', text: footText(m) }), faces(list)];
+    const locked = (m.phase === 'write' && m.wrote) || (m.phase === 'pick' && m.hasPicked);
+    return [locked ? h('span', { class: 'bluff-locked', text: '✓ Locked in' }) : null, h('span', { class: 'foot-text', text: footText(m) }), faces(list, 8, 'sm')];
   });
 
   function cardFor(id) {

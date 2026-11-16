@@ -1,6 +1,6 @@
 import draw, { GUESS_CHARS, REVEAL_MS, PICK_MS, guessRef, reportableGuess } from '../games/draw.js';
 import { GRID_W, GRID_H, COLORS, SIZES, SIZE_NAMES, ERASER, CUSTOM, MAX_CHUNKS, FILL, inkKey, fitInk, readInk, liveMessage, applyLive, pruneLive, quantise, decodeStroke, strokeOn as inkStroke, fillOn, createPainter } from '../games/ink.js';
-import { h, memo, timer, avatar, button, plural } from '../ui/dom.js';
+import { h, memo, timer, profileButton, button, plural } from '../ui/dom.js';
 import { board as scoreBoard, standings } from '../ui/board.js';
 import { person } from '../players.js';
 import { hidesWords } from '../text.js';
@@ -20,6 +20,15 @@ export const WRITE_GAP_MS = 900;
 export const LIVE_CHARS = 3000;
 
 const TIER_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard', pack: `${PACK_EMOJI} Pack` };
+
+function hintWords(hint) {
+  const words = [[]];
+  for (const ch of hint) {
+    if (ch === ' ') words.push([]);
+    else words[words.length - 1].push(ch);
+  }
+  return words.filter((w) => w.length);
+}
 
 export const FLAG_ICON = '🚩';
 export const FLAG_TITLE = 'Flag this drawing if it breaks the rules. When enough players flag it, it gets hidden.';
@@ -192,7 +201,7 @@ function who(p, { verb = '', me = 'You', size = 'sm', cls = null } = {}) {
   return h(
     'span',
     { class: ['who', cls] },
-    avatar(p, size),
+    profileButton(p, size),
     h(
       'span',
       { class: 'who-text' },
@@ -695,7 +704,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
     return h(
       'p',
       { class: 'word-line', attrs: { 'aria-label': m.gotMe ? `The word is ${m.hint.join('')}` : `${plural(m.letters, 'letter', 'letters')}` } },
-      h('span', { class: ['blanks', m.gotMe ? 'is-solved' : null], attrs: { 'aria-hidden': 'true' } }, m.hint.map((ch) => h('span', { class: ['blank', ch === ' ' ? 'is-gap' : null, ch !== '_' && ch !== ' ' ? 'is-open' : null], text: ch === '_' ? '' : ch }))),
+      h('span', { class: ['blanks', m.gotMe ? 'is-solved' : null], attrs: { 'aria-hidden': 'true' } }, hintWords(m.hint).map((w) => h('span', { class: 'blank-word' }, w.map((ch) => h('span', { class: ['blank', ch !== '_' ? 'is-open' : null], text: ch === '_' ? '' : ch }))))),
       h('span', { class: 'blank-count', text: countText(m) }),
     );
   });
@@ -706,7 +715,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
       'div',
       { class: 'got-row', attrs: { 'aria-label': 'Already guessed it' } },
       h('span', { class: 'got-label muted', text: 'Got it:' }),
-      h('ul', { class: 'got-list' }, m.got.map((g) => h('li', { class: ['got-item', g.isMe ? 'is-me' : null], attrs: { title: g.isMe ? 'You' : g.name } }, avatar(g, 'xs'), h('span', { class: 'got-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'got-tick', text: '✓', attrs: { 'aria-hidden': 'true' } })))),
+      h('ul', { class: 'got-list' }, m.got.map((g) => h('li', { class: ['got-item', g.isMe ? 'is-me' : null], attrs: { title: g.isMe ? 'You' : g.name } }, profileButton(g, 'xs'), h('span', { class: 'got-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'got-tick', text: '✓', attrs: { 'aria-hidden': 'true' } })))),
     );
   });
 
@@ -725,7 +734,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
         ? h(
             'ul',
             { class: 'reveal-got', attrs: { 'aria-label': 'Who guessed it' } },
-            m.got.map((g) => h('li', { class: ['reveal-guess', g.isMe ? 'is-me' : null] }, avatar(g, 'xs'), h('span', { class: 'reveal-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'reveal-pts', text: `+${g.pts}` }))),
+            m.got.map((g) => h('li', { class: ['reveal-guess', g.isMe ? 'is-me' : null] }, profileButton(g, 'xs'), h('span', { class: 'reveal-name', text: g.isMe ? 'You' : g.name }), h('span', { class: 'reveal-pts', text: `+${g.pts}` }))),
           )
         : h('p', { class: 'reveal-none muted', text: 'Nobody guessed it this time.' }),
     );
@@ -759,7 +768,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
             h(
               'li',
               { class: ['feed-item', `is-${f.kind}`, f.mine ? 'is-me' : null, f.ref ? 'has-flag' : null] },
-              avatar(f, 'xs'),
+              profileButton(f, 'xs'),
               h('span', { class: 'feed-name', text: f.isMe ? 'You' : f.name }),
               h('span', { class: 'feed-text', text: feedLine(f) }),
               heatBadge(f),

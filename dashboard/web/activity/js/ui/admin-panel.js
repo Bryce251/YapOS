@@ -1,3 +1,4 @@
+import { pfp } from './pfp.js';
 import { h, memo, avatar, button, uidOf } from './dom.js';
 import { fmt } from './board.js';
 import { NEEDS_TARGET, TROLL_FX } from './trolls.js';
@@ -370,7 +371,7 @@ export function createAdminPanel({ engine, toast, win, onToggle = () => {}, focu
       h(
         'div',
         { class: 'admin-player-top' },
-        avatar(r, 'sm'),
+        pfp(r, 'md'),
         h(
           'span',
           { class: 'admin-who' },

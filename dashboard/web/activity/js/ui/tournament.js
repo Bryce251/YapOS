@@ -1,4 +1,5 @@
-import { h, avatar, button, plural } from './dom.js';
+import { h, button, plural } from './dom.js';
+import { pfp } from './pfp.js';
 import { TOUR_GAMES, PLACE_POINTS } from '../engine.js';
 
 export const TOUR_BLURB = `Play ${TOUR_GAMES} games back to back. Each game hands out ${PLACE_POINTS.join('/')} points by place, and the most points wins.`;
@@ -96,7 +97,7 @@ export function tourModel(snap, games) {
     games: live.g.map((id) => meta(games, id)),
     next: !live.done && live.i + 1 < live.g.length ? meta(games, live.g[live.i + 1]) : null,
     rows,
-    champ: champ ? { name: champ.name, isMe: Boolean(champ.isMe), slot: champ.slot } : live.champ !== null ? { name: 'Player', isMe: false, slot: live.champ } : null,
+    champ: champ ? { name: champ.name, isMe: Boolean(champ.isMe), slot: champ.slot, id: champ.id, initials: champ.initials, hue: champ.hue, avatar: champ.avatar || null } : live.champ !== null ? { name: 'Player', isMe: false, slot: live.champ } : null,
   };
 }
 
@@ -120,8 +121,8 @@ function standings(m) {
       h(
         'li',
         { class: ['tour-row', r.isMe ? 'is-me' : null, r.place === 1 ? 'is-top' : null] },
-        h('span', { class: 'tour-place', text: String(r.place) }),
-        avatar(r, 'xs'),
+        h('span', { class: ['tour-place', r.place <= 3 ? `medal medal-${r.place}` : null], text: String(r.place), attrs: { 'aria-label': `Place ${r.place}` } }),
+        pfp(r, 'sm'),
         h('span', { class: 'tour-name', text: r.isMe ? `${r.name} (you)` : r.name }),
         r.gain ? h('span', { class: 'tour-gain', text: `+${r.gain}` }) : null,
         h('strong', { class: 'tour-pts', text: plural(r.pts, 'pt', 'pts') }),
@@ -141,7 +142,7 @@ export function tourCard(m) {
     return h(
       'div',
       { class: ['card', 'glass', 'tour-card', 'is-champion', m.champ && m.champ.isMe ? 'is-me' : null] },
-      h('span', { class: 'tour-crown', text: '👑', attrs: { 'aria-hidden': 'true' } }),
+      m.champ && m.champ.id ? h('span', { class: 'tour-champ-face' }, pfp(m.champ, 'xl', { crown: true, ring: 'glow' })) : h('span', { class: 'tour-crown', text: '👑', attrs: { 'aria-hidden': 'true' } }),
       h('span', { class: 'eyebrow', text: 'Tournament over' }),
       h('h2', { class: 'winner-title tour-champ', text: championTitle(m) }),
       steps,
@@ -151,7 +152,8 @@ export function tourCard(m) {
   return h(
     'div',
     { class: 'card glass tour-card' },
-    h('div', { class: 'card-head' }, h('h3', { class: 'card-title', text: '🏆 Tournament' }), h('span', { class: 'count-pill', text: tourStatus(m) })),
+    h('div', { class: 'card-head' }, h('span', { class: 'card-icon', text: '🏆', attrs: { 'aria-hidden': 'true' } }), h('h3', { class: 'card-title', text: 'Tournament' }), h('span', { class: 'count-pill', text: tourStatus(m) })),
+    h('div', { class: 'tour-progress', attrs: { role: 'progressbar', 'aria-label': 'Tournament progress', 'aria-valuemin': '0', 'aria-valuemax': String(m.total), 'aria-valuenow': String(Math.min(m.i, m.total)) }, vars: { '--p': `${Math.round((Math.min(m.i, m.total) / Math.max(1, m.total)) * 100)}%` } }, h('span', { class: 'tour-progress-fill' })),
     steps,
     standings(m),
     m.next ? h('p', { class: 'tour-next' }, h('span', { class: 'muted', text: 'Up next: ' }), h('strong', { text: `${m.next.emoji} ${m.next.name}` })) : null,

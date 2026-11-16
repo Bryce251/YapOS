@@ -193,7 +193,7 @@ export function createReplayStrip({ win = globalThis, now = () => Date.now() } =
     }
     const item = items[open] || null;
     const kids = [
-      h('div', { class: 'card-head' }, h('h3', { class: 'card-title', text: 'Replays' }), h('span', { class: 'count-pill', text: `${items.length} drawing${items.length === 1 ? '' : 's'}` })),
+      h('div', { class: 'card-head' }, h('span', { class: 'card-icon', text: '🎞️', attrs: { 'aria-hidden': 'true' } }), h('h3', { class: 'card-title', text: 'Replays' }), h('span', { class: 'count-pill', text: `${items.length} drawing${items.length === 1 ? '' : 's'}` })),
       h('p', { class: 'replay-hint muted', text: 'Tap a drawing to watch it being made.' }),
       h('div', { class: 'replay-strip', attrs: { role: 'list' } }, items.map((x, i) => thumb(x, i))),
       item

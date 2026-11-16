@@ -9,6 +9,7 @@ import { profileCleanupStatements } from './public-profiles.js';
 import { packReportsCleanupStatements } from './pack-browse.js';
 import { statsCleanupStatements } from './server-stats.js';
 import { ownerCleanupStatements } from './owner.js';
+import { linkCleanupStatements } from './activity-auth.js';
 
 export const PUBLIC_STALE = 2 * HOUR;
 export const SNAPSHOT_STALE = DAY;
@@ -27,6 +28,7 @@ export async function cleanup(db, t) {
     db.prepare('DELETE FROM snapshots WHERE updated < ?').bind(t - SNAPSHOT_STALE),
     db.prepare('DELETE FROM profile_wanted WHERE asked < ?').bind(t - WANTED_TTL),
     db.prepare('DELETE FROM profiles WHERE fetched < ?').bind(t - PROFILE_KEEP),
+    ...linkCleanupStatements(db, t),
     ...cleanupStatements(db, t),
     ...resultsCleanupStatements(db, t),
     ...dailyCleanupStatements(db, t),
@@ -35,7 +37,7 @@ export async function cleanup(db, t) {
     ...statsCleanupStatements(db, t),
     ...ownerCleanupStatements(db, t),
   ]);
-  const names = ['sessions', 'states', 'jobs', 'rate', 'grants', 'userServers', 'publicPages', 'snapshots', 'profileWanted', 'profiles', 'dismissedReports', 'extraReports', 'orphanReportTexts', 'partyResults', 'partyXp', 'partyShards', 'dailyScores', 'publicProfiles', 'profileSettings', 'packReports', 'serverStats', 'ownerActions'];
+  const names = ['sessions', 'states', 'jobs', 'rate', 'grants', 'userServers', 'publicPages', 'snapshots', 'profileWanted', 'profiles', 'activityLinks', 'activitySessions', 'dismissedReports', 'extraReports', 'orphanReportTexts', 'partyResults', 'partyXp', 'partyShards', 'dailyScores', 'publicProfiles', 'profileSettings', 'packReports', 'serverStats', 'ownerActions'];
   const removed = {};
   results.forEach((r, i) => {
     removed[names[i]] = Number((r && r.meta && r.meta.changes) || 0);

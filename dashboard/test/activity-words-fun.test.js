@@ -457,6 +457,17 @@ test('Hot Takes without the recap finishes after the last reveal and keeps the r
   assert.ok(timer.options.some((o) => o.value === 90), 'longer writing time is still there');
 });
 
+function profileFaces(root, min) {
+  const faces = all(root).filter((n) => n.classList && n.classList.contains('avatar-btn') && n.getAttribute('data-profile-id'));
+  assert.ok(faces.length >= min, `expected at least ${min} profile avatars, got ${faces.length}`);
+  for (const f of faces) {
+    assert.equal(f.getAttribute('role'), 'button');
+    assert.equal(f.getAttribute('tabindex'), '0');
+    assert.match(f.getAttribute('aria-label'), /^View (your|.+'s) profile$/);
+  }
+  return faces;
+}
+
 function all(root) {
   const out = [];
   const walk = (n) => {
@@ -496,6 +507,7 @@ test('the views show the category round, the bonus chip and both recaps', async 
   assert.match(ctext, /Q X Z ×2/);
   assert.match(ctext, /Your turn! Type an animal that starts with C/);
   noInlineStyle(cv.el);
+  assert.deepEqual(profileFaces(cv.el, 2).map((f) => f.getAttribute('data-profile-id')), ['id-0', 'id-1']);
 
   const w = fake([0, 1, 2], { rounds: 2, timer: 12, mode: 'majority', recap: true });
   wyr.start(w.api);

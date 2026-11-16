@@ -22,38 +22,62 @@
 }
 
 .musicquiz-stage {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-4);
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface-2);
+  padding: var(--space-6) var(--space-5) var(--space-5);
+  border-radius: var(--radius-xl);
+  border: 1px solid color-mix(in srgb, var(--game) 20%, var(--border-strong));
+  background: radial-gradient(70% 90% at 50% 0%, color-mix(in srgb, var(--game) 16%, transparent), transparent 70%), var(--surface-2);
+  box-shadow: var(--inset-hi), inset 0 -3px 0 color-mix(in srgb, var(--game) 30%, transparent);
+  overflow: hidden;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur-slow) var(--ease), background-color var(--dur) var(--ease);
+}
+
+.musicquiz-stage::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--stage-dots);
+  background-size: var(--stage-dots-size);
+  -webkit-mask-image: radial-gradient(70% 70% at 50% 10%, #000, transparent 75%);
+  mask-image: radial-gradient(70% 70% at 50% 10%, #000, transparent 75%);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.musicquiz-stage > * {
+  position: relative;
 }
 
 .musicquiz-stage.is-playing {
   border-color: var(--game-line);
-  background: var(--game-soft);
+  background: radial-gradient(70% 90% at 50% 0%, color-mix(in srgb, var(--game) 28%, transparent), transparent 75%), radial-gradient(50% 60% at 85% 100%, var(--aurora-b), transparent 70%), var(--surface-2);
+  box-shadow: var(--inset-hi), inset 0 -3px 0 var(--game), 0 0 48px -18px var(--game);
 }
 
 .musicquiz-bars {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  gap: 6px;
-  height: 56px;
+  gap: 8px;
+  height: 72px;
+  padding: 0 var(--space-4);
 }
 
 .musicquiz-bar {
   display: block;
-  width: 10px;
+  width: 12px;
   height: 100%;
   border-radius: var(--radius-full);
-  background: var(--game);
+  background: linear-gradient(0deg, var(--game), color-mix(in srgb, var(--game) 55%, var(--glow-b)));
+  box-shadow: 0 0 12px -4px var(--game);
   transform-origin: bottom center;
-  transform: scaleY(0.18);
-  opacity: 0.6;
+  transform: scaleY(0.16);
+  opacity: 0.55;
+  transition: opacity var(--dur) var(--ease);
 }
 
 .musicquiz-stage.is-playing .musicquiz-bar {
@@ -67,33 +91,69 @@
   gap: var(--space-2);
 }
 
+.musicquiz-controls .btn {
+  min-height: var(--control-md);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--game-line);
+  border-radius: var(--radius-full);
+  background: var(--game-soft);
+  color: var(--text);
+}
+
+.musicquiz-controls .btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .musicquiz-note {
+  max-width: 40ch;
   margin: 0;
+  color: var(--text-2);
   font-size: var(--text-sm);
   text-align: center;
+  text-wrap: balance;
 }
 
 .musicquiz-question {
+  margin: var(--space-2) auto;
+  max-width: 24ch;
+  font-size: var(--text-hero);
   text-align: center;
 }
 
-.musicquiz-answer {
+.musicquiz-answer.card.glass {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--space-1);
-  padding: var(--space-4);
+  padding: var(--space-5) var(--space-4);
+  border-color: var(--success-line);
+  border-radius: var(--radius-xl);
+  background: radial-gradient(80% 100% at 50% 0%, var(--success-soft), transparent 70%), var(--surface-2);
+  box-shadow: var(--inset-hi), 0 0 36px -16px var(--success);
   text-align: center;
   animation: musicquiz-in 360ms var(--pop) both;
 }
 
+.musicquiz-answer::after {
+  content: "🎶";
+  content: "🎶" / "";
+  order: -1;
+  font-size: 28px;
+  line-height: 1;
+}
+
 .musicquiz-title {
-  font-size: clamp(20px, 3.6vw, 28px);
-  font-weight: var(--weight-heavy);
+  font-size: var(--text-hero);
+  font-weight: var(--weight-display);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
   text-wrap: balance;
 }
 
 .musicquiz-by {
+  color: var(--text-2);
   font-size: var(--text-sm);
 }
 
@@ -118,13 +178,40 @@
   }
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .musicquiz-controls .btn:hover:not(:disabled) {
+    border-color: var(--game);
+    background: color-mix(in srgb, var(--game) 22%, transparent);
+  }
+}
+
+@media (max-width: 420px) {
+  .musicquiz-stage {
+    padding: var(--space-5) var(--space-3) var(--space-4);
+  }
+
+  .musicquiz-bars {
+    gap: 6px;
+    height: 56px;
+  }
+
+  .musicquiz-bar {
+    width: 10px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .musicquiz-stage.is-playing .musicquiz-bar {
     animation: none;
     transform: scaleY(0.7);
   }
 
-  .musicquiz-answer {
+  .musicquiz-answer.card.glass {
     animation: none;
+  }
+
+  .musicquiz-stage,
+  .musicquiz-bar {
+    transition: none;
   }
 }

@@ -2,17 +2,17 @@ import truths, { KEY, STATEMENT_MAX, PROBLEMS, mask, problemOf, statementRef } f
 import { ideaAt, sampleAt, IDEAS } from '../../data/truths.js';
 import { cleanShared, hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
-import { h, memo, timer, avatar, who, button, plural } from '../ui/dom.js';
+import { h, memo, timer, who, button, plural, profileButton } from '../ui/dom.js';
 import { textFlag } from '../ui/report.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
 
-function faces(list, max = 7) {
+function faces(list, max = 7, size = 'xs') {
   if (!list || !list.length) return null;
   return h(
     'span',
-    { class: 'faces', attrs: { title: list.map((p) => (p.isMe ? 'You' : p.name)).join(', ') } },
-    list.slice(0, max).map((p) => avatar(p, 'xs')),
+    { class: ['faces', `faces-${size}`], attrs: { title: list.map((p) => (p.isMe ? 'You' : p.name)).join(', ') } },
+    list.slice(0, max).map((p) => profileButton(p, size)),
     list.length > max ? h('span', { class: 'faces-more', text: `+${list.length - max}` }) : null,
   );
 }
@@ -136,7 +136,7 @@ export function createTruthsView({ engine, fx, cues, toast }) {
   const form = h(
     'div',
     { class: ['truths-form', 'truths-off'] },
-    h('p', { class: 'eyebrow truths-eyebrow', text: 'Two truths and one lie about you' }),
+    h('div', { class: 'truths-form-head' }, h('p', { class: 'truths-eyebrow', text: 'Your turn to write' }), h('h2', { class: 'truths-form-title', text: 'Two truths and one lie about you' }), h('p', { class: 'truths-form-sub', text: 'Tap Lie next to the one you made up.' })),
     rows.map((r) => r.row),
     ideaBox,
     h('div', { class: 'truths-actions' }, lockBtn, editBtn),
@@ -260,7 +260,9 @@ export function createTruthsView({ engine, fx, cues, toast }) {
   function statement(m, s) {
     const card = statementCard(m, s);
     const flag = m.isWriter || m.watching ? null : textFlag(engine, statementRef(m.n, m.v, s.i), { toast, corner: true });
-    return flag ? h('div', { class: 'truths-row has-flag' }, card, flag) : card;
+    const known = m.phase === 'reveal' && !m.lost;
+    const voters = known ? h('div', { class: 'truths-voters' }, faces(s.voters, 7), h('span', { class: 'truths-voters-count', text: s.voters.length ? plural(s.voters.length, 'vote', 'votes') : 'No votes' })) : null;
+    return h('div', { class: ['truths-pick-row', flag ? 'has-flag' : null, known && s.isLie ? 'is-lie' : null] }, card, flag, voters);
   }
 
   function statementCard(m, s) {
@@ -286,8 +288,8 @@ export function createTruthsView({ engine, fx, cues, toast }) {
       },
       h('span', { class: 'option-letter', text: String(s.i + 1), attrs: { 'aria-hidden': 'true' } }),
       h('span', { class: 'option-text', text: s.text }),
-      known ? h('span', { class: ['truths-tag', s.isLie ? 'truths-tag-lie' : 'truths-tag-true'], text: s.isLie ? 'Lie' : 'True' }) : null,
-      known ? faces(s.voters, 5) : null,
+      known ? h('span', { class: ['truths-tag', s.isLie ? 'truths-tag-lie' : 'truths-tag-true'], text: s.isLie ? '🤥 Lie' : '✓ True' }) : null,
+      s.mine && !known ? h('span', { class: 'truths-tag truths-tag-pick', text: 'Your pick' }) : null,
     );
   }
 
@@ -299,7 +301,7 @@ export function createTruthsView({ engine, fx, cues, toast }) {
       h('span', { class: 'truths-award-icon', text: icon, attrs: { 'aria-hidden': 'true' } }),
       h('span', { class: 'eyebrow truths-award-title', text: title }),
       has
-        ? h('div', { class: 'truths-award-people' }, a.people.slice(0, 3).map((p) => who(p, { size: 'md' })))
+        ? h('div', { class: 'truths-award-people' }, a.people.slice(0, 3).map((p) => who(p, { size: 'md', profile: true })))
         : h('p', { class: 'muted', text: 'Nobody this time!' }),
       has ? h('p', { class: 'truths-award-line', text: `${names(a.people.slice(0, 3))} ${unit(a.n)}` }) : null,
     );
@@ -309,7 +311,7 @@ export function createTruthsView({ engine, fx, cues, toast }) {
     if (!m) return h('p', { class: 'waiting', text: 'Getting the game ready…' });
     const notice = m.note === 'host' ? h('p', { class: 'notice', text: m.phase === 'vote' ? 'The host changed, so voting on this one starts again. Vote again!' : 'The host changed. Your answers are being sent again.' }) : null;
     if (m.phase === 'write') {
-      if (m.writer) return [notice, m.doneBy.length ? h('div', { class: 'truths-ready' }, h('span', { class: 'muted', text: 'Ready:' }), faces(m.doneBy, 10)) : null];
+      if (m.writer) return [notice, m.doneBy.length ? h('div', { class: 'truths-ready' }, h('span', { class: 'truths-ready-label', text: 'Ready' }), faces(m.doneBy, 10, 'sm')) : null];
       return [
         notice,
         h(
@@ -317,7 +319,7 @@ export function createTruthsView({ engine, fx, cues, toast }) {
           { class: 'truths-wait glass' },
           h('span', { class: 'truths-wait-icon', text: '🕵️', attrs: { 'aria-hidden': 'true' } }),
           h('p', { class: 'truths-wait-text', text: m.late ? 'Everyone is writing two truths and a lie. You get to play detective on all of them!' : 'Everyone is writing two truths and a lie. Get ready to guess!' }),
-          faces(m.doneBy, 10),
+          faces(m.doneBy, 10, 'sm'),
         ),
       ];
     }
@@ -333,18 +335,26 @@ export function createTruthsView({ engine, fx, cues, toast }) {
     return [
       h(
         'div',
-        { class: 'truths-writer' },
-        who(m.writerFace, { size: 'md' }),
-        h('span', { class: 'truths-writer-says', text: m.isWriter ? 'These are yours!' : 'says…' }),
+        { class: ['truths-hero', m.isWriter ? 'is-yours' : null] },
+        h(
+          'div',
+          { class: 'truths-writer' },
+          who(m.writerFace, { size: 'lg', profile: true }),
+          h('span', { class: 'truths-writer-says', text: m.isWriter ? 'These are yours!' : 'says…' }),
+        ),
+        h('h2', { class: 'question truths-question', text: m.phase === 'vote' ? (m.isWriter ? 'Can they find your lie?' : 'Which one is the lie?') : m.lost ? 'This one got lost' : 'The lie was…' }),
       ),
       notice,
-      h('h2', { class: 'question truths-question', text: m.phase === 'vote' ? (m.isWriter ? 'Can they find your lie?' : 'Which one is the lie?') : m.lost ? 'This one got lost' : 'The lie was…' }),
-      h('div', { class: 'truths-options' }, m.statements.map((s) => statement(m, s))),
-      m.phase === 'vote' ? h('div', { class: 'truths-voted' }, faces(m.votedBy, 10)) : null,
+      h('div', { class: ['truths-options', m.phase === 'reveal' ? 'is-reveal' : null, m.phase === 'vote' && m.myPick !== null ? 'is-voted' : null] }, m.statements.map((s) => statement(m, s))),
+      m.phase === 'vote' && m.votedBy.length ? h('div', { class: 'truths-voted' }, h('span', { class: 'truths-ready-label', text: 'Voted' }), faces(m.votedBy, 10, 'sm')) : null,
     ];
   });
 
-  const paintFoot = memo((m) => (m ? h('span', { class: 'foot-text', text: verdict(m) }) : null));
+  const paintFoot = memo((m) => {
+    if (!m) return null;
+    const locked = (m.phase === 'write' && m.writer && m.done) || (m.phase === 'vote' && m.myPick !== null && !m.isWriter);
+    return [locked ? h('span', { class: 'truths-lockpill', text: '✓ Locked in' }) : null, h('span', { class: 'foot-text', text: verdict(m) })];
+  });
 
   function paintForm(m) {
     const show = Boolean(m && m.phase === 'write' && m.writer);

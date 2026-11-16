@@ -262,7 +262,13 @@ test('the in-call leaderboard opens, switches boards, filters games and closes o
   assert.equal(calls[0].init.credentials, 'same-origin');
   const rows = view.el.querySelectorAll('.lb-row');
   assert.equal(rows.length, 3);
-  assert.equal(rows[0].querySelector('.lb-rank').textContent, '🥇');
+  assert.equal(rows[0].querySelector('.lb-rank').textContent, '1');
+  assert.ok(rows[0].querySelector('.lb-rank').className.includes('medal-1'));
+  const face = rows[0].querySelector('.avatar-btn');
+  assert.equal(face.getAttribute('data-profile-id'), uid(1));
+  assert.equal(face.getAttribute('role'), 'button');
+  assert.equal(face.getAttribute('tabindex'), '0');
+  assert.equal(face.getAttribute('aria-label'), "View Pip's profile");
   assert.equal(rows[2].querySelector('.lb-rank').textContent, '#4');
   assert.ok(rows[2].className.includes('is-me'));
   assert.ok(view.el.textContent.includes('<b>Juno</b>'));
@@ -317,6 +323,28 @@ test('the in-call leaderboard shows friendly empty and error states', async () =
   down.close();
   assert.equal(ui.meLine('wins', { rank: 2, value: 1 }), "You're #2 with 1 win");
   assert.equal(ui.boardUrl('best', 'draw', 'bad id!'), '/api/activity/leaderboard?board=best&game=draw&limit=20');
+  ui.resetLeaderboard();
+});
+
+test('Esc closes the in-call leaderboard when the profile card is closed, and waits while it is open', async () => {
+  const { installDom, flush, FakeEvent } = await import('./dom-shim.js');
+  const { document } = installDom({ url: 'https://dash.example.test/activity/' });
+  const ui = await import('../web/activity/js/ui/leaderboard.js');
+  ui.resetLeaderboard();
+  ui.configureLeaderboard({ fetch: async () => ({ ok: true, status: 200, json: async () => ({ rows: [], me: null, total: 0 }) }) });
+  const layer = document.createElement('div');
+  layer.className = 'pcard-layer';
+  layer.hidden = false;
+  document.body.append(layer);
+  const view = ui.openLeaderboard(document.body, {});
+  await flush();
+  document.dispatchEvent(new FakeEvent('keydown', { key: 'Escape' }));
+  assert.equal(view.closed, false, 'an open profile card closes first');
+  layer.hidden = true;
+  layer.setAttribute('hidden', '');
+  document.dispatchEvent(new FakeEvent('keydown', { key: 'Escape' }));
+  assert.equal(view.closed, true, 'a closed profile card no longer blocks Esc');
+  layer.remove();
   ui.resetLeaderboard();
 });
 

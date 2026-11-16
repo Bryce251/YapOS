@@ -13,6 +13,8 @@ import { hostBarModel, hostBar, REMOVED_TEXT, LATE_LOCKED_TEXT } from './hosttoo
 import { tourStatus } from './tournament.js';
 import { createFullscreen } from './fullscreen.js';
 import { createParty, createBoardLink } from './party.js';
+import { createProfileCard } from './profilecard.js';
+import { createSignin } from './signin.js';
 
 export const ANNOUNCE_MS = 10000;
 export const LEAVE_GRACE_MS = 6000;
@@ -130,7 +132,7 @@ export function spectateModel(snap) {
   return out;
 }
 
-export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, juice = null, leaderboard = null }) {
+export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, juice = null, leaderboard = null, signin = null }) {
   const alone = !win.parent || win.parent === win;
   let account = alone ? { state: 'loading', name: '' } : null;
   const fx = createFx(win);
@@ -164,9 +166,24 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const boardHost = h('div', { class: 'leaderboard-host' });
   const boardLink = createBoardLink({ engine, host: boardHost, loader: leaderboard });
   root.replaceChildren(h('div', { class: 'aurora', attrs: { 'aria-hidden': 'true' } }), shell, fxLayer, party.el, panel.el, boardHost, toastRoot);
+  const profileCard = createProfileCard({ win, engine, alone });
+  const offProfileCard = profileCard.bind(root);
+  const gate = signin ? createSignin({ win, engine, toast, dev: Boolean(signin.dev), alone, host: root, onChange: () => repaintHead() }) : null;
+  if (gate) root.append(gate.el);
 
-  function toast(text) {
-    const t = h('div', { class: 'toast', text, attrs: { role: 'status' } });
+  function withSignin(m) {
+    return gate && gate.needsLink() ? { ...m, signin: true } : m;
+  }
+
+  function signinButton() {
+    const b = button('Sign in', { variant: 'ghost', size: 'sm', key: 'signin', on: () => gate.open(), attrs: { 'aria-haspopup': 'dialog', title: 'Sign in to YapOS Party' }, kids: h('span', { class: 'btn-icon', text: '👤', attrs: { 'aria-hidden': 'true' } }) });
+    b.classList.add('btn-signin');
+    return b;
+  }
+
+  function toast(text, kind = 'info') {
+    const tone = kind === 'success' || kind === 'error' ? kind : 'info';
+    const t = h('div', { class: ['toast', `toast-${tone}`], text, attrs: { role: 'status' } });
     toastRoot.append(t);
     win.setTimeout(() => t.classList.add('is-out'), 2600);
     win.setTimeout(() => t.remove(), 3000);
@@ -201,12 +218,13 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     h(
       'div',
       { class: 'top-inner' },
-      h('span', { class: 'brand' }, h('span', { class: 'brand-mark', text: 'Y', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'brand-name', text: 'YapOS Party' })),
-      h('span', { class: 'status-pill', text: m.status }),
+      h('span', { class: 'brand' }, h('span', { class: 'brand-mark', attrs: { 'aria-hidden': 'true' } }, h('img', { class: 'mark-img', alt: '', attrs: { src: '/logo.png', draggable: 'false', decoding: 'async' } })), h('span', { class: 'brand-name' }, 'YapOS ', h('span', { class: 'brand-sub', text: 'Party' }))),
+      h('span', { class: ['status-pill', m.phase === 'connecting' ? null : 'is-live'] }, h('span', { class: 'status-dot', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'status-text', text: m.status })),
       m.host
         ? h(
             'span',
             { class: ['host-pill', m.isHost ? 'is-me' : null], attrs: { title: m.host } },
+            m.isHost ? h('span', { class: 'host-crown', text: '👑', attrs: { 'aria-hidden': 'true' } }) : null,
             h('span', { class: 'host-long', text: m.host }),
             h('span', { class: 'host-short', text: m.hostShort, attrs: { 'aria-hidden': 'true' } }),
           )
@@ -214,6 +232,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       h(
         'span',
         { class: 'top-actions' },
+        m.signin ? signinButton() : null,
         soundButton(m.sound),
         fullscreen.button(),
         m.admin
@@ -223,6 +242,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
               key: 'admin',
               on: () => panel.toggle(),
               attrs: { 'aria-haspopup': 'dialog', 'aria-expanded': m.adminOpen ? 'true' : 'false', 'aria-controls': 'admin-panel', title: 'Open the admin panel' },
+              kids: h('span', { class: 'btn-icon', text: '🛡️', attrs: { 'aria-hidden': 'true' } }),
             })
           : null,
         m.canEnd ? button('End game', { variant: 'ghost', size: 'sm', key: 'end', on: () => engine.lobby.end(), attrs: { 'aria-label': 'End game', title: 'End game' }, kids: h('span', { class: 'btn-icon', text: '■', attrs: { 'aria-hidden': 'true' } }) }) : null,
@@ -266,7 +286,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   function repaintHead() {
     if (destroyed) return;
-    paintHead(head, headerModel(engine.snapshot(), { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode }));
+    paintHead(head, withSignin(headerModel(engine.snapshot(), { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode })));
   }
 
   function stamp() {
@@ -380,7 +400,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       : null,
   );
 
-  const paintBan = memo((on) => (on ? h('p', { class: 'party-ban', text: PARTY_BANNED_TEXT, attrs: { role: 'status' } }) : null));
+  const paintBan = memo((on) => (on ? h('p', { class: 'party-ban', attrs: { role: 'status' } }, h('span', { class: 'party-ban-icon', text: '🚫', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'party-ban-text', text: PARTY_BANNED_TEXT })) : null));
 
   const paintSpectate = memo((m) => {
     if (!m) return null;
@@ -435,6 +455,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       ? h(
           'div',
           { class: 'announce', attrs: { role: 'status', 'aria-live': 'polite' } },
+          h('span', { class: 'announce-icon', text: '📣', attrs: { 'aria-hidden': 'true' } }),
           h('span', { class: 'announce-text', text: m.text }),
           h('span', { class: 'announce-secs', text: '' }),
           h('span', { class: 'announce-track', attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'announce-fill' })),
@@ -478,6 +499,11 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
         return;
       }
       if (n.dataset && (n.dataset.key === 'join' || n.dataset.key === 'join-late')) {
+        if (gate && !gate.require('join')) {
+          if (typeof e.stopPropagation === 'function') e.stopPropagation();
+          if (typeof e.preventDefault === 'function') e.preventDefault();
+          return;
+        }
         if (partyBanned(engine.snapshot())) {
           if (typeof e.stopPropagation === 'function') e.stopPropagation();
           if (typeof e.preventDefault === 'function') e.preventDefault();
@@ -520,19 +546,24 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       return h(
         'div',
         { class: 'card glass hello-card' },
-        h('span', { class: 'trophy', text: 'Y', attrs: { 'aria-hidden': 'true' } }),
-        h('h1', { class: 'winner-title', text: 'YapOS Party' }),
+        helloCrest(false),
+        h('h1', { class: 'hello-title', text: 'YapOS Party' }),
         h('p', { class: 'muted', text: "Start it from a voice call in Yapin' to play with everyone in the call." }),
         accountBlock(m.account),
       );
     }
     return h(
       'div',
-      { class: 'card glass hello-card' },
-      h('span', { class: 'spinner', attrs: { 'aria-hidden': 'true' } }),
-      h('p', { class: 'muted', attrs: { role: 'status' }, text: m.ready ? 'Setting up the room…' : 'Joining the party…' }),
+      { class: 'card glass hello-card is-busy' },
+      helloCrest(true),
+      h('h1', { class: 'hello-title', text: 'YapOS Party' }),
+      h('p', { class: 'muted hello-status', attrs: { role: 'status' } }, h('span', { class: 'spinner', attrs: { 'aria-hidden': 'true' } }), h('span', { text: m.ready ? 'Setting up the room…' : 'Joining the party…' })),
     );
   });
+
+  function helloCrest(busy) {
+    return h('span', { class: ['hello-crest', busy ? 'is-busy' : null], attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'hello-crest-mark' }, h('img', { class: 'mark-img', alt: '', attrs: { src: '/logo.png', draggable: 'false', decoding: 'async' } })));
+  }
 
   function connectModel(snap) {
     return { lost: alone, ready: Boolean(snap && snap.ready), account: account ? `${account.state}:${account.name}` : '' };
@@ -578,7 +609,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   function render(snap) {
     renders += 1;
     const hm = headerModel(snap, { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode });
-    paintHead(head, hm);
+    paintHead(head, withSignin(hm));
     root.dataset.phase = hm.phase;
     const tint = gameTint(snap, hm.phase);
     if (tint) root.dataset.game = tint;
@@ -589,10 +620,12 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     paintBan(banSlot, partyBanned(snap) && hm.phase !== 'game');
     tickAnnounce(now());
     panel.update(snap);
+    if (gate) gate.update(snap);
     paintBody(snap, hm);
     if (party.update(snap)) root.dataset.dock = 'on';
     else delete root.dataset.dock;
     trolls.paint();
+    profileCard.scan();
     direct(snap);
   }
 
@@ -644,6 +677,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     if (destroyed) return;
     if (screen === 'lobby') lobby.update(engine.snapshot());
     else if (screen === 'results') results.update(engine.snapshot());
+    profileCard.scan();
   });
   root.addEventListener('click', onRootClick, true);
   if (typeof win.addEventListener === 'function') win.addEventListener(PROFILES_EVENT, onProfiles);
@@ -666,6 +700,8 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     panel,
     trolls,
     fullscreen,
+    profileCard,
+    signin: gate,
     get renders() {
       return renders;
     },
@@ -674,6 +710,8 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       offChange();
       offBoard();
       party.destroy();
+      offProfileCard();
+      profileCard.destroy();
       root.removeEventListener('click', onRootClick, true);
       offUnlock();
       if (typeof offFx === 'function') offFx();
@@ -690,6 +728,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       panel.destroy();
       trolls.destroy();
       fullscreen.destroy();
+      if (gate) gate.destroy();
       if (typeof win.removeEventListener === 'function') win.removeEventListener(PROFILES_EVENT, onProfiles);
       if (profileTimer !== null) win.clearTimeout(profileTimer);
       profileTimer = null;

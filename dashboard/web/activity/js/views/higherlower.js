@@ -1,6 +1,6 @@
 import higherlower, { REVEAL_MS } from '../games/higherlower.js';
 import { koLine } from '../games/knockout.js';
-import { h, memo, timer, avatar, plural } from '../ui/dom.js';
+import { h, memo, timer, avatar, plural, profileButton } from '../ui/dom.js';
 import { koBar } from './knockout.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
@@ -9,12 +9,12 @@ function nameOf(p) {
   return p.isMe ? 'You' : p.username ? `${p.name} (@${p.username})` : p.name;
 }
 
-function faces(list, max = 7) {
+function faces(list, max = 7, open = true) {
   if (!list || !list.length) return null;
   return h(
     'span',
     { class: 'faces', attrs: { title: list.map(nameOf).join(', ') } },
-    list.slice(0, max).map((p) => avatar(p, 'xs')),
+    list.slice(0, max).map((p) => (open ? profileButton(p, 'sm') : avatar(p, 'xs'))),
     list.length > max ? h('span', { class: 'faces-more', text: `+${list.length - max}` }) : null,
   );
 }
@@ -83,7 +83,7 @@ export function createHigherlowerView({ engine, fx, cues }) {
       h('span', { class: 'hl-name', text: it.name }),
       reveal ? h('span', { class: 'hl-value', text: it.value || '' }) : h('span', { class: 'hl-value is-hidden', text: '?' }),
       m.myPick === side ? h('span', { class: 'hl-tag', text: reveal ? (win ? 'Your pick ✓' : 'Your pick') : 'Your pick' }) : null,
-      reveal ? faces(m.pickers[side]) : null,
+      reveal ? faces(m.pickers[side], 7, false) : null,
     );
   }
 
@@ -107,7 +107,7 @@ export function createHigherlowerView({ engine, fx, cues }) {
         ? h(
             'div',
             { class: 'hl-hot', attrs: { 'aria-label': 'Hot streaks' } },
-            m.hot.map((x) => h('span', { class: 'hl-hot-item' }, avatar(x.who, 'xs'), h('span', { text: `${x.who.isMe ? 'You' : x.who.name} 🔥${x.n}` }))),
+            m.hot.map((x) => h('span', { class: 'hl-hot-item' }, profileButton(x.who, 'xs'), h('span', { text: `${x.who.isMe ? 'You' : x.who.name} 🔥${x.n}` }))),
           )
         : null,
       h(

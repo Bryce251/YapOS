@@ -1,4 +1,5 @@
-import { h, avatar } from './dom.js';
+import { h } from './dom.js';
+import { pfp } from './pfp.js';
 import { textFlag } from './report.js';
 
 export const AWARDS_TITLE = 'Awards';
@@ -35,7 +36,7 @@ export function awardsCard(list) {
   return h(
     'div',
     { class: 'card glass awards-card' },
-    h('div', { class: 'card-head' }, h('h3', { class: 'card-title', text: AWARDS_TITLE })),
+    h('div', { class: 'card-head' }, h('span', { class: 'card-icon', text: '🏅', attrs: { 'aria-hidden': 'true' } }), h('h3', { class: 'card-title', text: AWARDS_TITLE }), h('span', { class: 'count-pill', text: String(list.length) })),
     h(
       'ul',
       { class: 'award-list' },
@@ -43,12 +44,12 @@ export function awardsCard(list) {
         h(
           'li',
           { class: ['award', a.mine ? 'is-me' : null], vars: { '--i': String(i) } },
-          h('span', { class: 'award-emoji', text: a.emoji, attrs: { 'aria-hidden': 'true' } }),
+          h('span', { class: 'award-badge', attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'award-emoji', text: a.emoji })),
           h(
             'span',
             { class: 'award-text' },
             h('span', { class: 'award-title', text: a.title }),
-            h('span', { class: 'award-who' }, a.who.map((p) => h('span', { class: 'award-person' }, avatar(p, 'xs'), h('span', { class: 'award-name', text: p.isMe ? `${p.name} (you)` : p.name })))),
+            h('span', { class: 'award-who' }, a.who.map((p) => h('span', { class: ['award-person', p.isMe ? 'is-me' : null] }, pfp(p, 'sm'), h('span', { class: 'award-name', text: p.isMe ? `${p.name} (you)` : p.name })))),
             a.why ? h('span', { class: 'award-why', text: a.why }) : null,
           ),
         ),
@@ -62,15 +63,15 @@ export function reelCard(list, { engine = null, toast = null } = {}) {
   return h(
     'div',
     { class: 'card glass reel-card' },
-    h('div', { class: 'card-head' }, h('h3', { class: 'card-title', text: REEL_TITLE })),
+    h('div', { class: 'card-head' }, h('span', { class: 'card-icon', text: '🎬', attrs: { 'aria-hidden': 'true' } }), h('h3', { class: 'card-title', text: REEL_TITLE })),
     h(
       'ol',
       { class: 'reel-list' },
-      list.map((x) =>
+      list.map((x, i) =>
         h(
           'li',
-          { class: ['reel-item', x.mine ? 'is-me' : null] },
-          h('span', { class: 'reel-quote', text: `“${x.text}”` }),
+          { class: ['reel-item', x.mine ? 'is-me' : null], vars: { '--i': String(i) } },
+          h('span', { class: 'reel-quote', text: x.name ? `“${x.text}”` : x.text }),
           x.name ? h('span', { class: 'reel-who', text: `— ${x.name}` }) : null,
           x.report && !x.mine && engine ? textFlag(engine, x.r, { toast }) : null,
         ),
@@ -80,5 +81,5 @@ export function reelCard(list, { engine = null, toast = null } = {}) {
 }
 
 export function upsetLine(text) {
-  return text ? h('p', { class: 'upset-line', text }) : null;
+  return text ? h('p', { class: 'upset-line' }, h('span', { class: 'upset-icon', text: '⚡', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'upset-text', text })) : null;
 }

@@ -619,6 +619,10 @@ test('the draw view lets the drawer pick and draw, and shows guessers the blanks
   const word = secret(st);
   assert.match(text(hostView.v.el), new RegExp(`Draw this:\\s+${word}`));
   assert.equal(text(guestView.v.el).includes(word), false);
+  const groups = all(guestView.v.el).filter((x) => x.classList && x.classList.contains('blank-word'));
+  assert.equal(groups.length, word.split(' ').filter(Boolean).length, 'each word keeps its blanks together so a line never breaks inside a word');
+  assert.deepEqual(groups.map((g) => g.children.length), word.split(' ').filter(Boolean).map((w) => w.length));
+  assert.equal(all(guestView.v.el).some((x) => x.classList && x.classList.contains('is-gap')), false);
   assert.match(hostView.v.el.querySelector('.draw-board').className, /is-drawing/);
   byKey(hostView.v.el, 'color-3').click();
   byKey(hostView.v.el, 'size-2').click();
@@ -756,4 +760,30 @@ test('the drawer shows with their picture, name and @username so they can be rep
   assert.match(text(mine.el), /You drew this/);
   assert.match(text(mine.el), /for your drawing/);
   mine.destroy();
+});
+
+test('player faces in Draw & Guess open their profile card', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await startDraw(3, { rounds: 1 });
+  const [host, a] = r.engines;
+  const win = { setTimeout: r.clock.setTimeout, clearTimeout: r.clock.clearTimeout, setInterval: () => 0, clearInterval() {} };
+  const view = VIEWS.draw({ engine: a, fx: { confetti() {} }, toast() {}, win });
+  view.update(a.snapshot());
+  const drawer = host.snapshot().players.find((p) => p.slot === 0);
+  const faces = all(view.el).filter((x) => x.getAttribute && x.getAttribute('data-profile-id') && x.getAttribute('role') === 'button');
+  assert.ok(faces.length >= 1, 'the drawer face is a profile button');
+  const face = faces.find((x) => x.getAttribute('data-profile-id') === String(drawer.id));
+  assert.ok(face, 'the face carries the player id');
+  assert.equal(face.getAttribute('tabindex'), '0');
+  assert.equal(face.getAttribute('aria-label'), `View ${drawer.name}'s profile`);
+  assert.ok(face.classList.contains('avatar-btn'));
+  const st = await pickWord(r, 0);
+  a.act({ type: 'guess', text: secret(st) });
+  await r.clock.advance(800);
+  view.update(a.snapshot());
+  const me = a.snapshot().players.find((p) => p.isMe);
+  const mine = all(view.el).filter((x) => x.getAttribute && x.getAttribute('data-profile-id') === String(me.id) && x.getAttribute('role') === 'button');
+  assert.ok(mine.length >= 1, 'faces in the guessed list are profile buttons');
+  assert.equal(mine[0].getAttribute('aria-label'), 'View your profile');
+  view.destroy();
 });

@@ -28,7 +28,7 @@ export function boot(win) {
   configureAdmins({ win });
   const bridge = connect({ win });
   const engine = createEngine({ transport: bridge, games: GAMES });
-  const app = mountApp({ root, engine, bridge, win });
+  const app = mountApp({ root, engine, bridge, win, signin: { dev: Boolean(bridge.dev) } });
   const seen = (list) => {
     askProfiles(bridge, list);
     askAdmins(bridge, list);
