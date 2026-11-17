@@ -102,7 +102,9 @@ export function soundCues(prev, next) {
   return cues;
 }
 
-export function headerModel(snap, { alone = false, adminOpen = false, sound = true, screen = 'off' } = {}) {
+export const QUIT_ARM_MS = 3000;
+
+export function headerModel(snap, { alone = false, adminOpen = false, sound = true, screen = 'off', quitArmed = false } = {}) {
   const phase = snap.ready ? snap.room.phase : 'connecting';
   const game = snap.game;
   let status = alone ? 'Not in a call' : 'Connecting';
@@ -118,6 +120,8 @@ export function headerModel(snap, { alone = false, adminOpen = false, sound = tr
     hostShort: snap.ready ? (snap.isHost ? 'You' : snap.hostName) : null,
     isHost: snap.isHost,
     canEnd: snap.isHost && phase === 'game',
+    canLeave: phase === 'game' && Boolean(snap.meJoined) && snap.joining !== 'out',
+    quitArmed: phase === 'game' && Boolean(snap.meJoined) && Boolean(quitArmed),
     admin: isAdminSnap(snap),
     adminOpen: Boolean(adminOpen) && isAdminSnap(snap),
     sound: Boolean(sound),
@@ -253,7 +257,20 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const gameCard = h('div', { class: 'card glass play-card' });
   const strip = h('div', { class: 'strip' });
   const modTray = createModTray();
-  gameWrap.append(hostSlot, spectate, predictSlot, gameCard, modTray.el, strip);
+  const quitSlot = h('div', { class: 'quit-slot' });
+  gameWrap.append(hostSlot, spectate, predictSlot, gameCard, modTray.el, strip, quitSlot);
+  const paintQuit = memo((m) =>
+    m.canLeave
+      ? button(m.armed ? 'Tap again to leave' : 'Leave game', {
+          variant: m.armed ? 'danger' : 'ghost',
+          size: 'sm',
+          key: 'quit-game',
+          on: quitGame,
+          attrs: { 'aria-label': m.armed ? 'Tap again to leave this game' : 'Leave this game and watch instead', title: 'Leave this game and watch instead' },
+          kids: h('span', { class: 'btn-icon', text: '🚪', attrs: { 'aria-hidden': 'true' } }),
+        })
+      : null,
+  );
   let hostOpen = false;
   let predictUntil = 0;
   const now = () => (typeof engine.now === 'function' ? engine.now() : Date.now());
@@ -265,6 +282,33 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   let wasJoined = null;
   let selfLeaveAt = -Infinity;
   let announceLive = null;
+  let quitArmedUntil = 0;
+  let quitTimer = null;
+
+  function quitArmed() {
+    return now() < quitArmedUntil;
+  }
+
+  function quitGame() {
+    if (quitTimer !== null) {
+      win.clearTimeout(quitTimer);
+      quitTimer = null;
+    }
+    if (!quitArmed()) {
+      quitArmedUntil = now() + QUIT_ARM_MS;
+      quitTimer = win.setTimeout(() => {
+        quitTimer = null;
+        quitArmedUntil = 0;
+        render(engine.snapshot());
+      }, QUIT_ARM_MS);
+      render(engine.snapshot());
+      return;
+    }
+    quitArmedUntil = 0;
+    selfLeaveAt = now();
+    if (engine.leave()) toast("You left the game. You're watching now and can join the next one.");
+    render(engine.snapshot());
+  }
 
   const paintHead = memo((m) =>
     h(
@@ -339,7 +383,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   function repaintHead() {
     if (destroyed) return;
-    paintHead(head, withSignin(headerModel(engine.snapshot(), { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode })));
+    paintHead(head, withSignin(headerModel(engine.snapshot(), { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode, quitArmed: quitArmed() })));
   }
 
   function stamp() {
@@ -661,7 +705,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   function render(snap) {
     renders += 1;
-    const hm = headerModel(snap, { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode });
+    const hm = headerModel(snap, { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode, quitArmed: quitArmed() });
     paintHead(head, withSignin(hm));
     root.dataset.phase = hm.phase;
     const tint = gameTint(snap, hm.phase);
@@ -820,6 +864,8 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     paintHostBar(hostSlot, hostBarModel(snap, hostOpen));
     paintSpectate(spectate, spectateModel(snap));
     paintStrip(strip, ownsBoard() ? null : stripModel(snap, viewBoard(snap)));
+    const qm = headerModel(snap, { quitArmed: quitArmed() });
+    paintQuit(quitSlot, { canLeave: qm.canLeave, armed: qm.quitArmed });
     tickTimers(stage, now(), timerHooks);
   }
 
