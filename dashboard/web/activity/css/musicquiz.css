@@ -136,8 +136,8 @@
 }
 
 .musicquiz-answer::after {
-  content: "🎶";
-  content: "🎶" / "";
+  content: "\1F3B6";
+  content: "\1F3B6" / "";
   order: -1;
   font-size: 28px;
   line-height: 1;

@@ -905,7 +905,7 @@ img {
 }
 
 .tag-host::before {
-  content: "👑";
+  content: "\1F451";
   letter-spacing: 0;
 }
 
@@ -1532,7 +1532,7 @@ img {
 }
 
 .game-tile.is-on::before {
-  content: "✓";
+  content: "\2713";
   position: absolute;
   top: var(--space-2);
   right: var(--space-2);

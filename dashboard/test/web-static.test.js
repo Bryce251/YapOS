@@ -154,6 +154,14 @@ test('no comments in any website file', () => {
   }
 });
 
+test('stylesheets are plain ASCII so emoji never turn into garbled text', () => {
+  for (const f of files.filter((x) => x.endsWith('.css'))) {
+    const src = readFileSync(f, 'utf8');
+    const bad = Array.from(src).filter((c) => c.codePointAt(0) > 127);
+    assert.deepEqual(bad, [], `${rel(f)} has characters that need CSS escapes like \\1F451`);
+  }
+});
+
 test('no unsafe DOM or eval', () => {
   for (const f of jsFiles) {
     const src = readFileSync(f, 'utf8');

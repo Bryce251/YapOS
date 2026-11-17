@@ -744,7 +744,7 @@
 }
 
 [data-uid].is-clown:not(.avatar)::after {
-  content: " 🤡";
+  content: " \1F921";
 }
 
 .avatar.is-clown {
@@ -752,7 +752,7 @@
 }
 
 .avatar.is-clown::before {
-  content: "🤡";
+  content: "\1F921";
   position: absolute;
   inset: 0;
   z-index: 1;

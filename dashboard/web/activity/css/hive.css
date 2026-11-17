@@ -195,7 +195,7 @@
 }
 
 .hive-cell[data-uses]::after {
-  content: '×' attr(data-uses);
+  content: '\D7' attr(data-uses);
   position: absolute;
   bottom: 10%;
   left: 0;

@@ -239,7 +239,7 @@
 }
 
 .signin-copy-icon::before {
-  content: '⧉';
+  content: '\29C9';
 }
 
 .signin-copy.is-copied {
@@ -248,7 +248,7 @@
 }
 
 .signin-copy.is-copied .signin-copy-icon::before {
-  content: '✓';
+  content: '\2713';
 }
 
 .signin-expiry {
