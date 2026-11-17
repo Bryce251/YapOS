@@ -3,7 +3,8 @@ import { icon } from '../icons.js';
 import { avatar, copyButton, emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
 import { brand } from '../shell.js';
 import { themeToggle } from '../theme.js';
-import { medalFor, normalizeBoard } from '../public-data.js';
+import { boardPeople, medalFor, normalizeBoard } from '../public-data.js';
+import { openBoardPerson } from './board-person.js';
 import { formatNumber, relativeTime } from '../format.js';
 import { ApiError, isAbort } from '../api.js';
 import { publicPath } from '../router.js';
@@ -27,7 +28,7 @@ function rankBadge(rank) {
   return h('span', { class: 'rank-num', attrs: { 'aria-label': `Rank ${rank}` }, text: String(rank) });
 }
 
-function boardView(rows, kind) {
+function boardView(rows, kind, onOpen = null) {
   if (!rows.length) {
     return emptyState({
       icon: kind === 'economy' ? 'coins' : 'trophy',
@@ -42,15 +43,21 @@ function boardView(rows, kind) {
     const q = filter.value.trim().toLowerCase();
     const visible = q ? rows.filter((r) => r.name.toLowerCase().includes(q)) : rows;
     none.hidden = visible.length > 0;
-    replace(list, ...visible.map((r) => h('li', { class: ['board-row', r.rank <= 3 ? `is-top is-top-${r.rank}` : ''] },
-      rankBadge(r.rank),
-      avatar({ name: r.name, url: r.avatar, id: r.id, size: 'md' }),
-      h('div', { class: 'board-who' },
-        h('span', { class: 'board-name', text: r.name }),
-        r.secondary ? h('span', { class: 'board-sub', text: r.secondary }) : null),
-      h('div', { class: 'board-score' },
-        h('span', { class: 'board-value', text: formatNumber(r.primary) }),
-        h('span', { class: 'board-unit', text: r.primaryLabel === 'level' ? 'Level' : `${CURRENCY_EMOJI} ${CURRENCY_NAME}` })))));
+    replace(list, ...visible.map((r) => h('li', { class: 'board-item' }, h('button', {
+      type: 'button',
+      class: ['board-row', 'board-row-btn', r.rank <= 3 ? `is-top is-top-${r.rank}` : ''],
+      dataset: { id: r.id },
+      attrs: { 'aria-haspopup': 'dialog', title: `Open ${r.name}'s profile` },
+      on: { click: () => onOpen?.(r) },
+    },
+    rankBadge(r.rank),
+    avatar({ name: r.name, url: r.avatar, id: r.id, size: 'md' }),
+    h('span', { class: 'board-who' },
+      h('span', { class: 'board-name', text: r.name }),
+      r.secondary ? h('span', { class: 'board-sub', text: r.secondary }) : null),
+    h('span', { class: 'board-score' },
+      h('span', { class: 'board-value', text: formatNumber(r.primary) }),
+      h('span', { class: 'board-unit', text: r.primaryLabel === 'level' ? 'Level' : `${CURRENCY_EMOJI} ${CURRENCY_NAME}` }))))));
   };
   filter.addEventListener('input', draw);
   draw();
@@ -98,8 +105,23 @@ export function renderPublic(root, ctx) {
 
   function draw(data) {
     ctx.setTitle('Global leaderboard');
-    const levels = normalizeBoard(data.levels, 'levels');
-    const economy = normalizeBoard(data.economy, 'economy');
+    let levels = normalizeBoard(data.levels, 'levels');
+    let economy = normalizeBoard(data.economy, 'economy');
+    let people = boardPeople(levels, economy);
+    const viewer = typeof ctx.getViewer === 'function' ? Promise.resolve().then(() => ctx.getViewer()).catch(() => null) : Promise.resolve(null);
+    const isOwner = () => viewer.then((v) => v?.partyOwner === true);
+    const rerank = (list) => list.map((r, i) => ({ ...r, rank: i + 1 }));
+    const changed = (evt) => {
+      if (evt.type !== 'global.hide' || evt.status !== 'done') return;
+      levels = rerank(levels.filter((r) => r.id !== evt.id));
+      economy = rerank(economy.filter((r) => r.id !== evt.id));
+      people = boardPeople(levels, economy);
+      select(current);
+    };
+    const open = (row) => {
+      const person = people.get(row.id) || { id: row.id, name: row.name, avatar: row.avatar, handle: row.handle };
+      openBoardPerson({ person, api, signal, owner: isOwner(), onChanged: changed });
+    };
     const asked = new URLSearchParams(window.location.search).get('tab');
     const initial = asked === 'coins' ? 'shards' : asked;
     let current = TABS.some((t) => t.id === initial) ? initial : 'levels';
@@ -121,7 +143,7 @@ export function renderPublic(root, ctx) {
         if (on && focus) b.focus();
       });
       panel.setAttribute('aria-labelledby', `tab-${id}`);
-      replace(panel, id === 'levels' ? boardView(levels, 'levels') : boardView(economy, 'economy'));
+      replace(panel, id === 'levels' ? boardView(levels, 'levels', open) : boardView(economy, 'economy', open));
       const url = new URL(window.location.href);
       if (id === 'levels') url.searchParams.delete('tab');
       else url.searchParams.set('tab', id);

@@ -278,3 +278,27 @@ test('the /economy give owner flow still works', async () => {
   assert.equal(balOf(h, IDS.member) - before, 100);
   assert.equal(earned.length, 0);
 });
+
+test('a Shards change from the owner republishes the global board in the same tick, and 0 Shards drops off it', async () => {
+  const { h, w, dash } = await setup();
+  const boards = [];
+  const base = w.fetch;
+  w.fetch = async (url, init = {}) => {
+    if (init.method === 'PUT' && new URL(url).pathname === '/bot/global') boards.push(JSON.parse(init.body));
+    return base(url, init);
+  };
+  dash.stop();
+  const d2 = createDashboard({ engine: h.engine, url: 'https://dash.example.test', secret: SECRET, fetch: w.fetch, now: h.now });
+  h.engine.service('economy').add(IDS.server, IDS.member, 5000, 'test');
+  await d2.tick();
+  assert.equal(boards.length, 1);
+  assert.ok(boards[0].economy.some((r) => r.id === IDS.member));
+  await d2.tick();
+  assert.equal(boards.length, 1, 'no change, no extra publish');
+  w.owner = [{ id: 'z1', user: IDS.member, kind: 'shards.set', value: 0 }];
+  await d2.tick();
+  await h.settle();
+  assert.equal(balOf(h, IDS.member), 0);
+  assert.equal(boards.length, 2, 'the board is pushed again right away');
+  assert.ok(!boards[1].economy.some((r) => r.id === IDS.member), 'someone with 0 Shards is not on the Shards board');
+});

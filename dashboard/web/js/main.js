@@ -181,7 +181,7 @@ async function render() {
   }
   if (route.name === 'public') {
     shell = null;
-    renderPublic(root, { api, params: route.params, signal, setTitle });
+    renderPublic(root, { api, params: route.params, signal, setTitle, getViewer: () => ensureUser(signal).then(() => ({ user: state.user, partyOwner: state.partyOwner })).catch(() => ({ user: null, partyOwner: false })) });
     return;
   }
   if (PUBLIC_PAGES[route.name]) {

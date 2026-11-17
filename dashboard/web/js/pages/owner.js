@@ -6,7 +6,7 @@ import { formatNumber, relativeTime } from '../format.js';
 import { ownerPath, profilePath } from '../router.js';
 import { state } from '../state.js';
 import { mountAsync } from './common.js';
-import { PARTY_GAMES, PARTY_BADGE_COUNTERS } from '../community-data.js';
+import { PARTY_GAMES, PARTY_BADGE_COUNTERS, BADGES } from '../community-data.js';
 import { cheatAlertsCard } from './owner-cheats.js';
 
 export const OWNER_USERS_PATH = '/api/owner/users';
@@ -18,6 +18,9 @@ export const LOG_LIMIT = 30;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OPEN = new Set(['queued', 'sent']);
+const ACCOUNT_STATES = new Set(['real', 'fake', 'checking']);
+export const NOT_REAL_TEXT = "That isn't a real Yapin' account. Check the id.";
+export const CHECK_SLOW_MS = 30000;
 const REMOVALS = new Set(['shards.remove', 'xp.remove', 'achievement.revoke', 'badge.revoke', 'giver.revoke', 'quests.reset']);
 const GIFTS = new Set(['shards.add', 'xp.add', 'achievement.grant', 'badge.grant', 'giver.grant']);
 export const PARTY_GAME_IDS = Object.freeze(Object.keys(PARTY_GAMES));
@@ -51,6 +54,8 @@ export function readUser(u) {
     party: { games: num(u.party?.games) || 0, wins: num(u.party?.wins) || 0 },
     partyBoard: readBoard(u.partyBoard),
     known: u.known !== false,
+    globalHidden: u.globalHidden === true,
+    account: ACCOUNT_STATES.has(u.account) ? u.account : 'real',
   };
 }
 
@@ -171,6 +176,8 @@ export function describeAction(a, catalog = { achievements: [], badges: [] }) {
     case 'party.reset': return a.value?.badges ? 'Reset Party leaderboard and badge stats' : 'Reset Party leaderboard stats';
     case 'party.board.hide': return 'Remove from Party leaderboards';
     case 'party.board.show': return 'Show on Party leaderboards again';
+    case 'global.hide': return 'Hide from the global leaderboard';
+    case 'global.show': return 'Show on the global leaderboard again';
     default: return a.kind;
   }
 }
@@ -193,6 +200,9 @@ export function confirmText(kind, value, user, label = describeAction({ kind, va
   }
   if (kind === 'party.board.hide') {
     return { title: `Remove ${name} from the Party leaderboards?`, body: "They disappear from every Party board and can't win monthly prizes. They can still play and their stats are kept. You can show them again any time." };
+  }
+  if (kind === 'global.hide') {
+    return { title: `Hide ${name} from the global leaderboard?`, body: 'They disappear from the Levels and Shards boards for everyone within about a minute. Their Shards, XP and profile page are kept. You can show them again any time.' };
   }
   if (kind === 'streak.set' && value === 0) return { title: `Clear ${name}'s daily streak?`, body: 'Their /daily streak goes back to zero.' };
   return null;
@@ -249,7 +259,7 @@ function userRow(u) {
   return h('li', null, h('a', { href: ownerPath(u.id), class: 'owner-result', dataset: { link: '', id: u.id } },
     avatar({ name: personName(u), url: u.avatar, id: u.id, size: 'md' }),
     h('span', { class: 'owner-result-main' },
-      h('span', { class: ['owner-result-name', u.name || u.username ? '' : 'muted'], text: u.name || u.username ? personName(u) : 'Not seen yet' }),
+      h('span', { class: ['owner-result-name', u.account === 'fake' ? 'is-fake' : u.name || u.username ? '' : 'muted'], text: u.account === 'fake' ? "Not a real Yapin' account" : u.name || u.username ? personName(u) : 'Not seen yet' }),
       u.username ? h('span', { class: 'owner-result-sub', text: `@${u.username}` }) : h('code', { class: 'owner-result-sub', text: u.id })),
     h('span', { class: 'owner-result-facts', text: facts.join(' · ') }),
     icon('chevron-right', { size: 16 })));
@@ -460,13 +470,68 @@ export function renderOwnerUser(ctx) {
         replace(body, emptyState({ icon: 'user', title: 'Nobody here', body: "That person couldn't be loaded.", action: linkButton({ label: 'Back to the owner panel', href: '/owner', icon: 'chevron-left' }) }));
         return;
       }
-      const name = personName(detail.user);
-      ctx.setTitle(`${name} · Owner panel`);
-      ctx.setChrome({ variant: 'plain', section: 'owner', crumbs: crumbs(name) });
-      pageParts = buildUserPage(ctx, body, detail, { send, getDetail: () => detail });
-      if (hasOpen(detail.actions)) poller.later();
+      if (detail.user.account !== 'real') {
+        gate();
+        return;
+      }
+      showPage();
     },
   });
+
+  function showPage() {
+    const name = personName(detail.user);
+    ctx.setTitle(`${name} · Owner panel`);
+    ctx.setChrome({ variant: 'plain', section: 'owner', crumbs: crumbs(name) });
+    pageParts = buildUserPage(ctx, body, detail, { send, getDetail: () => detail });
+    if (hasOpen(detail.actions)) poller.later();
+  }
+
+  const checkStarted = Date.now();
+  const checker = schedule(ctx.signal, () => recheck(), POLL_MS);
+  async function recheck() {
+    try {
+      const data = await api.get(`${OWNER_USERS_PATH}/${encodeURIComponent(id)}`, { signal: ctx.signal });
+      if (ctx.signal?.aborted) return;
+      const next = readDetail(data);
+      if (next.user) detail = next;
+    } catch {
+      if (ctx.signal?.aborted) return;
+    }
+    if (detail?.user?.account === 'real') showPage();
+    else gate();
+  }
+
+  function gate() {
+    const u = detail.user;
+    const back = linkButton({ label: 'Back to the owner panel', href: '/owner', icon: 'chevron-left' });
+    if (u.account === 'fake') {
+      ctx.setTitle('Not a real account · Owner panel');
+      ctx.setChrome({ variant: 'plain', section: 'owner', crumbs: crumbs('Not a real account') });
+      const cleanup = u.known && !u.globalHidden ? button({ label: 'Hide it from the global leaderboard', icon: 'eye-off', variant: 'danger' }) : null;
+      cleanup?.addEventListener('click', async () => {
+        if (await send('global.hide', { btn: cleanup })) recheck();
+      });
+      replace(body, h('div', { class: 'owner-account-gate is-fake', attrs: { role: 'alert' } },
+        emptyState({
+          icon: 'alert',
+          title: NOT_REAL_TEXT,
+          body: `No Yapin' account has the id ${u.id}, so nothing can be given to it.${cleanup ? ' It still shows up from an earlier change, so you can hide it from the global leaderboard.' : ''}`,
+          action: h('div', { class: 'owner-actions-row' }, cleanup, back),
+        })));
+      return;
+    }
+    const slow = Date.now() - checkStarted > CHECK_SLOW_MS;
+    replace(body, h('div', { class: 'owner-account-gate', attrs: { 'aria-live': 'polite' } },
+      emptyState({
+        icon: 'clock',
+        title: "Checking this account with Yapin'",
+        body: slow
+          ? "YapOS hasn't answered yet. It checks ids while the bot is online, so make sure it's running. If this never finishes, check the id."
+          : `Making sure ${u.id} belongs to a real Yapin' account before you change anything. This takes a few seconds.`,
+        action: back,
+      })));
+    checker.later();
+  }
 
   async function send(kind, { value, ref, btn, notify, onDone } = {}) {
     const ask = confirmText(kind, value, detail?.user, describeAction({ kind, value, ref }, detail?.catalog));
@@ -497,6 +562,11 @@ export function renderOwnerUser(ctx) {
     } catch (err) {
       if (ctx.signal?.aborted) return false;
       toast(err instanceof ApiError ? err.message : 'That did not work. Try again.', { tone: 'danger', title: "Couldn't do that" });
+      if (err instanceof ApiError && (err.code === 'not_a_user' || err.code === 'checking_user') && detail?.user && kind !== 'global.hide') {
+        detail.user.account = err.code === 'not_a_user' ? 'fake' : 'checking';
+        pageParts = null;
+        gate();
+      }
       return false;
     } finally {
       if (btn?.isConnected) setBusy(btn, false);
@@ -534,6 +604,8 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
   const gamesField = amountField({ label: 'Games', id: nextId('owner-games') });
   const winsField = amountField({ label: 'Wins', id: nextId('owner-wins') });
   const addParty = button({ label: 'Add to Party stats', icon: 'plus' });
+  const globalHide = button({ label: 'Hide from global leaderboard', icon: 'eye-off' });
+  const globalShow = button({ label: 'Show on global leaderboard', icon: 'eye' });
 
   const achSearchId = nextId('owner-ach-q');
   const achSearch = h('input', { type: 'search', id: achSearchId, class: 'input', placeholder: 'Search achievements', autocomplete: 'off' });
@@ -616,6 +688,8 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
   resetQuests.addEventListener('click', () => send('quests.reset', { btn: resetQuests }));
   allowGive.addEventListener('click', () => send('giver.grant', { btn: allowGive, notify: notifyOn() }));
   stopGive.addEventListener('click', () => send('giver.revoke', { btn: stopGive }));
+  globalHide.addEventListener('click', () => send('global.hide', { btn: globalHide }));
+  globalShow.addEventListener('click', () => send('global.show', { btn: globalShow }));
   addParty.addEventListener('click', async () => {
     const g = gamesField.input.value.trim() ? amountOrSay(gamesField) : 0;
     if (g === null) return;
@@ -758,7 +832,7 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
         h('span', { class: 'owner-check-emoji', attrs: { 'aria-hidden': 'true' }, text: e.emoji || '•' }),
         h('span', { class: 'owner-check-main' },
           h('span', { class: 'owner-check-label', text: e.label }),
-          h('span', { class: 'owner-check-sub', text: auto ? 'Earned from Party stats' : busy ? 'Waiting for YapOS' : has ? 'They have this' : (e.reward ? `Normally pays ${formatNumber(e.reward)} 💎, not paid when you give it` : e.id) })),
+          h('span', { class: 'owner-check-sub', text: auto ? 'Earned from Party stats' : busy ? 'Waiting for YapOS' : has ? 'They have this' : (e.reward ? `Normally pays ${formatNumber(e.reward)} 💎, not paid when you give it` : (what === 'badge' && Object.prototype.hasOwnProperty.call(BADGES, e.id) && BADGES[e.id].note) || e.id) })),
         btn);
     })));
   }
@@ -776,11 +850,14 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
         h('h1', { class: 'owner-card-name', text: u.name || u.username ? name : 'Someone YapOS has not seen yet' }),
         u.username ? h('span', { class: 'owner-card-handle', text: `@${u.username}` }) : null,
         h('code', { class: 'owner-card-id', text: u.id }),
+        h('span', { class: 'owner-card-verified' }, badge("Real Yapin' account", 'success', 'check')),
         u.clan ? h('span', { class: 'owner-card-clan' }, icon('shield', { size: 14 }), h('span', { text: u.clan.tag ? `${u.clan.name} [${u.clan.tag}]` : u.clan.name })) : null),
       h('div', { class: 'owner-card-links' },
         u.username ? linkButton({ label: 'Public profile', href: profilePath(u.username), icon: 'user', size: 'sm' }) : null,
         headHide));
     updateBoard(u.partyBoard);
+    globalHide.hidden = u.globalHidden;
+    globalShow.hidden = !u.globalHidden;
     replace(stats,
       stat('Level', u.level === null ? 'Not known' : formatNumber(u.level)),
       stat('XP', u.xp === null ? 'Not known' : formatNumber(u.xp)),
@@ -810,7 +887,9 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
       card({ title: 'Shards', icon: 'coins' },
         shardsField.wrap,
         row(giveShards, takeShards, setShards),
-        h('p', { class: 'field-help', text: 'Gifts count as given by you, not earned, so they never move the season board or quests.' })),
+        h('p', { class: 'field-help', text: 'Gifts count as given by you, not earned, so they never move the season board or quests.' }),
+        row(globalHide, globalShow),
+        h('p', { class: 'field-help', text: 'Hiding takes them off the global Levels and Shards boards straight away. Their Shards and XP stay.' })),
       card({ title: 'XP and level', icon: 'star' },
         xpField.wrap,
         row(giveXp, takeXp),

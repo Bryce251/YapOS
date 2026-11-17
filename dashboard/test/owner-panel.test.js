@@ -66,13 +66,15 @@ test('search finds people across public profiles, the profile cache and dashboar
   h.db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, ?, ?, 0, ?)').run(uid(3), 'percent%', 'Odd', null, h.clock.t);
   const byName = await (await h.api('GET', '/api/owner/users?q=pip', owner)).json();
   assert.equal(byName.users.length, 1);
-  assert.deepEqual(Object.keys(byName.users[0]).sort(), ['avatar', 'id', 'level', 'name', 'seen', 'shards', 'username']);
+  assert.deepEqual(Object.keys(byName.users[0]).sort(), ['account', 'avatar', 'id', 'level', 'name', 'seen', 'shards', 'username']);
+  assert.equal(byName.users[0].account, 'checking');
   assert.equal(byName.users[0].username, 'pipsqueak');
   assert.equal(byName.users[0].level, 4);
   assert.equal(byName.users[0].shards, 250);
   const juno = await (await h.api('GET', '/api/owner/users?q=JUN', owner)).json();
   assert.equal(juno.users[0].id, uid(2));
   assert.equal(juno.users[0].avatar, 'https://files.yapper.website/j.png');
+  assert.equal(juno.users[0].account, 'real');
   const bob = await (await h.api('GET', '/api/owner/users?q=%40bob', owner)).json();
   assert.equal(bob.users[0].id, BOB.id);
   assert.equal(bob.users[0].avatar, null);
@@ -80,7 +82,8 @@ test('search finds people across public profiles, the profile cache and dashboar
   const like = await (await h.api('GET', `/api/owner/users?q=${encodeURIComponent('%')}`, owner)).json();
   assert.deepEqual(like.users.map((u) => u.id), [uid(3)]);
   const unknown = await (await h.api('GET', `/api/owner/users?q=${uid(9).toUpperCase()}`, owner)).json();
-  assert.deepEqual(unknown.users, [{ id: uid(9), username: null, name: null, avatar: null, level: null, shards: null, seen: null }]);
+  assert.deepEqual(unknown.users, [{ id: uid(9), username: null, name: null, avatar: null, level: null, shards: null, seen: null, account: 'checking' }]);
+  assert.ok(h.db.raw.prepare('SELECT 1 FROM profile_wanted WHERE id = ?').get(uid(9)), 'a pasted id is sent to YapOS to check');
   const recent = await (await h.api('GET', '/api/owner/users', owner)).json();
   assert.ok(recent.users.length >= 4 && recent.users.length <= 20);
 });
@@ -201,6 +204,7 @@ test('results never reveal Shards a person hid, but the owner panel still knows 
 
 test('Party stats are added right away on the dashboard and never sent to the bot', async () => {
   const { h, owner } = await setup();
+  h.db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, ?, NULL, 0, ?)').run(uid(2), 'juno', 'Juno', h.clock.t);
   const r = await give(h, owner, { user: uid(2), kind: 'party.stats.add', value: { games: 10, wins: 2 } });
   assert.equal(r.status, 201);
   assert.equal(r.body.action.status, 'done');

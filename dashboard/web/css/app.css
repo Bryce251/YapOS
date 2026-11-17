@@ -3608,6 +3608,178 @@ a.server-card:hover .server-card-arrow {
   text-align: center;
 }
 
+.board-item {
+  display: block;
+}
+
+.board-row-btn {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+}
+
+.board-row-btn:hover {
+  background-color: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.board-row-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  border-radius: 10px;
+}
+
+.board-row-btn:active {
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.bp-head {
+  margin-bottom: 16px;
+}
+
+.bp-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas:
+    "level xp lrank"
+    "shards shards srank";
+  margin-bottom: 16px;
+}
+
+.bp-stat[data-stat="level"] {
+  grid-area: level;
+}
+
+.bp-stat[data-stat="xp"] {
+  grid-area: xp;
+}
+
+.bp-stat[data-stat="level-rank"] {
+  grid-area: lrank;
+}
+
+.bp-stat[data-stat="shards"] {
+  grid-area: shards;
+}
+
+.bp-stat[data-stat="shards-rank"] {
+  grid-area: srank;
+}
+
+.bp-stat-value {
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+@media (max-width: 520px) {
+  .bp-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "level xp"
+      "lrank srank"
+      "shards shards";
+  }
+}
+
+.bp-stat dd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.bp-stat.is-pending .bp-stat-value {
+  color: var(--text-3);
+}
+
+.bp-pending {
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.bp-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.bp-note {
+  margin: 0;
+  font-size: 13px;
+}
+
+.bp-mod {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.bp-mod-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bp-mod-head .person-section-title {
+  margin: 0;
+}
+
+.bp-mod-status {
+  margin: 0;
+  font-size: 13px;
+}
+
+.bp-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bp-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.bp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bp-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bp-row > [hidden] {
+  display: none;
+}
+
+@media (max-width: 520px) {
+  .bp-row-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bp-row-grid > .btn {
+    width: 100%;
+  }
+}
+
 .wrapped {
   display: flex;
   flex-direction: column;

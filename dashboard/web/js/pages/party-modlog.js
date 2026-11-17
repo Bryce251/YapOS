@@ -40,6 +40,8 @@ export const ACTION_LABELS = Object.freeze({
   owner_reset: ['\u{1F451}', 'Owner: Party stats reset'],
   owner_board_hide: ['\u{1F451}', 'Owner: taken off leaderboards'],
   owner_board_show: ['\u{1F451}', 'Owner: put back on leaderboards'],
+  owner_global_hide: ['\u{1F451}', 'Owner: hidden from the global leaderboard'],
+  owner_global_show: ['\u{1F451}', 'Owner: put back on the global leaderboard'],
 });
 export const CHEAT_LABELS = Object.freeze({
   daily_points: 'Daily points cap',
@@ -174,6 +176,10 @@ export function modLogSentence(e) {
       return `${who} took ${them} off the Party leaderboards`;
     case 'owner_board_show':
       return `${who} put ${them} back on the Party leaderboards`;
+    case 'owner_global_hide':
+      return `${who} hid ${them} from the global leaderboard`;
+    case 'owner_global_show':
+      return `${who} put ${them} back on the global leaderboard`;
     case 'owner_reset':
       return `${who} reset ${them}'s Party leaderboard stats`;
     case 'owner_stats_add':

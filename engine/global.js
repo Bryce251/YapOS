@@ -211,7 +211,10 @@ export const GIFT_BADGES = Object.freeze([
   Object.freeze({ id: 'vip', label: 'VIP', emoji: '🎩' }),
   Object.freeze({ id: 'event-winner', label: 'Event winner', emoji: '🎊' }),
   Object.freeze({ id: 'legend', label: 'YapOS legend', emoji: '🌠' }),
+  Object.freeze({ id: 'einstein', label: 'Einstein', emoji: '🧠', note: 'Can only be given by Jolli' }),
 ]);
+
+export const BADGE_NOTES = Object.freeze(Object.fromEntries(GIFT_BADGES.filter((b) => b.note).map((b) => [b.id, b.note])));
 
 export const BADGE_NS = 'badges';
 export const BADGE_ID_RE = /^[A-Za-z0-9_.:-]{1,48}$/;

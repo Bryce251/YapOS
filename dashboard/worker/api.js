@@ -8,7 +8,8 @@ import { postResults } from './party-results.js';
 import { dailyRoute } from './party-daily.js';
 import { packsRoute, getPublicPack } from './party-packs.js';
 import { browsePacks, packReportsRoute } from './pack-browse.js';
-import { getPublicProfile, visibilityRoute } from './public-profiles.js';
+import { getPublicProfile, visibilityRoute, publicHandles } from './public-profiles.js';
+import { globalHiddenIds, withoutHidden } from './owner-global.js';
 import { getSeasons } from './seasons.js';
 import { getLeaderboard } from './party-leaderboard.js';
 import { getPartyProfile } from './party-profile.js';
@@ -408,13 +409,21 @@ async function getPublic(request, env, slug, t) {
   const row = await env.DB.prepare('SELECT data, updated FROM global_board WHERE id = ?').bind(GLOBAL_SLUG).first();
   const data = (row && parseJsonSafe(row.data, null)) || null;
   const currency = isPlainObject(data && data.currency) ? data.currency : DEFAULT_CURRENCY;
+  const hidden = await globalHiddenIds(env.DB);
+  const levels = withoutHidden(data && data.levels, hidden);
+  const economy = withoutHidden(data && data.economy, hidden);
+  const handles = await publicHandles(env.DB, [...levels, ...economy].map((r) => r && r.id));
+  const withHandle = (list) => list.map((r) => {
+    const handle = r && typeof r === 'object' && typeof r.id === 'string' ? handles.get(r.id.toLowerCase()) : null;
+    return handle ? { ...r, handle } : r;
+  });
   return json(
     {
       slug: GLOBAL_SLUG,
       global: true,
       currency: { name: currency.name || DEFAULT_CURRENCY.name, emoji: currency.emoji || DEFAULT_CURRENCY.emoji },
-      levels: Array.isArray(data && data.levels) ? data.levels : [],
-      economy: Array.isArray(data && data.economy) ? data.economy : [],
+      levels: withHandle(levels),
+      economy: withHandle(economy),
       updatedAt: (data && Number(data.updatedAt)) || (row && Number(row.updated)) || null,
     },
     200,

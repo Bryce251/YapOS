@@ -16,6 +16,8 @@ async function setup() {
   const h = createHarness({ PARTY_OWNER_ID: OWNER.id });
   const owner = (await h.login(OWNER)).cookie;
   const bob = (await h.login(BOB)).cookie;
+  const real = h.db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, NULL, NULL, NULL, 0, ?)');
+  for (let i = 1; i <= 40; i++) real.run(uid(i), h.clock.t);
   return { h, owner, bob };
 }
 

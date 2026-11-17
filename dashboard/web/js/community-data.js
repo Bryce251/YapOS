@@ -65,6 +65,7 @@ export const BADGES = Object.freeze({
   vip: { label: 'VIP', emoji: '🎩' },
   'event-winner': { label: 'Event winner', emoji: '🎊' },
   legend: { label: 'YapOS legend', emoji: '🌠' },
+  einstein: { label: 'Einstein', emoji: '🧠', note: 'Can only be given by Jolli' },
 });
 
 export const ACHIEVEMENTS = Object.freeze({
@@ -154,7 +155,9 @@ function catalogItem(entry, catalog, fallbackEmoji) {
 }
 
 export function badgeInfo(entry, catalog = BADGES) {
-  return catalogItem(entry, catalog, '🏅');
+  const out = catalogItem(entry, catalog, '🏅');
+  const note = out && Object.prototype.hasOwnProperty.call(BADGES, out.id) ? BADGES[out.id].note : null;
+  return note ? { ...out, note } : out;
 }
 
 export function achievementInfo(entry, catalog = ACHIEVEMENTS) {

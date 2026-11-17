@@ -7,18 +7,47 @@ export function normalizeBoard(list, kind) {
     .map((r, i) => {
       const rank = toNumber(r.rank) ?? i + 1;
       const name = String(r.name ?? r.username ?? 'Unknown');
+      const handle = typeof r.handle === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(r.handle) ? r.handle : '';
       if (kind === 'economy') {
-        return { rank, id: String(r.id ?? ''), name, avatar: r.avatar_url ?? '', primary: toNumber(r.balance) ?? 0, primaryLabel: 'coins', secondary: '' };
+        const balance = toNumber(r.balance) ?? 0;
+        return { rank, id: String(r.id ?? ''), name, avatar: r.avatar_url ?? '', handle, balance, primary: balance, primaryLabel: 'coins', secondary: '' };
       }
       const level = toNumber(r.level) ?? 0;
       const xp = toNumber(r.xp);
       const messages = toNumber(r.messages);
       const parts = [];
       if (xp !== null) parts.push(`${formatNumber(xp)} XP`);
-      if (messages !== null) parts.push(`${formatNumber(messages)} messages`);
-      return { rank, id: String(r.id ?? ''), name, avatar: r.avatar_url ?? '', primary: level, primaryLabel: 'level', secondary: parts.join(' · ') };
+      if (messages !== null) parts.push(`${formatNumber(messages)} ${messages === 1 ? 'message' : 'messages'}`);
+      return { rank, id: String(r.id ?? ''), name, avatar: r.avatar_url ?? '', handle, level, xp, messages, primary: level, primaryLabel: 'level', secondary: parts.join(' · ') };
     })
     .sort((a, b) => a.rank - b.rank);
+}
+
+export function boardPeople(levels, economy) {
+  const people = new Map();
+  const slot = (r) => {
+    if (!r.id) return null;
+    if (!people.has(r.id)) people.set(r.id, { id: r.id, name: r.name, avatar: r.avatar, handle: r.handle, levelRank: null, level: null, xp: null, messages: null, shardsRank: null, shards: null });
+    const p = people.get(r.id);
+    if (!p.avatar && r.avatar) p.avatar = r.avatar;
+    if (!p.handle && r.handle) p.handle = r.handle;
+    return p;
+  };
+  for (const r of Array.isArray(levels) ? levels : []) {
+    const p = slot(r);
+    if (!p) continue;
+    p.levelRank = r.rank;
+    p.level = r.level ?? r.primary ?? null;
+    p.xp = r.xp ?? null;
+    p.messages = r.messages ?? null;
+  }
+  for (const r of Array.isArray(economy) ? economy : []) {
+    const p = slot(r);
+    if (!p) continue;
+    p.shardsRank = r.rank;
+    p.shards = r.balance ?? r.primary ?? null;
+  }
+  return people;
 }
 
 const LABELS = {

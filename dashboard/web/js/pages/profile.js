@@ -52,9 +52,10 @@ function clanTag(clan) {
 
 function tileGrid(items, label) {
   return h('ul', { class: 'badge-grid', attrs: { 'aria-label': label } },
-    ...items.map((b) => h('li', { class: 'badge-tile', title: b.label },
+    ...items.map((b) => h('li', { class: ['badge-tile', b.note ? 'has-note' : ''], title: b.note ? `${b.label}: ${b.note}` : b.label },
       h('span', { class: 'badge-tile-emoji', attrs: { 'aria-hidden': 'true' }, text: b.emoji }),
-      h('span', { class: 'badge-tile-label', text: b.label }))));
+      h('span', { class: 'badge-tile-label', text: b.label }),
+      b.note ? h('span', { class: 'badge-tile-note', text: b.note }) : null)));
 }
 
 function section(title, iconName, body) {

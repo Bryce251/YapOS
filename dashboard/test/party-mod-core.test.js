@@ -378,7 +378,8 @@ test('admins see each other in the mod log, but not owner panel changes or notes
   await h.api('POST', `/api/party/reports/person/${BOB.id}/notes`, carl, { text: 'Bob is new' });
   h.clock.t += 1000;
   h.db.raw.prepare("INSERT INTO party_points (user_id, points, games, wins, updated) VALUES (?, 10, 1, 0, 1)").run(uid(7));
-  const give = await h.api('POST', '/api/owner/actions', owner, { user: uid(7), kind: 'party.points.set', value: 50 });
+  h.db.raw.prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, NULL, NULL, NULL, 0, 1)').run(uid(7));
+  const give =await h.api('POST', '/api/owner/actions', owner, { user: uid(7), kind: 'party.points.set', value: 50 });
   assert.equal(give.status, 201);
   h.clock.t += 1000;
   await h.api('POST', `/api/party/reports/person/${REX}/warnings`, carl, { text: 'No cheating' });

@@ -153,6 +153,27 @@ function displayNameOf(row, prof) {
   return [saved, looked].find((n) => n && !isHandle(n)) || saved || looked || row.username || 'Player';
 }
 
+const HANDLE_CHUNK = 90;
+
+export async function publicHandles(db, ids) {
+  const list = [...new Set((Array.isArray(ids) ? ids : []).filter((v) => typeof v === 'string' && v && v.length <= 64).map((v) => v.toLowerCase()))];
+  const out = new Map();
+  for (let i = 0; i < list.length; i += HANDLE_CHUNK) {
+    const part = list.slice(i, i + HANDLE_CHUNK);
+    const marks = part.map(() => '?').join(', ');
+    const res = await db
+      .prepare(`SELECT p.user_id, p.username, p.hidden, p.shards, p.updated, s.hidden AS s_hidden, s.show_shards AS s_show_shards, s.claimed AS s_claimed, s.updated AS s_updated FROM public_profiles p LEFT JOIN profile_settings s ON s.user_id = p.user_id WHERE p.user_id IN (${marks}) AND p.username IS NOT NULL`)
+      .bind(...part)
+      .all();
+    for (const r of (res && res.results) || []) {
+      const settings = r.s_updated === null || r.s_updated === undefined ? null : { hidden: r.s_hidden, show_shards: r.s_show_shards, claimed: r.s_claimed, updated: r.s_updated };
+      const username = cleanUsername(r.username);
+      if (username && !applySettings(r, settings).hidden) out.set(String(r.user_id).toLowerCase(), username);
+    }
+  }
+  return out;
+}
+
 export async function getPublicProfile(request, env, raw, t) {
   if (request.method !== 'GET' && request.method !== 'HEAD') return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   const limit = await hit(env.DB, await ipKey('publicProfile', clientIp(request)), LIMITS.publicProfile, t);

@@ -4,7 +4,7 @@ import { customId } from '../engine/router.js';
 import { clip, parseBool } from '../engine/parse.js';
 import { avatarUrl } from '../engine/links.js';
 import { looksLikeFeatureOff } from '../engine/errors.js';
-import { CURRENCY, seasonName } from '../engine/global.js';
+import { CURRENCY, seasonName, BADGE_NOTES } from '../engine/global.js';
 import { profileData, partyOf, privacyOf, setPrivacy } from '../engine/profile-data.js';
 import { profileSync, dropProfileSync } from '../engine/profiles-sync.js';
 import { seasonSync, dropSeasonSync } from '../engine/seasons-sync.js';
@@ -47,6 +47,10 @@ export function partyGameName(id) {
 
 export function badgeNames(ids) {
   return (ids || []).map((b) => PARTY_BADGES[b]).filter(Boolean);
+}
+
+export function badgeNotes(ids) {
+  return [...new Set(ids || [])].filter((b) => BADGE_NOTES[b] && PARTY_BADGES[b]).map((b) => `${PARTY_BADGES[b]}: ${BADGE_NOTES[b]}`);
 }
 
 export function bestSeason(list) {
@@ -99,6 +103,8 @@ export function embedView(data, view) {
   if (data.season.length) fields.push({ name: '🗓️ Seasons', value: data.season.slice(0, 3).map(seasonLabel).join('\n'), inline: false });
   const badges = badgeNames(data.party?.badges);
   if (badges.length) fields.push({ name: '🎉 Party badges', value: badges.slice(0, 6).join(' · '), inline: false });
+  const notes = badgeNotes(data.party?.badges);
+  if (notes.length) fields.push({ name: '⭐ Special badges', value: notes.join('\n'), inline: false });
   return card({ title: `${ICON} ${clip(view.name, 80)}`, body: lines.join('\n'), fields, color: data.clan?.colour ? parseInt(data.clan.colour.slice(1), 16) : 'brand' });
 }
 
@@ -199,7 +205,8 @@ async function showProfile(ctx, query = '', how = 'reply') {
     if (png) {
       stateOf(engine).sent.push(nowOf(engine));
       try {
-        const out = await ctx.reply({ content: `${ICON} **${clip(view.name, 80)}**`, files: [{ name: 'profile.png', data: png }], components });
+        const special = badgeNotes(data.party?.badges).map((n) => `\n-# ${n}`).join('');
+        const out = await ctx.reply({ content: `${ICON} **${clip(view.name, 80)}**${special}`, files: [{ name: 'profile.png', data: png }], components });
         if (engine.caps.state(ctx.serverId, 'files') !== true) engine.caps.mark(ctx.serverId, 'files', true);
         return out;
       } catch (e) {

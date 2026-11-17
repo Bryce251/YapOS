@@ -7,6 +7,8 @@ import { PARTY_BADGES, badgesFor, partySeasonBadges, partySeasonBadgeId, seasonB
 import { PARTY_OWNER_KINDS, validatePartyValue, partyBoardView, partyActionPlan, partyActionDone } from './owner-party.js';
 import { cheatsRoute } from './owner-cheats.js';
 import { logModAction, actorName, personName, ownerLogAction } from './party-mod.js';
+import { GLOBAL_OWNER_KINDS, globalActionPlan, isGlobalHidden } from './owner-global.js';
+import { accountState, requireAccount, noAccountStatement } from './owner-account.js';
 
 export const OWNER_ACTIONS_PER_MIN = 120;
 export const OWNER_READS_PER_MIN = 300;
@@ -58,6 +60,7 @@ export const OWNER_KINDS = Object.freeze({
   'streak.set': Object.freeze({ label: 'Set daily streak', input: 'amount', min: 0, max: 10000, gift: false }),
   'party.stats.add': Object.freeze({ label: 'Add Party games and wins', input: 'party', min: 0, max: 100000, gift: false, instant: true }),
   ...PARTY_OWNER_KINDS,
+  ...GLOBAL_OWNER_KINDS,
 });
 
 export const KIND_LIST = Object.freeze(Object.entries(OWNER_KINDS).map(([kind, k]) => Object.freeze({ kind, ...k })));
@@ -257,7 +260,7 @@ function mergeUser(out, { pub, prof, sess, known }) {
   return out;
 }
 
-async function searchUsers(env, url) {
+async function searchUsers(env, url, t) {
   const raw = (url.searchParams.get('q') || '').trim().replace(/^@+/, '').slice(0, QUERY_MAX);
   const db = env.DB;
   const exact = USER_ID_RE.test(raw) ? raw.toLowerCase() : null;
@@ -301,7 +304,13 @@ async function searchUsers(env, url) {
     for (const r of rowsOf(sessMore)) { const s = parts.get(String(r.user_id).toLowerCase()); if (s && !s.sess) s.sess = r; }
   }
   const q = raw.toLowerCase();
-  const users = ids.map((id) => mergeUser(blankUser(id), parts.get(id)));
+  const users = ids.map((id) => {
+    const p = parts.get(id);
+    const u = mergeUser(blankUser(id), p);
+    u.account = p.sess || (p.prof && !Number(p.prof.missing)) ? 'real' : p.prof ? 'fake' : 'checking';
+    return u;
+  });
+  if (exact && t) await accountState(db, exact, t);
   const score = (u) => {
     if (exact && u.id === exact) return 0;
     if (q && u.username && u.username.toLowerCase() === q) return 1;
@@ -329,7 +338,7 @@ async function userDetail(env, raw, t) {
   const id = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
   if (!USER_ID_RE.test(id)) return fail(400, 'bad_user', "That user id doesn't look right.");
   const db = env.DB;
-  const [pub, prof, sess, known, stats, streak, actions, catalog, partySeason] = await Promise.all([
+  const [pub, prof, sess, known, stats, streak, actions, catalog, partySeason, globalHidden] = await Promise.all([
     db.prepare('SELECT user_id, username, name, level, xp, shards, badges, achievements, season, clan, hidden, updated FROM public_profiles WHERE user_id = ?').bind(id).first(),
     db.prepare('SELECT id, username, display_name, avatar_url, missing, fetched FROM profiles WHERE id = ?').bind(id).first(),
     db.prepare('SELECT user_id, username, display_name, avatar_url, MAX(CASE WHEN last_seen > created THEN last_seen ELSE created END) AS seen FROM sessions WHERE LOWER(user_id) = ? GROUP BY user_id').bind(id).first(),
@@ -339,6 +348,7 @@ async function userDetail(env, raw, t) {
     db.prepare(`SELECT ${ACTION_COLUMNS} FROM owner_actions WHERE user_id = ? ORDER BY created DESC, rowid DESC LIMIT ?`).bind(id, OWNER_USER_ACTIONS).all(),
     readCatalog(db),
     partySeasonBadges(db, id).catch(() => []),
+    isGlobalHidden(db, id),
   ]);
   const user = mergeUser(blankUser(id), { pub, prof, sess: sess && sess.user_id ? sess : null, known });
   const pubAt = pub ? Number(pub.updated) || 0 : 0;
@@ -363,8 +373,10 @@ async function userDetail(env, raw, t) {
     : null;
   user.party = party;
   user.hidden = Boolean(pub && Number(pub.hidden));
+  user.globalHidden = globalHidden;
   user.partyBoard = await partyBoardView(db, id, t, isPlainObject(counters) ? counters : {});
   user.known = Boolean(pub || prof || (sess && sess.user_id) || known || stats || user.partyBoard.points || user.partyBoard.games);
+  user.account = await accountState(db, id, t);
   return json({ user, actions: rowsOf(actions).map(actionOut), catalog });
 }
 
@@ -402,7 +414,8 @@ async function postAction(request, env, session, t) {
   const a = validateAction(body, catalog);
   const id = randomToken(12);
   const db = env.DB;
-  const plan = OWNER_KINDS[a.kind].instant ? await partyActionPlan(db, a, session.user_id, t) : null;
+  await requireAccount(db, a, OWNER_KINDS[a.kind], t);
+  const plan = OWNER_KINDS[a.kind].instant ? (await globalActionPlan(db, a, session.user_id, t)) || (await partyActionPlan(db, a, session.user_id, t)) : null;
   const status = plan ? 'done' : 'queued';
   const result = plan ? plan.result : null;
   const stmts = [
@@ -427,7 +440,7 @@ export async function ownerApi(request, env, route, url, t, { csrf }) {
   await touchSession(env.DB, session, t);
   const n = route.length;
   if (n === 2 && route[1] === 'users') {
-    if (readOnly) return searchUsers(env, url);
+    if (readOnly) return searchUsers(env, url, t);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   }
   if (n === 3 && route[1] === 'users') {
@@ -525,6 +538,7 @@ export async function postOwnerResults(request, env, t) {
     ];
     const after = ok ? cleanAfter(r.after) : null;
     if (after) stmts.push(...afterStatements(db, row.user_id, after, t));
+    if (!ok && r.noAccount === true) stmts.push(noAccountStatement(db, row.user_id, t));
     await db.batch(stmts);
     stored += 1;
   }

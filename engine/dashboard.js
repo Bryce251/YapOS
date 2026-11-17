@@ -1442,6 +1442,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
   async function syncOwner(rows) {
     const results = await owner.run(Array.isArray(rows) ? rows : []);
     if (!results.length) return { applied: 0, posted: 0 };
+    if (results.some((x) => x.ok && plainObject(x.after) && ['shards', 'xp', 'level'].some((k) => k in x.after))) state.boardAt = -Infinity;
     const r = await request('POST', '/bot/owner/results', { results }).catch((e) => ({ ok: false, status: 0, error: e }));
     if (r.ok) owner.markPosted(results.map((x) => x.id));
     else log.debug('[dashboard] owner results post failed', r.status);

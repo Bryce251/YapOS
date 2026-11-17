@@ -2874,6 +2874,17 @@
   overflow-wrap: anywhere;
 }
 
+.badge-tile.has-note {
+  border-color: var(--accent);
+}
+
+.badge-tile-note {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
 .fav-list,
 .placing-list {
   display: flex;

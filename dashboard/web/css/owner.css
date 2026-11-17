@@ -187,6 +187,23 @@
   overflow-wrap: anywhere;
 }
 
+.owner-card-verified {
+  display: inline-flex;
+  margin-top: 4px;
+}
+
+.owner-result-name.is-fake {
+  color: var(--danger);
+}
+
+.owner-account-gate .empty-body {
+  overflow-wrap: anywhere;
+}
+
+.owner-account-gate .owner-actions-row {
+  justify-content: center;
+}
+
 .owner-card-clan {
   display: inline-flex;
   align-items: center;

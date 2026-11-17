@@ -43,6 +43,7 @@ export const DEV_REPORT_DRAWER = 'de7e0000-0000-4000-8000-000000000003';
 export const DEV_REPORT_REPORTER = 'de7e0000-0000-4000-8000-000000000004';
 export const DEV_TEXT_REPORT_ID = 'devreport0002';
 export const DEV_PACK_CODE = 'DEVPACK2';
+export const DEV_FAKE_ACCOUNT = Object.freeze({ id: 'a0000000-0000-4000-8000-0000000000fa', username: 'mwa', name: 'mwa', shards: 50000, xp: 40 });
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -584,6 +585,32 @@ export function seedPartyModeration(db, t = Date.now()) {
   for (const [id, actor, actorName, action, target, targetName, detail, at] of rows) log.run(id, actor, actorName, action, target, targetName, detail ? JSON.stringify(detail) : null, at);
 }
 
+export function devGlobalBoard(t = Date.now()) {
+  const levels = [
+    { id: IDS.owner, name: 'Jolli', level: 27, xp: 18450, messages: 5210 },
+    { id: IDS.member, name: 'Sam', level: 9, xp: 2650, messages: 640 },
+    { id: IDS.member2, name: 'Riley', level: 6, xp: 1480, messages: 377 },
+    { id: IDS.admin, name: 'Alex', level: 4, xp: 910, messages: 260 },
+    { id: IDS.mod, name: 'Morgan', level: 2, xp: 420, messages: 98 },
+    { id: DEV_FAKE_ACCOUNT.id, name: DEV_FAKE_ACCOUNT.name, level: 0, xp: DEV_FAKE_ACCOUNT.xp, messages: 3 },
+  ].map((r, i) => ({ rank: i + 1, avatar_url: null, ...r }));
+  const economy = [
+    { id: DEV_FAKE_ACCOUNT.id, name: DEV_FAKE_ACCOUNT.name, balance: DEV_FAKE_ACCOUNT.shards },
+    { id: IDS.member, name: 'Sam', balance: 1250 },
+    { id: IDS.admin, name: 'Alex', balance: 980 },
+    { id: IDS.member2, name: 'Riley', balance: 640 },
+    { id: IDS.mod, name: 'Morgan', balance: 300 },
+  ].map((r, i) => ({ rank: i + 1, avatar_url: null, ...r }));
+  return { levels, economy, currency: { name: 'Shards', emoji: '\u{1F48E}' }, updatedAt: t };
+}
+
+export function seedGlobalBoard(db, t = Date.now()) {
+  db.raw.prepare('INSERT INTO global_board (id, data, updated) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING').run('global', JSON.stringify(devGlobalBoard(t)), t);
+  db.raw.prepare("INSERT INTO public_profiles (user_id, username, username_key, name, level, xp, shards, badges, achievements, season, clan, hidden, updated) VALUES (?, ?, ?, ?, 0, ?, ?, '[]', '[]', '[]', NULL, 0, ?) ON CONFLICT (user_id) DO NOTHING")
+    .run(DEV_FAKE_ACCOUNT.id, DEV_FAKE_ACCOUNT.username, DEV_FAKE_ACCOUNT.username, DEV_FAKE_ACCOUNT.name, DEV_FAKE_ACCOUNT.xp, DEV_FAKE_ACCOUNT.shards, t);
+  upsertProfile(db, DEV_FAKE_ACCOUNT.id, DEV_FAKE_ACCOUNT.username, DEV_FAKE_ACCOUNT.name, t);
+}
+
 export function seedPartyLeaderboard(db, t = Date.now()) {
   const rand = devRandom(4242);
   const people = [
@@ -874,6 +901,9 @@ async function seedBot(h) {
   const economy = engine.service('economy');
   const coins = [[IDS.member, 1250], [IDS.admin, 980], [IDS.member2, 640], [IDS.mod, 300]];
   for (const [uid, amount] of coins) economy?.add?.(S, uid, amount, 'Seeded for local testing');
+  h.fake.state.members['dev-fake-accounts'] = [{ id: DEV_FAKE_ACCOUNT.id, username: DEV_FAKE_ACCOUNT.username, display_name: DEV_FAKE_ACCOUNT.name, nickname: null, roles: [], joined_at: '2026-02-01T00:00:00Z' }];
+  economy?.add?.(S, DEV_FAKE_ACCOUNT.id, DEV_FAKE_ACCOUNT.shards, 'Seeded fake account for local testing');
+  await levels?.addXp?.(S, DEV_FAKE_ACCOUNT.id, DEV_FAKE_ACCOUNT.xp, 'Seeded fake account for local testing', { silent: true });
 
   const mention = (id) => `<@${id}>`;
   await h.slash('warn', `${mention(IDS.member)} spamming links in general`, { user: IDS.admin });
@@ -1001,6 +1031,7 @@ export async function startDev({
   seedPartyModeration(db);
   seedServerStats(db, IDS.server);
   seedOwnerPanel(db);
+  seedGlobalBoard(db);
 
   const oauth = createFakeOAuth({
     users: TEST_USERS,
@@ -1122,6 +1153,7 @@ async function main() {
     `Word packs: sign in as Jolli and open /packs to edit the sample pack. Type the code ${DEV_PACK_CODE} into Draw & Guess or Trivia settings to play with it.`,
     "Daily puzzle: today's Letter Hive and Scramble already have a few scores on the leaderboard (/api/activity/daily/top?kind=hive).",
     `Owner panel: sign in as Jolli and open /owner to give people Shards, XP, achievements and badges. ${dev.ownerSimulated ? 'A stand-in bot finishes each change about 2 seconds later.' : 'The test bot applies each change for real.'}`,
+    `Global leaderboard: open /p/global?tab=shards and click any row to see their profile. Sign in as Jolli to get the mod view: "${DEV_FAKE_ACCOUNT.name}" is a fake account with ${DEV_FAKE_ACCOUNT.shards.toLocaleString('en-US')} Shards to set to 0 or hide.`,
     'Community: /u/jolli is a sample public profile, /packs/browse lists 3 public packs with likes, /seasons shows last month, and Test Town has 30 days of stats on its Stats page.',
     '',
     'Test users (pick one on the sign-in page):',

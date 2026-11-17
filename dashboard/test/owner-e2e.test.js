@@ -14,6 +14,8 @@ async function setup() {
   const w = createWorkerHarness({ PARTY_OWNER_ID: OWNER.id });
   const cookie = (await w.login(OWNER)).cookie;
   const b = await createBotHarness({ apps: ['levels', 'economy', 'quests', 'achievements'], fakeClock: true });
+  const lookup = b.engine.bot.user.bind(b.engine.bot);
+  b.engine.bot.user = async (id) => (id === PIP ? { id: PIP, username: 'pip', display_name: 'Pip', avatar_path: null } : lookup(id));
   const failPosts = { results: 0 };
   const fetch = async (url, init = {}) => {
     const u = new URL(url);

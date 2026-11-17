@@ -13,6 +13,10 @@ const MAX_MESSAGE = 300;
 const DM_MS = 5000;
 const SEASON_CATALOG_MONTHS = 12;
 const SEASON_CATALOG_TOP = 3;
+const CHECK_MS = 5000;
+const CHECK_KEEP_MS = 10 * 60_000;
+export const NO_ACCOUNT = "No Yapin' account has this id, so nothing was changed. Check the id.";
+const ACCOUNT_FREE = new Set(['giver.revoke']);
 
 export const OWNER_KINDS = Object.freeze([
   'shards.add', 'shards.remove', 'shards.set',
@@ -120,6 +124,32 @@ function editRecords(engine, ids, fn) {
 export function createOwnerActions(engine, { now = () => Date.now(), partyStats = null, dm = true } = {}) {
   const log = engine.log;
   let changedProfiles = false;
+  const checked = new Map();
+  let unreachable = false;
+
+  async function accountOf(user) {
+    const hit = checked.get(user);
+    if (hit && now() - hit.at < CHECK_KEEP_MS) return hit.state;
+    if (typeof engine.bot?.user !== 'function' || unreachable) return 'unknown';
+    let timer;
+    const late = new Promise((resolve) => {
+      timer = setTimeout(() => resolve('unknown'), CHECK_MS);
+      timer.unref?.();
+    });
+    const ask = Promise.resolve()
+      .then(() => engine.bot.user(user))
+      .then((u) => (u && typeof u === 'object' ? 'real' : 'fake'))
+      .catch((e) => (e?.status === 404 ? 'fake' : 'unknown'));
+    let state;
+    try {
+      state = await Promise.race([ask, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (state !== 'unknown') checked.set(user, { at: now(), state });
+    else unreachable = true;
+    return state;
+  }
 
   function achievementIds() {
     try {
@@ -403,6 +433,16 @@ export function createOwnerActions(engine, { now = () => Date.now(), partyStats 
       known[id] = rec;
       return;
     }
+    if (!ACCOUNT_FREE.has(a.kind) && a.user !== engine.bot?.me?.id) {
+      const account = await accountOf(a.user);
+      if (account === 'unknown') return;
+      if (account === 'fake') {
+        const rec = { at: t, state: 'done', ok: false, noAccount: true, message: NO_ACCOUNT, posted: false, user: a.user, kind: a.kind };
+        writeRecord(engine, id, rec);
+        known[id] = rec;
+        return;
+      }
+    }
     writeRecord(engine, id, { at: t, state: 'started', user: a.user, kind: a.kind, posted: false });
     await save();
     let out;
@@ -430,6 +470,7 @@ export function createOwnerActions(engine, { now = () => Date.now(), partyStats 
 
   async function run(rows) {
     const list = Array.isArray(rows) ? rows.slice(0, OWNER_BATCH) : [];
+    unreachable = false;
     const seen = new Set();
     const local = { ...readLog(engine) };
     for (const raw of list) {
@@ -459,6 +500,7 @@ export function createOwnerActions(engine, { now = () => Date.now(), partyStats 
       .map(([id, r]) => {
         const out = { id, ok: r.ok === true, message: r.message || (r.ok ? 'Done.' : 'That didn\'t work.') };
         if (plain(r.after)) out.after = r.after;
+        if (r.noAccount === true) out.noAccount = true;
         return out;
       });
   }

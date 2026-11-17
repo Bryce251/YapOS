@@ -13,6 +13,11 @@ test('levels board', () => {
   assert.equal(rows[1].secondary, '1,200 XP · 400 messages');
 });
 
+test('levels board says 1 message, not 1 messages', () => {
+  const rows = normalizeBoard([{ rank: 1, id: 'a', name: 'Al', level: 2, xp: 90, messages: 1 }], 'levels');
+  assert.equal(rows[0].secondary, '90 XP · 1 message');
+});
+
 test('coins board', () => {
   const rows = normalizeBoard([{ rank: 1, id: 'a', name: 'Al', balance: 1500 }], 'economy');
   assert.equal(rows[0].primary, 1500);

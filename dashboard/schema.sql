@@ -485,6 +485,12 @@ CREATE TABLE IF NOT EXISTS party_board_hidden (
   at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS global_board_hidden (
+  user_id TEXT PRIMARY KEY,
+  by_id TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS activity_links (
   code_hash TEXT PRIMARY KEY,
   poll_hash TEXT NOT NULL UNIQUE,

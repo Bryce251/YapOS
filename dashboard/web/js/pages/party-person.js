@@ -261,7 +261,7 @@ export function personStats(model) {
 export function personBadges(model) {
   const card = model.person.card;
   if (!card || card.hidden || !card.badges.length) return null;
-  return h('ul', { class: 'person-badges', attrs: { 'aria-label': 'Badges' } }, ...card.badges.map((b) => h('li', { class: 'person-badge', attrs: { title: b.label } }, b.emoji ? h('span', { text: b.emoji, attrs: { 'aria-hidden': 'true' } }) : null, h('span', { text: b.label }))));
+  return h('ul', { class: 'person-badges', attrs: { 'aria-label': 'Badges' } }, ...card.badges.map((b) => h('li', { class: 'person-badge', attrs: { title: b.note ? `${b.label}: ${b.note}` : b.label } }, b.emoji ? h('span', { text: b.emoji, attrs: { 'aria-hidden': 'true' } }) : null, h('span', { text: b.label }))));
 }
 
 export function banHistory(model) {
