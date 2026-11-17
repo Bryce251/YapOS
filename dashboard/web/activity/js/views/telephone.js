@@ -732,8 +732,7 @@ export function createTelephoneView({ engine, fx, toast, win, cues }) {
 
   function flag() {
     if (!snap) return;
-    flagDrawing({ engine, snap, game: 'telephone', item: telephone.drawingOf(snap), local: flagged, toast });
-    update(engine.snapshot());
+    flagDrawing({ engine, snap, game: 'telephone', item: telephone.drawingOf(snap), local: flagged, toast, after: () => update(engine.snapshot()) });
   }
 
   function paintFlags(next, m) {

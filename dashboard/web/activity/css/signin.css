@@ -553,3 +553,50 @@
   opacity: 0;
   pointer-events: none;
 }
+
+.warn-layer {
+  z-index: calc(var(--z-modal) + 1);
+}
+
+.warn-card {
+  align-items: center;
+}
+
+.warn-crest {
+  font-size: 44px;
+  line-height: 1;
+}
+
+.warn-title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.warn-text {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  width: 100%;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--warning-line);
+  background: var(--warning-soft);
+  font-size: 17px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.warn-hint {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.warn-actions {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.warn-actions .btn {
+  min-width: 160px;
+}

@@ -4,6 +4,7 @@ import { cleanText, cleanUsername } from './profiles.js';
 import { normalizeCode } from './party-packs.js';
 import { getSession } from './sessions.js';
 import { partyRole } from './reports.js';
+import { logModAction, actorName, personName } from './party-mod.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 
 export const BROWSE_PAGE = 24;
@@ -239,24 +240,34 @@ async function staffAction(env, session, raw, action, t) {
   const report = await reportById(env, raw);
   if (!report) return fail(404, 'not_found', 'That report is gone. Someone may have deleted it.');
   const db = env.DB;
+  if (action !== 'dismiss' && action !== 'hide' && action !== 'restore') return fail(404, 'not_found', "That page of the dashboard doesn't exist.");
+  const pack = await db.prepare('SELECT owner_id, name FROM party_packs WHERE code = ?').bind(report.code).first();
+  const owner = pack && pack.owner_id ? String(pack.owner_id) : null;
+  const ownerName = owner ? await personName(db, owner) : null;
+  const log = (guard) => logModAction(db, { actorId: session.user_id, actorName: actorName(session), action: `pack_${action}`, targetId: owner, targetName: ownerName, detail: { code: report.code, pack: pack ? pack.name : null }, t }, guard);
   if (action === 'dismiss') {
-    const res = await db.prepare("UPDATE pack_reports SET status = 'dismissed', dismissed_at = ?, dismissed_by = ? WHERE id = ? AND status = 'open'").bind(t, session.user_id, report.id).run();
+    const out = await db.batch([
+      log({ sql: "EXISTS (SELECT 1 FROM pack_reports WHERE id = ? AND status = 'open')", args: [report.id] }),
+      db.prepare("UPDATE pack_reports SET status = 'dismissed', dismissed_at = ?, dismissed_by = ? WHERE id = ? AND status = 'open'").bind(t, session.user_id, report.id),
+    ]);
+    const res = out && out[1];
     return json({ ok: true, dismissed: Boolean(res && res.meta && res.meta.changes) });
   }
   if (action === 'hide') {
     await db.batch([
+      log({ sql: 'NOT EXISTS (SELECT 1 FROM pack_public WHERE code = ? AND blocked = 1)', args: [report.code] }),
       db.prepare('INSERT INTO pack_public (code, public, blocked, published, updated) VALUES (?, 0, 1, NULL, ?) ON CONFLICT (code) DO UPDATE SET blocked = 1, updated = excluded.updated').bind(report.code, t),
       db.prepare("UPDATE pack_reports SET status = 'dismissed', dismissed_at = ?, dismissed_by = ? WHERE code = ? AND status = 'open'").bind(t, session.user_id, report.code),
     ]);
     dropCache(db);
     return json({ ok: true, hidden: true, code: report.code });
   }
-  if (action === 'restore') {
-    await db.prepare('UPDATE pack_public SET blocked = 0, updated = ? WHERE code = ?').bind(t, report.code).run();
-    dropCache(db);
-    return json({ ok: true, restored: true, code: report.code });
-  }
-  return fail(404, 'not_found', "That page of the dashboard doesn't exist.");
+  await db.batch([
+    log({ sql: 'EXISTS (SELECT 1 FROM pack_public WHERE code = ? AND blocked = 1)', args: [report.code] }),
+    db.prepare('UPDATE pack_public SET blocked = 0, updated = ? WHERE code = ?').bind(t, report.code),
+  ]);
+  dropCache(db);
+  return json({ ok: true, restored: true, code: report.code });
 }
 
 export async function packReportsRoute(request, env, session, route, url, t) {

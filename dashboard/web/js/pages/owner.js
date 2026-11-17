@@ -7,6 +7,7 @@ import { ownerPath, profilePath } from '../router.js';
 import { state } from '../state.js';
 import { mountAsync } from './common.js';
 import { PARTY_GAMES, PARTY_BADGE_COUNTERS } from '../community-data.js';
+import { cheatAlertsCard } from './owner-cheats.js';
 
 export const OWNER_USERS_PATH = '/api/owner/users';
 export const OWNER_ACTIONS_PATH = '/api/owner/actions';
@@ -314,6 +315,7 @@ export function renderOwner(ctx) {
       description: 'Give anyone Shards, XP, levels, achievements, badges and more. Only you can see this page.',
       actions: staffLinks(),
     }),
+    cheatAlertsCard(ctx, { onChange: () => loadLog() }),
     card({ title: 'Find someone', icon: 'search' },
       h('label', { class: 'field-label', htmlFor: inputId, text: 'Search people' }),
       input,

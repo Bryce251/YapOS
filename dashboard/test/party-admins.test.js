@@ -371,3 +371,19 @@ test('the Party admins link shows in the account area only for the owner', () =>
     assert.equal(links[0].getAttribute('aria-label'), 'Party admins');
   }
 });
+
+test('adding and removing party admins goes in the mod log once, only for the owner', async () => {
+  const h = party();
+  const { cookie } = await h.login(OWNER);
+  const log = () => h.db.raw.prepare('SELECT actor_id, action, target_id FROM party_mod_log ORDER BY created ASC, rowid ASC').all().map((r) => ({ ...r }));
+  assert.equal((await h.api('POST', '/api/party/admins', cookie, { id: uid(1) })).status, 200);
+  assert.equal((await h.api('POST', '/api/party/admins', cookie, { id: uid(1) })).status, 200);
+  assert.deepEqual(log(), [{ actor_id: OWNER.id, action: 'owner_admin_add', target_id: uid(1) }]);
+  const del = await h.api('DELETE', `/api/party/admins/${uid(1)}`, cookie);
+  assert.equal(del.status, 200);
+  assert.equal((await del.json()).removed, true);
+  const again = await h.api('DELETE', `/api/party/admins/${uid(1)}`, cookie);
+  assert.equal((await again.json()).removed, false);
+  assert.deepEqual(log().map((r) => r.action), ['owner_admin_add', 'owner_admin_remove']);
+  assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM party_admins').get().n, 0);
+});

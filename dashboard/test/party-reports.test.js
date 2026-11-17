@@ -616,7 +616,7 @@ test('staff see each report with the drawing, the drawer and the reporter', asyn
   const ctx = makeCtx(a);
   renderPartyReports(ctx);
   await flush();
-  assert.deepEqual(a.calls.map((c) => c[1]).sort(), [BANS_PATH, `${REPORTS_PATH}?status=open`]);
+  assert.deepEqual(a.calls.map((c) => c[1]).sort(), [BANS_PATH, '/api/party/blocked-words', `${REPORTS_PATH}?status=open`]);
   assert.equal(ctx.chrome[0].section, 'party-reports');
   const items = ctx.main.querySelectorAll('.report-item');
   assert.equal(items.length, 2);

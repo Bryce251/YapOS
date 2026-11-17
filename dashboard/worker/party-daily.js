@@ -3,6 +3,7 @@ import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanText } from './profiles.js';
 import { reportIpHash } from './reports.js';
 import { offBoard } from './party-leaderboard.js';
+import { activeBan } from './party-mod.js';
 import { censor } from '../web/activity/js/filter.js';
 import { dailyPuzzle, hiveAnswers, hiveMax, scoreHive, scoreScramble, dailyScrambleWords, dayKey, shiftDay, nextReset, isDateKey, HIVE_MAX_LETTERS, SCRAMBLE_ROUNDS } from '../web/activity/js/daily.js';
 
@@ -199,7 +200,7 @@ async function postDaily(request, env, url, t) {
   const day = dayKey(t);
   if (sub.date !== day) return fail(409, 'old_puzzle', "That puzzle has finished. A new one is ready, so reload to play today's.", { date: day });
   const db = env.DB;
-  const ban = await db.prepare('SELECT id FROM party_bans WHERE id = ?').bind(sub.user.id).first();
+  const ban = await activeBan(db, sub.user.id, t);
   if (ban) return fail(403, 'banned', "You can't play the daily puzzle right now.");
   await loadDictionary(env, url.href, t);
   const entry = puzzleFor(day);
@@ -235,7 +236,7 @@ async function postDaily(request, env, url, t) {
       .bind(sub.user.id, day, streak.streak, streak.best, t),
   );
   await db.batch(stmts);
-  const rankRow = await db.prepare(`SELECT COUNT(*) AS n FROM party_daily_scores s WHERE s.day = ? AND s.kind = ? AND (s.score > ? OR (s.score = ? AND s.ms < ?)) AND ${offBoard('s.user_id')}`).bind(day, sub.kind, kept.score, kept.score, kept.ms).first();
+  const rankRow = await db.prepare(`SELECT COUNT(*) AS n FROM party_daily_scores s WHERE s.day = ? AND s.kind = ? AND (s.score > ? OR (s.score = ? AND s.ms < ?)) AND ${offBoard('s.user_id', t)}`).bind(day, sub.kind, kept.score, kept.score, kept.ms).first();
   return json({
     ok: true,
     date: day,
@@ -257,7 +258,7 @@ async function getTop(request, env, url, t) {
   if (!KIND_SET.has(kind)) throw bad('bad_kind', 'Pick the hive or the scramble puzzle.');
   const day = dayKey(t);
   const res = await env.DB.prepare(
-    `SELECT s.user_id, s.name, s.username, s.score, s.ms, k.streak, k.last_day FROM party_daily_scores s LEFT JOIN party_daily_streaks k ON k.user_id = s.user_id WHERE s.day = ? AND s.kind = ? AND ${offBoard('s.user_id')} ORDER BY s.score DESC, s.ms ASC, s.at ASC, s.user_id ASC LIMIT ?`,
+    `SELECT s.user_id, s.name, s.username, s.score, s.ms, k.streak, k.last_day FROM party_daily_scores s LEFT JOIN party_daily_streaks k ON k.user_id = s.user_id WHERE s.day = ? AND s.kind = ? AND ${offBoard('s.user_id', t)} ORDER BY s.score DESC, s.ms ASC, s.at ASC, s.user_id ASC LIMIT ?`,
   ).bind(day, kind, TOP_SIZE).all();
   const yesterday = shiftDay(day, -1);
   const top = ((res && res.results) || []).map((r, i) => ({

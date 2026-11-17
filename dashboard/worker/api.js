@@ -14,6 +14,8 @@ import { getLeaderboard } from './party-leaderboard.js';
 import { getPartyProfile } from './party-profile.js';
 import { activityAuthRoute, isActivityAuthPath, linkSessionRoute } from './activity-auth.js';
 import { ownerApi } from './owner.js';
+import { activityWarningsRoute } from './party-mod.js';
+import { getBlockedPublic, blockedWordsRoute } from './party-blocked.js';
 import { parseDays, readStats } from './server-stats.js';
 import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
 
@@ -438,6 +440,8 @@ export async function handleApi(request, env, deps, url) {
     if (segs.length === 3 && segs[2] === 'reports') return postActivityReport(request, env, t);
     if (segs.length === 3 && segs[2] === 'results') return postResults(request, env, t);
     if (segs.length === 3 && segs[2] === 'leaderboard') return getLeaderboard(request, env, url, t);
+    if (segs.length === 3 && segs[2] === 'blocked') return getBlockedPublic(request, env, t);
+    if (segs[2] === 'warnings') return activityWarningsRoute(request, env, segs, url, t);
     if (segs[2] === 'daily') return dailyRoute(request, env, segs, url, t);
     if (segs.length === 4 && segs[2] === 'pack') return getPublicPack(request, env, segs[3], t);
     if (segs.length === 4 && segs[2] === 'profile') return getPartyProfile(request, env, segs[3], t);
@@ -492,8 +496,9 @@ export async function handleApi(request, env, deps, url) {
   }
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-visibility') return visibilityRoute(request, env, session, t);
   if (n === 2 && (route[0] === 'link' || (route[0] === 'me' && route[1] === 'party-signins'))) return linkSessionRoute(request, env, session, route, t);
+  if (route[0] === 'party' && route[1] === 'blocked-words') return blockedWordsRoute(request, env, session, route, t);
   if (route[0] === 'party' && route[1] === 'pack-reports') return packReportsRoute(request, env, session, route, url, t);
-  if (route[0] === 'party' && (route[1] === 'reports' || route[1] === 'bans')) return partyStaffRoute(request, env, session, route, url, t);
+  if (route[0] === 'party' && (route[1] === 'reports' || route[1] === 'bans' || route[1] === 'modlog')) return partyStaffRoute(request, env, session, route, url, t);
   if (route[0] === 'party') return partyRoute(request, env, session, route, t);
   if (route[0] === 'packs') return packsRoute(request, env, session, route, t);
   if (n === 1 && route[0] === 'servers' && readOnly) return getServers(env, session, t);

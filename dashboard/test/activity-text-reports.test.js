@@ -15,6 +15,7 @@ import chain, { wordRef } from '../web/activity/js/games/chain.js';
 import telephone, { textRef, promptRef, isStarterText } from '../web/activity/js/games/telephone.js';
 import { STARTERS } from '../web/activity/data/telephone.js';
 import { textFlag, TEXT_FLAG_LABEL, TEXT_FLAG_TITLE, TEXT_FLAG_DONE } from '../web/activity/js/ui/report.js';
+import { pickIn } from './reason-pick.js';
 import { VIEWS } from '../web/activity/js/views/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -270,11 +271,12 @@ test('Two Truths and a Lie, Word Chain and Draw Telephone list reportable text',
   assert.equal(promptRef(drawSt, 1), textRef(5, 0, 0));
 });
 
-test('the flag is a small Report button that turns into Reported', () => {
+test('the flag is a small Report button that turns into Reported', async () => {
   installDom({ url: 'https://yapos.dev/activity/' });
   const calls = [];
   const toasts = [];
-  const engine = { report: (r) => (calls.push(r), 'sent'), reported: () => false };
+  const whys = [];
+  const engine = { report: (r, why) => (calls.push(r), whys.push(why), 'sent'), reported: () => false };
   const btn = textFlag(engine, 'chain.3', { toast: (t) => toasts.push(t) });
   assert.equal(btn.tagName.toLowerCase(), 'button');
   assert.equal(btn.getAttribute('aria-label'), TEXT_FLAG_LABEL);
@@ -282,7 +284,10 @@ test('the flag is a small Report button that turns into Reported', () => {
   assert.equal(btn.getAttribute('aria-label'), 'Report');
   assert.equal(btn.getAttribute('title'), 'Report this');
   btn.click();
+  assert.deepEqual(calls, [], 'nothing is sent until a reason is picked');
+  await pickIn('rude');
   assert.deepEqual(calls, ['chain.3']);
+  assert.deepEqual(whys, [{ reason: 'rude' }]);
   assert.equal(btn.classList.contains('is-reported'), true);
   assert.equal(btn.disabled, true);
   assert.equal(btn.getAttribute('aria-label'), TEXT_FLAG_DONE);
@@ -295,6 +300,7 @@ test('the flag is a small Report button that turns into Reported', () => {
   const slow = [];
   const s = textFlag({ report: () => 'slow', reported: () => false }, 'chain.4', { toast: (t) => slow.push(t) });
   s.click();
+  await pickIn('spam');
   assert.equal(s.disabled, false);
   assert.match(slow[0], /minute/);
   assert.equal(textFlag({}, 'chain.5'), null);
@@ -320,6 +326,7 @@ test('the Draw & Guess feed shows a flag on other players guesses only', async (
   assert.equal(flags.length, 1);
   assert.equal(flags[0].getAttribute('aria-label'), 'Report');
   flags[0].click();
+  await pickIn('cheating');
   assert.equal(flags[0].classList.contains('is-reported'), true);
   otherView.destroy();
   assert.ok(host);
@@ -399,4 +406,49 @@ test('the flag on a guess carries the reference the host knows, taken from what 
   await settle(r.clock);
   assert.equal(log.length, 1, 'the host posts the report');
   assert.equal(log[0].body.text, 'pickle parade');
+});
+
+test('a text report carries the reason and short note the player picked, through the host', async () => {
+  const log = setup();
+  const r = await startDraw(3);
+  const host = r.engines[0];
+  const [a, b] = guessers(r);
+  a.act({ type: 'guess', text: 'buy coins at my site' });
+  await settle(r.clock);
+  const st = host.snapshot().state.draw;
+  const line = st.feed.find((f) => f[2] === 'buy coins at my site');
+  const ref = guessRef(st, line[0]);
+  const reporter = b === host ? r.engines.find((e) => e !== a && e !== host) || b : b;
+  assert.equal(reporter.report(ref, { reason: 'spam', reasonNote: `  ${'n'.repeat(140)}  ` }), 'sent');
+  await settle(r.clock);
+  assert.equal(log.length, 1);
+  assert.equal(log[0].body.reason, 'spam');
+  assert.equal(Array.from(log[0].body.reasonNote).length, 100);
+  a.act({ type: 'guess', text: 'another guess' });
+  await settle(r.clock);
+  const st2 = host.snapshot().state.draw;
+  const line2 = st2.feed.find((f) => f[2] === 'another guess');
+  assert.equal(reporter.report(guessRef(st2, line2[0]), { reason: 'hacking' }), 'sent');
+  await settle(r.clock);
+  assert.equal(log.length, 2);
+  assert.equal('reason' in log[1].body, false, 'an unknown reason is dropped, not sent');
+  resetAdmins();
+});
+
+test('the reason picker sends a note only for Something else and Escape cancels', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const { pickReason, reasonOpen, REASON_CHOICES } = await import('../web/activity/js/ui/report.js');
+  assert.deepEqual(REASON_CHOICES.map((c) => c.label), ['Rude or inappropriate', 'Spam', 'Cheating', 'Something else']);
+  const first = pickReason();
+  assert.ok(reasonOpen());
+  const second = pickReason();
+  assert.equal(await first, null, 'opening a new picker closes the old one');
+  const { pickIn: pick } = await import('./reason-pick.js');
+  await pick('other', 'they kept   saying it');
+  assert.deepEqual(await second, { reason: 'other', reasonNote: 'they kept saying it' });
+  assert.equal(reasonOpen(), null);
+  const third = pickReason();
+  reasonOpen().dispatchEvent(Object.assign(new (await import('./dom-shim.js')).FakeEvent('keydown', { bubbles: true }), { key: 'Escape' }));
+  assert.equal(await third, null);
+  assert.equal(reasonOpen(), null);
 });

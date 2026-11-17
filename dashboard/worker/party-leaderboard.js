@@ -3,6 +3,7 @@ import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanAvatar, cleanUsername } from './profiles.js';
 import { safeName } from './public-profiles.js';
 import { findBlocked } from '../web/activity/js/filter.js';
+import { banLive } from './party-mod.js';
 
 export const LEADERBOARD_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel', 'typerace', 'memory', 'beatdrop', 'closest', 'namefive']);
 export const LEADERBOARD_BOARDS = Object.freeze(['points', 'wins', 'games', 'best']);
@@ -106,7 +107,7 @@ export async function awardMonth(db, t) {
   const month = prevMonth(monthOf(t));
   const done = await db.prepare('SELECT 1 AS x FROM party_season_awards WHERE month = ? LIMIT 1').bind(month).first();
   if (done) return { month, awarded: 0 };
-  const res = await db.prepare(`SELECT m.user_id AS user_id, m.points AS points, p.name AS name, p.username AS username FROM party_points_month m LEFT JOIN party_points p ON p.user_id = m.user_id WHERE m.month = ? AND m.points > 0 AND ${offBoard('m.user_id')} ORDER BY m.points DESC, m.updated ASC, m.user_id ASC LIMIT ?`).bind(month, MONTH_PRIZES).all();
+  const res = await db.prepare(`SELECT m.user_id AS user_id, m.points AS points, p.name AS name, p.username AS username FROM party_points_month m LEFT JOIN party_points p ON p.user_id = m.user_id WHERE m.month = ? AND m.points > 0 AND ${offBoard('m.user_id', t)} ORDER BY m.points DESC, m.updated ASC, m.user_id ASC LIMIT ?`).bind(month, MONTH_PRIZES).all();
   const rows = (res && res.results) || [];
   if (!rows.length) return { month, awarded: 0 };
   const out = await db.batch(rows.map((r, i) => db.prepare('INSERT OR IGNORE INTO party_season_awards (month, rank, user_id, name, username, points, awarded) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -140,14 +141,14 @@ function source(board, game, month = null) {
   return { from: 'party_points_game g LEFT JOIN party_points p ON p.user_id = g.user_id', col: `g.${board}`, where: 'g.game = ?', binds: [game], game: true };
 }
 
-export const OFF_BOARD_SQL = 'NOT EXISTS (SELECT 1 FROM party_bans b WHERE b.id = {u}) AND NOT EXISTS (SELECT 1 FROM party_board_hidden x WHERE x.user_id = LOWER({u}))';
+export const OFF_BOARD_SQL = 'NOT EXISTS (SELECT 1 FROM party_bans b WHERE b.id = {u} AND {live}) AND NOT EXISTS (SELECT 1 FROM party_board_hidden x WHERE x.user_id = LOWER({u}))';
 
-export function offBoard(u) {
-  return OFF_BOARD_SQL.replaceAll('{u}', u);
+export function offBoard(u, t = Date.now()) {
+  return OFF_BOARD_SQL.replaceAll('{live}', banLive('b', t)).replaceAll('{u}', u);
 }
 
-export async function isOffBoard(db, id) {
-  const row = await db.prepare('SELECT 1 AS x FROM party_bans WHERE id = ? UNION ALL SELECT 1 AS x FROM party_board_hidden WHERE user_id = LOWER(?) LIMIT 1').bind(id, id).first();
+export async function isOffBoard(db, id, t = Date.now()) {
+  const row = await db.prepare(`SELECT 1 AS x FROM party_bans b WHERE b.id = ? AND ${banLive('b', t)} UNION ALL SELECT 1 AS x FROM party_board_hidden WHERE user_id = LOWER(?) LIMIT 1`).bind(id, id).first();
   return Boolean(row);
 }
 

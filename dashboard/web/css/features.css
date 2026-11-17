@@ -2150,6 +2150,20 @@
   gap: 8px 12px;
 }
 
+.report-reason-tools {
+  justify-content: flex-start;
+  margin: 0 0 16px;
+}
+
+.report-reason-tools[hidden] {
+  display: none;
+}
+
+.report-reason-note {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .report-list {
   display: flex;
   flex-direction: column;
@@ -2363,6 +2377,11 @@
     justify-content: flex-start;
   }
 
+  .report-tools .segmented {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
   .card-header:has(.report-tools) {
     flex-wrap: wrap;
   }
@@ -2377,6 +2396,10 @@
   .party-add .inline-form {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .party-add .inline-form > .input {
+    flex: none;
   }
 
   .party-row {

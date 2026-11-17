@@ -11,6 +11,7 @@ import { statsCleanupStatements } from './server-stats.js';
 import { ownerCleanupStatements } from './owner.js';
 import { linkCleanupStatements } from './activity-auth.js';
 import { awardMonth, monthCleanup } from './party-leaderboard.js';
+import { banCleanupStatements, BAN_CLEANUP_NAMES } from './party-mod.js';
 
 export const PUBLIC_STALE = 2 * HOUR;
 export const SNAPSHOT_STALE = DAY;
@@ -42,6 +43,10 @@ export async function cleanup(db, t) {
   const removed = {};
   results.forEach((r, i) => {
     removed[names[i]] = Number((r && r.meta && r.meta.changes) || 0);
+  });
+  const modResults = await db.batch(banCleanupStatements(db, t));
+  modResults.forEach((r, i) => {
+    removed[BAN_CLEANUP_NAMES[i]] = Number((r && r.meta && r.meta.changes) || 0);
   });
   const season = await awardMonth(db, t).catch(() => ({ awarded: 0 }));
   removed.partySeasonAwards = season.awarded;

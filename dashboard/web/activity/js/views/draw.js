@@ -7,7 +7,7 @@ import { hidesWords } from '../text.js';
 import { HIDDEN_NOTE } from '../filter.js';
 import { flagInfo, flagsLeft } from '../engine.js';
 import { sendReport } from '../admin.js';
-import { textFlag } from '../ui/report.js';
+import { textFlag, pickReason } from '../ui/report.js';
 import { replayLog } from '../games/replaylog.js';
 import { createPalette, dropTool, pixelAt, canvasPixel } from './palette.js';
 import { TEAM_MS, teamInfo, finalText } from '../games/teams.js';
@@ -99,7 +99,7 @@ export function reportOf(snap, game, item, log = replayLog) {
   return body;
 }
 
-export function flagDrawing({ engine, snap, game, item, local, toast }) {
+export function sendFlag({ engine, snap, game, item, local, toast, why = null }) {
   const say = (t) => {
     if (typeof toast === 'function') toast(t);
   };
@@ -109,9 +109,22 @@ export function flagDrawing({ engine, snap, game, item, local, toast }) {
   }
   if (local) local.add(item.d);
   const body = reportOf(snap, game, item);
-  if (body) sendReport(item.d, body).catch(() => false);
+  if (body) sendReport(item.d, why ? { ...body, ...why } : body).catch(() => false);
   say(FLAG_THANKS);
   return true;
+}
+
+export async function flagDrawing({ after = null, ...opts }) {
+  if (!opts.item) return sendFlag(opts);
+  const why = await pickReason();
+  if (!why) return false;
+  const ok = sendFlag({ ...opts, why });
+  if (typeof after === 'function') {
+    try {
+      after();
+    } catch {}
+  }
+  return ok;
 }
 
 export function feedRefs(m) {
@@ -811,8 +824,7 @@ export function createDrawView({ engine, fx, toast, win, cues }) {
 
   function flag() {
     if (!snap) return;
-    flagDrawing({ engine, snap, game: 'draw', item: draw.drawingOf(snap), local: flagged, toast });
-    update(engine.snapshot());
+    flagDrawing({ engine, snap, game: 'draw', item: draw.drawingOf(snap), local: flagged, toast, after: () => update(engine.snapshot()) });
   }
 
   function showHidden(on) {

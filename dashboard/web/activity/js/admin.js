@@ -1,4 +1,4 @@
-import { findBlocked, isBlockedGameWord } from './filter.js';
+import { findBlocked, isBlockedGameWord, censor } from './filter.js';
 import { decodeStroke, fitLevels } from './games/ink.js';
 import { trimReplay, inkMatches, SOLO_GAMES } from './games/replayformat.js';
 export const ADMINS_EVENT = 'yapos:admins';
@@ -17,6 +17,8 @@ export const REPORT_SENT_MAX = 200;
 export const TEXT_REPORT_GAMES = Object.freeze(['draw', 'hottakes', 'truths', 'telephone', 'chain', 'bluff', 'story']);
 export const REPORT_TEXT_MAX = 300;
 export const REPORT_CONTEXT_MAX = 200;
+export const REPORT_REASONS = Object.freeze(['rude', 'spam', 'cheating', 'other']);
+export const REASON_NOTE_MAX = 100;
 const INK_RE = /^[A-Za-z0-9_-]{6,4096}$/;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -24,6 +26,7 @@ let env = defaults();
 let checked = new Map();
 let admins = new Set();
 let banned = new Set();
+let bannedUntil = new Map();
 let reported = new Set();
 let owner = null;
 let failedAt = new Map();
@@ -54,6 +57,7 @@ export function resetAdmins() {
   checked = new Map();
   admins = new Set();
   banned = new Set();
+  bannedUntil = new Map();
   reported = new Set();
   owner = null;
   failedAt = new Map();
@@ -88,11 +92,19 @@ export function isOwner(id) {
 
 export function isBanned(id) {
   const key = idOf(id);
-  return Boolean(key) && banned.has(key);
+  if (!key || !banned.has(key)) return false;
+  const until = bannedUntil.get(key);
+  return !until || until > env.now();
+}
+
+export function banUntil(id) {
+  const key = idOf(id);
+  if (!key || !isBanned(key)) return null;
+  return bannedUntil.get(key) || null;
 }
 
 export function bannedIds() {
-  return [...banned];
+  return [...banned].filter((id) => isBanned(id));
 }
 
 export function knows(id) {
@@ -138,6 +150,7 @@ function track(id, at) {
     checked.delete(old);
     admins.delete(old);
     banned.delete(old);
+    bannedUntil.delete(old);
   }
 }
 
@@ -159,6 +172,9 @@ function apply(ids, body) {
   const asked = new Set(ids);
   const yes = new Set(body.admins.filter((x) => typeof x === 'string' && asked.has(x)));
   const out = new Set((Array.isArray(body.banned) ? body.banned : []).filter((x) => typeof x === 'string' && asked.has(x)));
+  const ends = body.until && typeof body.until === 'object' && !Array.isArray(body.until) ? body.until : {};
+  const told = Number(body.now);
+  const skew = Number.isFinite(told) && told > 0 ? Math.round((env.now() - told) / 60000) * 60000 : 0;
   let changed = false;
   const at = env.now();
   for (const id of ids) {
@@ -168,6 +184,12 @@ function apply(ids, body) {
       admins.add(id);
       changed = true;
     } else if (!yes.has(id) && admins.delete(id)) {
+      changed = true;
+    }
+    const end = out.has(id) && Number.isFinite(Number(ends[id])) && Number(ends[id]) > 0 ? Number(ends[id]) + skew : null;
+    if ((bannedUntil.get(id) || null) !== end) {
+      if (end) bannedUntil.set(id, end);
+      else bannedUntil.delete(id);
       changed = true;
     }
     if (out.has(id) && !banned.has(id)) {
@@ -280,6 +302,23 @@ export function replayFits(replay, game, drawerId, ink) {
   return inkMatches(replay, ink, REPORT_STROKES, 16 * 1024, me);
 }
 
+export function cleanReasonNote(raw) {
+  const text = clipReport(raw, REASON_NOTE_MAX);
+  if (!text) return '';
+  try {
+    return censor(text).text;
+  } catch {
+    return text;
+  }
+}
+
+export function reasonOf(input) {
+  const x = input && typeof input === 'object' ? input : {};
+  if (!REPORT_REASONS.includes(x.reason)) return {};
+  const note = cleanReasonNote(x.reasonNote);
+  return note ? { reason: x.reason, reasonNote: note } : { reason: x.reason };
+}
+
 export function reportBody(input) {
   const x = input && typeof input === 'object' ? input : {};
   if (!REPORT_GAMES.includes(x.game)) return null;
@@ -297,6 +336,7 @@ export function reportBody(input) {
     ink: reportInk(x.ink),
     word: word || null,
     at: Number.isFinite(x.at) ? Math.round(x.at) : env.now(),
+    ...reasonOf(x),
   };
   const replay = x.replay ? trimReplay(x.replay) : null;
   if (replay && replayFits(replay, x.game, drawerId, body.ink)) body.replay = replay;
@@ -346,6 +386,7 @@ export function textReportBody(input) {
     text,
     context: context || null,
     at: Number.isFinite(x.at) ? Math.round(x.at) : env.now(),
+    ...reasonOf(x),
   };
 }
 

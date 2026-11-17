@@ -356,8 +356,7 @@ export function createSketchduelView({ engine, fx, toast, win, cues }) {
 
   function flag(item) {
     if (!snap || !item) return;
-    flagDrawing({ engine, snap, game: 'sketchduel', item, local: flagged, toast });
-    update(engine.snapshot());
+    flagDrawing({ engine, snap, game: 'sketchduel', item, local: flagged, toast, after: () => update(engine.snapshot()) });
   }
 
   function onKeys(e) {

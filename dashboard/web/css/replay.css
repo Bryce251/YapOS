@@ -528,14 +528,13 @@
 }
 
 .person-ban {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
 }
 
 .person-ban-why {
-  flex: 1 1 160px;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -559,4 +558,244 @@
 
 .replay-artist-profile {
   flex: none;
+}
+
+.report-item.is-flagged {
+  border-color: var(--danger);
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.flag-badge {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.flag-badge-title {
+  font-weight: 700;
+}
+
+.flag-badge-text {
+  color: var(--text-2);
+}
+
+.note-chip {
+  padding: 0 8px;
+  font-size: 12px;
+  height: 22px;
+}
+
+.person-notes {
+  display: grid;
+  gap: 8px;
+}
+
+.mod-note-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mod-note-box {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+}
+
+.mod-note-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mod-note-bar .field-counter {
+  position: static;
+}
+
+.mod-notes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mod-note-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mod-note-author {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mod-note-head .timeline-action {
+  margin-left: 0;
+}
+
+.mod-note-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.person-warnings {
+  display: grid;
+  gap: 8px;
+}
+
+.mod-warning-box {
+  min-height: 56px;
+}
+
+.mod-warning.is-unseen {
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
+.warning-state {
+  padding: 0 8px;
+  height: 22px;
+  font-size: 12px;
+}
+
+.warning-state.is-unseen {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.ban-length {
+  flex-wrap: wrap;
+}
+
+.ban-status {
+  color: var(--danger);
+}
+
+.modlog-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.modlog-filter {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.modlog-select {
+  min-width: 140px;
+  max-width: 100%;
+}
+
+.modlog-row {
+  align-items: flex-start;
+}
+
+.modlog-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.modlog-icon {
+  flex: none;
+  width: 20px;
+  text-align: center;
+}
+
+.modlog-text {
+  overflow-wrap: anywhere;
+}
+
+.modlog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 6px;
+}
+
+.modlog-system {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  font-size: 18px;
+}
+
+.modlog-row.is-ban .modlog-text,
+.modlog-row.is-warn .modlog-text {
+  font-weight: 600;
+}
+
+@media (max-width: 560px) {
+  .card-header:has(.modlog-tools) {
+    flex-wrap: wrap;
+  }
+
+  .card-actions:has(> .modlog-tools) {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .modlog-tools {
+    width: 100%;
+  }
+
+  .modlog-filter {
+    flex: 1 1 140px;
+  }
+
+  .modlog-select {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+.blocked-search {
+  margin-bottom: 12px;
+}
+
+.blocked-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.cheat-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+}
+
+@media (max-width: 560px) {
+  .card-header:has(.cheat-tools) {
+    flex-wrap: wrap;
+  }
+
+  .card-actions:has(> .cheat-tools) {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .cheat-tools {
+    justify-content: space-between;
+  }
 }

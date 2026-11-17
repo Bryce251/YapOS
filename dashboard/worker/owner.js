@@ -5,6 +5,8 @@ import { isPartyOwner, USER_ID_RE } from './party.js';
 import { cleanText, cleanUsername, cleanAvatar } from './profiles.js';
 import { PARTY_BADGES, badgesFor, partySeasonBadges, partySeasonBadgeId, seasonBadgeInfo } from './party-badges.js';
 import { PARTY_OWNER_KINDS, validatePartyValue, partyBoardView, partyActionPlan, partyActionDone } from './owner-party.js';
+import { cheatsRoute } from './owner-cheats.js';
+import { logModAction, actorName, personName, ownerLogAction } from './party-mod.js';
 
 export const OWNER_ACTIONS_PER_MIN = 120;
 export const OWNER_READS_PER_MIN = 300;
@@ -407,7 +409,7 @@ async function postAction(request, env, session, t) {
     db.prepare('INSERT INTO owner_actions (id, user_id, kind, value, ref, note, notify, created, status, sent_at, result, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)')
       .bind(id, a.user, a.kind, a.value === null ? null : JSON.stringify(a.value), a.ref, a.note, a.notify ? 1 : 0, t, status, result, t),
   ];
-  if (plan) stmts.push(...plan.stmts);
+  if (plan) stmts.push(...plan.stmts, logModAction(db, { actorId: session.user_id, actorName: actorName(session), action: ownerLogAction(a.kind), targetId: a.user, targetName: await personName(db, a.user), detail: { kind: a.kind, summary: plan.result }, t }));
   await db.batch(stmts);
   if (plan) partyActionDone(db);
   const row = await db.prepare(`SELECT ${ACTION_COLUMNS} FROM owner_actions WHERE id = ?`).bind(id).first();
@@ -437,6 +439,7 @@ export async function ownerApi(request, env, route, url, t, { csrf }) {
     if (method === 'POST') return postAction(request, env, session, t);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   }
+  if (route[1] === 'cheats') return cheatsRoute(request, env, session, route, url, t);
   return fail(404, 'not_found', MISSING);
 }
 

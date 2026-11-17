@@ -5,6 +5,8 @@ import { createResults } from './results.js';
 import { board, standings, fmt } from './board.js';
 import { viewFor } from '../views/index.js';
 import { createAdminPanel } from './admin-panel.js';
+import { banUntil } from '../admin.js';
+import { createWarnings } from './warning.js';
 import { createTrolls, ALL_FX, seesFx } from './trolls.js';
 import { sfx as defaultSfx } from './sfx.js';
 import { createRecorder } from './replay.js';
@@ -45,6 +47,31 @@ export const LEAVE_GRACE_MS = 6000;
 export const KICKED_TEXT = 'An admin moved you to watching.';
 export const BANNED_TEXT = "An admin moved you to watching. You can't rejoin until an admin lets you back in.";
 export const PARTY_BANNED_TEXT = "You can't join YapOS Party games right now.";
+
+export function banLeftText(ms) {
+  const mins = Math.ceil(ms / 60000);
+  if (mins < 2) return 'about a minute';
+  if (mins < 60) return `${mins} minutes`;
+  const hours = Math.round(mins / 60);
+  if (hours < 2) return '1 hour';
+  if (hours < 36) return `${hours} hours`;
+  const days = Math.round(hours / 24);
+  return `${days} ${days === 1 ? 'day' : 'days'}`;
+}
+
+export function partyBanText(until, now = Date.now()) {
+  const end = Number(until);
+  if (!until || !Number.isFinite(end) || end <= now) return PARTY_BANNED_TEXT;
+  const when = new Date(end);
+  let clock = '';
+  try {
+    clock = when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (new Date(now).toDateString() !== when.toDateString()) clock = `${when.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${clock}`;
+  } catch {
+    clock = when.toISOString().slice(0, 16).replace('T', ' ');
+  }
+  return `You can't join games until ${clock} (in ${banLeftText(end - now)}).`;
+}
 
 export function partyBanned(snap) {
   return Boolean(snap && snap.ready && snap.admin && snap.admin.partyBanned);
@@ -205,6 +232,8 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const offProfileCard = profileCard.bind(root);
   const gate = signin ? createSignin({ win, engine, toast, dev: Boolean(signin.dev), alone, host: root, onChange: () => repaintHead() }) : null;
   if (gate) root.append(gate.el);
+  const warnings = gate ? createWarnings({ win, gate }) : null;
+  if (warnings) root.append(warnings.el);
 
   function withSignin(m) {
     const out = { ...m, fx: fxMode.button() };
@@ -497,7 +526,8 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       : null,
   );
 
-  const paintBan = memo((on) => (on ? h('p', { class: 'party-ban', attrs: { role: 'status' } }, h('span', { class: 'party-ban-icon', text: '🚫', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'party-ban-text', text: PARTY_BANNED_TEXT })) : null));
+  const banText = (snap) => partyBanText(snap && snap.me ? banUntil(snap.me) : null, now());
+  const paintBan = memo((text) => (text ? h('p', { class: 'party-ban', attrs: { role: 'status' } }, h('span', { class: 'party-ban-icon', text: '🚫', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'party-ban-text', text })) : null));
 
   const paintSpectate = memo((m) => {
     if (!m) return null;
@@ -506,7 +536,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
         'div',
         { class: 'spectate', attrs: { role: 'status' } },
         h('span', { class: 'spectate-label' }, h('span', { text: 'Watching' })),
-        h('span', { class: 'spectate-hint', text: m.banned ? PARTY_BANNED_TEXT : m.removed ? REMOVED_TEXT : LATE_LOCKED_TEXT }),
+        h('span', { class: 'spectate-hint', text: m.banned ? banText(engine.snapshot()) : m.removed ? REMOVED_TEXT : LATE_LOCKED_TEXT }),
       );
     }
     const btn = joinButton(m, { size: 'sm', key: 'join-late' });
@@ -582,7 +612,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     const mine = snap.players.find((p) => p.isMe);
     if (wasJoined && !joined && snap.admin && mine && mine.present && snap.joining !== 'out' && now() - selfLeaveAt > LEAVE_GRACE_MS) {
       const banned = Array.isArray(snap.admin.banned) && snap.admin.banned.includes(snap.me);
-      toast(partyBanned(snap) ? PARTY_BANNED_TEXT : banned ? BANNED_TEXT : KICKED_TEXT);
+      toast(partyBanned(snap) ? banText(snap) : banned ? BANNED_TEXT : KICKED_TEXT);
     }
     if (snap.joining === 'out') selfLeaveAt = now();
     wasJoined = joined;
@@ -604,7 +634,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
         if (partyBanned(engine.snapshot())) {
           if (typeof e.stopPropagation === 'function') e.stopPropagation();
           if (typeof e.preventDefault === 'function') e.preventDefault();
-          toast(PARTY_BANNED_TEXT);
+          toast(banText(engine.snapshot()));
           return;
         }
         const c = centerOf(n);
@@ -715,10 +745,11 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     watchKick(snap);
     announceLive = announceModel(snap, now());
     paintAnnounce(announceSlot, announceLive ? { text: announceLive.text, until: announceLive.until } : null);
-    paintBan(banSlot, partyBanned(snap) && hm.phase !== 'game');
+    paintBan(banSlot, partyBanned(snap) && hm.phase !== 'game' ? banText(snap) : null);
     tickAnnounce(now());
     panel.update(snap);
     if (gate) gate.update(snap);
+    if (warnings) warnings.update();
     paintBody(snap, hm);
     if (party.update(snap)) root.dataset.dock = 'on';
     else delete root.dataset.dock;
@@ -930,6 +961,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       trolls.destroy();
       fullscreen.destroy();
       if (gate) gate.destroy();
+      if (warnings) warnings.destroy();
       if (typeof win.removeEventListener === 'function') win.removeEventListener(PROFILES_EVENT, onProfiles);
       if (profileTimer !== null) win.clearTimeout(profileTimer);
       profileTimer = null;

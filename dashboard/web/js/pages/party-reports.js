@@ -2,12 +2,14 @@ import { h, replace } from '../dom.js';
 import { avatar, badge, button, card, confirmDialog, emptyState, linkButton, loadingRegion, pageHeader, setBusy, skeleton, toast } from '../ui.js';
 import { ApiError } from '../api.js';
 import { mountAsync } from './common.js';
+import { icon } from '../icons.js';
 import { state } from '../state.js';
 import { formatDate, relativeTime } from '../format.js';
 import { decodeStroke, paintInk } from '../../activity/js/games/ink.js';
 import { replayOf } from '../replay-model.js';
 import { createReplayPlayer } from './party-replay.js';
-import { openProfilePanel, readPerson, personUrl, personHead, personStats, personBadges, banHistory, gameCounts, filterHistory, reportCountText, STATUS_FILTERS, KIND_FILTERS } from './party-person.js';
+import { blockedWordsCard } from './party-blocked.js';
+import { openProfilePanel, readPerson, personUrl, personHead, personStats, personBadges, banHistory, gameCounts, filterHistory, reportCountText, readFlag, flagBadge, noteChip, timeLeft, STATUS_FILTERS, KIND_FILTERS } from './party-person.js';
 
 export const REPORTS_PATH = '/api/party/reports';
 export const BANS_PATH = '/api/party/bans';
@@ -40,8 +42,27 @@ export const GAME_NAMES = Object.freeze({
 });
 export const ART_SCALE = 2;
 const FILTERS = [['open', 'Open'], ['dismissed', 'Dismissed'], ['all', 'All']];
-const KINDS = [['all', 'All'], ['drawing', 'Drawings'], ['text', 'Text'], ['pack', 'Packs']];
+const KINDS = [['all', 'All'], ['drawing', 'Drawings'], ['text', 'Text'], ['pack', 'Packs'], ['flagged', 'Flagged']];
 const SNIPPET_MAX = 80;
+export const REASON_FILTERS = Object.freeze([['all', 'All reasons'], ['rude', 'Rude'], ['spam', 'Spam'], ['cheating', 'Cheating'], ['other', 'Other']]);
+export const REASON_LABELS = Object.freeze({ rude: 'Rude or inappropriate', spam: 'Spam', cheating: 'Cheating', other: 'Something else' });
+export const NO_REASON = 'No reason given';
+export const SORTS = Object.freeze([['new', 'Newest first'], ['reason', 'Sort by reason']]);
+const REASON_ORDER = ['cheating', 'rude', 'spam', 'other', ''];
+const REASON_TONES = { rude: 'danger', spam: 'caution', cheating: 'warning', other: 'neutral' };
+
+export function reasonBadge(r) {
+  if (!r || r.kind === 'pack') return null;
+  return r.reason ? badge(REASON_LABELS[r.reason], REASON_TONES[r.reason] || 'neutral', 'flag') : badge(NO_REASON, 'neutral');
+}
+
+export function sortByReason(list) {
+  const rank = (r) => {
+    const i = REASON_ORDER.indexOf(r && r.reason ? r.reason : '');
+    return i < 0 ? REASON_ORDER.length : i;
+  };
+  return (Array.isArray(list) ? list : []).map((r, i) => [r, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([r]) => r);
+}
 
 const str = (v) => (typeof v === 'string' && v ? v : '');
 
@@ -73,7 +94,7 @@ function readPackReport(r) {
       public: pk?.public === true,
       blocked: pk?.blocked === true,
     },
-    drawer: { id: str(owner.id), name: '', username: str(owner.username), profile: null, banned: false, role: '' },
+    drawer: { id: str(owner.id), name: '', username: str(owner.username), profile: null, banned: false, role: '', flag: null, notes: 0 },
     reporter: { id: str(p.id), name: str(p.name), profile: null },
   };
 }
@@ -88,6 +109,8 @@ function readReport(r) {
     kind,
     game: str(r.game),
     word: str(r.word),
+    reason: Object.prototype.hasOwnProperty.call(REASON_LABELS, r.reason) ? r.reason : '',
+    reasonNote: Object.prototype.hasOwnProperty.call(REASON_LABELS, r.reason) ? str(r.reasonNote) : '',
     text: kind === 'text' ? str(r.text) : '',
     context: kind === 'text' ? str(r.context) : '',
     created: Number(r.created) || 0,
@@ -101,19 +124,33 @@ function readReport(r) {
       profile: readProfile(d.profile),
       banned: d.banned === true,
       role: d.role === 'owner' || d.role === 'admin' ? d.role : '',
+      flag: d.banned === true ? null : readFlag(d.flag),
+      notes: Number.isInteger(d.notes) && d.notes > 0 ? d.notes : 0,
     },
     reporter: { id: str(p.id), name: str(p.name), profile: readProfile(p.profile) },
   };
 }
 
+function readFlagged(f) {
+  if (!f || typeof f !== 'object') return null;
+  return { people: Number.isInteger(f.people) && f.people > 0 ? f.people : 0, reports: Number.isInteger(f.reports) && f.reports > 0 ? f.reports : 0 };
+}
+
 export function readReports(data, kind = 'all') {
   const read = kind === 'pack' ? readPackReport : readReport;
-  return {
+  const out = {
     reports: Array.isArray(data?.reports) ? data.reports.map(read).filter(Boolean) : [],
     next: typeof data?.next === 'string' && data.next ? data.next : null,
     open: Number.isInteger(data?.open) && data.open >= 0 ? data.open : 0,
     role: data?.role === 'owner' ? 'owner' : 'admin',
   };
+  const flagged = readFlagged(data?.flagged);
+  if (flagged) out.flagged = flagged;
+  return out;
+}
+
+export function kindLabel(v, label, flagged) {
+  return v === 'flagged' && flagged && flagged.people ? `${label} (${flagged.people})` : label;
 }
 
 export function readBans(data) {
@@ -125,6 +162,7 @@ export function readBans(data) {
     avatar: str(b.avatar),
     reason: str(b.reason),
     banned_at: Number(b.banned_at) || 0,
+    until: Number(b.until) > 0 ? Number(b.until) : null,
   })) : [];
   return { bans, max: Number.isInteger(data?.max) && data.max > 0 ? data.max : 1000 };
 }
@@ -200,7 +238,10 @@ export function renderPartyReports(ctx) {
 
   let filter = 'open';
   let kind = 'all';
+  let reason = 'all';
+  let sort = 'new';
   let view = readReports(null);
+  let flagged = { people: 0, reports: 0 };
   let bans = readBans(null);
   let who = null;
   let whoFilter = { status: 'all', kind: 'all', game: '' };
@@ -211,17 +252,45 @@ export function renderPartyReports(ctx) {
   const openCount = h('span', { class: 'party-count' });
   const filterBar = h('div', { class: 'segmented', attrs: { role: 'group', 'aria-label': 'Show reports' } });
   const kindBar = h('div', { class: 'segmented', attrs: { role: 'group', 'aria-label': 'Show what was reported' } });
+  const reasonSelect = h('select', { class: 'input select', dataset: { role: 'reason-filter' }, attrs: { 'aria-label': 'Show reports by reason' } }, ...REASON_FILTERS.map(([v, label]) => h('option', { value: v, text: label })));
+  const sortSelect = h('select', { class: 'input select', dataset: { role: 'reason-sort' }, attrs: { 'aria-label': 'Sort reports' } }, ...SORTS.map(([v, label]) => h('option', { value: v, text: label })));
+  reasonSelect.value = reason;
+  sortSelect.value = sort;
+  reasonSelect.addEventListener('change', () => {
+    if (reasonSelect.value === reason) return;
+    reason = REASON_FILTERS.some(([v]) => v === reasonSelect.value) ? reasonSelect.value : 'all';
+    who = null;
+    loadReports();
+  });
+  sortSelect.addEventListener('change', () => {
+    sort = sortSelect.value === 'reason' ? 'reason' : 'new';
+    drawReports();
+  });
+  const reasonBar = h('div', { class: 'report-tools report-reason-tools' },
+    h('div', { class: 'select-shell' }, reasonSelect, icon('chevron-down', { size: 14, className: 'select-caret' })),
+    h('div', { class: 'select-shell' }, sortSelect, icon('chevron-down', { size: 14, className: 'select-caret' })));
   const listBody = h('div', { class: 'report-wrap' });
   const banCount = h('span', { class: 'party-count' });
   const banBody = h('div', { class: 'party-list-wrap' });
+  const blockedCard = blockedWordsCard(ctx);
+  blockedCard.id = 'blocked-words';
+  const toBlocked = () => {
+    blockedCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const field = blockedCard.querySelector('input[type="text"]');
+    if (field) field.focus({ preventScroll: true });
+  };
   const page = h('div', { class: 'page page-narrow party-page report-page' },
     pageHeader({
       title: 'Party reports',
       description: 'When players flag a drawing, something another player wrote or a public word pack in YapOS Party, a copy lands here with the name of whoever made it. Ban someone to stop them joining games in every server. They can still watch.',
-      actions: state.partyOwner ? linkButton({ label: 'Party admins', href: '/party', icon: 'crown', size: 'sm' }) : null,
+      actions: h('div', { class: 'report-tools' },
+        linkButton({ label: 'Mod log', href: '/party/modlog', icon: 'clock', size: 'sm' }),
+        button({ label: 'Blocked words', icon: 'shield', size: 'sm', onClick: toBlocked }),
+        state.partyOwner ? linkButton({ label: 'Party admins', href: '/party', icon: 'crown', size: 'sm' }) : null),
     }),
-    card({ title: 'Reports', icon: 'flag', actions: h('div', { class: 'report-tools' }, openCount, kindBar, filterBar) }, listBody),
-    card({ title: 'Banned from Party', icon: 'ban', actions: banCount }, banBody));
+    card({ title: 'Reports', icon: 'flag', actions: h('div', { class: 'report-tools' }, openCount, kindBar, filterBar) }, reasonBar, listBody),
+    card({ title: 'Banned from Party', icon: 'ban', actions: banCount }, banBody),
+    blockedCard);
   main.replaceChildren(page);
 
   function segments(bar, list, current, pick) {
@@ -240,7 +309,14 @@ export function renderPartyReports(ctx) {
 
   function drawFilters() {
     segments(filterBar, FILTERS, filter, (v) => { filter = v; });
-    segments(kindBar, KINDS, kind, (v) => { kind = v; });
+    segments(kindBar, KINDS.map(([v, label]) => [v, kindLabel(v, label, flagged)]), kind, (v) => { kind = v; });
+    reasonBar.hidden = kind === 'pack' || Boolean(who);
+  }
+
+  function takeView(data) {
+    view = readReports(data, kind);
+    if (view.flagged) flagged = view.flagged;
+    drawFilters();
   }
 
   function failToast(err, title) {
@@ -293,9 +369,11 @@ export function renderPartyReports(ctx) {
     }
     const tags = isPack
       ? [badge('Word pack', 'accent', 'folder'), r.pack.blocked ? badge('Hidden from browser', 'danger', 'eye-off') : r.pack.public ? badge('Public', 'neutral', 'globe') : badge('Not public', 'neutral')]
-      : [badge(gameName(r.game, r.kind), 'accent'), badge(isText ? 'Text' : 'Drawing', 'neutral', isText ? 'message' : 'palette')];
+      : [reasonBadge(r), badge(gameName(r.game, r.kind), 'accent'), badge(isText ? 'Text' : 'Drawing', 'neutral', isText ? 'message' : 'palette')];
     if (r.status === 'dismissed') tags.push(badge('Dismissed', 'neutral'));
     if (d.banned) tags.push(badge('Banned', 'danger', 'ban'));
+    else if (d.flag) tags.push(flagBadge(d.flag));
+    if (d.notes) tags.push(noteChip(d.notes));
     if (d.role === 'owner') tags.push(badge('Owner', 'neutral', 'crown'));
     else if (d.role === 'admin') tags.push(badge('Party admin', 'neutral', 'crown'));
     const actions = [];
@@ -308,14 +386,15 @@ export function renderPartyReports(ctx) {
     const note = d.role === 'admin' && view.role !== 'owner'
       ? h('p', { class: 'report-note', text: 'Only the owner can ban a party admin.' })
       : null;
-    return h('li', { class: ['report-item', isText || isPack ? 'is-text' : '', art.classList.contains('report-replay') ? 'has-replay' : '', r.status === 'dismissed' ? 'is-dismissed' : ''], dataset: { id: r.id, kind: r.kind } },
+    return h('li', { class: ['report-item', isText || isPack ? 'is-text' : '', art.classList.contains('report-replay') ? 'has-replay' : '', r.status === 'dismissed' ? 'is-dismissed' : '', d.flag && !d.banned && r.status === 'open' ? 'is-flagged' : ''], dataset: { id: r.id, kind: r.kind } },
       art,
       h('div', { class: 'report-info' },
         h('div', { class: 'report-head' }, ...tags, h('time', { class: 'report-time', attrs: { datetime: new Date(r.created || 0).toISOString(), title: formatDate(r.created) }, text: relativeTime(r.created) })),
         h('dl', { class: 'report-facts' },
           person(isPack ? 'Made it' : isText ? 'Wrote it' : 'Drew it', d, [], openProfile),
           person('Reported by', r.reporter, [], openProfile),
-          !isText && r.word ? h('div', { class: 'report-person' }, h('dt', { class: 'report-label', text: 'Word' }), h('dd', { class: 'report-word', text: r.word })) : null),
+          !isText && r.word ? h('div', { class: 'report-person' }, h('dt', { class: 'report-label', text: 'Word' }), h('dd', { class: 'report-word', text: r.word })) : null,
+          r.reasonNote ? h('div', { class: 'report-person' }, h('dt', { class: 'report-label', text: 'Their note' }), h('dd', { class: 'report-reason-note', text: r.reasonNote })) : null),
         h('p', { class: 'report-note', text: isPack
           ? 'A signed-in player reported this public pack. Hiding it takes it off the pack browser for everyone, and its code keeps working in games.'
           : isText
@@ -351,6 +430,10 @@ export function renderPartyReports(ctx) {
       markBanned(evt.id, evt.type === 'ban');
       if (evt.type === 'ban' && evt.data?.removedAdmin) for (const x of view.reports) if (x.drawer.id.toLowerCase() === key) x.drawer.role = '';
       if (evt.data) showBans(evt.data);
+    }
+    if (evt.type === 'notes') {
+      const count = Number(evt.count) || 0;
+      for (const x of view.reports) if (x.kind !== 'pack' && x.drawer.id.toLowerCase() === key) x.drawer.notes = count;
     }
     if (evt.type === 'dismissAll') {
       const mine = (x) => x.kind !== 'pack' && x.drawer.id.toLowerCase() === key && x.status === 'open';
@@ -427,25 +510,29 @@ export function renderPartyReports(ctx) {
 
   function drawReports() {
     stopPlayers();
+    reasonBar.hidden = kind === 'pack' || Boolean(who);
     if (who) return drawHistory();
     openCount.textContent = `${view.open} open`;
     if (!view.reports.length) {
+      const picked = reason !== 'all' && kind !== 'pack';
       replace(listBody, emptyState({
         icon: 'flag',
-        title: filter === 'open' ? 'No open reports' : 'No reports here',
-        body: filter === 'open' ? `Nothing needs a look right now. ${kind === 'pack' ? 'Reported public word packs' : kind === 'text' ? 'Flagged guesses, answers and other words' : kind === 'drawing' ? 'Flagged drawings' : 'Flagged drawings and words'} show up here.` : 'Reports you dismiss stay here for 30 days.',
+        title: picked ? `No reports marked ${REASON_FILTERS.find(([v]) => v === reason)[1].toLowerCase()} here` : kind === 'flagged' ? 'No repeat offenders' : filter === 'open' ? 'No open reports' : 'No reports here',
+        body: kind === 'flagged' ? 'Someone shows up here when 2 or more people report them in 3 or more games within a week. Banned players and dismissed reports are left out.' : filter === 'open' ? `Nothing needs a look right now. ${kind === 'pack' ? 'Reported public word packs' : kind === 'text' ? 'Flagged guesses, answers and other words' : kind === 'drawing' ? 'Flagged drawings' : 'Flagged drawings and words'} show up here.` : 'Reports you dismiss stay here for 30 days.',
         compact: true,
       }));
       return;
     }
     const more = view.next ? button({ label: 'Show older reports', icon: 'chevron-down', size: 'sm', onClick: (e) => loadMore(e.currentTarget) }) : null;
-    replace(listBody, h('ul', { class: 'report-list' }, ...view.reports.map(reportItem)), more ? h('div', { class: 'report-more' }, more) : null);
+    const list = sort === 'reason' && kind !== 'pack' ? sortByReason(view.reports) : view.reports;
+    replace(listBody, h('ul', { class: 'report-list' }, ...list.map(reportItem)), more ? h('div', { class: 'report-more' }, more) : null);
   }
 
   function reportsUrl(before) {
     const q = new URLSearchParams({ status: filter });
     if (kind === 'pack') return `${PACK_REPORTS_PATH}?${q}`;
     if (kind !== 'all') q.set('kind', kind);
+    if (reason !== 'all') q.set('reason', reason);
     if (before) q.set('before', before);
     return `${REPORTS_PATH}?${q}`;
   }
@@ -457,6 +544,10 @@ export function renderPartyReports(ctx) {
       if (ctx.signal?.aborted) return;
       const seen = new Set(view.reports.map((r) => r.id));
       view = { ...data, reports: view.reports.concat(data.reports.filter((r) => !seen.has(r.id))) };
+      if (data.flagged) {
+        flagged = data.flagged;
+        drawFilters();
+      }
       drawReports();
     } catch (err) {
       if (ctx.signal?.aborted) return;
@@ -648,7 +739,7 @@ export function renderPartyReports(ctx) {
   function banRow(b) {
     const name = b.display_name || b.name || '';
     const sub = b.username ? h('span', { class: 'party-row-sub', text: `@${b.username}` }) : null;
-    const why = [b.reason, b.banned_at ? `Banned ${relativeTime(b.banned_at)}` : ''].filter(Boolean).join(' · ');
+    const why = [b.reason, b.banned_at ? `Banned ${relativeTime(b.banned_at)}` : '', b.until ? `Ends in ${timeLeft(b.until) || 'a moment'}` : ''].filter(Boolean).join(' · ');
     return h('li', { class: 'party-row', dataset: { id: b.id } },
       avatar({ name: name || b.id, url: b.avatar, id: b.id, size: 'md' }),
       h('span', { class: 'party-row-main' },
@@ -687,7 +778,7 @@ export function renderPartyReports(ctx) {
       render: (data) => {
         if (mine !== gen) return;
         if (data?.staffOnly) return denied();
-        view = readReports(data, kind);
+        takeView(data);
         drawReports();
       },
     });

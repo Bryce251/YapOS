@@ -4,6 +4,7 @@ import { GAMES } from './games/index.js';
 import { mountApp } from './ui/app.js';
 import { configureProfiles, wantProfiles } from './profiles.js';
 import { configureAdmins, refreshAdmins } from './admin.js';
+import { startBlocked } from './blocked.js';
 
 function idsOf(bridge, list) {
   const ids = (Array.isArray(list) ? list : []).map((p) => (p && typeof p === 'object' ? p.id ?? p.user_id ?? p.userId : p));
@@ -26,6 +27,7 @@ export function boot(win) {
   if (!root) return null;
   configureProfiles({ win });
   configureAdmins({ win });
+  startBlocked({ win }).catch(() => false);
   const bridge = connect({ win });
   const engine = createEngine({ transport: bridge, games: GAMES });
   const app = mountApp({ root, engine, bridge, win, signin: { dev: Boolean(bridge.dev) } });

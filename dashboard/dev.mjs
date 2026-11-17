@@ -16,6 +16,7 @@ import { encodeStroke } from './web/activity/js/games/ink.js';
 import { cleanReplay } from './worker/reports.js';
 import { monthOf, prevMonth } from './worker/party-leaderboard.js';
 import { dayKey } from './web/activity/js/daily.js';
+import { customKey } from './web/activity/js/filter.js';
 import { seedOwnerPanel, createOwnerSim, botHandlesOwner } from './dev/owner-sim.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -239,7 +240,8 @@ export async function withDevPartyOwner(response, url) {
   headers.set('Cache-Control', 'no-store');
   headers.delete('Content-Length');
   const banned = (Array.isArray(body.banned) ? body.banned : []).filter((id) => id !== DEV_PARTY_OWNER);
-  return new Response(JSON.stringify({ admins: ids.filter((id) => given.has(id)), owner: DEV_PARTY_OWNER, banned }), { status: 200, headers });
+  const until = body.until && typeof body.until === 'object' ? Object.fromEntries(Object.entries(body.until).filter(([id]) => banned.includes(id))) : {};
+  return new Response(JSON.stringify({ admins: ids.filter((id) => given.has(id)), owner: DEV_PARTY_OWNER, banned, ...(Object.keys(until).length ? { until, now: body.now } : {}) }), { status: 200, headers });
 }
 
 export function seedPartyAdmins(db, ownerId, t = Date.now()) {
@@ -332,12 +334,28 @@ export function seedPartyReport(db, t = Date.now()) {
   past.run(DEV_PAST_REPORT_IDS[0], 'draw', rex.id, rex.display_name, rex.username, artists[1].id, artists[1].display_name, JSON.stringify(ink), 'rainbow', t - 6 * DAY, t - 6 * DAY, t - 6 * DAY + 3_600_000, IDS.owner);
   keep.run(DEV_PAST_REPORT_IDS[0], JSON.stringify(cleanReplay({ v: 1, kind: 'ink', authors: [{ id: rex.id, name: rex.display_name }], events: ink.map((s, i) => [0, 1500 + i * 2600, s]) }, 'draw', rex.id)), t - 6 * DAY);
   past.run(DEV_PAST_REPORT_IDS[1], 'sketchduel', rex.id, rex.display_name, rex.username, artists[2].id, artists[2].display_name, JSON.stringify(ink.slice(0, 3)), 'snowman', t - 12 * DAY, t - 12 * DAY, t - 11 * DAY, IDS.owner);
+  const flagged = db.raw.prepare("INSERT INTO party_reports (id, game, drawer_id, drawer_name, drawer_username, reporter_id, reporter_name, ink, word, at, created, ip_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open') ON CONFLICT (id) DO NOTHING");
+  flagged.run(DEV_FLAG_REPORT_IDS[0], 'telephone', rex.id, rex.display_name, rex.username, artists[1].id, artists[1].display_name, JSON.stringify(ink.slice(0, 4)), 'volcano', t - DAY, t - DAY, 'dev-flag-1');
+  flagged.run(DEV_FLAG_REPORT_IDS[1], 'sketchduel', rex.id, rex.display_name, rex.username, artists[2].id, artists[2].display_name, JSON.stringify(ink.slice(1, 5)), 'robot', t - 3 * DAY, t - 3 * DAY, 'dev-flag-2');
+  const why = db.raw.prepare('INSERT INTO party_report_reasons (report_id, reason, note, created) VALUES (?, ?, ?, ?) ON CONFLICT (report_id) DO NOTHING');
+  why.run(DEV_TEXT_REPORT_ID, 'rude', null, t - 2 * 60_000);
+  why.run(DEV_ODD_REPORT_ID, 'other', 'They drew over everyone else on purpose', t - 4 * 60_000);
+  why.run(DEV_PIXEL_REPORT_ID, 'spam', null, t - 3 * 60_000);
+  why.run(DEV_FLAG_REPORT_IDS[0], 'rude', null, t - DAY);
+  why.run(DEV_FLAG_REPORT_IDS[1], 'cheating', null, t - 3 * DAY);
+  const note = db.raw.prepare('INSERT INTO party_mod_notes (id, user_id, author_id, author_name, text, created) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING');
+  const juno = fakeProfile(DEV_PARTY_ADMIN);
+  note.run(DEV_NOTE_IDS[0], top.id, DEV_PARTY_ADMIN, juno.display_name, 'Warned in a Pixel Art game about copying other players and then taking credit.', t - 2 * DAY);
+  note.run(DEV_NOTE_IDS[1], top.id, IDS.owner, 'Jolli', 'Watch: said sorry in chat. Give them another chance, but look again if a new report comes in.', t - 3 * 3_600_000);
+  note.run(DEV_NOTE_IDS[2], rex.id, DEV_PARTY_ADMIN, juno.display_name, 'Ban appeal: asked to be unbanned after the Sketch Duel ban and promised to keep drawings friendly.', t - 9 * DAY);
   const log = db.raw.prepare('INSERT INTO party_ban_log (id, user_id, action, reason, by_id, at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING');
   log.run('devbanlog0001', rex.id, 'ban', 'Rude drawings in Sketch Duel', IDS.owner, t - 11 * DAY);
   log.run('devbanlog0002', rex.id, 'unban', null, IDS.owner, t - 9 * DAY);
 }
 
 export const DEV_PAST_REPORT_IDS = Object.freeze(['devreport0005', 'devreport0006']);
+export const DEV_FLAG_REPORT_IDS = Object.freeze(['devreport0007', 'devreport0008']);
+export const DEV_NOTE_IDS = Object.freeze(['devnote0001', 'devnote0002', 'devnote0003']);
 
 export const DEV_ODD_REPORT_ID = 'devreport0003';
 export const DEV_PIXEL_REPORT_ID = 'devreport0004';
@@ -498,6 +516,73 @@ export function seedSeason(db, t = Date.now()) {
 }
 
 export const DEV_LEADERBOARD_GAMES = ['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel', 'typerace', 'memory', 'beatdrop', 'closest', 'namefive'];
+
+export const DEV_CHEATER_ID = 'de7e0000-0000-4000-8000-0000000000d0';
+
+export function seedCheatAlerts(db, t = Date.now()) {
+  db.raw.prepare('INSERT INTO party_points (user_id, name, username, points, games, wins, best, best_game, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING').run(DEV_CHEATER_ID, 'XD', 'xd', 412_000, 180, 171, 50_000, 'trivia', t);
+  db.raw.prepare("INSERT INTO party_stats (user_id, games, wins, by_game, counters, updated) VALUES (?, 180, 171, '{}', '{}', ?) ON CONFLICT (user_id) DO NOTHING").run(DEV_CHEATER_ID, t);
+  const alert = db.raw.prepare("INSERT INTO party_cheat_alerts (id, user_id, kind, name, detail, first_at, last_at, count, status) VALUES (?, ?, ?, 'XD', ?, ?, ?, ?, 'open') ON CONFLICT (user_id, kind) DO NOTHING");
+  alert.run('devcheat0001', DEV_CHEATER_ID, 'daily_points', 'Hit the 100,000 daily points cap on 3 of the last 7 days', t - 3 * 86_400_000, t - 3_600_000, 3);
+  alert.run('devcheat0002', DEV_CHEATER_ID, 'game_cap', '50,000 in one Trivia game = the cap', t - 2 * 86_400_000, t - 7_200_000, 4);
+  alert.run('devcheat0003', DEV_CHEATER_ID, 'win_rate', 'Won 171 of 180 Party games (95%)', t - 86_400_000, t - 600_000, 1);
+}
+
+export function seedBlockedWords(db, t = Date.now()) {
+  const row = db.raw.prepare('INSERT INTO party_blocked_words (id, word, key, added_by, added_name, created) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (key) DO NOTHING');
+  row.run('devword00001', 'pineapple pizza', 'pineaple piza', IDS.owner, 'Jolli', t - 86_400_000);
+  const juno = fakeProfile(DEV_PARTY_ADMIN);
+  row.run('devword00002', 'skibidi', customKey('skibidi'), DEV_PARTY_ADMIN, juno.display_name, t - 3_600_000);
+  row.run('devword00003', 'sussy baka', customKey('sussy baka'), DEV_PARTY_ADMIN, juno.display_name, t - 20 * 60_000);
+}
+
+export const DEV_TEMP_BANNED = DEV_ARTISTS[3];
+export const DEV_EXPIRED_BAN = DEV_ARTISTS[2];
+export const DEV_WARNED = IDS.member;
+export const DEV_WARNING_IDS = Object.freeze(['devwarn00001', 'devwarn00002']);
+
+export function seedPartyModeration(db, t = Date.now()) {
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+  const DAY = 24 * HOUR;
+  const juno = fakeProfile(DEV_PARTY_ADMIN);
+  const rex = fakeProfile(DEV_REPORT_DRAWER);
+  const temp = fakeProfile(DEV_TEMP_BANNED);
+  const gone = fakeProfile(DEV_EXPIRED_BAN);
+  const top = fakeProfile(DEV_ARTISTS[0]);
+  const sam = TEST_USERS.find((u) => u.id === DEV_WARNED);
+  const samName = (sam && sam.display_name) || 'Sam';
+  db.raw.prepare('INSERT INTO party_bans (id, name, username, reason, banned_by, banned_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING')
+    .run(temp.id, temp.display_name, temp.username, 'Spamming the chat in Word Chain', DEV_PARTY_ADMIN, t - 2 * HOUR);
+  db.raw.prepare("INSERT INTO party_ban_terms (user_id, until, duration, set_at) VALUES (?, ?, 'day', ?) ON CONFLICT (user_id) DO NOTHING")
+    .run(temp.id, t - 2 * HOUR + DAY, t - 2 * HOUR);
+  const banLog = db.raw.prepare('INSERT INTO party_ban_log (id, user_id, action, reason, by_id, at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING');
+  banLog.run('devbanlog0003', temp.id, 'ban', 'Spamming the chat in Word Chain', DEV_PARTY_ADMIN, t - 2 * HOUR);
+  banLog.run('devbanlog0004', gone.id, 'ban', 'Rude guesses in Draw', IDS.owner, t - 8 * DAY);
+  banLog.run('devbanlog0005', gone.id, 'unban', 'The ban ran out', 'yapos', t - DAY);
+  const warn = db.raw.prepare('INSERT INTO party_warnings (id, user_id, author_id, author_name, text, created, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING');
+  warn.run(DEV_WARNING_IDS[0], DEV_WARNED, DEV_PARTY_ADMIN, juno.display_name, 'Keep drawings clean, please. Next time it is a ban.', t - 20 * MIN, null);
+  warn.run(DEV_WARNING_IDS[1], rex.id, IDS.owner, 'Jolli', 'Keep drawings friendly in Sketch Duel.', t - 10 * DAY, t - 10 * DAY + HOUR);
+  const log = db.raw.prepare('INSERT INTO party_mod_log (id, actor_id, actor_name, action, target_id, target_name, detail, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING');
+  const rows = [
+    ['devmodlog0001', IDS.owner, 'Jolli', 'ban', rex.id, rex.display_name, { duration: 'forever', reason: 'Rude drawings in Sketch Duel' }, t - 11 * DAY],
+    ['devmodlog0002', IDS.owner, 'Jolli', 'dismiss', rex.id, rex.display_name, { report: DEV_PAST_REPORT_IDS[1], game: 'sketchduel' }, t - 11 * DAY + MIN],
+    ['devmodlog0003', IDS.owner, 'Jolli', 'warn', rex.id, rex.display_name, { text: 'Keep drawings friendly in Sketch Duel.' }, t - 10 * DAY],
+    ['devmodlog0004', DEV_PARTY_ADMIN, juno.display_name, 'note_add', rex.id, rex.display_name, { note: DEV_NOTE_IDS[2] }, t - 9 * DAY],
+    ['devmodlog0005', IDS.owner, 'Jolli', 'unban', rex.id, rex.display_name, null, t - 9 * DAY + MIN],
+    ['devmodlog0006', IDS.owner, 'Jolli', 'ban', gone.id, gone.display_name, { duration: 'week', reason: 'Rude guesses in Draw' }, t - 8 * DAY],
+    ['devmodlog0007', IDS.owner, 'Jolli', 'dismiss', rex.id, rex.display_name, { report: DEV_PAST_REPORT_IDS[0], game: 'draw' }, t - 6 * DAY + HOUR],
+    ['devmodlog0008', DEV_PARTY_ADMIN, juno.display_name, 'note_add', top.id, top.display_name, { note: DEV_NOTE_IDS[0] }, t - 2 * DAY],
+    ['devmodlog0009', 'yapos', 'YapOS', 'ban_expire', gone.id, gone.display_name, { duration: 'week' }, t - DAY],
+    ['devmodlog0010', IDS.owner, 'Jolli', 'word_add', null, null, { word: 'pineapple pizza' }, t - DAY],
+    ['devmodlog0011', IDS.owner, 'Jolli', 'note_add', top.id, top.display_name, { note: DEV_NOTE_IDS[1] }, t - 3 * HOUR],
+    ['devmodlog0012', DEV_PARTY_ADMIN, juno.display_name, 'ban', temp.id, temp.display_name, { duration: 'day', reason: 'Spamming the chat in Word Chain' }, t - 2 * HOUR],
+    ['devmodlog0013', DEV_PARTY_ADMIN, juno.display_name, 'word_add', null, null, { word: 'skibidi' }, t - HOUR],
+    ['devmodlog0014', DEV_PARTY_ADMIN, juno.display_name, 'warn', DEV_WARNED, samName, { text: 'Keep drawings clean, please. Next time it is a ban.' }, t - 20 * MIN],
+    ['devmodlog0015', DEV_PARTY_ADMIN, juno.display_name, 'word_add', null, null, { word: 'sussy baka' }, t - 20 * MIN + 1],
+  ];
+  for (const [id, actor, actorName, action, target, targetName, detail, at] of rows) log.run(id, actor, actorName, action, target, targetName, detail ? JSON.stringify(detail) : null, at);
+}
 
 export function seedPartyLeaderboard(db, t = Date.now()) {
   const rand = devRandom(4242);
@@ -911,6 +996,9 @@ export async function startDev({
   seedPublicPacks(db);
   seedSeason(db);
   seedPartyLeaderboard(db);
+  seedCheatAlerts(db);
+  seedBlockedWords(db);
+  seedPartyModeration(db);
   seedServerStats(db, IDS.server);
   seedOwnerPanel(db);
 
@@ -1029,7 +1117,7 @@ async function main() {
     `Fake Yapin' sign-in is at ${dev.oauthUrl}`,
     `YapOS Party test call is at ${dev.url}/activity-dev/`,
     `Test server: Test Town (${dev.serverId})`,
-    'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party and see a sample flagged drawing and a flagged Hot Takes answer at /party/reports. Click Rex there to open his profile panel with every report, a past replay and his ban history.',
+    'YapOS Party: Pip (the first player) is the owner and Juno is an extra admin. Sign in as Jolli to manage party admins at /party and see a sample flagged drawing and a flagged Hot Takes answer at /party/reports. Rex is flagged as a repeat offender, so his reports sit at the top and under Flagged. Click Rex there to open his profile panel with every report, a past replay, his ban history and a mod note. The Pixel Art artist has a couple of mod notes too.',
     'Party leaderboard: the This month tab is filled in, and last month\'s top 3 have Party badges (Jolli is #2, with the new skill badges too).',
     `Word packs: sign in as Jolli and open /packs to edit the sample pack. Type the code ${DEV_PACK_CODE} into Draw & Guess or Trivia settings to play with it.`,
     "Daily puzzle: today's Letter Hive and Scramble already have a few scores on the leaderboard (/api/activity/daily/top?kind=hive).",

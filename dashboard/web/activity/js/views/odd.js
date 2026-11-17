@@ -540,8 +540,7 @@ export function createOddView({ engine, fx, toast, win, cues }) {
 
   function flag() {
     if (!snapLast) return;
-    flagDrawing({ engine, snap: snapLast, game: 'odd', item: odd.drawingOf(snapLast), local: flagged, toast: say });
-    update(engine.snapshot());
+    flagDrawing({ engine, snap: snapLast, game: 'odd', item: odd.drawingOf(snapLast), local: flagged, toast: say, after: () => update(engine.snapshot()) });
   }
 
   function flagFor(next, m) {

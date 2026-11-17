@@ -3,6 +3,7 @@ import { idOf, people, person, cleanName, initials, hueOf } from './players.js';
 import { censor } from './filter.js';
 import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins, sendTextReport, sendResults, allowResultGames } from './admin.js';
 import { cleanShared } from './text.js';
+import { reasonOf } from './admin.js';
 import {
   FUN,
   REACTIONS,
@@ -1399,7 +1400,7 @@ export function createEngine(opts) {
     textTimes.set(from, times.concat([at]));
     while (textTimes.size > TEXT_REPORT_KEEP) textTimes.delete(textTimes.keys().next().value);
     const me = personFor(from);
-    const body = { kind: 'text', game: game.id, author: personFor(authorId), reporter: { id: me.id, name: me.name }, text: item.text, context: item.context, at };
+    const body = { kind: 'text', game: game.id, author: personFor(authorId), reporter: { id: me.id, name: me.name }, text: item.text, context: item.context, at, ...reasonOf({ reason: data.y, reasonNote: data.o }) };
     try {
       Promise.resolve(postText(body)).catch(() => false);
     } catch {}
@@ -2032,7 +2033,7 @@ export function createEngine(opts) {
     return broadcast(msg);
   }
 
-  function report(r) {
+  function report(r, why = null) {
     const room = read(ROOM);
     const id = meId();
     if (destroyed || !room || !validTextRef(r) || !id || slotOf(id) === null) return 'no';
@@ -2042,7 +2043,8 @@ export function createEngine(opts) {
     const at = now();
     myTimes = myTimes.filter((x) => at - x < TEXT_REPORT_WINDOW_MS);
     if (myTimes.length >= TEXT_REPORT_LIMIT) return 'slow';
-    const msg = { t: 'rpt', g: room.game, r };
+    const pick = reasonOf(why);
+    const msg = { t: 'rpt', g: room.game, r, ...(pick.reason ? { y: pick.reason } : {}), ...(pick.reasonNote ? { o: pick.reasonNote } : {}) };
     const ok = isHost() ? reportText(id, msg) : broadcast(msg);
     if (!ok) return 'no';
     myReports.add(mark);

@@ -133,6 +133,10 @@ test('a reported pack shows up for the party team, who can hide it from the brow
   assert.equal(all.reports.length, 1);
   assert.equal((await h.api('GET', '/api/party/pack-reports?status=weird', alice)).status, 400);
   assert.equal((await h.api('POST', '/api/party/pack-reports/nope/dismiss', alice)).status, 404);
+  assert.equal((await h.api('POST', `/api/party/pack-reports/${r.id}/restore`, alice)).status, 200);
+  const log = h.db.raw.prepare('SELECT action, target_id, detail FROM party_mod_log ORDER BY created ASC, rowid ASC').all();
+  assert.deepEqual(log.map((x) => x.action), ['pack_hide', 'pack_restore']);
+  assert.ok(log.every((x) => x.target_id === BOB.id && JSON.parse(x.detail).pack === 'Space night'));
 });
 
 test('a report can be dismissed and deleting a pack clears its likes and reports', async () => {
@@ -143,6 +147,8 @@ test('a report can be dismissed and deleting a pack clears its likes and reports
   const list = await (await h.api('GET', '/api/party/pack-reports', alice)).json();
   const dismissed = await h.api('POST', `/api/party/pack-reports/${list.reports[0].id}/dismiss`, alice);
   assert.deepEqual(await dismissed.json(), { ok: true, dismissed: true });
+  assert.deepEqual(await (await h.api('POST', `/api/party/pack-reports/${list.reports[0].id}/dismiss`, alice)).json(), { ok: true, dismissed: false });
+  assert.deepEqual(h.db.raw.prepare('SELECT action FROM party_mod_log').all().map((x) => x.action), ['pack_dismiss']);
   assert.equal((await h.api('DELETE', `/api/packs/${space.code}`, bob)).status, 200);
   for (const table of ['pack_public', 'pack_likes', 'pack_reports']) {
     assert.equal(h.db.raw.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0, table);

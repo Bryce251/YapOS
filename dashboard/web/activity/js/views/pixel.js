@@ -2,6 +2,7 @@ import pixel, { SIZE, CELLS, PALETTE, EMPTY, MAX_BATCH, encodeCells } from '../g
 import { h, memo, timer, button, plural } from '../ui/dom.js';
 import { flagModel, flagLabel, FLAG_ICON } from './draw.js';
 import { sendReport } from '../admin.js';
+import { pickReason } from '../ui/report.js';
 import { pixelReport } from '../games/replaylog.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
@@ -252,15 +253,17 @@ export function createPixelView({ engine, fx, cues, toast, win }) {
     ];
   });
 
-  function flag(f) {
+  async function flag(f) {
     if (!f || f.mine) return;
+    const why = await pickReason();
+    if (!why) return;
     if (!engine || typeof engine.flag !== 'function' || !engine.flag(f.d)) {
       tell(FLAG_FAIL);
       return;
     }
     flagged.add(f.d);
     const body = snap ? pixelReport(snap) : null;
-    if (body) sendReport(f.d, body).catch(() => false);
+    if (body) sendReport(f.d, { ...body, ...why }).catch(() => false);
     tell(FLAG_SENT);
     if (snap) update(snap);
   }

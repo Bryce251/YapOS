@@ -26,6 +26,9 @@ export const LIMITS = {
   stats: 30,
   leaderboard: 120,
   partyProfile: 90,
+  modNotes: 10,
+  modWarnings: 10,
+  activityWarnings: 30,
 };
 
 export async function hit(db, key, limit, t, weight = 1) {

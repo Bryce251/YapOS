@@ -138,6 +138,14 @@ CREATE TABLE IF NOT EXISTS party_report_replays (
   created INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS party_report_reasons (
+  report_id TEXT PRIMARY KEY,
+  reason TEXT NOT NULL,
+  note TEXT,
+  created INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_report_reasons_reason ON party_report_reasons (reason, report_id);
+
 CREATE TABLE IF NOT EXISTS party_bans (
   id TEXT PRIMARY KEY,
   name TEXT,
@@ -158,6 +166,52 @@ CREATE TABLE IF NOT EXISTS party_ban_log (
 );
 CREATE INDEX IF NOT EXISTS party_ban_log_user ON party_ban_log (user_id, at);
 CREATE INDEX IF NOT EXISTS party_reports_drawer ON party_reports (drawer_id, created);
+CREATE INDEX IF NOT EXISTS party_reports_flag ON party_reports (status, created, drawer_id, reporter_id, game, ip_hash);
+
+CREATE TABLE IF NOT EXISTS party_mod_notes (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  author_id TEXT NOT NULL,
+  author_name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_mod_notes_user ON party_mod_notes (user_id, created);
+
+CREATE TABLE IF NOT EXISTS party_ban_terms (
+  user_id TEXT PRIMARY KEY,
+  until INTEGER NOT NULL,
+  duration TEXT NOT NULL,
+  set_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_ban_terms_until ON party_ban_terms (until);
+
+CREATE TABLE IF NOT EXISTS party_warnings (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  author_id TEXT NOT NULL,
+  author_name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created INTEGER NOT NULL,
+  seen_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS party_warnings_user ON party_warnings (user_id, created);
+CREATE INDEX IF NOT EXISTS party_warnings_created ON party_warnings (created);
+
+CREATE TABLE IF NOT EXISTS party_mod_log (
+  id TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL,
+  actor_name TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_id TEXT,
+  target_name TEXT,
+  detail TEXT,
+  created INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_mod_log_created ON party_mod_log (created, id);
+CREATE INDEX IF NOT EXISTS party_mod_log_actor ON party_mod_log (actor_id, created);
+CREATE INDEX IF NOT EXISTS party_mod_log_action ON party_mod_log (action, created);
+CREATE INDEX IF NOT EXISTS party_mod_log_target ON party_mod_log (target_id, action, created);
 
 CREATE TABLE IF NOT EXISTS party_stats (
   user_id TEXT PRIMARY KEY,
@@ -457,3 +511,50 @@ CREATE TABLE IF NOT EXISTS activity_sessions (
 );
 CREATE INDEX IF NOT EXISTS activity_sessions_user ON activity_sessions (user_id);
 CREATE INDEX IF NOT EXISTS activity_sessions_expires ON activity_sessions (expires);
+
+CREATE TABLE IF NOT EXISTS party_blocked_words (
+  id TEXT PRIMARY KEY,
+  word TEXT NOT NULL,
+  key TEXT NOT NULL UNIQUE,
+  added_by TEXT NOT NULL,
+  added_name TEXT,
+  created INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_blocked_words_created ON party_blocked_words (created);
+
+CREATE TABLE IF NOT EXISTS party_cheat_alerts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT,
+  detail TEXT NOT NULL,
+  first_at INTEGER NOT NULL,
+  last_at INTEGER NOT NULL,
+  count INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'open',
+  handled_by TEXT,
+  handled_at INTEGER,
+  UNIQUE (user_id, kind)
+);
+CREATE INDEX IF NOT EXISTS party_cheat_alerts_status ON party_cheat_alerts (status, last_at);
+
+CREATE TABLE IF NOT EXISTS party_cheat_days (
+  user_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  PRIMARY KEY (user_id, kind, day)
+);
+CREATE INDEX IF NOT EXISTS party_cheat_days_day ON party_cheat_days (day);
+
+CREATE TABLE IF NOT EXISTS party_cheat_pairs (
+  a TEXT NOT NULL,
+  b TEXT NOT NULL,
+  day TEXT NOT NULL,
+  games INTEGER NOT NULL DEFAULT 0,
+  wins_a INTEGER NOT NULL DEFAULT 0,
+  wins_b INTEGER NOT NULL DEFAULT 0,
+  fast INTEGER NOT NULL DEFAULT 0,
+  last_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (a, b, day)
+);
+CREATE INDEX IF NOT EXISTS party_cheat_pairs_day ON party_cheat_pairs (day);

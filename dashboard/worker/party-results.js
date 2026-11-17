@@ -2,10 +2,12 @@ import { MINUTE, DAY, ID_RE, HttpError, json, fail, readJson, isPlainObject, cli
 import { hit, tooMany, LIMITS } from './rate.js';
 import { cleanText } from './profiles.js';
 import { reportIpHash } from './reports.js';
+import { activeBanIds } from './party-mod.js';
 import { PARTY_BADGES, COUNTER_GAMES, COUNTER_KEYS, badgesFor, applySkills, SKILL_KEYS, SKILL_GAMES, SKILL_GAME_CAPS, PERFECT_MIN_QUESTIONS, PERFECT_MAX_QUESTIONS } from './party-badges.js';
 import { MAX_PREDICTIONS, REASON_DAILY_LIMIT, loadRates, shardWants, shardStatement, shardTotals, shardReasonCounts, shardsPoll, ackShards, shardsCleanupStatements } from './party-shards.js';
 import { ackSettings } from './public-profiles.js';
 import { pointsStatements, pointsCleanupStatements } from './party-leaderboard.js';
+import { detectCheats, cheatsCleanupStatements } from './party-cheats.js';
 
 export const PARTY_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel', 'typerace', 'memory', 'beatdrop', 'closest', 'namefive']);
 export const MAX_PLAYERS = 16;
@@ -173,13 +175,6 @@ function readStats(row) {
   };
 }
 
-async function idSet(db, table, ids) {
-  if (!ids.length) return new Set();
-  const marks = ids.map(() => '?').join(', ');
-  const res = await db.prepare(`SELECT id FROM ${table} WHERE id IN (${marks})`).bind(...ids).all();
-  return new Set(((res && res.results) || []).map((r) => String(r.id).toLowerCase()));
-}
-
 export async function postResults(request, env, t) {
   if (request.method !== 'POST') return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   const origin = request.headers.get('Origin');
@@ -206,7 +201,7 @@ export async function postResults(request, env, t) {
   const [statRes, xpRes, banned, rates, shardSums, reasonCounts] = await Promise.all([
     db.prepare(`SELECT user_id, games, wins, by_game, counters FROM party_stats WHERE user_id IN (${marks})`).bind(...ids).all(),
     db.prepare(`SELECT user_id, SUM(xp) AS total FROM party_xp WHERE day = ? AND user_id IN (${marks}) GROUP BY user_id`).bind(day, ...ids).all(),
-    idSet(db, 'party_bans', everyone),
+    activeBanIds(db, everyone, t),
     loadRates(db),
     shardTotals(db, everyone, day),
     shardReasonCounts(db, everyone, day),
@@ -260,6 +255,7 @@ export async function postResults(request, env, t) {
     await db.prepare('DELETE FROM party_results WHERE hash = ? AND created = ?').bind(hash, t).run().catch(() => {});
     throw err;
   }
+  await detectCheats(db, result, banned, day, t).catch(() => []);
   return json({ ok: true, counted: true, xp: given, shards }, 201);
 }
 
@@ -360,5 +356,6 @@ export function resultsCleanupStatements(db, t) {
     db.prepare('DELETE FROM party_xp WHERE (claimed > 0 AND at < ?) OR at < ?').bind(t - XP_KEEP_CLAIMED, t - XP_KEEP_UNCLAIMED),
     ...shardsCleanupStatements(db, t),
     ...pointsCleanupStatements(db, t),
+    ...cheatsCleanupStatements(db, t),
   ];
 }

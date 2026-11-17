@@ -1,6 +1,7 @@
 import { HttpError, isPlainObject, parseJsonSafe } from './util.js';
 import { LEADERBOARD_GAMES, pointCap, monthOf, clearLeaderboardCache, offBoard } from './party-leaderboard.js';
 import { clearPartyProfileCache } from './party-profile.js';
+import { activeBan } from './party-mod.js';
 import { PARTY_GAMES, PARTY_BADGE_COUNTERS } from '../web/js/community-data.js';
 
 export const PARTY_POINTS_MAX = 1e9;
@@ -115,14 +116,14 @@ export async function partyBoardView(db, id, t, counters = {}) {
     db.prepare('SELECT points FROM party_points_day WHERE user_id = ? AND day = ?').bind(id, day).first(),
     db.prepare('SELECT games FROM party_games_day WHERE user_id = ? AND day = ?').bind(id, day).first(),
     db.prepare('SELECT by_id, at FROM party_board_hidden WHERE user_id = ?').bind(id).first(),
-    db.prepare('SELECT 1 AS x FROM party_bans WHERE id = ?').bind(id).first(),
+    activeBan(db, id, t),
   ]);
   const points = num(pts && pts.points);
   const monthPoints = num(mon && mon.points);
   const off = Boolean(hidden || banned);
   const [rank, monthRank] = await Promise.all([
-    !off && points > 0 ? rankAbove(db, `SELECT COUNT(*) AS n FROM party_points p WHERE p.points > ? AND ${offBoard('p.user_id')}`, [points]) : null,
-    !off && monthPoints > 0 ? rankAbove(db, `SELECT COUNT(*) AS n FROM party_points_month m WHERE m.month = ? AND m.points > ? AND ${offBoard('m.user_id')}`, [month, monthPoints]) : null,
+    !off && points > 0 ? rankAbove(db, `SELECT COUNT(*) AS n FROM party_points p WHERE p.points > ? AND ${offBoard('p.user_id', t)}`, [points]) : null,
+    !off && monthPoints > 0 ? rankAbove(db, `SELECT COUNT(*) AS n FROM party_points_month m WHERE m.month = ? AND m.points > ? AND ${offBoard('m.user_id', t)}`, [month, monthPoints]) : null,
   ]);
   const c = isPlainObject(counters) ? counters : {};
   const bestGame = pts && typeof pts.best_game === 'string' && GAME_SET.has(pts.best_game) ? pts.best_game : null;

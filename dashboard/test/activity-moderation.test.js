@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { room, person, seeded } from './activity-kit.test.js';
+import { pickIn } from './reason-pick.js';
 import { installDom, FakeEvent } from './dom-shim.js';
 import {
   configureAdmins,
@@ -506,12 +507,16 @@ test('the draw view shows a Flag button to guessers, sends one report and shows 
   assert.ok(btn);
   assert.match(text(btn), /Flag/);
   btn.dispatchEvent(new FakeEvent('click', { bubbles: true }));
+  assert.equal(log.filter((x) => x.url === REPORTS_ENDPOINT).length, 0, 'nothing is sent before a reason is picked');
+  await pickIn('other', 'drew   something gross\n on purpose');
   await r.clock.advance(400);
   await new Promise((res) => setImmediate(res));
   guestView.update(guessers[0].snapshot());
   const reports = log.filter((x) => x.url === REPORTS_ENDPOINT);
   assert.equal(reports.length, 1);
   const body = JSON.parse(reports[0].init.body);
+  assert.equal(body.reason, 'other');
+  assert.equal(body.reasonNote, 'drew something gross on purpose');
   assert.equal(body.game, 'draw');
   assert.equal(body.drawer.id, drawer.snapshot().me);
   assert.equal(body.reporter.id, guessers[0].snapshot().me);
@@ -525,6 +530,7 @@ test('the draw view shows a Flag button to guessers, sends one report and shows 
   other.update(guessers[1].snapshot());
   assert.match(text(byKey(other.el, 'flag')), /Flag \(1 of 2\)/);
   byKey(other.el, 'flag').dispatchEvent(new FakeEvent('click', { bubbles: true }));
+  await pickIn('rude');
   await r.clock.advance(400);
   guestView.update(guessers[0].snapshot());
   drawerView.update(drawer.snapshot());
@@ -548,6 +554,7 @@ test('the odd and telephone views show the Flag button under the drawing', async
   const btn = byKey(v.el, 'flag');
   assert.ok(btn);
   btn.dispatchEvent(new FakeEvent('click', { bubbles: true }));
+  await pickIn('spam');
   await r.clock.advance(400);
   v.update(viewer.snapshot());
   assert.equal(byKey(v.el, 'flag'), null);

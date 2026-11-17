@@ -353,6 +353,10 @@ export function findBlocked(raw) {
   scan(tokenize(list, false, true), loose);
   scan(tokenize(list, false, false), loose);
   const hits = fine.concat(loose.filter(([a, b]) => !overlaps(fine, a, b)));
+  if (customCompact.size) {
+    const memo = new Map();
+    for (const [split, leet] of [[true, true], [true, false], [false, true], [false, false]]) scanCustom(tokenize(list, split, leet), hits, memo);
+  }
   NUMBERS.lastIndex = 0;
   let m = NUMBERS.exec(text);
   while (m) {
@@ -372,6 +376,7 @@ export function isBlockedWord(word, { strict = false } = {}) {
   const w = String(word ?? '').trim().toLowerCase();
   if (!w) return false;
   if (strict && gameHit(w)) return true;
+  if (customCompact.size && hasCustom(w)) return true;
   if (SAFE.has(w)) return false;
   if (/^[a-z]+$/.test(w)) return WORD_RE.test(w) || PHRASE_RE.test(w) || variant(w) || stemHit(w);
   return findBlocked(w).length > 0;
@@ -392,4 +397,97 @@ export function censor(raw) {
     at = s.end;
   }
   return { text: out + text.slice(at), changed: true };
+}
+
+export const CUSTOM_MAX = 500;
+export const CUSTOM_CHARS = 40;
+export const CUSTOM_INSIDE = 6;
+
+let customSpaced = new Set();
+let customCompact = new Set();
+let customInside = new Map();
+let customLongest = 0;
+let customWords = 1;
+
+function squeeze(s) {
+  return s.replace(/([a-z])\1+/g, '$1');
+}
+
+export function customKey(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text || Array.from(text).length > CUSTOM_CHARS) return '';
+  return normalizeForFilter(text.replace(/^[\s.,!?;:'"()[\]{}]+|[\s.,!?;:'"()[\]{}]+$/g, '')).text;
+}
+
+export function setCustomTerms(list, { encoded = true } = {}) {
+  const spaced = new Set();
+  const compact = new Set();
+  for (const raw of Array.isArray(list) ? list.slice(0, CUSTOM_MAX) : []) {
+    if (typeof raw !== 'string') continue;
+    const key = customKey(encoded ? decodeTerm(raw) : raw);
+    const flat = key.replace(/ /g, '');
+    if (flat.length < 2) continue;
+    spaced.add(key);
+    compact.add(squeeze(flat));
+  }
+  customSpaced = spaced;
+  customCompact = compact;
+  customInside = new Map();
+  for (const x of compact) {
+    if (x.length < CUSTOM_INSIDE) continue;
+    const head = x.slice(0, 3);
+    if (!customInside.has(head)) customInside.set(head, []);
+    customInside.get(head).push(x);
+  }
+  customLongest = Math.max(0, ...[...compact].map((x) => x.length));
+  customWords = Math.max(1, ...[...spaced].map((x) => x.split(' ').length));
+  return compact.size;
+}
+
+export function customTermCount() {
+  return customCompact.size;
+}
+
+function customMatch(flat) {
+  if (customCompact.has(flat)) return true;
+  if (flat.length > 3 && flat.endsWith('s') && (customCompact.has(flat.slice(0, -1)) || (flat.endsWith('es') && customCompact.has(flat.slice(0, -2))))) return true;
+  if (flat.length < CUSTOM_INSIDE || !customInside.size) return false;
+  for (let k = 0; k + CUSTOM_INSIDE <= flat.length; k += 1) {
+    const list = customInside.get(flat.slice(k, k + 3));
+    if (list && list.some((x) => flat.startsWith(x, k))) return true;
+  }
+  return false;
+}
+
+function scanCustom(tokens, hits, memo = new Map()) {
+  const n = tokens.length;
+  for (let i = 0; i < n; i += 1) {
+    const words = [];
+    let short = true;
+    for (let j = i; j < n && j - i < MAX_SPAN; j += 1) {
+      const t = squeeze(tokens[j].text);
+      words.push(t);
+      if (t.length > 2) short = false;
+      const flat = squeeze(words.join(''));
+      if (flat.length > customLongest + 2 && words.length > customWords) break;
+      const tight = words.length === 1 || short;
+      let found = customSpaced.has(words.join(' '));
+      if (!found && tight) {
+        if (!memo.has(flat)) memo.set(flat, customMatch(flat));
+        found = memo.get(flat);
+      }
+      if (found) {
+        hits.push([tokens[i].start, tokens[j].end]);
+        break;
+      }
+    }
+  }
+}
+
+function hasCustom(word) {
+  const list = chars(word);
+  const hits = [];
+  const memo = new Map();
+  for (const [split, leet] of [[true, true], [true, false], [false, true], [false, false]]) scanCustom(tokenize(list, split, leet), hits, memo);
+  return hits.length > 0;
 }

@@ -1,6 +1,7 @@
 import { ID_RE, USER_BODY_LIMIT, HttpError, json, fail, readJson, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { parseIds, lookupProfiles, cleanAvatar, cleanText } from './profiles.js';
+import { activeBans, logModAction, actorName, personName } from './party-mod.js';
 
 export const MAX_PARTY_ADMINS = 50;
 export const USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -26,13 +27,17 @@ export async function getActivityAdmins(request, env, url, t) {
   const stored = new Set(((res && res.results) || []).map((r) => String(r.id).toLowerCase()));
   const owner = ids.find((id) => isPartyOwner(env, id)) || null;
   const admins = ids.filter((id) => id === owner || stored.has(id.toLowerCase()));
-  let barred = new Set();
+  let barred = new Map();
   try {
-    const bans = await env.DB.prepare(`SELECT id FROM party_bans WHERE id IN (${marks})`).bind(...lower).all();
-    barred = new Set(((bans && bans.results) || []).map((r) => String(r.id).toLowerCase()));
+    barred = await activeBans(env.DB, lower, t);
   } catch {}
   const banned = ids.filter((id) => !isPartyOwner(env, id) && barred.has(id.toLowerCase()));
-  return json({ admins, owner, banned }, 200, { 'Cache-Control': 'private, max-age=30' });
+  const until = {};
+  for (const id of banned) {
+    const end = barred.get(id.toLowerCase());
+    if (end) until[id] = end;
+  }
+  return json({ admins, owner, banned, ...(Object.keys(until).length ? { until, now: t } : {}) }, 200, { 'Cache-Control': 'private, max-age=30' });
 }
 
 export function activityAdminsRoute(request, env, url, t) {
@@ -80,11 +85,16 @@ async function addAdmin(request, env, session, t) {
   if (isPartyOwner(env, id)) return fail(400, 'is_owner', "That's you! You're the owner, so you're always an admin.");
   const existing = await env.DB.prepare('SELECT id FROM party_admins WHERE id = ?').bind(id).first();
   if (existing) return listAdmins(request, env, session, t, { added: false });
+  if ((await activeBans(env.DB, [id], t)).has(id)) return fail(409, 'is_banned', "They're banned from Party right now. Unban them first.");
   const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM party_admins').first();
   if (Number(count && count.n) >= MAX_PARTY_ADMINS) {
     return fail(409, 'too_many', `You already have ${MAX_PARTY_ADMINS} party admins. Remove someone first.`);
   }
-  await env.DB.prepare('INSERT INTO party_admins (id, added_by, added_at) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING').bind(id, session.user_id, t).run();
+  const name = await personName(env.DB, id);
+  await env.DB.batch([
+    logModAction(env.DB, { actorId: session.user_id, actorName: actorName(session), action: 'owner_admin_add', targetId: id, targetName: name, t }, { sql: 'NOT EXISTS (SELECT 1 FROM party_admins WHERE id = ?)', args: [id] }),
+    env.DB.prepare('INSERT INTO party_admins (id, added_by, added_at) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING').bind(id, session.user_id, t),
+  ]);
   return listAdmins(request, env, session, t, { added: true });
 }
 
@@ -92,7 +102,12 @@ async function removeAdmin(request, env, session, raw, t) {
   if (typeof raw !== 'string' || !ID_RE.test(raw)) throw new HttpError(400, 'bad_id', "That user id doesn't look right.");
   const id = raw.toLowerCase();
   if (isPartyOwner(env, id)) return fail(400, 'is_owner', "You're the owner, so you can't be removed.");
-  const res = await env.DB.prepare('DELETE FROM party_admins WHERE id = ?').bind(id).run();
+  const name = await personName(env.DB, id);
+  const out = await env.DB.batch([
+    logModAction(env.DB, { actorId: session.user_id, actorName: actorName(session), action: 'owner_admin_remove', targetId: id, targetName: name, t }, { sql: 'EXISTS (SELECT 1 FROM party_admins WHERE id = ?)', args: [id] }),
+    env.DB.prepare('DELETE FROM party_admins WHERE id = ?').bind(id),
+  ]);
+  const res = out && out[1];
   const removed = Boolean(res && res.meta && res.meta.changes);
   return listAdmins(request, env, session, t, { removed });
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { room } from './activity-kit.test.js';
 import { installDom, FakeEvent } from './dom-shim.js';
+import { pickIn } from './reason-pick.js';
 import {
   GRID_W,
   GRID_H,
@@ -678,6 +679,7 @@ test('Draw & Guess: guessers can still flag a drawing made with custom colors', 
   assert.ok(strokes.length >= 1);
   assert.equal(strokes[0].c, CUSTOM);
   flag.click();
+  await pickIn('cheating');
   assert.ok(toasts.includes(FLAG_THANKS));
   await r.clock.advance(400);
   const again = byKey(guesser.v.el, 'flag');
