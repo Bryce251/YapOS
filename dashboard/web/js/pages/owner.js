@@ -9,6 +9,7 @@ import { mountAsync } from './common.js';
 import { PARTY_GAMES, PARTY_BADGE_COUNTERS, BADGES, badgeImage } from '../community-data.js';
 import { cheatAlertsCard } from './owner-cheats.js';
 import { badgeMakerCard } from './owner-badges.js';
+import { staffProfileUrl } from './party-person.js';
 
 export const OWNER_USERS_PATH = '/api/owner/users';
 export const OWNER_ACTIONS_PATH = '/api/owner/actions';
@@ -22,6 +23,8 @@ const OPEN = new Set(['queued', 'sent']);
 const ACCOUNT_STATES = new Set(['real', 'fake', 'checking']);
 export const NOT_REAL_TEXT = "That isn't a real Yapin' account. Check the id.";
 export const CHECK_SLOW_MS = 30000;
+export const FOUNDER_BADGE = 'founder';
+export const FOUNDER_ONLY = 'Only Jolli can have the Founder badge.';
 const REMOVALS = new Set(['shards.remove', 'xp.remove', 'achievement.revoke', 'badge.revoke', 'giver.revoke', 'quests.reset']);
 const GIFTS = new Set(['shards.add', 'xp.add', 'achievement.grant', 'badge.grant', 'giver.grant']);
 export const PARTY_GAME_IDS = Object.freeze(Object.keys(PARTY_GAMES));
@@ -56,6 +59,7 @@ export function readUser(u) {
     partyBoard: readBoard(u.partyBoard),
     known: u.known !== false,
     globalHidden: u.globalHidden === true,
+    isOwner: u.isOwner === true,
     account: ACCOUNT_STATES.has(u.account) ? u.account : 'real',
     look: readOwnerLook(u.look),
   };
@@ -648,7 +652,7 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
     if (!ok || ctx.signal?.aborted) return;
     setBusy(btn, true, 'Working');
     try {
-      const data = await ctx.api.request('DELETE', `${OWNER_USERS_PATH}/${encodeURIComponent(u.id)}/${what === 'banner' ? 'banner' : 'look-text'}`, { signal: ctx.signal });
+      const data = await ctx.api.request('DELETE', staffProfileUrl(u.id, 'look', what === 'banner' ? 'banner' : 'text'), { signal: ctx.signal });
       if (ctx.signal?.aborted) return;
       getDetail().user.look = readOwnerLook(data?.look);
       update(getDetail());
@@ -869,7 +873,7 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
     for (const { key, field } of counterFields) prefill(field.input, b.counters[key]);
   }
 
-  function checklist(wrap, list, owned, { grant, revoke, earned = new Set(), filter = '', what, pending }) {
+  function checklist(wrap, list, owned, { grant, revoke, earned = new Set(), filter = '', what, pending, founderOk = false }) {
     const q = filter.trim().toLowerCase();
     const shown = list.filter((e) => !q || e.label.toLowerCase().includes(q) || e.id.includes(q));
     if (!list.length) {
@@ -884,16 +888,17 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
       const has = owned.has(e.id);
       const auto = earned.has(e.id);
       const busy = pending.has(e.id);
+      const locked = what === 'badge' && e.id === FOUNDER_BADGE && !founderOk && !has;
       const btn = has
         ? button({ label: 'Take', icon: 'x', size: 'sm', disabled: auto || busy, ariaLabel: `Take ${e.label}` })
-        : button({ label: 'Give', icon: 'gift', size: 'sm', variant: 'primary', disabled: busy, ariaLabel: `Give ${e.label}` });
+        : button({ label: 'Give', icon: 'gift', size: 'sm', variant: 'primary', disabled: busy || locked, ariaLabel: `Give ${e.label}` });
       btn.addEventListener('click', () => send(has ? revoke : grant, { ref: e.id, btn, notify: !has && notifyOn() }));
       return h('li', { class: ['owner-check-row', has ? 'is-owned' : ''] },
         h('span', { class: 'owner-check-mark', attrs: { 'aria-hidden': 'true' } }, has ? icon('check', { size: 14 }) : null),
         e.image ? h('span', { class: 'owner-check-emoji' }, badgeArt(e, '', 'owner-check-img')) : h('span', { class: 'owner-check-emoji', attrs: { 'aria-hidden': 'true' }, text: e.emoji || '•' }),
         h('span', { class: 'owner-check-main' },
           h('span', { class: 'owner-check-label', text: e.label }),
-          h('span', { class: 'owner-check-sub', text: auto ? 'Earned from Party stats' : busy ? 'Waiting for YapOS' : has ? 'They have this' : (e.reward ? `Normally pays ${formatNumber(e.reward)} 💎, not paid when you give it` : (what === 'badge' && (e.note || (Object.prototype.hasOwnProperty.call(BADGES, e.id) && BADGES[e.id].note))) || (e.source === 'custom' ? 'Your own badge' : e.id)) })),
+          h('span', { class: 'owner-check-sub', text: locked ? FOUNDER_ONLY : auto ? 'Earned from Party stats' : busy ? 'Waiting for YapOS' : has ? 'They have this' : (e.reward ? `Normally pays ${formatNumber(e.reward)} 💎, not paid when you give it` : (what === 'badge' && (e.note || (Object.prototype.hasOwnProperty.call(BADGES, e.id) && BADGES[e.id].note))) || (e.source === 'custom' ? 'Your own badge' : e.id)) })),
         btn);
     })));
   }
@@ -928,7 +933,7 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
     replace(badgesBox, h('h3', { class: 'owner-section-title', text: 'Badges' }), pills(u.badges, d.catalog.badges, 'No badges yet.'));
     replace(achBox, h('h3', { class: 'owner-section-title', text: 'Achievements' }), pills(u.achievements, d.catalog.achievements, 'No achievements yet.'));
     checklist(achList, d.catalog.achievements, new Set(u.achievements), { grant: 'achievement.grant', revoke: 'achievement.revoke', filter: achSearch.value, what: 'achievement', pending: pendingRefs(d.actions, ['achievement.grant', 'achievement.revoke']) });
-    checklist(badgeList, d.catalog.badges, new Set(u.badges), { grant: 'badge.grant', revoke: 'badge.revoke', earned: new Set(u.earnedBadges), filter: badgeSearch.value, what: 'badge', pending: pendingRefs(d.actions, ['badge.grant', 'badge.revoke']) });
+    checklist(badgeList, d.catalog.badges, new Set(u.badges), { grant: 'badge.grant', revoke: 'badge.revoke', earned: new Set(u.earnedBadges), filter: badgeSearch.value, what: 'badge', pending: pendingRefs(d.actions, ['badge.grant', 'badge.revoke']), founderOk: u.isOwner });
     updateLook(u.look);
     replace(userLog, d.actions.length
       ? h('ul', { class: 'owner-log' }, ...d.actions.map((a) => logRow(a, { catalog: d.catalog })))

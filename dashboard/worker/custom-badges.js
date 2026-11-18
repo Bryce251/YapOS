@@ -142,7 +142,28 @@ export function cleanName(raw) {
   const name = cleanText(raw, BADGE_NAME_MAX + 1);
   if (!name) throw bad('bad_name', 'Give the badge a name.');
   if (Array.from(name).length > BADGE_NAME_MAX) throw bad('bad_name', `Keep the name to ${BADGE_NAME_MAX} characters or fewer.`);
+  if (isFounderName(name)) throw bad('reserved_name', 'Founder is only for Jolli. Pick another name.');
   return name;
+}
+
+const LOOKALIKES = Object.freeze({
+  0: 'o', 3: 'e', 5: 's', 7: 't', $: 's', '€': 'e', '£': 'e', ƒ: 'f', ꜰ: 'f', ꝼ: 'f', ϝ: 'f', ғ: 'f',
+  о: 'o', ο: 'o', օ: 'o', ø: 'o', ᴏ: 'o', σ: 'o', θ: 'o',
+  у: 'u', υ: 'u', ս: 'u', ц: 'u', и: 'u', ᴜ: 'u', µ: 'u', μ: 'u', v: 'u', ν: 'u',
+  п: 'n', ո: 'n', η: 'n', ɴ: 'n', ñ: 'n', ŋ: 'n', й: 'n',
+  ԁ: 'd', ð: 'd', đ: 'd', ɗ: 'd', ᴅ: 'd', δ: 'd',
+  е: 'e', ё: 'e', є: 'e', ε: 'e', ᴇ: 'e', ə: 'e', ɛ: 'e',
+  г: 'r', ɾ: 'r', ʀ: 'r', ꞃ: 'r', ᴦ: 'r', я: 'r',
+  ѕ: 's', т: 't', τ: 't', һ: 'h', н: 'h',
+});
+
+export function founderSkeleton(name) {
+  const base = Array.from(String(name ?? '').normalize('NFKC').toLowerCase(), (c) => LOOKALIKES[c] ?? c).join('');
+  return base.normalize('NFKD').replace(/\p{M}+/gu, '').replace(/[^\p{L}\p{N}]+/gu, '').replace(/(.)\1+/gu, '$1');
+}
+
+export function isFounderName(name) {
+  return /^(the)?founders?$/.test(founderSkeleton(name));
 }
 
 export function cleanNote(raw) {

@@ -2,6 +2,7 @@ import { HttpError, json, fail, readJson, isPlainObject, parseJsonSafe, clientIp
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanUsername } from './profiles.js';
 import { safeName } from './public-profiles.js';
+import { hiddenNameMap, flagsFor, maskEntry } from './hidden-names.js';
 
 export const SEASON_BOARDS = Object.freeze(['xp', 'shards']);
 export const SEASON_TOP = 10;
@@ -81,6 +82,7 @@ async function buildSeasons(db) {
     const boards = {};
     for (const key of SEASON_BOARDS) {
       boards[key] = s.boards[key].map((e) => ({
+        id: e.id,
         rank: e.rank,
         name: e.name,
         username: e.username,
@@ -101,5 +103,12 @@ export async function getSeasons(request, env, t) {
     entry = { at: t, seasons: await buildSeasons(env.DB) };
     cache.set(env.DB, entry);
   }
-  return json({ seasons: entry.seasons, top: SEASON_TOP }, 200, { 'Cache-Control': 'public, max-age=300' });
+  const hidden = await hiddenNameMap(env.DB, t);
+  const shown = (e) => {
+    const { id, ...rest } = e;
+    const flags = id ? flagsFor(hidden, id) : null;
+    return flags ? maskEntry(rest, flags, id, { link: ['profile'] }) : rest;
+  };
+  const seasons = entry.seasons.map((s) => ({ ...s, boards: Object.fromEntries(Object.entries(s.boards).map(([k, list]) => [k, list.map(shown)])) }));
+  return json({ seasons, top: SEASON_TOP }, 200, { 'Cache-Control': 'public, max-age=300' });
 }

@@ -31,6 +31,7 @@ export const LIMITS = {
   activityWarnings: 30,
   profileLook: 20,
   profileBanner: 6,
+  staffProfile: 30,
 };
 
 export async function hit(db, key, limit, t, weight = 1) {

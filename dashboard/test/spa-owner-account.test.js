@@ -146,7 +146,17 @@ test('the Einstein badge shows on profiles with its brain and says only Jolli ca
   const card = profileCard(p);
   assert.match(card.textContent, /Einstein/);
   assert.match(card.textContent, /Can only be given by Jolli/);
-  const tile = walk(card).find((n) => n.className === 'badge-tile has-note');
+  const tile = walk(card).find((n) => n.className === 'badge-tile has-note is-special');
   assert.ok(tile);
+  const withHints = profileCard(p, { hints: { 'first-game': 'Finish your first YapOS Party game.' } });
+  assert.match(withHints.querySelector('.badge-grid').firstChild.textContent, /Einstein/, 'special badges come before Party badges');
   assert.match(tile.getAttribute('title') || tile.title || '', /Can only be given by Jolli/);
+});
+
+test('a clan whose tag and name are the same shows the name once on the profile', () => {
+  const same = profileCard(normalizeProfile({ profile: { name: 'XD', username: 'xd', clan: { name: 'XDC', tag: 'XDC' } } }));
+  const sameTag = walk(same).find((n) => n.className === 'clan-tag');
+  assert.equal(sameTag.textContent, '[XDC]');
+  const diff = profileCard(normalizeProfile({ profile: { name: 'Juno', username: 'juno', clan: { name: 'Night Owls', tag: 'OWL' } } }));
+  assert.equal(walk(diff).find((n) => n.className === 'clan-tag').textContent, '[OWL]Night Owls');
 });

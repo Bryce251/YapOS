@@ -211,7 +211,8 @@ test('custom badges go through the owner actions path, reach the bot, and deleti
   assert.ok(profile.profile.badges.includes(made.id));
   assert.deepEqual(profile.catalog.badges.find((x) => x.id === made.id), { id: made.id, label: 'Galaxy brain', emoji: '\u{1F30C}', image: made.image, note: 'Only from Jolli' });
   const card = await buildCard(h.db, BOB.id);
-  assert.deepEqual(card.badges.find((x) => x.id === made.id), { id: made.id, label: 'Galaxy brain', emoji: '\u{1F30C}', image: made.image, note: 'Only from Jolli' });
+  assert.deepEqual(card.badges.find((x) => x.id === made.id), { id: made.id, label: 'Galaxy brain', emoji: '\u{1F30C}', image: made.image, note: 'Only from Jolli', rare: 'custom' });
+  assert.equal(card.badges[0].id, made.id, 'one-of-a-kind badges lead the Party card');
 
   const list = await (await h.api('GET', '/api/owner/badges', owner)).json();
   assert.equal(list.badges[0].holders, 1);

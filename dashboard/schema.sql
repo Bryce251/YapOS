@@ -607,3 +607,13 @@ CREATE TABLE IF NOT EXISTS profile_banners (
   bytes INTEGER NOT NULL,
   updated INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS party_hidden_names (
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  reason TEXT,
+  by_id TEXT NOT NULL,
+  by_name TEXT,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, kind)
+);
+CREATE INDEX IF NOT EXISTS party_hidden_names_at ON party_hidden_names (at);

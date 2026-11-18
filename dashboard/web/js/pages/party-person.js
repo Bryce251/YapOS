@@ -157,6 +157,7 @@ export function readPerson(data, readReport = (r) => r) {
       banned: ban ? { reason: str(ban.reason), by: str(ban.by), at: num(ban.at) || 0, until: num(ban.until), duration: BAN_LENGTHS.some(([v]) => v === ban.duration) ? ban.duration : 'forever' } : null,
       card: readCard(p.card),
       flag: ban ? null : readFlag(p.flag),
+      ...(p.hiddenNames ? { hiddenNames: readHiddenNames(p.hiddenNames) } : {}),
     },
     notes: Array.isArray(data?.notes) ? readNotes(data.notes) : null,
     warnings: readWarnings(data?.warnings),
@@ -225,6 +226,7 @@ export function personHead(model, { size = 'xl' } = {}) {
   if (p.banned) tags.push(badge('Banned from Party', 'danger', 'ban'));
   else if (p.flag) tags.push(flagBadge(p.flag));
   if (model.notes && model.notes.length) tags.push(noteChip(model.notes.length));
+  if (p.hiddenNames && (p.hiddenNames.name || p.hiddenNames.username)) tags.push(hiddenTag(p.hiddenNames));
   if (p.role === 'owner') tags.push(badge('Owner', 'neutral', 'crown'));
   else if (p.role === 'admin') tags.push(badge('Party admin', 'neutral', 'crown'));
   return h('div', { class: 'person-head' },
@@ -401,12 +403,152 @@ function reasonField(id) {
   return { input, el: h('div', { class: 'person-reason-field' }, h('label', { class: 'field-label', htmlFor: id, text: 'Reason' }), input, list) };
 }
 
+export const STAFF_PROFILE_PATH = '/api/party/profile/';
+export const HIDE_REASON_MAX = 200;
+export const HIDDEN_TAG = 'Hidden from others';
+const BANNER_URL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg)$/;
+
+export const RESET_PARTS = Object.freeze([
+  Object.freeze({ part: 'banner', label: 'Remove banner picture', icon: 'trash', done: 'Banner picture removed.', ask: 'Their banner picture is deleted straight away and their card goes back to no banner. They can upload a new one.' }),
+  Object.freeze({ part: 'bio', label: 'Clear about me', icon: 'x', done: 'About me cleared.', ask: 'Their about me is emptied straight away.' }),
+  Object.freeze({ part: 'status', label: 'Clear status', icon: 'x', done: 'Status cleared.', ask: 'Their status and status emoji are emptied straight away.' }),
+  Object.freeze({ part: 'pronouns', label: 'Clear pronouns', icon: 'x', done: 'Pronouns cleared.', ask: 'Their pronouns are emptied straight away.' }),
+  Object.freeze({ part: 'name-style', label: 'Reset name colour and style', icon: 'palette', done: 'Name colour and style reset.', ask: 'Their name goes back to the default colour, no gradient and the default font.' }),
+  Object.freeze({ part: 'pins', label: 'Clear pinned badges', icon: 'x', done: 'Pinned badges cleared.', ask: 'Their pinned badges are unpinned. They keep the badges themselves.' }),
+  Object.freeze({ part: 'all', label: 'Reset everything', icon: 'refresh', done: 'Their profile look is back to the default.', ask: 'Their banner picture, about me, status, pronouns, name style, pins, colours and layout all go back to the default.' }),
+]);
+
+export const HIDE_KINDS = Object.freeze([
+  Object.freeze({ what: 'name', label: 'display name', hide: 'Hide display name', show: 'Show display name again' }),
+  Object.freeze({ what: 'username', label: 'username', hide: 'Hide username', show: 'Show username again' }),
+]);
+
+export function staffProfileUrl(id, ...rest) {
+  return `${STAFF_PROFILE_PATH}${encodeURIComponent(id)}${rest.map((r) => `/${encodeURIComponent(r)}`).join('')}`;
+}
+
+export function readHiddenNames(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  return { name: Boolean(o.name), username: Boolean(o.username) };
+}
+
+function readHideRow(r) {
+  if (!r || typeof r !== 'object') return null;
+  return { reason: str(r.reason), at: num(r.at) || 0, byName: str(r.byName) };
+}
+
+export function readStaffProfile(data) {
+  const l = data?.look && typeof data.look === 'object' ? data.look : {};
+  const hidden = data?.hidden && typeof data.hidden === 'object' ? data.hidden : {};
+  return {
+    look: {
+      banner: typeof l.banner === 'string' && BANNER_URL_RE.test(l.banner) ? l.banner : null,
+      bio: str(l.bio),
+      status: str(l.status),
+      statusEmoji: str(l.statusEmoji),
+      pronouns: str(l.pronouns),
+      nameColour: str(l.nameColour),
+      nameGradient: str(l.nameGradient),
+      nameFont: str(l.nameFont) || 'default',
+      pins: (Array.isArray(l.pins) ? l.pins : []).filter((p) => typeof p === 'string'),
+      custom: l.custom === true,
+    },
+    hidden: { name: readHideRow(hidden.name), username: readHideRow(hidden.username) },
+    canAct: data?.canAct === true,
+    why: str(data?.why),
+  };
+}
+
+export function canReset(look, part) {
+  if (!look) return false;
+  if (part === 'banner') return Boolean(look.banner);
+  if (part === 'bio') return Boolean(look.bio);
+  if (part === 'status') return Boolean(look.status || look.statusEmoji);
+  if (part === 'pronouns') return Boolean(look.pronouns);
+  if (part === 'name-style') return Boolean(look.nameColour || look.nameGradient || (look.nameFont && look.nameFont !== 'default'));
+  if (part === 'pins') return look.pins.length > 0;
+  if (part === 'all') return Boolean(look.banner || look.custom);
+  return false;
+}
+
+export function nameStyleText(look) {
+  const parts = [];
+  if (look.nameColour) parts.push(`colour ${look.nameColour}`);
+  if (look.nameGradient) parts.push(`${look.nameGradient} gradient`);
+  if (look.nameFont && look.nameFont !== 'default') parts.push(`${look.nameFont} font`);
+  return parts.length ? parts.join(', ') : 'Default';
+}
+
+export function pinLabel(pin) {
+  if (pin.startsWith('ach:')) return `Achievement: ${pin.slice(4)}`;
+  const info = badgeInfo(pin);
+  return (info && info.label) || pin;
+}
+
+export function hiddenTag(flags) {
+  const f = readHiddenNames(flags);
+  if (!f.name && !f.username) return null;
+  const what = f.name && f.username ? 'display name and username are' : f.name ? 'display name is' : 'username is';
+  return h('span', { class: 'hidden-name-tag', attrs: { title: `Their ${what} hidden on YapOS. Only staff see it.` } }, badge(HIDDEN_TAG, 'warning', 'eye-off'));
+}
+
+export function lookRows(look) {
+  const rows = [];
+  rows.push(['Banner', look.banner ? null : 'No banner picture']);
+  rows.push(['About me', look.bio || 'Empty']);
+  rows.push(['Status', [look.statusEmoji, look.status].filter(Boolean).join(' ') || 'Empty']);
+  rows.push(['Pronouns', look.pronouns || 'Empty']);
+  rows.push(['Name style', nameStyleText(look)]);
+  rows.push(['Pinned badges', look.pins.length ? look.pins.map(pinLabel).join(', ') : 'None']);
+  return rows;
+}
+
+export function staffProfileSection({ name, staff, onReset, onHide, onUnhide }) {
+  const title = h('h3', { class: 'person-section-title', text: 'Profile' });
+  if (!staff) return h('section', { class: 'person-profile-tools person-tool-section', attrs: { 'aria-label': 'Profile' } }, title, h('p', { class: 'muted person-empty', text: "Couldn't load their profile look." }));
+  const look = staff.look;
+  const rows = lookRows(look);
+  const box = h('div', { class: 'owner-look' },
+    look.banner ? h('img', { class: 'owner-look-banner', src: look.banner, alt: `${name}'s banner picture`, loading: 'lazy', decoding: 'async' }) : null,
+    h('dl', { class: 'owner-look-text' }, ...rows.filter(([, v]) => v !== null).map(([k, v]) => [h('dt', { text: k }), h('dd', { class: [k === 'About me' ? 'owner-look-bio' : null], text: v })])));
+  const resets = staff.canAct
+    ? RESET_PARTS.filter((r) => canReset(look, r.part)).map((r) => button({ label: r.label, icon: r.icon, size: 'sm', variant: r.part === 'all' ? 'danger' : 'secondary', onClick: (e) => onReset(r, e.currentTarget) }))
+    : [];
+  const reasonId = nextId('hide-reason');
+  const reason = h('input', { type: 'text', id: reasonId, class: 'input person-reason hide-reason', placeholder: 'Why? Only staff see this.', attrs: { maxlength: String(HIDE_REASON_MAX), autocomplete: 'off' } });
+  const hideRows = HIDE_KINDS.map((k) => {
+    const row = staff.hidden[k.what];
+    const state = row ? `Hidden ${relativeTime(row.at)}${row.reason ? `: ${row.reason}` : ''}` : 'Shown';
+    const action = !staff.canAct
+      ? null
+      : row
+      ? button({ label: k.show, icon: 'eye', size: 'sm', onClick: (e) => onUnhide(k, e.currentTarget) })
+      : button({ label: k.hide, icon: 'eye-off', size: 'sm', onClick: (e) => onHide(k, reason.value, e.currentTarget) });
+    return h('div', { class: 'person-stat' }, h('dt', { class: 'report-label', text: k.label === 'username' ? 'Username' : 'Display name' }), h('dd', { text: state }), action);
+  });
+  const canHideAny = staff.canAct && HIDE_KINDS.some((k) => !staff.hidden[k.what]);
+  return h('div', { class: 'person-profile-tools' },
+    h('section', { class: 'person-tool-section', attrs: { 'aria-label': 'Profile' } },
+      title,
+      h('p', { class: 'report-note', text: 'What they show on their YapOS profile and Party card. Resets happen straight away, are written to the mod log, and they see a short note on their profile.' }),
+      box,
+      staff.canAct
+        ? resets.length ? h('div', { class: 'report-actions person-actions' }, ...resets) : h('p', { class: 'muted person-empty', text: 'Nothing to reset. Their profile uses the default look.' })
+        : h('p', { class: 'report-note', text: staff.why || 'You cannot change this profile.' })),
+    h('section', { class: 'person-tool-section', attrs: { 'aria-label': 'Names on YapOS' } },
+      h('h3', { class: 'person-section-title', text: 'Names on YapOS' }),
+      h('p', { class: 'report-note', text: "YapOS can't change Yapin' names. Hiding shows “Hidden name” or “@hidden” instead on YapOS pages, leaderboards and in Party games. Staff still see the real name." }),
+      canHideAny ? h('div', { class: 'person-reason-field' }, h('label', { class: 'field-label', htmlFor: reasonId, text: 'Reason' }), reason) : null,
+      h('dl', { class: 'person-stats' }, ...hideRows)));
+}
+
 export function openProfilePanel({ api, signal, id, seed = null, role = 'admin', gameName = (g) => g, navigate = null, onHistory = null, onChanged = null }) {
   const ctrl = new AbortController();
   if (signal && typeof signal.addEventListener === 'function') signal.addEventListener('abort', () => ctrl.abort());
   const title = (seed && seed.name) || 'Player';
   const d = drawer({ title, subtitle: 'Party profile', onClose: () => ctrl.abort() });
   let model = null;
+  let staff = null;
   let length = 'forever';
 
   function failToast(err, what) {
@@ -505,6 +647,66 @@ export function openProfilePanel({ api, signal, id, seed = null, role = 'admin',
       h('div', { class: 'report-actions person-actions' }, ...out));
   }
 
+  function staffDone(data, message, evt) {
+    staff = readStaffProfile(data);
+    const hidden = { name: Boolean(staff.hidden.name), username: Boolean(staff.hidden.username) };
+    model.person.hiddenNames = hidden;
+    toast(message);
+    changed({ ...evt, id: model.person.id, hidden });
+    paint();
+  }
+
+  async function resetPart(r, btn) {
+    const p = model.person;
+    const ok = await confirmDialog({ title: `${r.label} for ${p.name}?`, body: `${r.ask} This is written to the mod log and they see a short note on their profile.`, confirmLabel: r.part === 'all' ? 'Reset everything' : 'Reset' });
+    if (!ok || ctrl.signal.aborted) return;
+    setBusy(btn, true, 'Working');
+    try {
+      const data = await api.request('DELETE', staffProfileUrl(p.id, 'look', r.part), { signal: ctrl.signal });
+      if (ctrl.signal.aborted) return;
+      staffDone(data, r.done, { type: 'profileReset', part: r.part });
+    } catch (err) {
+      if (ctrl.signal.aborted) return;
+      if (btn.isConnected) setBusy(btn, false);
+      failToast(err, "Couldn't reset that");
+    }
+  }
+
+  async function hideName(k, reason, btn) {
+    const p = model.person;
+    const ok = await confirmDialog({ title: `Hide ${p.name}'s ${k.label} on YapOS?`, body: `Everyone else sees ${k.what === 'name' ? '“Hidden name”' : '“@hidden”'} instead on YapOS pages, leaderboards and in Party games. Their Yapin' name does not change. This is written to the mod log.`, confirmLabel: 'Hide' });
+    if (!ok || ctrl.signal.aborted) return;
+    setBusy(btn, true, 'Hiding');
+    try {
+      const body = { what: k.what };
+      const why = String(reason || '').trim().slice(0, HIDE_REASON_MAX);
+      if (why) body.reason = why;
+      const data = await api.post(staffProfileUrl(p.id, 'hide'), body, { signal: ctrl.signal });
+      if (ctrl.signal.aborted) return;
+      staffDone(data, `${k.label === 'username' ? 'Username' : 'Display name'} hidden on YapOS.`, { type: 'nameHide', what: k.what });
+    } catch (err) {
+      if (ctrl.signal.aborted) return;
+      if (btn.isConnected) setBusy(btn, false);
+      failToast(err, "Couldn't hide it");
+    }
+  }
+
+  async function unhideName(k, btn) {
+    const p = model.person;
+    const ok = await confirmDialog({ title: `Show ${p.name}'s ${k.label} again?`, body: 'It shows up again on YapOS pages and leaderboards within about a minute. This is written to the mod log.', confirmLabel: 'Show again', tone: 'primary' });
+    if (!ok || ctrl.signal.aborted) return;
+    setBusy(btn, true, 'Working');
+    try {
+      const data = await api.request('DELETE', staffProfileUrl(p.id, 'hide', k.what), { signal: ctrl.signal });
+      if (ctrl.signal.aborted) return;
+      staffDone(data, `${k.label === 'username' ? 'Username' : 'Display name'} shown again.`, { type: 'nameUnhide', what: k.what });
+    } catch (err) {
+      if (ctrl.signal.aborted) return;
+      if (btn.isConnected) setBusy(btn, false);
+      failToast(err, "Couldn't show it again");
+    }
+  }
+
   async function sendWarning(text, btn) {
     const value = String(text || '').trim();
     if (!value) return;
@@ -569,6 +771,7 @@ export function openProfilePanel({ api, signal, id, seed = null, role = 'admin',
       personBadges(model),
       gameCounts(model, gameName),
       actions(),
+      staffProfileSection({ name: model.person.name, staff, onReset: resetPart, onHide: hideName, onUnhide: unhideName }),
       notesSection({ model, onAdd: addNote, onDelete: deleteNote }),
       warningsSection({ model, onSend: sendWarning, canSend: model.notes !== null && canWarnPerson(model.person, model.role, state.user?.id || '') }),
       h('section', { class: 'person-history-mini' }, h('h3', { class: 'person-section-title', text: 'Ban history' }), banHistory(model))));
@@ -577,9 +780,16 @@ export function openProfilePanel({ api, signal, id, seed = null, role = 'admin',
   async function load() {
     replace(d.body, loadingRegion('Loading profile', h('div', { class: 'person-panel' }, skeleton('skeleton-avatar'), skeleton('skeleton-text skeleton-w-60'), skeleton('skeleton-text skeleton-w-40'))));
     try {
-      const data = await api.get(personUrl(id), { signal: ctrl.signal });
+      const [data, look] = await Promise.all([
+        api.get(personUrl(id), { signal: ctrl.signal }),
+        api.get(staffProfileUrl(id), { signal: ctrl.signal }).catch((err) => {
+          if (ctrl.signal.aborted) throw err;
+          return null;
+        }),
+      ]);
       if (ctrl.signal.aborted) return;
       model = readPerson(data);
+      staff = look ? readStaffProfile(look) : null;
       if (seed && !model.person.avatar && seed.avatar) model.person.avatar = seed.avatar;
       model.role = role === 'owner' ? 'owner' : model.role;
       paint();

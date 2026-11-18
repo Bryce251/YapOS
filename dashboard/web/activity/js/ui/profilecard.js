@@ -25,6 +25,7 @@ export const FONTS = Object.freeze(['rounded', 'serif', 'mono', 'caps']);
 export const PIN_MAX = 5;
 export const BADGE_IMAGE_RE = /^\/badge-img\/c-[a-z0-9]{8}-[0-9a-f]{16}\.(png|webp|jpg)$/;
 export const BANNER_IMAGE_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg)$/;
+export const RARE = Object.freeze({ custom: 'One of a kind', special: 'Special' });
 const FOCUSABLE = 'button, a, input, select, textarea, [tabindex]';
 const INTERACTIVE = 'button, a, input, select, textarea, label, summary, [role="button"], [role="option"], [role="radio"], [role="checkbox"], [role="tab"], [role="menuitem"], [role="link"], [contenteditable]';
 
@@ -102,6 +103,7 @@ export function cleanCard(raw) {
     if (typeof b.image === 'string' && BADGE_IMAGE_RE.test(b.image)) out.image = b.image;
     const note = text(b.note, 100);
     if (note) out.note = note;
+    if (b.rare === 'custom' || b.rare === 'special') out.rare = b.rare;
     return out;
   });
   const party = raw.party && typeof raw.party === 'object' ? raw.party : {};
@@ -387,7 +389,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     const row = h('ul', { class: 'pcard-row' });
     model.row.forEach((b, i) => {
       const said = b.note ? `${b.label}: ${b.note}` : b.label;
-      const btn = h('button', { class: ['pcard-badge', b.pinned ? 'is-pinned' : null], type: 'button', dataset: { key: `badge-${i}` }, attrs: { 'aria-label': b.pinned ? `${said} (pinned)` : said } }, badgeIcon(b, '28'), h('span', { class: 'pcard-tip', attrs: { 'aria-hidden': 'true' } }, h('strong', { text: b.label }), b.note ? h('span', { text: b.note }) : null));
+      const btn = h('button', { class: ['pcard-badge', b.pinned ? 'is-pinned' : null, b.rare ? 'is-special' : null], type: 'button', dataset: { key: `badge-${i}` }, attrs: { 'aria-label': b.pinned ? `${said} (pinned)` : said } }, badgeIcon(b, '28'), h('span', { class: 'pcard-tip', attrs: { 'aria-hidden': 'true' } }, h('strong', { text: b.label }), b.note ? h('span', { text: b.note }) : null));
       btn.addEventListener('click', () => tip(btn, row));
       btn.addEventListener('blur', () => btn.classList.remove('is-tip'));
       row.append(h('li', null, btn));
@@ -478,8 +480,8 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
       { class: ['pcard-view', 'is-all'] },
       h('div', { class: 'pcard-all-head' }, back, h('h2', { class: 'pcard-all-title', text: `All badges (${num(model.total)})`, attrs: { id: 'pcard-all-title' } })),
       h('ul', { class: 'pcard-all', attrs: { 'aria-labelledby': 'pcard-all-title' } }, model.all.map((b) => {
-        const kind = [b.pinned ? 'Pinned' : null, b.kind === 'achievement' ? 'Achievement' : null].filter(Boolean).join(' · ');
-        return h('li', { class: ['pcard-all-item', b.pinned ? 'is-pinned' : null] }, badgeIcon(b, '32'), h('div', { class: 'pcard-all-text' }, h('span', { class: 'pcard-all-name', text: b.label }), b.note ? h('span', { class: 'pcard-all-note', text: b.note }) : null, kind ? h('span', { class: 'pcard-all-kind', text: kind }) : null));
+        const kind = [b.pinned ? 'Pinned' : null, b.rare ? RARE[b.rare] : null, b.kind === 'achievement' ? 'Achievement' : null].filter(Boolean).join(' · ');
+        return h('li', { class: ['pcard-all-item', b.pinned ? 'is-pinned' : null, b.rare ? 'is-special' : null] }, badgeIcon(b, '32'), h('div', { class: 'pcard-all-text' }, h('span', { class: 'pcard-all-name', text: b.label }), b.note ? h('span', { class: 'pcard-all-note', text: b.note }) : null, kind ? h('span', { class: 'pcard-all-kind', text: kind }) : null));
       }), model.unlisted > 0 ? h('li', { class: 'pcard-none', text: `${num(model.unlisted)} more on their full profile.` }) : null),
     );
   }

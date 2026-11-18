@@ -1,4 +1,4 @@
-import { GLOBAL_KEY, CURRENCY, allowGiver, denyGiver, ownerIds, grantBadge, revokeBadge, parseSeasonBadge, seasonMonth, seasonName, seasonBadgeText, withGiftBadges, BADGE_ID_RE, SEASON_KINDS, isCustomBadge, customBadges } from './global.js';
+import { GLOBAL_KEY, CURRENCY, allowGiver, denyGiver, ownerIds, grantBadge, revokeBadge, parseSeasonBadge, seasonMonth, seasonName, seasonBadgeText, withGiftBadges, BADGE_ID_RE, SEASON_KINDS, isCustomBadge, customBadges, FOUNDER_BADGE, FOUNDER_ONLY, founderAllowed } from './global.js';
 import { profileSync } from './profiles-sync.js';
 import { privacyOf, achievementsOf } from './profile-data.js';
 
@@ -300,6 +300,7 @@ export function createOwnerActions(engine, { now = () => Date.now(), partyStats 
         }
         const name = badgeName(a.ref);
         if (kind === 'badge.grant') {
+          if (a.ref === FOUNDER_BADGE && !founderAllowed(engine, user)) return { ok: false, message: FOUNDER_ONLY };
           const changed = grantBadge(engine, user, a.ref);
           if (changed === null) return { ok: false, message: 'They already have as many gifted badges as a profile can hold.' };
           return { ok: true, message: changed ? `Gave the ${name} badge.` : `They already had the ${name} badge.`, gift: changed ? `the ${name} badge` : null };

@@ -1,4 +1,4 @@
-import { h, nextId, replace } from '../dom.js';
+import { focusFirst, h, nextId, replace, trapFocus } from '../dom.js';
 import { icon } from '../icons.js';
 import { badgeArt, button, confirmDialog, setBusy, switchControl, toast } from '../ui.js';
 import { tabBar } from '../kit.js';
@@ -8,14 +8,17 @@ import {
   BANNERS, BIO_MAX, DENSITIES, FEATURED, NAME_FONTS, NAME_GRADIENTS, NAME_PALETTE, PIN_MAX, PRONOUNS_MAX, RINGS, SECTIONS, STATUS_EMOJI_MAX, STATUS_MAX,
   cleanStatusEmoji, defaultLook, lookBody, moveItem, normalHex, readLook, sameLook, textLength, themeColours,
 } from '../profile-look.js';
-import { allBadges, openAllBadges } from './profile.js';
+import { allBadges, isSpecial, openAllBadges } from './profile.js';
 import { dataUrlBytes, loadPicture, sniffFile } from './owner-badges.js';
 
 export const LOOK_API = '/api/me/profile-look';
 export const BANNER_API = '/api/me/profile-banner';
-export const BANNER_W = 1200;
-export const BANNER_H = 300;
-export const BANNER_BYTES = 190 * 1024;
+export const BANNER_W = 1500;
+export const BANNER_H = 500;
+export const BANNER_BYTES = 400 * 1024;
+export const CROP_PREVIEW_W = 750;
+export const CROP_PREVIEW_H = 250;
+export const CROP_STEP = 0.05;
 export const BANNER_FILE_MAX = 15 * 1024 * 1024;
 export const PRONOUN_IDEAS = Object.freeze(['she/her', 'he/him', 'they/them', 'any pronouns']);
 export const PICK_SEARCH_AT = 12;
@@ -28,24 +31,159 @@ const TABS = Object.freeze([
   Object.freeze({ id: 'layout', label: 'Layout', icon: 'list' }),
 ]);
 
-export function bannerCrop(width, height, ratio = BANNER_W / BANNER_H) {
-  const w = Math.max(1, Math.floor(Number(width) || 1));
-  const ht = Math.max(1, Math.floor(Number(height) || 1));
-  if (w / ht > ratio) {
-    const sw = Math.round(ht * ratio);
-    return { sx: Math.floor((w - sw) / 2), sy: 0, sw, sh: ht };
-  }
-  const sh = Math.round(w / ratio);
-  return { sx: 0, sy: Math.floor((ht - sh) / 2), sw: w, sh };
+const unit = (v) => {
+  const n = Number(v);
+  return v !== null && v !== undefined && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5;
+};
+
+export function cleanFocus(focus) {
+  return { x: unit(focus && focus.x), y: unit(focus && focus.y) };
 }
 
-export function encodeBanner(src, { doc = document, max = BANNER_BYTES } = {}) {
+export function bannerCrop(width, height, { focus = null, ratio = BANNER_W / BANNER_H } = {}) {
+  const w = Math.max(1, Math.floor(Number(width) || 1));
+  const ht = Math.max(1, Math.floor(Number(height) || 1));
+  const f = cleanFocus(focus);
+  if (w / ht > ratio) {
+    const sw = Math.min(w, Math.round(ht * ratio));
+    return { sx: Math.floor((w - sw) * f.x), sy: 0, sw, sh: ht };
+  }
+  const sh = Math.min(ht, Math.round(w / ratio));
+  return { sx: 0, sy: Math.floor((ht - sh) * f.y), sw: w, sh };
+}
+
+export function cropAxis(width, height, ratio = BANNER_W / BANNER_H) {
+  const r = bannerCrop(width, height, { ratio });
+  const w = Math.max(1, Math.floor(Number(width) || 1));
+  const ht = Math.max(1, Math.floor(Number(height) || 1));
+  if (w - r.sw >= Math.max(4, w * 0.01)) return 'x';
+  if (ht - r.sh >= Math.max(4, ht * 0.01)) return 'y';
+  return null;
+}
+
+export function moveFocus(focus, axis, delta) {
+  const f = cleanFocus(focus);
+  if (axis === 'x') f.x = unit(f.x + delta);
+  if (axis === 'y') f.y = unit(f.y + delta);
+  return f;
+}
+
+export function dragDelta(axis, dx, dy, frameWidth, width, height) {
+  const r = bannerCrop(width, height);
+  const scale = r.sw / Math.max(1, Number(frameWidth) || 1);
+  if (axis === 'x') return -((Number(dx) || 0) * scale) / Math.max(1, Math.floor(Number(width) || 1) - r.sw);
+  if (axis === 'y') return -((Number(dy) || 0) * scale) / Math.max(1, Math.floor(Number(height) || 1) - r.sh);
+  return 0;
+}
+
+export function focusText(focus, axis) {
+  const v = Math.round((axis === 'x' ? focus.x : focus.y) * 100);
+  if (v === 50) return 'Centred';
+  if (axis === 'x') return v < 50 ? `${50 - v}% toward the left` : `${v - 50}% toward the right`;
+  return v < 50 ? `${50 - v}% toward the top` : `${v - 50}% toward the bottom`;
+}
+
+export function chooseBannerCrop(src, { doc = document } = {}) {
+  const width = src.naturalWidth || src.width;
+  const height = src.naturalHeight || src.height;
+  const axis = cropAxis(width, height);
+  if (!axis) return Promise.resolve(cleanFocus(null));
+  return new Promise((resolve) => {
+    let focus = cleanFocus(null);
+    let done = false;
+    let drag = null;
+    const titleId = nextId('crop');
+    const helpId = nextId('crop-help');
+    const previous = doc.activeElement;
+    const canvas = h('canvas', { class: 'pe-crop-canvas', attrs: { width: String(CROP_PREVIEW_W), height: String(CROP_PREVIEW_H), 'aria-hidden': 'true' } });
+    const frame = h('div', {
+      class: ['pe-crop-frame', `is-${axis}`],
+      attrs: { tabindex: '0', role: 'slider', 'aria-label': axis === 'x' ? 'Banner position, left to right' : 'Banner position, top to bottom', 'aria-describedby': helpId, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-orientation': axis === 'x' ? 'horizontal' : 'vertical' },
+    }, canvas);
+    const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+    const paint = () => {
+      frame.setAttribute('aria-valuenow', String(Math.round((axis === 'x' ? focus.x : focus.y) * 100)));
+      frame.setAttribute('aria-valuetext', focusText(focus, axis));
+      if (!ctx) return;
+      const r = bannerCrop(width, height, { focus });
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(src, r.sx, r.sy, r.sw, r.sh, 0, 0, CROP_PREVIEW_W, CROP_PREVIEW_H);
+    };
+    const set = (next) => {
+      focus = cleanFocus(next);
+      paint();
+    };
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(null);
+      } else trapFocus(panel, e);
+    }
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      doc.removeEventListener('keydown', onKey, true);
+      root.remove();
+      if (![...doc.querySelectorAll('.drawer-root')].some((r) => !r.classList.contains('is-closing'))) doc.body.classList.remove('has-modal');
+      if (previous && previous.focus && previous.isConnected) previous.focus();
+      resolve(value);
+    };
+    frame.addEventListener('pointerdown', (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      e.preventDefault();
+      drag = { x: e.clientX, y: e.clientY, from: focus, w: frame.getBoundingClientRect().width };
+      frame.classList.add('is-dragging');
+      try {
+        frame.setPointerCapture(e.pointerId);
+      } catch {}
+    });
+    frame.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      set(moveFocus(drag.from, axis, dragDelta(axis, e.clientX - drag.x, e.clientY - drag.y, drag.w, width, height)));
+    });
+    const endDrag = () => {
+      drag = null;
+      frame.classList.remove('is-dragging');
+    };
+    frame.addEventListener('pointerup', endDrag);
+    frame.addEventListener('pointercancel', endDrag);
+    frame.addEventListener('keydown', (e) => {
+      const back = axis === 'x' ? 'ArrowLeft' : 'ArrowUp';
+      const fwd = axis === 'x' ? 'ArrowRight' : 'ArrowDown';
+      let next = null;
+      if (e.key === back) next = moveFocus(focus, axis, -CROP_STEP);
+      else if (e.key === fwd) next = moveFocus(focus, axis, CROP_STEP);
+      else if (e.key === 'Home') next = moveFocus(focus, axis, -1);
+      else if (e.key === 'End') next = moveFocus(focus, axis, 1);
+      if (!next) return;
+      e.preventDefault();
+      set(next);
+    });
+    const cancel = button({ label: 'Cancel', className: 'pe-crop-cancel', onClick: () => finish(null) });
+    const centre = button({ label: 'Centre', icon: 'refresh', variant: 'ghost', className: 'pe-crop-centre', onClick: () => set(null) });
+    const ok = button({ label: 'Use this banner', icon: 'check', variant: 'primary', className: 'pe-crop-ok', onClick: () => finish(focus) });
+    const panel = h('div', { class: ['dialog-panel', 'pe-crop-panel'], attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId } },
+      h('h2', { class: 'dialog-title', id: titleId, text: 'Choose what your banner shows' }),
+      h('p', { class: 'dialog-body', id: helpId, text: `Banners are 1500 by 500. Your picture is ${axis === 'x' ? 'wider' : 'taller'} than that, so drag it, or use the arrow keys, to pick which part shows.` }),
+      frame,
+      h('div', { class: 'dialog-actions' }, centre, cancel, ok));
+    const root = h('div', { class: ['dialog-root', 'pe-crop'] }, h('div', { class: 'dialog-overlay', on: { click: () => finish(null) } }), panel);
+    doc.addEventListener('keydown', onKey, true);
+    doc.body.appendChild(root);
+    doc.body.classList.add('has-modal');
+    paint();
+    focusFirst(panel);
+    frame.focus();
+  });
+}
+
+export function encodeBanner(src, { doc = document, max = BANNER_BYTES, focus = null } = {}) {
   const canvas = doc.createElement('canvas');
   canvas.width = BANNER_W;
   canvas.height = BANNER_H;
   const c = canvas.getContext('2d');
   if (!c) throw new Error("Your browser can't resize pictures here. Try another browser.");
-  const r = bannerCrop(src.naturalWidth || src.width, src.naturalHeight || src.height);
+  const r = bannerCrop(src.naturalWidth || src.width, src.naturalHeight || src.height, { focus });
   c.imageSmoothingEnabled = true;
   c.imageSmoothingQuality = 'high';
   c.drawImage(src, r.sx, r.sy, r.sw, r.sh, 0, 0, BANNER_W, BANNER_H);
@@ -59,7 +197,7 @@ export function encodeBanner(src, { doc = document, max = BANNER_BYTES } = {}) {
   throw new Error('That picture is too detailed to use as a banner. Try a simpler one.');
 }
 
-export async function processBanner(file) {
+export async function processBanner(file, { choose = chooseBannerCrop } = {}) {
   if (!file) throw new Error('Pick a picture first.');
   if (Number(file.size) > BANNER_FILE_MAX) throw new Error('That file is bigger than 15 MB. Pick a smaller picture.');
   const head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
@@ -68,7 +206,9 @@ export async function processBanner(file) {
   if (!['png', 'jpeg', 'webp', 'gif'].includes(kind)) throw new Error("That file isn't a picture YapOS can use. Use a PNG, JPG, WebP or GIF.");
   const src = await loadPicture(file);
   try {
-    return encodeBanner(src);
+    const focus = choose ? await choose(src) : null;
+    if (choose && !focus) return null;
+    return encodeBanner(src, { focus });
   } finally {
     if (typeof src.close === 'function') src.close();
   }
@@ -296,7 +436,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
         const on = draft.pins.includes(b.key);
         const btn = h('button', {
           type: 'button',
-          class: ['pe-pick-btn', on ? 'is-on' : '', !on && full ? 'is-full' : ''],
+          class: ['pe-pick-btn', on ? 'is-on' : '', !on && full ? 'is-full' : '', isSpecial(b) ? 'is-special' : ''],
           title: b.about ? `${b.label}: ${b.about}` : b.label,
           attrs: { 'data-key': b.key, 'aria-pressed': on ? 'true' : 'false', 'aria-disabled': !on && full ? 'true' : null },
         },
@@ -443,6 +583,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
     setBusy(uploadBtn, true, 'Uploading');
     try {
       const image = await processBanner(file);
+      if (!image || closed) return;
       const data = await api.post(BANNER_API, { image }, { signal });
       if (closed) return;
       const url = data && data.banner && typeof data.banner.url === 'string' ? data.banner.url : null;
@@ -549,7 +690,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
     heading('Banner'),
     bannerWrap,
     h('div', { class: 'pe-actions-row' }, uploadBtn, removeBtn, fileInput),
-    h('p', { class: 'field-help', text: 'Wide pictures work best. PNG, JPG, WebP or GIF, cropped to 1200 by 300. Uploads are saved straight away and everyone can see them, so keep it friendly.' }),
+    h('p', { class: 'field-help', text: 'Best size 1500 x 500. PNG, JPG, WebP or GIF. Other sizes are cropped to fit, and you can drag to choose which part shows. Uploads are saved straight away and everyone can see them, so keep it friendly.' }),
     heading('Accent colour'),
     accentGroup.el,
     h('div', { class: 'pe-custom' },

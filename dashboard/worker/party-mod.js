@@ -3,6 +3,7 @@ import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { lookupProfiles, cleanText, MAX_PROFILE_IDS } from './profiles.js';
 import { getActivityUser } from './activity-auth.js';
 import { censor } from '../web/activity/js/filter.js';
+import { staffHiddenFlags } from './hidden-names.js';
 
 export const BAN_DURATIONS = Object.freeze({ hour: HOUR, day: DAY, week: 7 * DAY, forever: 0 });
 export const BAN_DURATION_NAMES = Object.freeze({ hour: '1 hour', day: '1 day', week: '1 week', forever: 'forever' });
@@ -268,7 +269,7 @@ function hiddenWhere(role, viewer) {
   return { where, args };
 }
 
-export function modLogEntry(r, profiles = new Map()) {
+export function modLogEntry(r, profiles = new Map(), hiddenNames = new Map()) {
   const actor = profiles.get(r.actor_id) || null;
   const target = r.target_id ? profiles.get(r.target_id) || null : null;
   const detail = parseJsonSafe(r.detail, null);
@@ -276,7 +277,7 @@ export function modLogEntry(r, profiles = new Map()) {
     id: r.id,
     action: r.action,
     actor: { id: r.actor_id, name: (actor && actor.display_name) || r.actor_name, avatar: (actor && actor.avatar) || null, system: r.actor_id === SYSTEM_ACTOR },
-    target: r.target_id ? { id: r.target_id, name: (target && target.display_name) || r.target_name || null, username: (target && target.username) || null, avatar: (target && target.avatar) || null } : null,
+    target: r.target_id ? { id: r.target_id, name: (target && target.display_name) || r.target_name || null, username: (target && target.username) || null, avatar: (target && target.avatar) || null, ...(hiddenNames.has(String(r.target_id).toLowerCase()) ? { hiddenNames: hiddenNames.get(String(r.target_id).toLowerCase()) } : {}) } : null,
     detail: isPlainObject(detail) ? detail : null,
     created: Number(r.created),
   };
@@ -327,10 +328,10 @@ export async function listModLog(request, env, session, role, url, t) {
   const page = rows.slice(0, MODLOG_PAGE);
   const actorRows = (actors && actors.results) || [];
   const ids = [...new Set(page.flatMap((r) => [r.actor_id, r.target_id]).concat(actorRows.map((a) => a.actor_id)).filter((x) => x && x !== SYSTEM_ACTOR))].slice(0, MAX_PROFILE_IDS);
-  const found = await lookupProfiles(env, ids, t, clientIp(request));
+  const [found, hiddenNames] = await Promise.all([lookupProfiles(env, ids, t, clientIp(request)), staffHiddenFlags(db, page.map((r) => r.target_id).filter(Boolean))]);
   const last = page[page.length - 1];
   return json({
-    entries: page.map((r) => modLogEntry(r, found.profiles)),
+    entries: page.map((r) => modLogEntry(r, found.profiles, hiddenNames)),
     next: rows.length > MODLOG_PAGE && last ? `${Number(last.created)}.${last.id}` : null,
     actors: actorRows.map((a) => {
       const p = found.profiles.get(a.actor_id) || null;

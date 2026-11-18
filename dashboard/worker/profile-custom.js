@@ -4,22 +4,23 @@ import { badgesFor, partySeasonBadges } from './party-badges.js';
 import { liveBadges, base64Bytes, imageHash, sniffImage, toBytes, IMAGE_EXT, BADGE_IMG_CACHE } from './custom-badges.js';
 import { readCatalog } from './owner.js';
 import { blockedIn } from './party-blocked.js';
-import { logModAction, actorName, personName } from './party-mod.js';
+import { logModAction, personName } from './party-mod.js';
 import { clearPartyProfileCache } from './party-profile.js';
 import { isBannerImagePath } from './security.js';
 import { cleanLook, defaultLook, isDefaultLook, lookTexts, themeColours, LookError, LOOK_VERSION, LOOK_BODY_MAX, ACH_PREFIX, PIN_MAX, BIO_MAX, PRONOUNS_MAX, STATUS_MAX } from '../web/js/profile-look.js';
 
-export const BANNER_MAX = 200 * 1024;
-export const BANNER_BODY_LIMIT = 300 * 1024;
-export const BANNER_MIN_W = 320;
+export const BANNER_MAX = 450 * 1024;
+export const BANNER_BODY_LIMIT = 640 * 1024;
+export const BANNER_MIN_W = 600;
 export const BANNER_MAX_W = 1600;
-export const BANNER_MIN_H = 80;
+export const BANNER_MIN_H = 200;
 export const BANNER_MAX_H = 600;
+export const BANNER_MIN_RATIO = 2;
+export const BANNER_MAX_RATIO = 4;
 export const BANNER_PREFIX = '/banner-img/';
 export const BANNER_ID_RE = /^b-[a-z0-9]{10}$/;
 
 const MAX_BADGES = 64;
-const OWNER_LOOK_ACTIONS_PER_MIN = 120;
 const MAX_ACHIEVEMENTS = 100;
 const BADGE_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
 const BANNER_PATH_RE = /^\/banner-img\/(b-[a-z0-9]{10})-([0-9a-f]{16})\.(png|webp|jpg)$/;
@@ -180,7 +181,7 @@ export function decodeBanner(raw) {
   if (width < BANNER_MIN_W || width > BANNER_MAX_W || height < BANNER_MIN_H || height > BANNER_MAX_H) {
     throw new HttpError(400, 'bad_image_size', `Banners must be ${BANNER_MIN_W} to ${BANNER_MAX_W} pixels wide and ${BANNER_MIN_H} to ${BANNER_MAX_H} pixels tall.`);
   }
-  if (width < height * 2) throw new HttpError(400, 'bad_image_size', 'Banners must be at least twice as wide as they are tall.');
+  if (width < height * BANNER_MIN_RATIO || width > height * BANNER_MAX_RATIO) throw new HttpError(400, 'bad_image_size', 'Banners must be 2 to 4 times as wide as they are tall. The best size is 1500 by 500.');
   return img;
 }
 
@@ -248,43 +249,96 @@ export function bannerRoute(request, env, session, t) {
   return fail(405, 'method_not_allowed', 'That action is not allowed here.');
 }
 
-export async function ownerLookView(db, userId) {
+export const RESET_PARTS = Object.freeze(['banner', 'bio', 'status', 'pronouns', 'text', 'name-style', 'pins', 'all']);
+export const RESET_ACTIONS = Object.freeze(['profile_banner_remove', 'profile_text_clear', 'profile_name_style_reset', 'profile_pins_clear', 'profile_reset']);
+const TEXT_PARTS = Object.freeze({ bio: ['bio'], status: ['status', 'statusEmoji'], pronouns: ['pronouns'] });
+const FIELD_NAMES = Object.freeze({ bio: 'about me', status: 'status', pronouns: 'pronouns' });
+
+export async function staffLookView(db, userId) {
   const { look, banner } = await readCustom(db, userId);
   return {
     banner: bannerUrl(banner),
+    bannerChoice: look.banner,
     bio: look.bio,
     pronouns: look.pronouns,
     status: look.status,
     statusEmoji: look.statusEmoji,
+    nameColour: look.nameColour,
+    nameGradient: look.nameGradient,
+    nameFont: look.nameFont,
+    pins: [...look.pins],
     custom: !isDefaultLook(look),
   };
 }
 
-export async function ownerLookRoute(request, env, session, userId, what, t) {
-  if (request.method !== 'DELETE') return fail(405, 'method_not_allowed', 'That action is not allowed here.');
-  const db = env.DB;
-  const limit = await hit(db, `owner:act:${lower(session.user_id)}`, OWNER_LOOK_ACTIONS_PER_MIN, t);
-  if (!limit.ok) return tooMany(limit.retryAfter);
-  const id = lower(userId);
-  const { look, banner } = await readCustom(db, id);
-  const name = await personName(db, id);
-  const actor = { actorId: session.user_id, actorName: actorName(session), targetId: id, targetName: name, t };
-  if (what === 'banner') {
-    if (!banner) return fail(404, 'not_found', "They don't have a banner picture.");
-    await db.batch([
-      ...removeBannerStatements(db, id, look, t),
-      logModAction(db, { ...actor, action: 'owner_banner_remove', detail: { summary: `Removed ${name || 'their'}${name ? "'s" : ''} profile banner` } }),
-    ]);
-  } else {
-    if (!look.bio && !look.pronouns && !look.status && !look.statusEmoji) return fail(404, 'not_found', 'There is no profile text to clear.');
-    const next = { ...look, bio: '', pronouns: '', status: '', statusEmoji: '' };
-    await db.batch([
-      isDefaultLook(next) ? db.prepare('DELETE FROM profile_custom WHERE user_id = ?').bind(id) : saveStatement(db, id, next, t),
-      logModAction(db, { ...actor, action: 'owner_profile_text_clear', detail: { bio: look.bio || null, status: look.status || null, summary: `Cleared ${name || 'their'}${name ? "'s" : ''} about me and status` } }),
-    ]);
+function hasNameStyle(look) {
+  return Boolean(look.nameColour || look.nameGradient || (look.nameFont && look.nameFont !== 'default'));
+}
+
+function textFields(look, part) {
+  const keys = part === 'text' ? ['bio', 'status', 'pronouns'] : [part];
+  return keys.filter((k) => TEXT_PARTS[k].some((f) => look[f]));
+}
+
+function possessive(name) {
+  return name ? `${name}'s` : 'their';
+}
+
+export function resetPlan(db, id, part, current, name, t) {
+  const { look, banner } = current;
+  const who = possessive(name);
+  const store = (next) => (isDefaultLook(next) ? db.prepare('DELETE FROM profile_custom WHERE user_id = ?').bind(id) : saveStatement(db, id, next, t));
+  if (part === 'banner') {
+    if (!banner) return null;
+    return { action: 'profile_banner_remove', stmts: removeBannerStatements(db, id, look, t), detail: { part, summary: `Removed ${who} profile banner picture` } };
   }
+  if (part === 'bio' || part === 'status' || part === 'pronouns' || part === 'text') {
+    const fields = textFields(look, part);
+    if (!fields.length) return null;
+    const next = { ...look };
+    for (const k of fields) for (const f of TEXT_PARTS[k]) next[f] = '';
+    const names = fields.map((k) => FIELD_NAMES[k]);
+    const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
+    return { action: 'profile_text_clear', stmts: [store(next)], detail: { part, fields, bio: fields.includes('bio') ? look.bio || null : undefined, status: fields.includes('status') ? look.status || null : undefined, pronouns: fields.includes('pronouns') ? look.pronouns || null : undefined, summary: `Cleared ${who} ${list}` } };
+  }
+  if (part === 'name-style') {
+    if (!hasNameStyle(look)) return null;
+    return { action: 'profile_name_style_reset', stmts: [store({ ...look, nameColour: null, nameGradient: null, nameFont: 'default' })], detail: { part, summary: `Reset ${who} name colour and style` } };
+  }
+  if (part === 'pins') {
+    if (!look.pins.length) return null;
+    return { action: 'profile_pins_clear', stmts: [store({ ...look, pins: [] })], detail: { part, count: look.pins.length, summary: `Cleared ${who} pinned badges` } };
+  }
+  if (part === 'all') {
+    if (!banner && isDefaultLook(look)) return null;
+    return {
+      action: 'profile_reset',
+      stmts: [db.prepare('DELETE FROM profile_custom WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_banners WHERE user_id = ?').bind(id)],
+      detail: { part, banner: Boolean(banner) || undefined, bio: look.bio || undefined, status: look.status || undefined, summary: `Reset ${who} whole profile look` },
+    };
+  }
+  return null;
+}
+
+export const NOTHING_TO_RESET = Object.freeze({
+  banner: "They don't have a banner picture.",
+  bio: 'There is no about me to clear.',
+  status: 'There is no status to clear.',
+  pronouns: 'There are no pronouns to clear.',
+  text: 'There is no profile text to clear.',
+  'name-style': 'Their name already uses the default colour and style.',
+  pins: 'They have no pinned badges.',
+  all: 'Their profile already uses the default look.',
+});
+
+export async function resetLook(db, { id, part, actor, t }) {
+  const current = await readCustom(db, id);
+  const name = await personName(db, id);
+  const plan = resetPlan(db, id, part, current, name, t);
+  if (!plan) return { done: false, message: NOTHING_TO_RESET[part] || 'There is nothing to reset.' };
+  await db.batch([...plan.stmts, logModAction(db, { actorId: actor.id, actorName: actor.name, action: plan.action, targetId: id, targetName: name, detail: plan.detail, t })]);
   clearPartyProfileCache(db);
-  return json({ ok: true, look: await ownerLookView(db, id) });
+  return { done: true, action: plan.action };
 }
 
 function missingImage() {

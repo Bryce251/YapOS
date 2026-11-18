@@ -1,5 +1,6 @@
 import { MINUTE, HOUR, DAY, ID_RE, HttpError, json, fail, readJson, isPlainObject, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
+import { maskList } from './hidden-names.js';
 
 export const MAX_PROFILE_IDS = 40;
 export const PROFILE_STALE = 6 * HOUR;
@@ -121,7 +122,7 @@ export async function getProfiles(request, env, url, t) {
   if (!limit.ok) return tooMany(limit.retryAfter);
   const ids = parseIds(url.searchParams.get('ids'));
   const found = await lookupProfiles(env, ids, t, ip);
-  const profiles = ids.filter((id) => found.profiles.has(id)).map((id) => found.profiles.get(id));
+  const profiles = await maskList(env.DB, ids.filter((id) => found.profiles.has(id)).map((id) => found.profiles.get(id)), t, { name: ['display_name'] });
   const pending = found.pending;
   const cache = pending.length ? 'no-store' : 'public, max-age=60';
   return json({ profiles, pending }, 200, { 'Cache-Control': cache });

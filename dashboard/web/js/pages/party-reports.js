@@ -9,7 +9,7 @@ import { decodeStroke, paintInk } from '../../activity/js/games/ink.js';
 import { replayOf } from '../replay-model.js';
 import { createReplayPlayer } from './party-replay.js';
 import { blockedWordsCard } from './party-blocked.js';
-import { openProfilePanel, readPerson, personUrl, personHead, personStats, personBadges, banHistory, gameCounts, filterHistory, reportCountText, readFlag, flagBadge, noteChip, timeLeft, STATUS_FILTERS, KIND_FILTERS } from './party-person.js';
+import { openProfilePanel, readPerson, personUrl, personHead, personStats, personBadges, banHistory, gameCounts, filterHistory, reportCountText, readFlag, flagBadge, noteChip, hiddenTag, readHiddenNames, timeLeft, STATUS_FILTERS, KIND_FILTERS } from './party-person.js';
 
 export const REPORTS_PATH = '/api/party/reports';
 export const BANS_PATH = '/api/party/bans';
@@ -126,6 +126,7 @@ function readReport(r) {
       role: d.role === 'owner' || d.role === 'admin' ? d.role : '',
       flag: d.banned === true ? null : readFlag(d.flag),
       notes: Number.isInteger(d.notes) && d.notes > 0 ? d.notes : 0,
+      ...(d.hiddenNames ? { hiddenNames: readHiddenNames(d.hiddenNames) } : {}),
     },
     reporter: { id: str(p.id), name: str(p.name), profile: readProfile(p.profile) },
   };
@@ -374,6 +375,7 @@ export function renderPartyReports(ctx) {
     if (d.banned) tags.push(badge('Banned', 'danger', 'ban'));
     else if (d.flag) tags.push(flagBadge(d.flag));
     if (d.notes) tags.push(noteChip(d.notes));
+    if (d.hiddenNames && (d.hiddenNames.name || d.hiddenNames.username)) tags.push(hiddenTag(d.hiddenNames));
     if (d.role === 'owner') tags.push(badge('Owner', 'neutral', 'crown'));
     else if (d.role === 'admin') tags.push(badge('Party admin', 'neutral', 'crown'));
     const actions = [];
@@ -440,6 +442,9 @@ export function renderPartyReports(ctx) {
       view.open = Math.max(0, view.open - (Number(evt.dismissed) || 0));
       if (filter === 'open') view.reports = view.reports.filter((x) => !mine(x));
       else for (const x of view.reports) if (mine(x)) x.status = 'dismissed';
+    }
+    if (evt.type === 'nameHide' || evt.type === 'nameUnhide') {
+      for (const x of view.reports) if (x.kind !== 'pack' && x.drawer.id.toLowerCase() === key) x.drawer.hiddenNames = evt.hidden;
     }
     if (who && who.person.id.toLowerCase() === key) {
       openHistory(who.person.id);

@@ -2,12 +2,13 @@ import { ID_RE, json, fail, isPlainObject, parseJsonSafe, clientIp } from './uti
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanAvatar, cleanUsername } from './profiles.js';
 import { safeName } from './public-profiles.js';
-import { PARTY_BADGES, badgesFor, partySeasonBadges, seasonBadgeInfo } from './party-badges.js';
+import { PARTY_BADGES, badgeTier, badgesFor, partySeasonBadges, seasonBadgeInfo, specialBadgesFirst } from './party-badges.js';
 import { readCatalog } from './owner.js';
 import { liveBadges } from './custom-badges.js';
 import { LEADERBOARD_GAMES, isOffBoard, offBoard } from './party-leaderboard.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 import { readCustom, cardLook, ownedSet, safeTexts } from './profile-custom.js';
+import { hiddenNameMap, flagsFor, maskEntry } from './hidden-names.js';
 
 export const CARD_TTL = 30_000;
 export const CARD_CACHE_MAX = 500;
@@ -71,7 +72,7 @@ function pretty(id) {
   return text ? text[0].toUpperCase() + text.slice(1) : id;
 }
 
-function label(list, id) {
+function label(list, id, badge = true) {
   const hit = list.find((x) => x && x.id === id) || seasonBadgeInfo(id);
   const text = hit && typeof hit.label === 'string' && hit.label.trim() ? safeName(hit.label, 48, pretty(id)) : pretty(id);
   const emoji = hit && typeof hit.emoji === 'string' && hit.emoji.length <= 16 ? hit.emoji : null;
@@ -81,6 +82,8 @@ function label(list, id) {
   const about = hit && typeof hit.note === 'string' ? hit.note : party ? party.hint : null;
   const note = about ? safeName(about, 100, null) : null;
   if (note) out.note = note;
+  const tier = badge ? badgeTier(id) : null;
+  if (tier === 'custom' || tier === 'special') out.rare = tier;
   return out;
 }
 
@@ -143,7 +146,7 @@ export async function buildCard(db, rawId, t = Date.now()) {
   const shown = custom ? await safeTexts(db, custom.look, t).catch(() => ({ ...custom.look, pronouns: '', status: '', statusEmoji: '' })) : null;
   const look = custom ? cardLook(shown, ownedSet(allBadges, achievementIds), custom.banner) : null;
   const pinned = look ? look.pins.filter((p) => !p.startsWith('ach:')) : [];
-  const badgeIds = [...pinned, ...allBadges.filter((b) => !pinned.includes(b))];
+  const badgeIds = [...pinned, ...specialBadgesFirst(allBadges.filter((b) => !pinned.includes(b)))];
   const badgeList = Array.isArray(catalog.badges) ? catalog.badges : [];
   const achList = Array.isArray(catalog.achievements) ? catalog.achievements : [];
   const level = pub ? Math.min(MAX_LEVEL, Math.max(0, Math.floor(Number(pub.level) || 0))) : null;
@@ -160,7 +163,7 @@ export async function buildCard(db, rawId, t = Date.now()) {
     shards,
     badges: badgeIds.slice(0, CARD_BADGES).map((b) => label(badgeList, b)),
     badgeCount: badgeIds.length,
-    achievements: achievementIds.map((a) => label(achList, a)),
+    achievements: achievementIds.map((a) => label(achList, a, false)),
     clan: pub ? clanOf(pub.clan) : null,
     party: { games, wins, bestStreak, favourites: favourites(parseJsonSafe(stats && stats.by_game, {})) },
     rank: await rankOf(db, pts ? String(pts.user_id) : id, Math.floor(Number(pts && pts.points) || 0)),
@@ -188,7 +191,8 @@ export async function getPartyProfile(request, env, raw, t) {
     if (cards.size > CARD_CACHE_MAX) cards.delete(cards.keys().next().value);
   }
   if (!entry.card) return fail(404, 'not_found', MISSING, undefined, CACHE_HEADERS);
-  return json({ profile: entry.card }, 200, CACHE_HEADERS);
+  const flags = flagsFor(await hiddenNameMap(env.DB, t), key);
+  return json({ profile: flags ? maskEntry(entry.card, flags, key, { link: ['page'] }) : entry.card }, 200, CACHE_HEADERS);
 }
 
 export function clearPartyProfileCache(db) {

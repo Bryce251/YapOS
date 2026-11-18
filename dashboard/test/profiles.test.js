@@ -51,7 +51,7 @@ test('the bot pushes a public profile and anyone can read it by username', async
   assert.equal(profile.level, 12);
   assert.equal(profile.xp, 3400);
   assert.equal(profile.shards, null);
-  assert.deepEqual(profile.badges, ['first-game', 'games-10', 'chatterbox']);
+  assert.deepEqual(profile.badges, ['chatterbox', 'first-game', 'games-10']);
   assert.deepEqual(profile.achievements, ['messages-10k']);
   assert.deepEqual(profile.season, [{ month: '2026-10', rank: 1, kind: 'shards' }, { month: '2026-09', rank: 3, kind: 'xp' }]);
   assert.deepEqual(profile.clan, { name: 'Night Owls', tag: 'OWL', colour: '#aa33ff' });

@@ -66,6 +66,7 @@ export const BADGES = Object.freeze({
   'event-winner': { label: 'Event winner', emoji: '🎊' },
   legend: { label: 'YapOS legend', emoji: '🌠' },
   einstein: { label: 'Einstein', emoji: '🧠', note: 'Can only be given by Jolli' },
+  founder: { label: 'Founder', emoji: '🔱', note: 'The owner of YapOS. Only Jolli has it' },
 });
 
 export const ACHIEVEMENTS = Object.freeze({
@@ -84,7 +85,7 @@ export const ACHIEVEMENTS = Object.freeze({
   quests10: { label: 'Errand runner', emoji: '📜' },
   quests50: { label: 'Quest master', emoji: '🗺️' },
   tickets100: { label: 'Frequent flyer', emoji: '🎫' },
-  clanfound: { label: 'Founder', emoji: '🛡️' },
+  clanfound: { label: 'Clan founder', emoji: '🛡️' },
   clanjoin: { label: 'Better together', emoji: '🤝' },
   'messages-1k': { label: 'Chatterbox', emoji: '💬' },
   'messages-10k': { label: 'Town crier', emoji: '📣' },

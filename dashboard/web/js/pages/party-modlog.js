@@ -5,7 +5,7 @@ import { icon } from '../icons.js';
 import { mountAsync } from './common.js';
 import { state } from '../state.js';
 import { formatDate, relativeTime } from '../format.js';
-import { openProfilePanel, durationName } from './party-person.js';
+import { openProfilePanel, durationName, hiddenTag, readHiddenNames } from './party-person.js';
 import { gameName } from './party-reports.js';
 
 export const MODLOG_PATH = '/api/party/modlog';
@@ -46,7 +46,14 @@ export const ACTION_LABELS = Object.freeze({
   owner_badge_edit: ['\u{1F3C5}', 'Owner: badges edited'],
   owner_badge_delete: ['\u{1F3C5}', 'Owner: badges deleted'],
   owner_banner_remove: ['\u{1F5BC}️', 'Owner: profile banners removed'],
-  owner_profile_text_clear: ['\u{1F4DD}', 'Owner: profile text cleared'],
+  owner_profile_text_clear: ['\u{1F9FD}','Owner: profile text cleared'],
+  profile_banner_remove: ['\u{1F5BC}️', 'Profile banners removed'],
+  profile_text_clear: ['\u{1F9FD}','Profile text cleared'],
+  profile_name_style_reset: ['\u{1F3A8}', 'Name styles reset'],
+  profile_pins_clear: ['\u{1F4CC}', 'Pinned badges cleared'],
+  profile_reset: ['\u{1F504}', 'Whole profiles reset'],
+  name_hide: ['\u{1F648}', 'Names hidden'],
+  name_unhide: ['\u{1F440}', 'Names shown again'],
   owner_pattern_add: ['\u{1F6E1}️', 'Owner: blocked patterns added'],
   owner_pattern_edit: ['\u{1F6E1}️', 'Owner: blocked patterns changed'],
   owner_pattern_remove: ['\u{1F6E1}️', 'Owner: blocked patterns removed'],
@@ -79,7 +86,7 @@ export function modLogUrl(f = {}, before = null) {
 
 function readWho(w) {
   if (!w || typeof w !== 'object' || typeof w.id !== 'string') return null;
-  return { id: w.id, name: str(w.name), username: str(w.username), avatar: str(w.avatar), system: w.system === true };
+  return { id: w.id, name: str(w.name), username: str(w.username), avatar: str(w.avatar), system: w.system === true, ...(w.hiddenNames ? { hiddenNames: readHiddenNames(w.hiddenNames) } : {}) };
 }
 
 export function readModLog(data) {
@@ -210,7 +217,24 @@ export function modLogSentence(e) {
       return `${who} deleted the badge${str(d.name) ? ` “${clip(d.name, 40)}”` : ''}${n ? ` and took it off ${n} ${n === 1 ? 'person' : 'people'}` : ''}`;
     }
     case 'owner_banner_remove':
+    case 'profile_banner_remove':
       return `${who} removed ${them}'s profile banner picture`;
+    case 'profile_text_clear': {
+      const names = { bio: 'about me', status: 'status', pronouns: 'pronouns' };
+      const list = (Array.isArray(d.fields) ? d.fields : []).filter((f) => names[f]).map((f) => names[f]);
+      const what = list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}` : list[0] || 'profile text';
+      return `${who} cleared ${them}'s ${what}`;
+    }
+    case 'profile_name_style_reset':
+      return `${who} reset ${them}'s name colour and style`;
+    case 'profile_pins_clear':
+      return `${who} cleared ${them}'s pinned badges`;
+    case 'profile_reset':
+      return `${who} reset ${them}'s whole profile look`;
+    case 'name_hide':
+      return `${who} hid ${them}'s ${d.what === 'username' ? 'username' : 'display name'} on YapOS${reason ? `: ${clip(reason)}` : ''}`;
+    case 'name_unhide':
+      return `${who} showed ${them}'s ${d.what === 'username' ? 'username' : 'display name'} on YapOS again`;
     case 'owner_profile_text_clear':
       return `${who} cleared ${them}'s about me and status`;
     case 'owner_stats_add':
@@ -273,8 +297,8 @@ export function renderPartyModLog(ctx) {
     pageHeader({
       title: 'Party mod log',
       description: state.partyOwner
-        ? 'Every ban, unban, warning, dismissed report, note, blocked word and hidden word pack by the owner and party admins, newest first. Your owner panel changes, cheat alerts and admin changes show here too, only for you.'
-        : 'Every ban, unban, warning, dismissed report, note, blocked word and hidden word pack by the owner and party admins, newest first.',
+        ? 'Every ban, unban, warning, dismissed report, note, blocked word, hidden word pack, profile reset and hidden name by the owner and party admins, newest first. Your owner panel changes, cheat alerts and admin changes show here too, only for you.'
+        : 'Every ban, unban, warning, dismissed report, note, blocked word, hidden word pack, profile reset and hidden name by the owner and party admins, newest first.',
       actions: linkButton({ label: 'Party reports', href: '/party/reports', icon: 'flag', size: 'sm' }),
     }),
     card({ title: 'What staff did', icon: 'list', actions: tools }, body));
@@ -326,7 +350,8 @@ export function renderPartyModLog(ctx) {
         h('span', { class: 'party-row-sub modlog-meta' },
           h('time', { class: 'report-time', attrs: { datetime: new Date(e.created || 0).toISOString(), title: formatDate(e.created) }, text: relativeTime(e.created) }),
           target ? h('span', { class: 'modlog-sep', text: ' · ', attrs: { 'aria-hidden': 'true' } }) : null,
-          target)));
+          target,
+          e.target ? hiddenTag(e.target.hiddenNames) : null)));
   }
 
   function more(btn) {

@@ -215,28 +215,29 @@ test('banner pictures are checked by their bytes and served safely with an immut
   assert.equal((await put(h, alice, { banner: 'image' })).body.error, 'no_banner');
 });
 
-test('the owner can remove anyone’s banner or profile text, and it is written to the mod log', async () => {
+test('staff remove banners and profile text through the shared staff route, and it is written to the mod log', async () => {
   const { h, alice, bob } = await setup();
   assert.equal((await put(h, bob, { bio: 'Bob bio', status: 'Hi', statusEmoji: '\u{1F44B}' })).status, 200);
   const up = await (await h.api('POST', BANNER, bob, { image: b64(devBannerPng()) })).json();
   const detail = await (await h.api('GET', `/api/owner/users/${BOB.id}`, alice)).json();
   assert.equal(detail.user.look.banner, up.banner.url);
   assert.equal(detail.user.look.bio, 'Bob bio');
-  assert.equal((await h.api('DELETE', `/api/owner/users/${ALICE.id}/banner`, bob)).status, 404, 'only the owner can do this');
-  assert.equal((await h.api('DELETE', `/api/owner/users/${BOB.id}/banner`, alice, undefined, { 'X-YapOS': null })).status, 403);
-  const gone = await h.api('DELETE', `/api/owner/users/${BOB.id}/banner`, alice);
+  assert.equal((await h.api('DELETE', `/api/owner/users/${BOB.id}/banner`, alice)).status, 404, 'the old owner-only route is gone');
+  assert.equal((await h.api('DELETE', `/api/party/profile/${ALICE.id}/look/banner`, bob)).status, 403, 'only staff can do this');
+  assert.equal((await h.api('DELETE', `/api/party/profile/${BOB.id}/look/banner`, alice, undefined, { 'X-YapOS': null })).status, 403);
+  const gone = await h.api('DELETE', `/api/party/profile/${BOB.id}/look/banner`, alice);
   assert.equal(gone.status, 200);
   assert.equal((await gone.json()).look.banner, null);
   assert.equal((await h.request('GET', up.banner.url)).status, 404);
   assert.equal((await view(h, 'bob')).body.profile.custom.banner, 'none');
-  assert.equal((await h.api('DELETE', `/api/owner/users/${BOB.id}/banner`, alice)).status, 404);
-  const cleared = await h.api('DELETE', `/api/owner/users/${BOB.id}/look-text`, alice);
+  assert.equal((await h.api('DELETE', `/api/party/profile/${BOB.id}/look/banner`, alice)).status, 404);
+  const cleared = await h.api('DELETE', `/api/party/profile/${BOB.id}/look/text`, alice);
   assert.equal(cleared.status, 200);
   const c = (await view(h, 'bob')).body.profile.custom;
   assert.equal(c.bio, '');
   assert.equal(c.status, '');
   const log = h.db.raw.prepare('SELECT action, actor_id, target_id FROM party_mod_log ORDER BY created ASC, rowid ASC').all();
-  assert.deepEqual(log.map((r) => r.action), ['owner_banner_remove', 'owner_profile_text_clear']);
+  assert.deepEqual(log.map((r) => r.action), ['profile_banner_remove', 'profile_text_clear']);
   assert.ok(log.every((r) => r.actor_id === ALICE.id && r.target_id === BOB.id));
 });
 

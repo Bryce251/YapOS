@@ -6,6 +6,7 @@ import { getSession } from './sessions.js';
 import { partyRole } from './reports.js';
 import { logModAction, actorName, personName } from './party-mod.js';
 import { findBlocked } from '../web/activity/js/filter.js';
+import { hiddenNameMap, flagsFor } from './hidden-names.js';
 
 export const BROWSE_PAGE = 24;
 export const BROWSE_MAX_PAGE = 20;
@@ -73,7 +74,7 @@ async function browseList(db, { sort, q, page }) {
     published: Number(r.published) || null,
     updated: Number(r.updated) || null,
   }));
-  return { packs, more };
+  return { packs, more, owners: rows.slice(0, BROWSE_PAGE).map((r) => String(r.owner_id || '').toLowerCase()) };
 }
 
 export async function browsePacks(request, env, url, t) {
@@ -93,7 +94,9 @@ export async function browsePacks(request, env, url, t) {
     store.set(key, entry);
     while (store.size > 200) store.delete(store.keys().next().value);
   }
-  const body = { packs: entry.packs, sort: params.sort, q: params.q, page: params.page, more: entry.more, liked: [] };
+  const hidden = await hiddenNameMap(env.DB, t);
+  const packs = hidden.size ? entry.packs.map((p, i) => (p.by && (flagsFor(hidden, entry.owners[i]) || {}).username ? { ...p, by: null } : p)) : entry.packs;
+  const body = { packs, sort: params.sort, q: params.q, page: params.page, more: entry.more, liked: [] };
   const session = await getSession(env.DB, request, t);
   if (!session || !entry.packs.length) {
     return json(body, 200, { 'Cache-Control': session ? 'private, no-store' : 'public, max-age=30' });

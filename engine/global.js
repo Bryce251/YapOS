@@ -212,9 +212,44 @@ export const GIFT_BADGES = Object.freeze([
   Object.freeze({ id: 'event-winner', label: 'Event winner', emoji: '🎊' }),
   Object.freeze({ id: 'legend', label: 'YapOS legend', emoji: '🌠' }),
   Object.freeze({ id: 'einstein', label: 'Einstein', emoji: '🧠', note: 'Can only be given by Jolli' }),
+  Object.freeze({ id: 'founder', label: 'Founder', emoji: '🔱', note: 'The owner of YapOS. Only Jolli has it' }),
 ]);
 
 export const BADGE_NOTES = Object.freeze(Object.fromEntries(GIFT_BADGES.filter((b) => b.note).map((b) => [b.id, b.note])));
+
+export const FOUNDER_BADGE = 'founder';
+export const FOUNDER_ONLY = 'Only Jolli can have the Founder badge.';
+
+export function founderAllowed(engine, uid) {
+  const id = asId(uid);
+  return !!id && engine?.isBotOwner?.(id) === true;
+}
+
+const LOOKALIKES = Object.freeze({
+  0: 'o', 3: 'e', 5: 's', 7: 't', $: 's', '€': 'e', '£': 'e', ƒ: 'f', ꜰ: 'f', ꝼ: 'f', ϝ: 'f', ғ: 'f',
+  о: 'o', ο: 'o', օ: 'o', ø: 'o', ᴏ: 'o', σ: 'o', θ: 'o',
+  у: 'u', υ: 'u', ս: 'u', ц: 'u', и: 'u', ᴜ: 'u', µ: 'u', μ: 'u', v: 'u', ν: 'u',
+  п: 'n', ո: 'n', η: 'n', ɴ: 'n', ñ: 'n', ŋ: 'n', й: 'n',
+  ԁ: 'd', ð: 'd', đ: 'd', ɗ: 'd', ᴅ: 'd', δ: 'd',
+  е: 'e', ё: 'e', є: 'e', ε: 'e', ᴇ: 'e', ə: 'e', ɛ: 'e',
+  г: 'r', ɾ: 'r', ʀ: 'r', ꞃ: 'r', ᴦ: 'r', я: 'r',
+  ѕ: 's', т: 't', τ: 't', һ: 'h', н: 'h',
+});
+
+export function founderSkeleton(name) {
+  const base = Array.from(String(name ?? '').normalize('NFKC').toLowerCase(), (c) => LOOKALIKES[c] ?? c).join('');
+  return base.normalize('NFKD').replace(/\p{M}+/gu, '').replace(/[^\p{L}\p{N}]+/gu, '').replace(/(.)\1+/gu, '$1');
+}
+
+export function isFounderName(name) {
+  return /^(the)?founders?$/.test(founderSkeleton(name));
+}
+
+function founderFirst(engine, uid, list) {
+  if (!list.includes(FOUNDER_BADGE)) return list;
+  if (!founderAllowed(engine, uid)) return list.filter((b) => b !== FOUNDER_BADGE);
+  return [FOUNDER_BADGE, ...list.filter((b) => b !== FOUNDER_BADGE)];
+}
 
 export const BADGE_NS = 'badges';
 export const BADGE_ID_RE = /^[A-Za-z0-9_.:-]{1,48}$/;
@@ -250,7 +285,7 @@ export function withGiftBadges(engine, uid, list) {
   const { gift, hide } = badgeGifts(engine, uid);
   const known = new Set(customBadges(engine).map((b) => b.id));
   const base = Array.isArray(list) ? list.filter((b) => typeof b === 'string') : [];
-  return [...new Set([...base, ...gift])].filter((b) => !hide.includes(b) && (!isCustomBadge(b) || known.has(b))).slice(0, BADGES_PER_USER);
+  return founderFirst(engine, uid, [...new Set([...base, ...gift])].filter((b) => !hide.includes(b) && (!isCustomBadge(b) || known.has(b)))).slice(0, BADGES_PER_USER);
 }
 
 export const CUSTOM_BADGE_NS = 'custombadges';
@@ -271,7 +306,7 @@ export function cleanCustomBadges(list) {
   for (const b of Array.isArray(list) ? list : []) {
     if (!b || typeof b !== 'object' || !isCustomBadge(b.id) || seen.has(b.id)) continue;
     const label = clip(b.label ?? b.name, 32);
-    if (!label) continue;
+    if (!label || isFounderName(label)) continue;
     seen.add(b.id);
     const emoji = clip(b.emoji, 8).replace(/\s+/g, '');
     const note = clip(b.note, 100);
@@ -357,6 +392,7 @@ function editSeasonBadge(engine, uid, parsed, add) {
 export function grantBadge(engine, uid, id) {
   const who = asId(uid);
   if (!who || typeof id !== 'string' || !BADGE_ID_RE.test(id)) return null;
+  if (id === FOUNDER_BADGE && !founderAllowed(engine, who)) return null;
   const season = parseSeasonBadge(id);
   if (season) return editSeasonBadge(engine, who, season, true);
   return mutateGlobal(engine, BADGE_NS, (d) => {

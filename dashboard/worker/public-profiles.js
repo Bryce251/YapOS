@@ -1,11 +1,12 @@
 import { DAY, ID_RE, USER_BODY_LIMIT, HttpError, json, fail, readJson, isPlainObject, parseJsonSafe, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanText, cleanUsername, cleanAvatar } from './profiles.js';
-import { PARTY_BADGES, badgesFor, partySeasonBadges } from './party-badges.js';
+import { PARTY_BADGES, badgesFor, partySeasonBadges, specialBadgesFirst } from './party-badges.js';
 import { liveBadges } from './custom-badges.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 import { readCatalog } from './owner.js';
 import { lookForProfile, ownedSet } from './profile-custom.js';
+import { hiddenNameMap, flagsFor, maskEntry } from './hidden-names.js';
 
 export const MAX_SNAPSHOTS = 50;
 export const MAX_BADGES = 64;
@@ -206,7 +207,7 @@ export async function getPublicProfile(request, env, raw, t) {
     favourites: favourites(byGame),
   };
   const earned = badgesFor({ games: party.games, wins: party.wins, counters: isPlainObject(counters) ? counters : {}, dailyBest: Number(streak && streak.best) || 0 });
-  const badges = liveBadges([...new Set([...earned, ...partySeason, ...idList(parseJsonSafe(row.badges, []), MAX_BADGES)])], catalog.badges);
+  const badges = specialBadgesFirst(liveBadges([...new Set([...earned, ...partySeason, ...idList(parseJsonSafe(row.badges, []), MAX_BADGES)])], catalog.badges));
   const clan = cleanClan(parseJsonSafe(row.clan, null));
   const achievements = idList(parseJsonSafe(row.achievements, []), MAX_ACHIEVEMENTS);
   const custom = await lookForProfile(env.DB, row.user_id, ownedSet(badges, achievements), t).catch(() => null);
@@ -226,7 +227,8 @@ export async function getPublicProfile(request, env, raw, t) {
     custom,
   };
   const pick = (list) => (Array.isArray(list) ? list : []).filter((x) => x && typeof x.id === 'string').map((x) => ({ id: x.id, label: x.label, emoji: x.emoji || null, ...(x.image ? { image: x.image } : {}), ...(x.note ? { note: x.note } : {}) }));
-  return json({ profile, partyBadges: PARTY_BADGES, catalog: { achievements: pick(catalog.achievements), badges: pick(catalog.badges) } }, 200, { 'Cache-Control': 'public, max-age=30' });
+  const flags = flagsFor(await hiddenNameMap(env.DB, t), row.user_id);
+  return json({ profile: flags ? maskEntry(profile, flags, row.user_id) : profile, partyBadges: PARTY_BADGES, catalog: { achievements: pick(catalog.achievements), badges: pick(catalog.badges) } }, 200, { 'Cache-Control': 'public, max-age=30' });
 }
 
 export async function isProfileHidden(db, userId) {

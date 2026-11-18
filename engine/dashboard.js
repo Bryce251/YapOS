@@ -2,7 +2,7 @@ import { VERSION, hideSecret } from './config.js';
 import { parseBool, parseDuration } from './parse.js';
 import { avatarUrl } from './links.js';
 import { HARD_CAP } from './limits.js';
-import { canGiveCurrency, CURRENCY, GLOBAL_KEY, withGiftBadges, badgeGifts, customBadges, customBadgeVersion, setCustomBadges } from './global.js';
+import { canGiveCurrency, CURRENCY, GLOBAL_KEY, withGiftBadges, badgeGifts, customBadges, customBadgeVersion, setCustomBadges, FOUNDER_BADGE } from './global.js';
 import { profileSync } from './profiles-sync.js';
 import { createOwnerActions } from './owner-actions.js';
 
@@ -1383,7 +1383,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
   function withGifts(id, value) {
     let gifts;
     try { gifts = badgeGifts(engine, id); } catch { return value; }
-    if (!gifts.gift.length && !gifts.hide.length) return value;
+    if (!gifts.gift.length && !gifts.hide.length && !(Array.isArray(value?.badges) && value.badges.includes(FOUNDER_BADGE))) return value;
     const badges = withGiftBadges(engine, id, value?.badges);
     if (value) return { ...value, badges };
     return badges.length ? { games: 0, wins: 0, fav: null, byGame: {}, badges } : value;

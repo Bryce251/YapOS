@@ -32,7 +32,7 @@ export const ACHIEVEMENTS = Object.freeze([
   { id: 'quests10', icon: '📜', name: 'Errand runner', desc: 'Complete 10 daily quests', stat: 'quests', goal: 10, reward: 50 },
   { id: 'quests50', icon: '🗺️', name: 'Quest master', desc: 'Complete 50 daily quests', stat: 'quests', goal: 50, reward: 250 },
   { id: 'tickets100', icon: '🎫', name: 'Frequent flyer', desc: 'Open 100 tickets', stat: 'tickets', goal: 100, reward: 100 },
-  { id: 'clanfound', icon: '🛡️', name: 'Founder', desc: 'Found a clan', stat: 'founded', goal: 1, reward: 50 },
+  { id: 'clanfound', icon: '🛡️', name: 'Clan founder', desc: 'Found a clan', stat: 'founded', goal: 1, reward: 50 },
   { id: 'clanjoin', icon: '🤝', name: 'Better together', desc: 'Join a clan someone else started', stat: 'joined', goal: 1, reward: 25 },
 ]);
 const BY_ID = new Map(ACHIEVEMENTS.map((a) => [a.id, a]));

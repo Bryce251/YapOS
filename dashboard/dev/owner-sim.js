@@ -14,12 +14,13 @@ export const DEV_OWNER_CATALOG = {
     { id: 'casino50', label: 'High roller', emoji: '🎰', reward: 150 },
     { id: 'party10', label: 'Party starter', emoji: '🎉', reward: 50 },
     { id: 'quests10', label: 'Errand runner', emoji: '📜', reward: 50 },
-    { id: 'clanfound', label: 'Founder', emoji: '🛡️', reward: 50 },
+    { id: 'clanfound', label: 'Clan founder', emoji: '🛡️', reward: 50 },
   ],
   badges: [
     { id: 'early-supporter', label: 'Early supporter', emoji: '🌱' },
     { id: 'bug-hunter', label: 'Bug hunter', emoji: '🐛' },
     { id: 'event-winner', label: 'Event winner', emoji: '🏅' },
+    { id: 'founder', label: 'Founder', emoji: '🔱' },
   ],
 };
 

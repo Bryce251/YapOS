@@ -573,9 +573,9 @@ test('the local test call treats Pip as the party owner and Juno as an extra adm
   const juno = 'de7e0000-0000-4000-8000-000000000002';
   const rex = 'de7e0000-0000-4000-8000-000000000003';
   const all = await (await fetch(`${dev.url}/api/activity/admins?ids=${pip},${juno},${rex}`)).json();
-  assert.deepEqual(all, { admins: [pip, juno], owner: pip, banned: [] });
+  assert.deepEqual(all, { admins: [pip, juno], owner: pip, banned: [], hiddenNames: [rex] });
   const noPip = await (await fetch(`${dev.url}/api/activity/admins?ids=${juno},${rex}`)).json();
-  assert.deepEqual(noPip, { admins: [juno], owner: null, banned: [] });
+  assert.deepEqual(noPip, { admins: [juno], owner: null, banned: [], hiddenNames: [rex] });
 });
 
 test('Jolli sees the sample flagged drawing locally and others cannot', async () => {

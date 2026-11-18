@@ -1,4 +1,5 @@
 import { profileOf, profileAvatar, cleanUsername } from './profiles.js';
+import { HIDDEN_NAME, nameHidden, handleHidden, noteHandle } from './hidden.js';
 
 const AVATAR_HOSTS = new Set(['files.yapper.website', 'www.yapin.gg']);
 export const NAME_MAX = 24;
@@ -62,9 +63,15 @@ export function person(p) {
   const id = idOf(p);
   if (!id) return null;
   const prof = profileOf(id);
-  const name = ownName(p) || !(prof && prof.displayName) ? nameOf(p) : cleanName(prof.displayName);
+  let name = ownName(p) || !(prof && prof.displayName) ? nameOf(p) : cleanName(prof.displayName);
   const own = p && typeof p === 'object' ? p : null;
-  const username = (prof && prof.username) || (own ? cleanUsername(own.username) : null) || null;
+  let username = (prof && prof.username) || (own ? cleanUsername(own.username) : null) || null;
+  if (username) noteHandle(id, username);
+  if (handleHidden(id)) {
+    if (username && name.replace(/^@+/, '').toLowerCase() === username.toLowerCase()) name = HIDDEN_NAME;
+    username = null;
+  }
+  if (nameHidden(id)) name = HIDDEN_NAME;
   const avatar = (prof && profileAvatar(prof.avatar)) || avatarOf(p) || null;
   return { id, name, username, avatar, initials: initials(name), hue: hueOf(id) };
 }

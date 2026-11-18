@@ -4,6 +4,7 @@ import { cleanText } from './profiles.js';
 import { reportIpHash } from './reports.js';
 import { offBoard } from './party-leaderboard.js';
 import { activeBan } from './party-mod.js';
+import { maskList, HIDDEN_NAME } from './hidden-names.js';
 import { censor } from '../web/activity/js/filter.js';
 import { dailyPuzzle, hiveAnswers, hiveMax, scoreHive, scoreScramble, dailyScrambleWords, dayKey, shiftDay, nextReset, isDateKey, HIVE_MAX_LETTERS, SCRAMBLE_ROUNDS } from '../web/activity/js/daily.js';
 
@@ -225,11 +226,11 @@ async function postDaily(request, env, url, t) {
   const stmts = [];
   if (improved) {
     stmts.push(
-      db.prepare('INSERT INTO party_daily_scores (day, kind, user_id, name, username, score, ms, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (day, kind, user_id) DO UPDATE SET name = excluded.name, username = excluded.username, score = excluded.score, ms = excluded.ms, at = excluded.at WHERE excluded.score > party_daily_scores.score OR (excluded.score = party_daily_scores.score AND excluded.ms < party_daily_scores.ms)')
-        .bind(day, sub.kind, sub.user.id, sub.user.name, sub.user.username, score, sub.ms, t),
+      db.prepare('INSERT INTO party_daily_scores (day, kind, user_id, name, username, score, ms, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (day, kind, user_id) DO UPDATE SET name = CASE WHEN excluded.name = ? THEN party_daily_scores.name ELSE excluded.name END, username = COALESCE(excluded.username, party_daily_scores.username), score = excluded.score, ms = excluded.ms, at = excluded.at WHERE excluded.score > party_daily_scores.score OR (excluded.score = party_daily_scores.score AND excluded.ms < party_daily_scores.ms)')
+        .bind(day, sub.kind, sub.user.id, sub.user.name, sub.user.username, score, sub.ms, t, HIDDEN_NAME),
     );
   } else {
-    stmts.push(db.prepare('UPDATE party_daily_scores SET name = ?, username = ? WHERE day = ? AND kind = ? AND user_id = ?').bind(sub.user.name, sub.user.username, day, sub.kind, sub.user.id));
+    stmts.push(db.prepare('UPDATE party_daily_scores SET name = CASE WHEN ? = ? THEN name ELSE ? END, username = COALESCE(?, username) WHERE day = ? AND kind = ? AND user_id = ?').bind(sub.user.name, HIDDEN_NAME, sub.user.name, sub.user.username, day, sub.kind, sub.user.id));
   }
   stmts.push(
     db.prepare('INSERT INTO party_daily_streaks (user_id, last_day, streak, best, updated) VALUES (?, ?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET last_day = excluded.last_day, streak = excluded.streak, best = excluded.best, updated = excluded.updated')
@@ -270,7 +271,7 @@ async function getTop(request, env, url, t) {
     ms: Number(r.ms),
     streak: r.last_day === day || r.last_day === yesterday ? Number(r.streak) || 0 : 0,
   }));
-  return json({ date: day, kind, top }, 200, { 'Cache-Control': 'public, max-age=15' });
+  return json({ date: day, kind, top: await maskList(env.DB, top, t) }, 200, { 'Cache-Control': 'public, max-age=15' });
 }
 
 export function dailyRoute(request, env, segs, url, t) {

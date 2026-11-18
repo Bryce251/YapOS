@@ -979,7 +979,7 @@
   display: block;
   width: 100%;
   max-width: 480px;
-  aspect-ratio: 4 / 1;
+  aspect-ratio: 3 / 1;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   object-fit: cover;

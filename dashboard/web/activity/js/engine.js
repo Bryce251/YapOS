@@ -3,6 +3,7 @@ import { idOf, people, person, cleanName, initials, hueOf } from './players.js';
 import { censor } from './filter.js';
 import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins, sendTextReport, sendResults, allowResultGames } from './admin.js';
 import { cleanShared } from './text.js';
+import { shownName } from './hidden.js';
 import { reasonOf } from './admin.js';
 import {
   FUN,
@@ -905,7 +906,7 @@ export function createEngine(opts) {
     const ps = playersState().p;
     return presentList()
       .filter((p) => ps[p.id] && ps[p.id].y)
-      .map((p) => ({ slot: ps[p.id].s, id: p.id, name: ps[p.id].n }))
+      .map((p) => ({ slot: ps[p.id].s, id: p.id, name: shownName(p.id, ps[p.id].n) }))
       .sort((a, b) => a.slot - b.slot);
   }
 
@@ -924,7 +925,7 @@ export function createEngine(opts) {
       players: activePlayers,
       nameOf(slot) {
         const id = idOfSlot(slot);
-        return id ? playersState().p[id].n : 'Player';
+        return id ? shownName(id, playersState().p[id].n) : 'Player';
       },
       get(key) {
         guard(key);
@@ -1363,7 +1364,7 @@ export function createEngine(opts) {
   function personFor(id) {
     const live = presentList().find((p) => p.id === id);
     const entry = playersState().p[id];
-    const name = live ? live.name : entry && entry.n ? entry.n : 'Player';
+    const name = live ? live.name : entry && entry.n ? shownName(id, entry.n) : 'Player';
     const look = live || person({ id, name }) || {};
     return { id, name, username: look.username || null };
   }
@@ -2169,10 +2170,10 @@ export function createEngine(opts) {
       list.push({
         id,
         slot: e.s,
-        name: live ? live.name : e.n,
+        name: live ? live.name : shownName(id, e.n),
         username: look.username || null,
         avatar: look.avatar || null,
-        initials: live ? live.initials : initials(e.n),
+        initials: live ? live.initials : initials(shownName(id, e.n)),
         hue: live ? live.hue : hueOf(id),
         present: Boolean(live),
         joined: Boolean(live) && Boolean(e.y),
@@ -2287,7 +2288,7 @@ export function createEngine(opts) {
   function nameAt(slot) {
     const id = Number.isInteger(slot) ? idOfSlot(slot) : null;
     const e = id ? playersState().p[id] : null;
-    return e && e.n ? e.n : 'Player';
+    return e && e.n ? shownName(id, e.n) : 'Player';
   }
 
   function startFun(game, round, keep) {
@@ -2736,6 +2737,13 @@ export function createEngine(opts) {
       typeof admins.onChange === 'function'
         ? admins.onChange(() => {
             enforceBans();
+            if (hostOnly()) {
+              try {
+                syncPlayers();
+              } catch (e) {
+                fail(e);
+              }
+            }
             changed();
           })
         : null;

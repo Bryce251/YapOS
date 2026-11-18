@@ -10,6 +10,8 @@ import { packsRoute, getPublicPack } from './party-packs.js';
 import { browsePacks, packReportsRoute } from './pack-browse.js';
 import { getPublicProfile, visibilityRoute, publicHandles } from './public-profiles.js';
 import { lookRoute, bannerRoute } from './profile-custom.js';
+import { maskList } from './hidden-names.js';
+import { staffProfileRoute, noticesRoute } from './staff-profile.js';
 import { globalHiddenIds, withoutHidden } from './owner-global.js';
 import { getSeasons } from './seasons.js';
 import { getLeaderboard } from './party-leaderboard.js';
@@ -414,17 +416,17 @@ async function getPublic(request, env, slug, t) {
   const levels = withoutHidden(data && data.levels, hidden);
   const economy = withoutHidden(data && data.economy, hidden);
   const handles = await publicHandles(env.DB, [...levels, ...economy].map((r) => r && r.id));
-  const withHandle = (list) => list.map((r) => {
+  const withHandle = (list) => maskList(env.DB, list.map((r) => {
     const handle = r && typeof r === 'object' && typeof r.id === 'string' ? handles.get(r.id.toLowerCase()) : null;
     return handle ? { ...r, handle } : r;
-  });
+  }), t, { username: ['username', 'handle'] });
   return json(
     {
       slug: GLOBAL_SLUG,
       global: true,
       currency: { name: currency.name || DEFAULT_CURRENCY.name, emoji: currency.emoji || DEFAULT_CURRENCY.emoji },
-      levels: withHandle(levels),
-      economy: withHandle(economy),
+      levels: await withHandle(levels),
+      economy: await withHandle(economy),
       updatedAt: (data && Number(data.updatedAt)) || (row && Number(row.updated)) || null,
     },
     200,
@@ -507,10 +509,12 @@ export async function handleApi(request, env, deps, url) {
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-visibility') return visibilityRoute(request, env, session, t);
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-look') return lookRoute(request, env, session, t);
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-banner') return bannerRoute(request, env, session, t);
+  if (n === 2 && route[0] === 'me' && route[1] === 'profile-notices') return noticesRoute(request, env, session, t);
   if (n === 2 && (route[0] === 'link' || (route[0] === 'me' && route[1] === 'party-signins'))) return linkSessionRoute(request, env, session, route, t);
   if (route[0] === 'party' && route[1] === 'blocked-words') return blockedWordsRoute(request, env, session, route, t);
   if (route[0] === 'party' && route[1] === 'blocked-patterns') return blockedPatternsRoute(request, env, session, route, t);
   if (route[0] === 'party' && route[1] === 'pack-reports') return packReportsRoute(request, env, session, route, url, t);
+  if (route[0] === 'party' && route[1] === 'profile') return staffProfileRoute(request, env, session, route, t);
   if (route[0] === 'party' && (route[1] === 'reports' || route[1] === 'bans' || route[1] === 'modlog')) return partyStaffRoute(request, env, session, route, url, t);
   if (route[0] === 'party') return partyRoute(request, env, session, route, t);
   if (route[0] === 'packs') return packsRoute(request, env, session, route, t);

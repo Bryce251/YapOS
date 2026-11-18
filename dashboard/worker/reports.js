@@ -3,6 +3,7 @@ import { hit, tooMany, LIMITS } from './rate.js';
 import { lookupProfiles, cleanText, MAX_PROFILE_IDS } from './profiles.js';
 import { isPartyOwner } from './party.js';
 import { buildCard } from './party-profile.js';
+import { staffHiddenFlags } from './hidden-names.js';
 import { censor } from '../web/activity/js/filter.js';
 import { cheatReportAlert } from './party-cheats.js';
 import { cleanDuration, banLive, activeBan, activeBanIds, banTermStatements, logModAction, actorName, personName, sendWarning, warningRows, warningsOut, listModLog, BAN_DURATION_NAMES } from './party-mod.js';
@@ -415,7 +416,7 @@ async function shapeReports(request, env, page, t, extraIds = [], { flags = new 
   const artists = [...replays.values()].flatMap((x) => x.authors.map((a) => a && a.id)).filter((id) => typeof id === 'string');
   const drawers = [...new Set(page.map((r) => String(r.drawer_id).toLowerCase()).concat(artists.map((id) => id.toLowerCase())))].slice(0, 90);
   const people = [...new Set(extraIds.concat(page.flatMap((r) => [r.drawer_id, r.reporter_id])).concat(artists))].slice(0, MAX_PROFILE_IDS);
-  const [admins, bans, found, notes] = await Promise.all([adminSet(env.DB, drawers), banSet(env.DB, drawers, t), lookupProfiles(env, people, t, clientIp(request)), noteCounts(env.DB, drawers, viewer)]);
+  const [admins, bans, found, notes, hiddenNames] = await Promise.all([adminSet(env.DB, drawers), banSet(env.DB, drawers, t), lookupProfiles(env, people, t, clientIp(request)), noteCounts(env.DB, drawers, viewer), staffHiddenFlags(env.DB, drawers)]);
   const reports = [];
   for (const r of page) {
     const isText = r.text_id !== null && r.text_id !== undefined;
@@ -444,6 +445,7 @@ async function shapeReports(request, env, page, t, extraIds = [], { flags = new 
         role: roleOf(env, admins, String(r.drawer_id)),
         flag: bans.has(String(r.drawer_id).toLowerCase()) ? null : flags.get(String(r.drawer_id).toLowerCase()) || null,
         notes: notes.get(String(r.drawer_id).toLowerCase()) || 0,
+        ...(hiddenNames.has(String(r.drawer_id).toLowerCase()) ? { hiddenNames: hiddenNames.get(String(r.drawer_id).toLowerCase()) } : {}),
       },
       reporter: { id: r.reporter_id, name: r.reporter_name, profile: profileOut(found.profiles.get(r.reporter_id)) },
       ...(replays.has(r.id) ? { replay: replayOut(env, replays.get(r.id), found.profiles, admins, bans) } : {}),
@@ -591,7 +593,7 @@ async function personReports(request, env, session, raw, role, t) {
   const db = env.DB;
   const viewer = notesHiddenFrom(session, role);
   const self = id === viewer;
-  const [list, agg, games, made, ban, log, isAdmin, card, flags, noteRows, warnRows, banTerms, why] = await Promise.all([
+  const [list, agg, games, made, ban, log, isAdmin, card, flags, noteRows, warnRows, banTerms, why, hiddenNames] = await Promise.all([
     db.prepare(`SELECT ${REPORT_COLUMNS} ${REPORT_FROM} WHERE r.drawer_id = ? ORDER BY r.created DESC, r.id DESC LIMIT ?`).bind(id, PERSON_REPORTS + 1).all(),
     db.prepare("SELECT COUNT(*) AS n, SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open, MIN(created) AS first, MAX(created) AS last FROM party_reports WHERE drawer_id = ?").bind(id).first(),
     db.prepare('SELECT r.game AS game, COUNT(*) AS n, SUM(CASE WHEN x.id IS NULL THEN 1 ELSE 0 END) AS drawings FROM party_reports r LEFT JOIN party_report_texts x ON x.id = r.id WHERE r.drawer_id = ? GROUP BY r.game ORDER BY n DESC, r.game ASC').bind(id).all(),
@@ -605,6 +607,7 @@ async function personReports(request, env, session, raw, role, t) {
     warningRows(db, id),
     db.prepare("SELECT created, detail FROM party_mod_log WHERE target_id = ? AND action = 'ban' ORDER BY created DESC LIMIT ?").bind(id, BAN_LOG_SHOWN * 2).all(),
     db.prepare('SELECT z.reason AS reason, COUNT(*) AS n FROM party_reports r JOIN party_report_reasons z ON z.report_id = r.id WHERE r.drawer_id = ? GROUP BY z.reason').bind(id).all(),
+    staffHiddenFlags(db, [id]),
   ]);
   const reasons = Object.fromEntries(REPORT_REASONS.map((k) => [k, 0]));
   for (const r of (why && why.results) || []) if (REPORT_REASONS.includes(r.reason)) reasons[r.reason] = Number(r.n) || 0;
@@ -633,6 +636,7 @@ async function personReports(request, env, session, raw, role, t) {
       banned: ban ? { reason: ban.reason || null, by: ban.banned_by, at: Number(ban.banned_at), until: ban.until === null || ban.until === undefined ? null : Number(ban.until), duration: ban.duration || 'forever' } : null,
       card: shown,
       flag,
+      hiddenNames: hiddenNames.get(id) || { name: false, username: false },
     },
     notes: noteRows ? notesOut(noteRows, found.profiles, session, role) : null,
     warnings: warningsOut(warnRows, found.profiles),

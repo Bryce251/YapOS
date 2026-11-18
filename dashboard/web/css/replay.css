@@ -877,3 +877,43 @@
   height: 16px;
   object-fit: contain;
 }
+
+.hidden-name-tag {
+  display: inline-flex;
+}
+
+.person-profile-tools {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.person-tool-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.person-tool-section .person-section-title,
+.person-tool-section .person-reason-field {
+  margin: 0;
+}
+
+.person-tool-section .owner-look {
+  margin: 4px 0;
+}
+
+.person-profile-tools .person-stats {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.person-profile-tools .person-stat {
+  min-width: 0;
+  align-content: start;
+}
+
+.person-profile-tools .person-stat .btn {
+  justify-self: start;
+  max-width: 100%;
+  margin-top: 4px;
+}

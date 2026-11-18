@@ -244,7 +244,9 @@ export async function withDevPartyOwner(response, url) {
   headers.delete('Content-Length');
   const banned = (Array.isArray(body.banned) ? body.banned : []).filter((id) => id !== DEV_PARTY_OWNER);
   const until = body.until && typeof body.until === 'object' ? Object.fromEntries(Object.entries(body.until).filter(([id]) => banned.includes(id))) : {};
-  return new Response(JSON.stringify({ admins: ids.filter((id) => given.has(id)), owner: DEV_PARTY_OWNER, banned, ...(Object.keys(until).length ? { until, now: body.now } : {}) }), { status: 200, headers });
+  const hidden = {};
+  for (const k of ['hiddenNames', 'hiddenUsernames']) if (Array.isArray(body[k]) && body[k].length) hidden[k] = body[k];
+  return new Response(JSON.stringify({ admins: ids.filter((id) => given.has(id)), owner: DEV_PARTY_OWNER, banned, ...(Object.keys(until).length ? { until, now: body.now } : {}), ...hidden }), { status: 200, headers });
 }
 
 export function seedPartyAdmins(db, ownerId, t = Date.now()) {
@@ -589,7 +591,7 @@ export const DEV_LOOKS = Object.freeze({
 
 export const DEV_BANNER_ID = 'b-devbanner1';
 
-export function devBannerPng(width = 640, height = 160) {
+export function devBannerPng(width = 750, height = 250) {
   const rows = [];
   for (let y = 0; y < height; y++) {
     const row = Buffer.alloc(1 + width * 3);
@@ -624,7 +626,7 @@ export function seedProfileLooks(db, t = Date.now()) {
   upsertProfile(db, IDS.member, 'sam', 'Sam', t);
   const png = devBannerPng();
   const hash = createHash('sha256').update(png).digest('hex').slice(0, 16);
-  db.raw.prepare('INSERT INTO profile_banners (user_id, id, image, mime, hash, width, height, bytes, updated) VALUES (?, ?, ?, ?, ?, 640, 160, ?, ?) ON CONFLICT (user_id) DO NOTHING')
+  db.raw.prepare('INSERT INTO profile_banners (user_id, id, image, mime, hash, width, height, bytes, updated) VALUES (?, ?, ?, ?, ?, 750, 250, ?, ?) ON CONFLICT (user_id) DO NOTHING')
     .run(IDS.member, DEV_BANNER_ID, new Uint8Array(png), 'image/png', hash, png.length, t);
   const look = db.raw.prepare('INSERT INTO profile_custom (user_id, v, data, updated) VALUES (?, 1, ?, ?) ON CONFLICT (user_id) DO NOTHING');
   look.run(IDS.owner, JSON.stringify(DEV_LOOKS.owner), t);
@@ -822,6 +824,44 @@ export function seedPartyLeaderboard(db, t = Date.now()) {
     const [id, name, username] = people[k];
     award.run(last, rank, id, name, username, pts, t);
   });
+}
+
+export const DEV_HIDDEN_PERSON = DEV_REPORT_DRAWER;
+export const DEV_HIDDEN_BANNER_ID = 'b-devbanner2';
+export const DEV_HIDDEN_LOOK = Object.freeze({
+  v: 1,
+  pins: ['first-game'],
+  order: ['about', 'stats', 'badges', 'favourites', 'achievements', 'placings'],
+  hidden: [],
+  nameColour: '#e0457b',
+  nameGradient: null,
+  nameFont: 'serif',
+  accent: '#e0457b',
+  banner: 'image',
+  bio: 'Best artist in every call. Ask anyone. Seriously, ask them.',
+  pronouns: 'he/him',
+  status: 'Drawing something spicy',
+  statusEmoji: '\u{1F336}️',
+  ring: 'accent',
+  density: 'cozy',
+  featured: 'level',
+});
+
+export function seedHiddenName(db, t = Date.now()) {
+  const rex = fakeProfile(DEV_HIDDEN_PERSON);
+  upsertProfile(db, rex.id, rex.username, rex.display_name, t);
+  db.raw.prepare("INSERT INTO public_profiles (user_id, username, username_key, name, level, xp, shards, badges, achievements, season, clan, hidden, updated) VALUES (?, ?, ?, ?, 6, 1400, NULL, ?, '[]', '[]', NULL, 0, ?) ON CONFLICT (user_id) DO NOTHING")
+    .run(rex.id, rex.username, rex.username.toLowerCase(), rex.display_name, JSON.stringify(['first-game']), t);
+  const png = devBannerPng(900, 300);
+  const hash = createHash('sha256').update(png).digest('hex').slice(0, 16);
+  db.raw.prepare('INSERT INTO profile_banners (user_id, id, image, mime, hash, width, height, bytes, updated) VALUES (?, ?, ?, ?, ?, 900, 300, ?, ?) ON CONFLICT (user_id) DO NOTHING')
+    .run(rex.id, DEV_HIDDEN_BANNER_ID, new Uint8Array(png), 'image/png', hash, png.length, t);
+  db.raw.prepare('INSERT INTO profile_custom (user_id, v, data, updated) VALUES (?, 1, ?, ?) ON CONFLICT (user_id) DO NOTHING').run(rex.id, JSON.stringify(DEV_HIDDEN_LOOK), t);
+  db.raw.prepare("INSERT INTO party_hidden_names (user_id, kind, reason, by_id, by_name, at) VALUES (?, 'name', ?, ?, 'Jolli', ?) ON CONFLICT (user_id, kind) DO NOTHING")
+    .run(rex.id, 'Display name breaks the rules', IDS.owner, t - 3 * 60 * 60_000);
+  db.raw.prepare("INSERT INTO party_mod_log (id, actor_id, actor_name, action, target_id, target_name, detail, created) VALUES ('devmodlog0090', ?, 'Jolli', 'name_hide', ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING")
+    .run(IDS.owner, rex.id, rex.display_name, JSON.stringify({ what: 'name', reason: 'Display name breaks the rules' }), t - 3 * 60 * 60_000);
+  return { id: rex.id, name: rex.display_name, username: rex.username };
 }
 
 export function seedServerStats(db, serverId, t = Date.now()) {
@@ -1191,6 +1231,7 @@ export async function startDev({
   seedCheatAlerts(db);
   seedBlockedWords(db);
   seedPartyModeration(db);
+  seedHiddenName(db);
   seedServerStats(db, IDS.server);
   seedOwnerPanel(db);
   seedGlobalBoard(db);

@@ -2,6 +2,7 @@ import { ID_RE, USER_BODY_LIMIT, HttpError, json, fail, readJson, clientIp } fro
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { parseIds, lookupProfiles, cleanAvatar, cleanText } from './profiles.js';
 import { activeBans, logModAction, actorName, personName } from './party-mod.js';
+import { hiddenNameMap, flagsFor } from './hidden-names.js';
 
 export const MAX_PARTY_ADMINS = 50;
 export const USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,7 +38,11 @@ export async function getActivityAdmins(request, env, url, t) {
     const end = barred.get(id.toLowerCase());
     if (end) until[id] = end;
   }
-  return json({ admins, owner, banned, ...(Object.keys(until).length ? { until, now: t } : {}) }, 200, { 'Cache-Control': 'private, max-age=30' });
+  const hiddenMap = await hiddenNameMap(env.DB, t);
+  const hiddenNames = ids.filter((id) => (flagsFor(hiddenMap, id) || {}).name);
+  const hiddenUsernames = ids.filter((id) => (flagsFor(hiddenMap, id) || {}).username);
+  const hidden = { ...(hiddenNames.length ? { hiddenNames } : {}), ...(hiddenUsernames.length ? { hiddenUsernames } : {}) };
+  return json({ admins, owner, banned, ...(Object.keys(until).length ? { until, now: t } : {}), ...hidden }, 200, { 'Cache-Control': 'private, max-age=30' });
 }
 
 export function activityAdminsRoute(request, env, url, t) {

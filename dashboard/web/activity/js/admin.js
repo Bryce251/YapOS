@@ -1,4 +1,5 @@
 import { findBlocked, isBlockedGameWord, censor } from './filter.js';
+import { setHiddenName, forgetHidden, resetHidden } from './hidden.js';
 import { decodeStroke, fitLevels } from './games/ink.js';
 import { trimReplay, inkMatches, SOLO_GAMES } from './games/replayformat.js';
 export const ADMINS_EVENT = 'yapos:admins';
@@ -64,6 +65,7 @@ export function resetAdmins() {
   busy = new Map();
   listeners = new Set();
   env = defaults();
+  resetHidden();
   resetParty();
 }
 
@@ -151,6 +153,7 @@ function track(id, at) {
     admins.delete(old);
     banned.delete(old);
     bannedUntil.delete(old);
+    forgetHidden(old);
   }
 }
 
@@ -173,6 +176,8 @@ function apply(ids, body) {
   const yes = new Set(body.admins.filter((x) => typeof x === 'string' && asked.has(x)));
   const out = new Set((Array.isArray(body.banned) ? body.banned : []).filter((x) => typeof x === 'string' && asked.has(x)));
   const ends = body.until && typeof body.until === 'object' && !Array.isArray(body.until) ? body.until : {};
+  const hideName = new Set((Array.isArray(body.hiddenNames) ? body.hiddenNames : []).filter((x) => typeof x === 'string' && asked.has(x)));
+  const hideHandle = new Set((Array.isArray(body.hiddenUsernames) ? body.hiddenUsernames : []).filter((x) => typeof x === 'string' && asked.has(x)));
   const told = Number(body.now);
   const skew = Number.isFinite(told) && told > 0 ? Math.round((env.now() - told) / 60000) * 60000 : 0;
   let changed = false;
@@ -180,6 +185,7 @@ function apply(ids, body) {
   for (const id of ids) {
     failedAt.delete(id);
     track(id, at);
+    if (setHiddenName(id, hideName.has(id), hideHandle.has(id))) changed = true;
     if (yes.has(id) && !admins.has(id)) {
       admins.add(id);
       changed = true;

@@ -49,7 +49,10 @@ export function detectChannels(channels) {
 export function createEngine({ bot, config = {}, store = createMemoryStore(), log = createLogger(), appsDir = path.join(ROOT, 'apps'), freshness: freshnessOptions = {}, scheduler: schedulerOptions = {} } = {}) {
   const apps = createAppRegistry();
   const settings = createSettings({ store, apps });
-  const isBotOwner = (uid) => !!uid && uid === (config.ownerId || bot.me?.bot?.owner_id);
+  const isBotOwner = (uid) => {
+    const owner = config.ownerId || bot.me?.bot?.owner_id;
+    return !!uid && !!owner && String(uid).toLowerCase() === String(owner).toLowerCase();
+  };
   const perms = createPerms({ bot, settings, isBotOwner });
   const caps = createCaps({ settings, log });
   const budget = createBudget({ bot, verified: !!config.verified, log });

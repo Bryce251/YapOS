@@ -594,6 +594,10 @@
   transition: transform var(--dur-fast) var(--ease);
 }
 
+.pcard .is-special {
+  border-color: var(--gold);
+}
+
 .pcard-badge.is-pinned,
 .pcard-all-item.is-pinned {
   border-color: color-mix(in srgb, var(--pc-ac-mix) 60%, transparent);
@@ -877,9 +881,6 @@
 @keyframes pcard-fade {
   from {
     opacity: 0;
-  }
-  to {
-    opacity: 1;
   }
 }
 

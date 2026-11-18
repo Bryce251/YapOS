@@ -1,3 +1,5 @@
+import { badgeKindOf, specialFirst } from '../web/js/profile-look.js';
+
 export const PARTY_BADGES = Object.freeze([
   Object.freeze({ id: 'first-game', label: 'First game', emoji: '🎈', hint: 'Finish your first YapOS Party game.' }),
   Object.freeze({ id: 'games-10', label: 'Party regular', emoji: '🎲', hint: 'Play 10 YapOS Party games.' }),
@@ -19,6 +21,22 @@ export const PARTY_BADGES = Object.freeze([
 ]);
 
 export const BADGE_IDS = Object.freeze(PARTY_BADGES.map((b) => b.id));
+
+export function badgeTier(id) {
+  return badgeKindOf(id, (k) => BADGE_IDS.includes(k));
+}
+
+export function specialBadgesFirst(ids) {
+  return specialFirst(ids, badgeTier);
+}
+
+export const FOUNDER_BADGE = 'founder';
+export const FOUNDER_ONLY = 'Only Jolli can have the Founder badge.';
+
+export function withoutFounder(ids, isOwner) {
+  const list = Array.isArray(ids) ? ids : [];
+  return isOwner ? list : list.filter((id) => id !== FOUNDER_BADGE);
+}
 
 export const COUNTER_GAMES = Object.freeze({
   fakerCaught: 'odd',

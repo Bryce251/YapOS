@@ -3,14 +3,14 @@ import { hit, tooMany } from './rate.js';
 import { getSession, touchSession } from './sessions.js';
 import { isPartyOwner, USER_ID_RE } from './party.js';
 import { cleanText, cleanUsername, cleanAvatar } from './profiles.js';
-import { PARTY_BADGES, badgesFor, partySeasonBadges, partySeasonBadgeId, seasonBadgeInfo } from './party-badges.js';
+import { PARTY_BADGES, badgesFor, partySeasonBadges, partySeasonBadgeId, seasonBadgeInfo, specialBadgesFirst, FOUNDER_BADGE, FOUNDER_ONLY, withoutFounder } from './party-badges.js';
 import { PARTY_OWNER_KINDS, validatePartyValue, partyBoardView, partyActionPlan, partyActionDone } from './owner-party.js';
 import { cheatsRoute } from './owner-cheats.js';
 import { logModAction, actorName, personName, ownerLogAction } from './party-mod.js';
 import { GLOBAL_OWNER_KINDS, globalActionPlan, isGlobalHidden } from './owner-global.js';
 import { accountState, requireAccount, noAccountStatement } from './owner-account.js';
 import { listCustomBadges, catalogEntry, isCustomBadge, liveBadges, badgesRoute } from './custom-badges.js';
-import { ownerLookView, ownerLookRoute } from './profile-custom.js';
+import { staffLookView } from './profile-custom.js';
 
 export const OWNER_ACTIONS_PER_MIN = 120;
 export const OWNER_READS_PER_MIN = 300;
@@ -362,7 +362,7 @@ async function userDetail(env, raw, t) {
   const party = { games: Number(stats && stats.games) || 0, wins: Number(stats && stats.wins) || 0 };
   const earned = badgesFor({ ...party, counters: isPlainObject(counters) ? counters : {}, dailyBest: Number(streak && streak.best) || 0 });
   const stored = idList(parseJsonSafe(pub && pub.badges, []));
-  user.badges = [...new Set([...earned, ...stored])];
+  user.badges = specialBadgesFirst([...new Set([...earned, ...stored])]);
   user.earnedBadges = earned;
   user.achievements = idList(parseJsonSafe(pub && pub.achievements, []));
   const season = parseJsonSafe(pub && pub.season, []);
@@ -378,10 +378,11 @@ async function userDetail(env, raw, t) {
   user.party = party;
   user.hidden = Boolean(pub && Number(pub.hidden));
   user.globalHidden = globalHidden;
+  user.isOwner = isPartyOwner(env, id);
   user.partyBoard = await partyBoardView(db, id, t, isPlainObject(counters) ? counters : {});
   user.known = Boolean(pub || prof || (sess && sess.user_id) || known || stats || user.partyBoard.points || user.partyBoard.games);
   user.account = await accountState(db, id, t);
-  user.look = await ownerLookView(db, id).catch(() => null);
+  user.look = await staffLookView(db, id).catch(() => null);
   return json({ user, actions: rowsOf(actions).map(actionOut), catalog });
 }
 
@@ -417,6 +418,7 @@ async function postAction(request, env, session, t) {
   if (!limit.ok) return tooMany(limit.retryAfter, "That's a lot of changes in one minute. Wait a moment and try again.");
   const catalog = await readCatalog(env.DB);
   const a = validateAction(body, catalog);
+  if (a.kind === 'badge.grant' && a.ref === FOUNDER_BADGE && !isPartyOwner(env, a.user)) throw bad('founder_only', FOUNDER_ONLY);
   const id = randomToken(12);
   const db = env.DB;
   await requireAccount(db, a, OWNER_KINDS[a.kind], t);
@@ -451,11 +453,6 @@ export async function ownerApi(request, env, route, url, t, { csrf }) {
   if (n === 3 && route[1] === 'users') {
     if (readOnly) return userDetail(env, route[2], t);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
-  }
-  if (n === 4 && route[1] === 'users' && (route[3] === 'banner' || route[3] === 'look-text')) {
-    const id = String(route[2] || '').trim().toLowerCase();
-    if (!USER_ID_RE.test(id)) return fail(400, 'bad_user', "That user id doesn't look right.");
-    return ownerLookRoute(request, env, session, id, route[3] === 'banner' ? 'banner' : 'text', t);
   }
   if (n === 2 && route[1] === 'actions') {
     if (readOnly) return listActions(env, url);
@@ -548,6 +545,7 @@ export async function postOwnerResults(request, env, t) {
       db.prepare("UPDATE owner_actions SET status = ?, result = ?, updated = ? WHERE id = ? AND status IN ('queued', 'sent')").bind(ok ? 'done' : 'failed', message, t, row.id),
     ];
     const after = ok ? cleanAfter(r.after) : null;
+    if (after && after.badges) after.badges = withoutFounder(after.badges, isPartyOwner(env, row.user_id));
     if (after) stmts.push(...afterStatements(db, row.user_id, after, t));
     if (!ok && r.noAccount === true) stmts.push(noAccountStatement(db, row.user_id, t));
     await db.batch(stmts);

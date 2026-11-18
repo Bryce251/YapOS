@@ -144,7 +144,7 @@ test('View all badges lists every badge grouped by type with a description', asy
   const sheet = document.querySelector('.allbadges');
   assert.ok(sheet);
   const groups = sheet.querySelectorAll('.allbadges-group').map((g) => g.dataset.group);
-  assert.deepEqual(groups, ['party', 'special', 'custom', 'season', 'achievement']);
+  assert.deepEqual(groups, ['custom', 'special', 'party', 'season', 'achievement']);
   assert.match(sheet.textContent, /Win 10 YapOS Party games\./);
   assert.match(sheet.textContent, /Made by Jolli/);
   assert.equal(sheet.querySelectorAll('.allbadges-row.is-pinned').length, 2);
@@ -174,6 +174,9 @@ test('the editor pins badges, reorders them with buttons or drag and drop, and s
   assert.equal(save.disabled, true);
   const pinRows = () => root.querySelectorAll('.pe-pins .pe-sort-row').map((r) => r.getAttribute('data-key'));
   assert.deepEqual(pinRows(), ['ach:messages-10k', 'wins-10']);
+  const picks = root.querySelectorAll('.pe-pick-btn');
+  assert.deepEqual(picks.map((b) => b.getAttribute('data-key')), ['c-abcdefgh', 'vip', 'first-game', 'wins-10', 'season-party-1-2026-09', 'ach:messages-10k'], 'one-of-a-kind and special badges lead the pin picker');
+  assert.deepEqual(picks.map((b) => b.classList.contains('is-special')), [true, true, false, false, false, false]);
   click(root.querySelector('.pe-pick-btn[data-key="first-game"]'));
   click(root.querySelector('.pe-pick-btn[data-key="vip"]'));
   click(root.querySelector('.pe-pick-btn[data-key="c-abcdefgh"]'));
@@ -313,8 +316,9 @@ test('the Shards big number is only offered when Shards are shown, and banner cr
   const { root, ctx } = await openEditor();
   click(root.querySelector('#pe-tab-card'));
   assert.equal(choice(root, 'shards').disabled, true);
-  assert.deepEqual(bannerCrop(2000, 300), { sx: 400, sy: 0, sw: 1200, sh: 300 });
-  assert.deepEqual(bannerCrop(1200, 1200), { sx: 0, sy: 450, sw: 1200, sh: 300 });
+  assert.deepEqual(bannerCrop(2000, 300), { sx: 550, sy: 0, sw: 900, sh: 300 });
+  assert.deepEqual(bannerCrop(1200, 1200), { sx: 0, sy: 400, sw: 1200, sh: 400 });
+  assert.deepEqual(bannerCrop(1500, 500), { sx: 0, sy: 0, sw: 1500, sh: 500 });
   assert.equal(BANNER_API, '/api/me/profile-banner');
   ctx.abort();
 });

@@ -47,6 +47,11 @@ const num = (v) => {
 };
 const str = (v) => (typeof v === 'string' ? v.trim() : '');
 
+export function hiddenHintText(r) {
+  if (!r || !r.hiddenHint) return '';
+  return r.hiddenHint === '-' ? 'Hidden by YapOS staff' : `Hidden by YapOS staff (id ${r.hiddenHint})`;
+}
+
 export function normalizeLeaderboard(data) {
   const raw = data && typeof data === 'object' ? data : {};
   const rows = (Array.isArray(raw.rows) ? raw.rows : []).filter((r) => r && typeof r === 'object').map((r, i) => {
@@ -63,6 +68,7 @@ export function normalizeLeaderboard(data) {
       best: num(r.best),
       bestGame: GAME_IDS.includes(r.bestGame) ? r.bestGame : null,
       link: r.link === true && Boolean(username),
+      ...(r.nameHidden === true || r.usernameHidden === true ? { hiddenHint: str(r.hint).slice(0, 12) || '-' } : {}),
     };
   });
   const me = raw.me && typeof raw.me === 'object' && num(raw.me.rank) > 0 ? { rank: num(raw.me.rank), value: num(raw.me.value) } : null;
@@ -111,7 +117,7 @@ export function boardRows(board, rows, meId = null) {
       h('span', { class: 'plb-who' },
         r.link
           ? h('a', { href: profilePath(r.username), class: 'plb-name', dataset: { link: '' }, text: r.name })
-          : h('span', { class: 'plb-name', text: r.name }),
+          : h('span', { class: 'plb-name', text: r.name, attrs: { title: hiddenHintText(r) || null } }),
         h('span', { class: 'plb-meta', text: detail(board, r) })),
       h('span', { class: 'plb-value', text: valueText(board, r.value) }))));
 }

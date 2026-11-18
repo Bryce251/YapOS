@@ -14,7 +14,7 @@ const CATALOG = {
     { id: 'level10', label: 'Rising star', emoji: '📈', reward: 100 },
     { id: 'bad id!', label: 'Nope' },
   ],
-  badges: [{ id: 'founder', label: 'Founder', emoji: '🛡️' }],
+  badges: [{ id: 'vip', label: 'VIP', emoji: '🎩' }],
 };
 
 async function setup() {
@@ -90,12 +90,12 @@ test('search finds people across public profiles, the profile cache and dashboar
 
 test('the user page shows their card, actions and the catalog', async () => {
   const { h, owner } = await setup();
-  profile(h, uid(1), { badges: '["founder"]', achievements: '["msgs1k"]', clan: JSON.stringify({ name: 'Owls', tag: 'OWL', colour: '#7C5CFF' }), season: JSON.stringify([{ month: '2026-10', rank: 1, kind: 'xp' }]) });
+  profile(h, uid(1), { badges: '["vip"]', achievements: '["msgs1k"]', clan: JSON.stringify({ name: 'Owls', tag: 'OWL', colour: '#7C5CFF' }), season: JSON.stringify([{ month: '2026-10', rank: 1, kind: 'xp' }]) });
   h.db.raw.prepare("INSERT INTO party_stats (user_id, games, wins, by_game, counters, updated) VALUES (?, 12, 3, '{}', '{}', ?)").run(uid(1), h.clock.t);
   const body = await (await h.api('GET', `/api/owner/users/${uid(1)}`, owner)).json();
   assert.equal(body.user.name, 'Pip');
   assert.deepEqual(body.user.party, { games: 12, wins: 3 });
-  assert.deepEqual(body.user.badges, ['first-game', 'games-10', 'founder', 'season-xp-1-2026-10']);
+  assert.deepEqual(body.user.badges, ['vip', 'first-game', 'games-10', 'season-xp-1-2026-10']);
   assert.deepEqual(body.user.earnedBadges, ['first-game', 'games-10']);
   assert.deepEqual(body.user.achievements, ['msgs1k']);
   assert.deepEqual(body.user.clan, { name: 'Owls', tag: 'OWL', colour: '#7c5cff' });
@@ -103,7 +103,7 @@ test('the user page shows their card, actions and the catalog', async () => {
   assert.deepEqual(body.actions, []);
   assert.deepEqual(body.catalog.achievements.map((a) => a.id), ['msgs1k', 'level10']);
   assert.equal(body.catalog.achievements[0].reward, 100);
-  assert.ok(body.catalog.badges.some((b) => b.id === 'founder' && b.source === 'bot'));
+  assert.ok(body.catalog.badges.some((b) => b.id === 'vip' && b.source === 'bot'));
   assert.ok(body.catalog.badges.some((b) => b.id === 'wins-10' && b.source === 'party'));
   assert.equal(body.catalog.kinds.length, Object.keys(OWNER_KINDS).length);
   const stranger = await (await h.api('GET', `/api/owner/users/${uid(8)}`, owner)).json();
@@ -169,7 +169,7 @@ test('a gift is queued, sent to the bot once, re-sent after two minutes and fini
   advance(h, 2 * MIN + 1);
   assert.equal((await h.poll()).owner.length, 2);
   const res = await h.bot('POST', '/bot/owner/results', { results: [
-    { id: a.id, ok: true, message: 'Gave 500 💎 Shards.', after: { shards: 750, level: 5, xp: 1200, achievements: ['msgs1k'], badges: ['founder'] } },
+    { id: a.id, ok: true, message: 'Gave 500 💎 Shards.', after: { shards: 750, level: 5, xp: 1200, achievements: ['msgs1k'], badges: ['vip'] } },
     { id: g.body.action.id, ok: false, message: 'They already have that achievement.' },
     { id: 'missing-one', ok: true },
     { nope: true },
@@ -186,7 +186,7 @@ test('a gift is queued, sent to the bot once, re-sent after two minutes and fini
   assert.equal(after.user.level, 5);
   assert.equal(after.user.xp, 1200);
   assert.deepEqual(after.user.achievements, ['msgs1k']);
-  assert.ok(after.user.badges.includes('founder'));
+  assert.ok(after.user.badges.includes('vip'));
   advance(h, 3 * MIN);
   assert.deepEqual((await h.poll()).owner, []);
 });

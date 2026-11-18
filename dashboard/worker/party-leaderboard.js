@@ -4,6 +4,7 @@ import { cleanAvatar, cleanUsername } from './profiles.js';
 import { safeName } from './public-profiles.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 import { banLive } from './party-mod.js';
+import { maskList, HIDDEN_NAME } from './hidden-names.js';
 
 export const LEADERBOARD_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel', 'typerace', 'memory', 'beatdrop', 'closest', 'namefive']);
 export const LEADERBOARD_BOARDS = Object.freeze(['points', 'wins', 'games', 'best']);
@@ -50,7 +51,7 @@ export function pointsStatements(db, result, banned, day, t) {
     const gate = [p.id, day, DAILY_GAMES_CAP, pts, DAILY_POINTS_CAP, p.id, day];
     const won = p.won ? 1 : 0;
     stmts.push(
-      db.prepare(`INSERT INTO party_points (user_id, name, username, points, games, wins, best, best_game, updated) SELECT ?, ?, ?, a, 1, ?, ?, ?, ? FROM (${GATE}) WHERE g = 1 ON CONFLICT (user_id) DO UPDATE SET name = excluded.name, username = COALESCE(excluded.username, party_points.username), points = party_points.points + excluded.points, games = party_points.games + 1, wins = party_points.wins + excluded.wins, best_game = CASE WHEN excluded.best > party_points.best THEN excluded.best_game ELSE party_points.best_game END, best = MAX(party_points.best, excluded.best), updated = excluded.updated`)
+      db.prepare(`INSERT INTO party_points (user_id, name, username, points, games, wins, best, best_game, updated) SELECT ?, ?, ?, a, 1, ?, ?, ?, ? FROM (${GATE}) WHERE g = 1 ON CONFLICT (user_id) DO UPDATE SET name = CASE WHEN excluded.name = '${HIDDEN_NAME}' THEN party_points.name ELSE excluded.name END, username = COALESCE(excluded.username, party_points.username), points = party_points.points + excluded.points, games = party_points.games + 1, wins = party_points.wins + excluded.wins, best_game = CASE WHEN excluded.best > party_points.best THEN excluded.best_game ELSE party_points.best_game END, best = MAX(party_points.best, excluded.best), updated = excluded.updated`)
         .bind(p.id, p.name, p.username, won, pts, result.game, t, ...gate),
       db.prepare(`INSERT INTO party_points_game (user_id, game, points, games, wins, best, updated) SELECT ?, ?, a, 1, ?, ?, ? FROM (${GATE}) WHERE g = 1 ON CONFLICT (user_id, game) DO UPDATE SET points = party_points_game.points + excluded.points, games = party_points_game.games + 1, wins = party_points_game.wins + excluded.wins, best = MAX(party_points_game.best, excluded.best), updated = excluded.updated`)
         .bind(p.id, result.game, won, pts, t, ...gate),
@@ -280,7 +281,8 @@ export async function getLeaderboard(request, env, url, t) {
     if (boards.size > 200) boards.delete(boards.keys().next().value);
   }
   const me = await myRank(env.DB, q.board, q.game, q.me, month);
-  const out = { board: q.board, game: q.game, period: q.period, rows: entry.rows, me, total: entry.total, updated: entry.at };
+  const rows = await maskList(env.DB, entry.rows, t, { link: ['link'] });
+  const out = { board: q.board, game: q.game, period: q.period, rows, me, total: entry.total, updated: entry.at };
   if (info) out.month = info;
   return json(out, 200, { 'Cache-Control': 'public, max-age=30' });
 }

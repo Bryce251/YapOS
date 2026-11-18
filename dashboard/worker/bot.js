@@ -8,6 +8,8 @@ import { postSeason } from './seasons.js';
 import { postStats } from './server-stats.js';
 import { ownerPoll, postOwnerResults, postOwnerCatalog } from './owner.js';
 import { botCustomBadges } from './custom-badges.js';
+import { withoutFounder } from './party-badges.js';
+import { isPartyOwner } from './party.js';
 
 const RESULTS_LIMIT = 2 * 1024 * 1024;
 const PROFILE_UPLOAD_LIMIT = 256 * 1024;
@@ -167,6 +169,7 @@ async function putProfileUpload(request, env, t) {
       continue;
     }
     seen.add(c.id);
+    c.badges = withoutFounder(c.badges, isPartyOwner(env, c.id));
     cleaned.push(c);
   }
   return storeProfiles(env, body, t, { stmts: snapshotStatements(env.DB, cleaned, t), skip: isSnapshot, out: { snapshots: cleaned.length, snapshotsIgnored: skipped } });

@@ -7,17 +7,71 @@ import { profilePath } from '../router.js';
 import { publicFrame } from '../public-frame.js';
 import { levelProgress, normalizeProfile, SEASON_KINDS } from '../community-data.js';
 import { medalFor } from '../public-data.js';
-import { ACH_PREFIX, defaultLook, featuredValue, readLook, themeColours } from '../profile-look.js';
+import { ACH_PREFIX, SPECIAL_KINDS, badgeKindOf, defaultLook, featuredValue, readLook, specialFirst, themeColours } from '../profile-look.js';
 import { openProfileEditor } from './profile-editor.js';
 
 export const PROFILE_API = '/api/u';
+export const NOTICES_API = '/api/me/profile-notices';
+export const HIDDEN_HANDLE = 'hidden';
+const RESET_TEXT = Object.freeze({
+  profile_banner_remove: 'your banner picture was removed',
+  profile_name_style_reset: 'your name colour and style were reset',
+  profile_pins_clear: 'your pinned badges were cleared',
+  profile_reset: 'your whole profile look was reset to the default',
+});
+const FIELD_TEXT = Object.freeze({ bio: 'about me', status: 'status', pronouns: 'pronouns' });
+
+function joinWords(list) {
+  return list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}` : list[0] || '';
+}
+
+export function resetText(r) {
+  if (!r || typeof r !== 'object') return '';
+  if (RESET_TEXT[r.action]) return RESET_TEXT[r.action];
+  if (r.action === 'profile_text_clear') {
+    const fields = (Array.isArray(r.fields) ? r.fields : []).filter((f) => FIELD_TEXT[f]).map((f) => FIELD_TEXT[f]);
+    return fields.length ? `your ${joinWords(fields)} ${fields.length === 1 && fields[0] !== 'pronouns' ? 'was' : 'were'} cleared` : 'some of your profile text was cleared';
+  }
+  return '';
+}
+
+export function noticeLines(data) {
+  const out = [];
+  const hidden = data && data.hidden && typeof data.hidden === 'object' ? data.hidden : {};
+  const both = Boolean(hidden.name && hidden.username);
+  if (both) out.push({ kind: 'hidden', text: 'Staff hid your display name and username on YapOS. Others see “Hidden name” and “@hidden” instead. Your Yapin’ name is not changed.' });
+  else if (hidden.name) out.push({ kind: 'hidden', text: 'Staff hid your display name on YapOS. Others see “Hidden name” instead. Your Yapin’ name is not changed.' });
+  else if (hidden.username) out.push({ kind: 'hidden', text: 'Staff hid your username on YapOS. Others see “@hidden” instead. Your Yapin’ username is not changed.' });
+  const seen = new Set();
+  const parts = [];
+  for (const r of Array.isArray(data?.resets) ? data.resets : []) {
+    const text = resetText(r);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    parts.push({ text, at: Number(r.at) || 0 });
+  }
+  if (parts.length) {
+    const words = joinWords(parts.map((x) => x.text));
+    out.push({ kind: 'reset', text: `Staff reset part of your profile: ${words}. You can change it again in Customize profile, as long as it follows the rules.`, at: Math.max(...parts.map((x) => x.at)) });
+  }
+  return out;
+}
+
+export function noticeBox(lines) {
+  if (!Array.isArray(lines) || !lines.length) return null;
+  return h('div', { class: 'notice profile-staff-notice', attrs: { role: 'status' } },
+    icon('info', { size: 16 }),
+    h('div', { class: 'profile-staff-notice-text' }, ...lines.map((l) => h('p', { text: l.text }))));
+}
 export const BADGE_TILES = 12;
+export const BANNER_COLLAPSE = 0.62;
+export const SHRINK_VAR = '--shrink';
 const NS = 'http://www.w3.org/2000/svg';
 
 export const BADGE_GROUPS = Object.freeze([
-  Object.freeze({ id: 'party', label: 'Party badges', blurb: 'Earned by playing YapOS Party.' }),
-  Object.freeze({ id: 'special', label: 'Special badges', blurb: 'Given by the YapOS team.' }),
   Object.freeze({ id: 'custom', label: 'One-of-a-kind badges', blurb: 'Made by Jolli for special moments.' }),
+  Object.freeze({ id: 'special', label: 'Special badges', blurb: 'Given by the YapOS team.' }),
+  Object.freeze({ id: 'party', label: 'Party badges', blurb: 'Earned by playing YapOS Party.' }),
   Object.freeze({ id: 'season', label: 'Season badges', blurb: 'Top finishes in a monthly season.' }),
   Object.freeze({ id: 'achievement', label: 'Achievements', blurb: 'Earned with the YapOS bot in your servers.' }),
 ]);
@@ -63,14 +117,14 @@ function clanTag(clan) {
   if (!clan) return null;
   const el = h('span', { class: 'clan-tag', title: clan.name },
     clan.tag ? h('span', { class: 'clan-tag-code', text: `[${clan.tag}]` }) : null,
-    h('span', { class: 'clan-tag-name', text: clan.name }));
+    clan.tag && String(clan.tag).trim().toLowerCase() === String(clan.name || '').trim().toLowerCase() ? null : h('span', { class: 'clan-tag-name', text: clan.name }));
   if (clan.colour) el.style.setProperty('--clan', clan.colour);
   return el;
 }
 
 function tileGrid(items, label, pinned = new Set()) {
   return h('ul', { class: 'badge-grid', attrs: { 'aria-label': label } },
-    ...items.map((b) => h('li', { class: ['badge-tile', b.note ? 'has-note' : '', pinned.has(b.key) ? 'is-pinned' : ''], title: b.note ? `${b.label}: ${b.note}` : b.label },
+    ...items.map((b) => h('li', { class: ['badge-tile', b.note ? 'has-note' : '', pinned.has(b.key) ? 'is-pinned' : '', isSpecial(b) ? 'is-special' : ''], title: b.note ? `${b.label}: ${b.note}` : b.label },
       b.image ? badgeArt(b, 'badge-tile-emoji', 'badge-tile-img') : h('span', { class: 'badge-tile-emoji', attrs: { 'aria-hidden': 'true' }, text: b.emoji }),
       h('span', { class: 'badge-tile-label', text: b.label }),
       b.note ? h('span', { class: 'badge-tile-note', text: b.note }) : null)));
@@ -99,15 +153,20 @@ function placingRow(s) {
 }
 
 export function badgeKind(id, hints = {}) {
-  if (/^c-[a-z0-9]{8}$/.test(id)) return 'custom';
-  if (id.startsWith('season-')) return 'season';
-  if (Object.prototype.hasOwnProperty.call(hints, id)) return 'party';
-  return 'special';
+  return badgeKindOf(id, (k) => Object.prototype.hasOwnProperty.call(hints, k));
+}
+
+export function isSpecial(b) {
+  return SPECIAL_KINDS.includes(b.kind);
+}
+
+export function orderedBadges(p, hints = {}) {
+  return specialFirst(p.badges.map((b) => ({ ...b, key: b.id, kind: badgeKind(b.id, hints) })), (b) => b.kind);
 }
 
 export function allBadges(p, hints = {}) {
   const out = [
-    ...p.badges.map((b) => ({ ...b, key: b.id, kind: badgeKind(b.id, hints) })),
+    ...orderedBadges(p, hints),
     ...p.achievements.map((a) => ({ ...a, key: `${ACH_PREFIX}${a.id}`, kind: 'achievement' })),
   ];
   return out.map((b) => ({ ...b, about: b.note || hints[b.id] || '' }));
@@ -129,10 +188,10 @@ export function openAllBadges(p, { pins = [], hints = {}, name = '' } = {}) {
   d.root.classList.add('allbadges');
   const groups = groupBadges(list);
   replace(d.body, groups.length
-    ? h('div', { class: 'allbadges-groups' }, ...groups.map((g) => h('section', { class: 'allbadges-group', dataset: { group: g.id } },
+    ? h('div', { class: 'allbadges-groups' }, ...groups.map((g) => h('section', { class: ['allbadges-group', SPECIAL_KINDS.includes(g.id) ? 'is-special' : ''], dataset: { group: g.id } },
       h('h3', { class: 'allbadges-title' }, h('span', { text: g.label }), h('span', { class: 'allbadges-count', text: formatNumber(g.items.length) })),
       h('p', { class: 'allbadges-blurb muted', text: g.blurb }),
-      h('ul', { class: 'allbadges-list' }, ...g.items.map((b) => h('li', { class: ['allbadges-row', pinned.has(b.key) ? 'is-pinned' : ''] },
+      h('ul', { class: 'allbadges-list' }, ...g.items.map((b) => h('li', { class: ['allbadges-row', pinned.has(b.key) ? 'is-pinned' : '', isSpecial(b) ? 'is-special' : ''] },
         h('span', { class: 'allbadges-art' }, badgeArt(b, 'allbadges-emoji', 'allbadges-img')),
         h('span', { class: 'allbadges-main' },
           h('span', { class: 'allbadges-name', text: b.label }),
@@ -176,7 +235,7 @@ function pinRow(items) {
 export function profileCard(p, opts = {}) {
   const { own = false, look: given = null, bannerImage = null, hints = {}, onCustomize = null, editing = false } = opts;
   const look = given || defaultLook();
-  const share = `${window.location.origin}${profilePath(p.username || p.name)}`;
+  const share = `${window.location.origin}${profilePath(p.username || p.sharePath || p.name)}`;
   const hidden = new Set(look.hidden);
   const pins = pinnedItems(p, look.pins, hints);
   const pinKeys = new Set(pins.map((b) => b.key));
@@ -190,7 +249,7 @@ export function profileCard(p, opts = {}) {
   if (featured.id !== 'wins') stats.push(stat('Party wins', formatNumber(p.wins), 'trophy'));
   if (p.shards !== null && featured.id !== 'shards') stats.push(stat('💎 Shards', formatNumber(p.shards), 'coins'));
 
-  const badgeItems = [...pins.filter((b) => b.kind !== 'achievement'), ...p.badges.map((b) => ({ ...b, key: b.id })).filter((b) => !pinKeys.has(b.key))];
+  const badgeItems = [...pins.filter((b) => b.kind !== 'achievement'), ...orderedBadges(p, hints).filter((b) => !pinKeys.has(b.key))];
   const achItems = [...pins.filter((b) => b.kind === 'achievement'), ...p.achievements.map((a) => ({ ...a, key: `${ACH_PREFIX}${a.id}` })).filter((a) => !pinKeys.has(a.key))];
   const viewAll = total ? button({ label: `View all badges (${formatNumber(total)})`, icon: 'list', size: 'sm', variant: 'ghost', className: 'profile-all-badges', onClick: openAll }) : null;
 
@@ -226,7 +285,7 @@ export function profileCard(p, opts = {}) {
       h('div', { class: 'profile-who' },
         nameHeading(p.name, look),
         h('div', { class: 'profile-sub' },
-          p.username ? h('span', { class: 'profile-handle', text: `@${p.username}` }) : null,
+          p.username ? h('span', { class: 'profile-handle', text: `@${p.username}` }) : p.usernameHidden ? h('span', { class: 'profile-handle', text: `@${HIDDEN_HANDLE}` }) : null,
           look.pronouns ? h('span', { class: 'profile-pronouns', text: look.pronouns }) : null,
           clanTag(p.clan)),
         status,
@@ -244,6 +303,71 @@ export function profileCard(p, opts = {}) {
     card.style.setProperty('--ac-dark', c.dark);
   }
   return card;
+}
+
+function reducedMotion(win) {
+  try {
+    return Boolean(win.matchMedia && win.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch {
+    return true;
+  }
+}
+
+export function shrinkProgress(scrollY, start, distance) {
+  if (!(distance > 0)) return 0;
+  const v = (Number(scrollY) - start) / distance;
+  return v <= 0 ? 0 : v >= 1 ? 1 : Math.round(v * 1000) / 1000;
+}
+
+export function shrinkBanner(card, { win = window, signal = null } = {}) {
+  const banner = card && card.querySelector ? card.querySelector('.profile-banner') : null;
+  const hero = card && card.querySelector ? card.querySelector('.profile-hero') : null;
+  if (!banner || !hero || card.classList.contains('is-preview') || reducedMotion(win) || typeof win.requestAnimationFrame !== 'function') return () => {};
+  card.classList.add('can-shrink');
+  let start = 0;
+  let distance = 0;
+  let frame = 0;
+  let last = -1;
+  let stopped = false;
+  const px = (v) => Number.parseFloat(v) || 0;
+  const measure = () => {
+    const cs = win.getComputedStyle ? win.getComputedStyle(banner) : null;
+    const gap = win.getComputedStyle ? px(win.getComputedStyle(card).rowGap) : 0;
+    const height = banner.offsetHeight || 0;
+    const naturalBottom = hero.getBoundingClientRect().top + (win.scrollY || 0) - gap - (cs ? px(cs.marginBottom) : 0);
+    start = naturalBottom - height - (cs ? px(cs.top) : 0);
+    distance = height * BANNER_COLLAPSE;
+  };
+  const paint = () => {
+    frame = 0;
+    if (stopped) return;
+    const next = shrinkProgress(win.scrollY || 0, start, distance);
+    if (next === last) return;
+    last = next;
+    card.style.setProperty(SHRINK_VAR, String(next));
+  };
+  const onScroll = () => {
+    if (!frame) frame = win.requestAnimationFrame(paint);
+  };
+  const onResize = () => {
+    measure();
+    onScroll();
+  };
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    win.removeEventListener('scroll', onScroll);
+    win.removeEventListener('resize', onResize);
+    if (frame && typeof win.cancelAnimationFrame === 'function') win.cancelAnimationFrame(frame);
+    card.classList.remove('can-shrink');
+    card.style.removeProperty(SHRINK_VAR);
+  };
+  win.addEventListener('scroll', onScroll, { passive: true });
+  win.addEventListener('resize', onResize, { passive: true });
+  if (signal) signal.addEventListener('abort', stop, { once: true });
+  measure();
+  paint();
+  return stop;
 }
 
 function profileSkeleton() {
@@ -267,6 +391,9 @@ export function renderProfile(root, ctx) {
   let user = null;
   let shown = null;
   let editor = null;
+  let stopShrink = () => {};
+  let notices = null;
+  let asked = false;
   ctx.getUser?.().then((u) => {
     if (signal.aborted) return;
     user = u || null;
@@ -276,17 +403,33 @@ export function renderProfile(root, ctx) {
 
   function isOwn(v) {
     const p = v.profile;
-    return Boolean(user && ((p.id && user.id === p.id) || (p.username && String(user.username || '').toLowerCase() === p.username.toLowerCase())));
+    const wanted = String(params.name || '').trim().replace(/^@+/, '').toLowerCase();
+    return Boolean(user && ((p.id && user.id === p.id) || (p.username && String(user.username || '').toLowerCase() === p.username.toLowerCase()) || (p.usernameHidden && wanted && String(user.username || '').toLowerCase() === wanted)));
   }
 
   function draw(v) {
     shown = v;
     ctx.setTitle(v.profile.name);
     const own = isOwn(v);
-    replace(content, profileCard(v.profile, { own, look: v.look, bannerImage: v.bannerImage, hints: v.hints, onCustomize: own ? () => edit(v) : null }));
+    stopShrink();
+    const card = profileCard(v.profile, { own, look: v.look, bannerImage: v.bannerImage, hints: v.hints, onCustomize: own ? () => edit(v) : null });
+    replace(content, own ? noticeBox(notices) : null, card);
+    if (own) askNotices();
+    stopShrink = shrinkBanner(card, { signal });
+  }
+
+  function askNotices() {
+    if (asked) return;
+    asked = true;
+    api.get(NOTICES_API, { signal, allow401: true }).then((data) => {
+      if (signal.aborted) return;
+      notices = noticeLines(data);
+      if (notices.length && shown && !editor) draw(shown);
+    }).catch(() => {});
   }
 
   function edit(v) {
+    stopShrink();
     editor = openProfileEditor({
       mount: content,
       profile: v.profile,
@@ -317,6 +460,9 @@ export function renderProfile(root, ctx) {
       const p = normalizeProfile(data);
       if (!p) throw new ApiError("We couldn't find that.", { status: 404, code: 'not_found' });
       const custom = readLook(data?.profile?.custom);
+      p.nameHidden = data?.profile?.nameHidden === true;
+      p.usernameHidden = data?.profile?.usernameHidden === true;
+      if (p.usernameHidden) p.sharePath = String(params.name || '').trim().replace(/^@+/, '');
       draw({ profile: p, look: custom.look, bannerImage: custom.bannerImage, hints: hintsFrom(data) });
     } catch (err) {
       if (isAbort(err) || signal.aborted) return;

@@ -414,3 +414,32 @@ export function featuredValue(id, p) {
   if (id === 'shards' && p.shards !== null && p.shards !== undefined) return { id, value: p.shards, label: 'Shards' };
   return { id: 'level', value: Number(p.level) || 0, label: 'Level' };
 }
+
+export const CUSTOM_BADGE_RE = /^c-[a-z0-9]{8}$/;
+export const SPECIAL_KINDS = Object.freeze(['custom', 'special']);
+
+export function badgeKindOf(id, isParty = () => false) {
+  const key = String(id ?? '');
+  if (CUSTOM_BADGE_RE.test(key)) return 'custom';
+  if (key.startsWith('season-')) return 'season';
+  if (key.startsWith(ACH_PREFIX)) return 'achievement';
+  if (isParty(key)) return 'party';
+  return 'special';
+}
+
+export const FOUNDER_BADGE = 'founder';
+
+const badgeKey = (x) => (x && typeof x === 'object' ? x.key ?? x.id : x);
+
+export function specialFirst(list, kindOf) {
+  const all = Array.isArray(list) ? list : [];
+  const top = all.filter((x) => badgeKey(x) === FOUNDER_BADGE);
+  const items = top.length ? all.filter((x) => badgeKey(x) !== FOUNDER_BADGE) : all;
+  const kinds = items.map((x) => kindOf(x));
+  return [
+    ...top,
+    ...items.filter((_, i) => kinds[i] === 'custom'),
+    ...items.filter((_, i) => kinds[i] === 'special'),
+    ...items.filter((_, i) => !SPECIAL_KINDS.includes(kinds[i])),
+  ];
+}
