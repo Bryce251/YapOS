@@ -8,7 +8,7 @@ document.documentElement = document.createElement('html');
 if (typeof globalThis.requestAnimationFrame !== 'function') globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
 
 const { renderProfile, profileCard, allBadges, groupBadges, badgeKind } = await import('../web/js/pages/profile.js');
-const { LOOK_API, BANNER_API, bannerCrop } = await import('../web/js/pages/profile-editor.js');
+const { LOOK_API, BANNER_API, cropRect, startView } = await import('../web/js/pages/profile-editor.js');
 const { normalizeProfile } = await import('../web/js/community-data.js');
 const { readLook, SECTION_IDS } = await import('../web/js/profile-look.js');
 
@@ -316,9 +316,9 @@ test('the Shards big number is only offered when Shards are shown, and banner cr
   const { root, ctx } = await openEditor();
   click(root.querySelector('#pe-tab-card'));
   assert.equal(choice(root, 'shards').disabled, true);
-  assert.deepEqual(bannerCrop(2000, 300), { sx: 550, sy: 0, sw: 900, sh: 300 });
-  assert.deepEqual(bannerCrop(1200, 1200), { sx: 0, sy: 400, sw: 1200, sh: 400 });
-  assert.deepEqual(bannerCrop(1500, 500), { sx: 0, sy: 0, sw: 1500, sh: 500 });
+  assert.deepEqual(cropRect(2000, 300, startView(2000, 300)), { sx: 550, sy: 0, sw: 900, sh: 300 });
+  assert.deepEqual(cropRect(1200, 1200, startView(1200, 1200)), { sx: 0, sy: 400, sw: 1200, sh: 400 });
+  assert.deepEqual(cropRect(1500, 500, startView(1500, 500)), { sx: 0, sy: 0, sw: 1500, sh: 500 });
   assert.equal(BANNER_API, '/api/me/profile-banner');
   ctx.abort();
 });

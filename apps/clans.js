@@ -1,7 +1,8 @@
 import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
-import { tokenize, didYouMean, clip, normalizeName } from '../engine/parse.js';
+import { tokenize, didYouMean, clip, normalizeName, userId as idOf, ID_RE } from '../engine/parse.js';
+import { looksLikeFeatureOff } from '../engine/errors.js';
 import { GLOBAL_KEY, CURRENCY, globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, canGiveCurrency } from '../engine/global.js';
 
 const ID = 'clans';
@@ -19,6 +20,14 @@ export const CREATE_COST = 500;
 const CREATE_COST_MAX = 1_000_000;
 const INVITE_TTL_MS = 7 * DAY;
 const MAX_INVITES = 5;
+export const INVITE_RATE = 10;
+const INVITE_WINDOW_MS = 3_600_000;
+const REINVITE_MS = DAY;
+const DECLINE_MS = 7 * DAY;
+const TARGET_DM_CAP = 3;
+const LOOKUP_MS = 2500;
+const DM_MS = 4000;
+const SEND_MS = 8000;
 const MAX_CLANS = 5000;
 const NAME_MIN = 3;
 const NAME_MAX = 24;
@@ -26,7 +35,7 @@ const BANNER_MAX = 60;
 const TOP_SIZE = 10;
 const DEPOSIT_MAX = 1_000_000_000;
 const MEDALS = ['🥇', '🥈', '🥉'];
-const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 '._-]*[A-Za-z0-9.]$/;
+const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 '._-]*[A-Za-z0-9.']$/;
 const TAG_RE = /^[A-Za-z0-9]{3,4}$/;
 const RESERVED = ['admin', 'admn', 'adm', 'mod', 'mods', 'moderator', 'staff', 'staf', 'stff', 'yapin', 'yapn', 'yap', 'yaps', 'yapper', 'yapos', 'yos', 'official', 'owner', 'ownr', 'dev', 'devs', 'system', 'sys', 'bot', 'bots', 'support', 'help'];
 const COLOURS = Object.freeze({
@@ -45,11 +54,11 @@ const nowOf = (engine) => engine.scheduler?.now?.() ?? Date.now();
 const fmt = (n) => Math.max(0, Math.trunc(Number(n) || 0)).toLocaleString('en-US');
 const shards = (n) => `${fmt(n)} ${CURRENCY.emoji}`;
 const cleanText = (text) => String(text ?? '').replace(/<@&[\w-]+>/g, '').replace(/<@!?[\w-]+>/g, '').replace(/<#[\w-]+>/g, '').replace(/[<>*_~`|\\@]/g, '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
-const blank = () => ({ seq: 0, clans: {}, members: {}, invites: {} });
+const blank = () => ({ seq: 0, clans: {}, members: {}, invites: {}, outbox: {}, inbox: {}, declined: {} });
 
 function fix(d) {
   const doc = d && typeof d === 'object' ? d : blank();
-  for (const k of ['clans', 'members', 'invites']) if (!doc[k] || typeof doc[k] !== 'object' || Array.isArray(doc[k])) doc[k] = {};
+  for (const k of ['clans', 'members', 'invites', 'outbox', 'inbox', 'declined']) if (!doc[k] || typeof doc[k] !== 'object' || Array.isArray(doc[k])) doc[k] = {};
   doc.seq = Number.isInteger(doc.seq) ? doc.seq : 0;
   return doc;
 }
@@ -76,13 +85,13 @@ function reservedWord(w) {
   return bare !== w && RESERVED.includes(bare);
 }
 
-function blocked(text) {
+function blocked(text, { owner = false } = {}) {
   const t = String(text ?? '');
   if (!t) return false;
   const words = normalizeName(t).split('-').filter(Boolean);
   const compact = normalizeName(t).replace(/-/g, '');
-  if ([...words, compact].some(reservedWord)) return true;
-  if (STEMS.some((stem) => compact.startsWith(stem) || compact.endsWith(stem))) return true;
+  if (!owner && [...words, compact].some(reservedWord)) return true;
+  if (!owner && STEMS.some((stem) => compact.startsWith(stem) || compact.endsWith(stem))) return true;
   if (!filter) return false;
   try {
     if (filter.findBlocked(t).length) return true;
@@ -92,18 +101,18 @@ function blocked(text) {
   }
 }
 
-export function checkName(raw) {
+export function checkName(raw, { owner = false } = {}) {
   const name = cleanText(raw);
   if (name.length < NAME_MIN || name.length > NAME_MAX) return { error: `Clan names are ${NAME_MIN} to ${NAME_MAX} characters.` };
   if (!NAME_RE.test(name)) return { error: 'Use letters, numbers, spaces and simple marks like - _ . \' in clan names.' };
-  if (blocked(name)) return { error: "That name isn't allowed. Pick something else." };
+  if (blocked(name, { owner })) return { error: "That name isn't allowed. Pick something else." };
   return { value: name };
 }
 
-export function checkTag(raw) {
+export function checkTag(raw, { owner = false } = {}) {
   const tag = String(raw ?? '').trim().replace(/^\[|\]$/g, '');
   if (!TAG_RE.test(tag)) return { error: 'Tags are 3 or 4 letters or numbers, like `OWL` or `GG42`.' };
-  if (blocked(tag)) return { error: "That tag isn't allowed. Pick something else." };
+  if (blocked(tag, { owner })) return { error: "That tag isn't allowed. Pick something else." };
   return { value: tag.toUpperCase() };
 }
 
@@ -325,9 +334,10 @@ function economy(engine) {
 async function createClan(ctx, nameRaw, tagRaw) {
   const { engine } = ctx;
   const uid = ctx.userId;
-  const name = checkName(nameRaw);
+  const owner = typeof engine.isBotOwner === 'function' && engine.isBotOwner(uid);
+  const name = checkName(nameRaw, { owner });
   if (name.error) return ctx.warn("That name didn't work", `${name.error}\nTry \`/clan create Night Owls OWL\`.`);
-  const tag = checkTag(tagRaw);
+  const tag = checkTag(tagRaw, { owner });
   if (tag.error) return ctx.warn("That tag didn't work", `${tag.error}\nTry \`/clan create Night Owls OWL\`.`);
   const res = await guarded(engine, uid, async () => {
     const doc = read(engine);
@@ -365,7 +375,93 @@ async function createClan(ctx, nameRaw, tagRaw) {
   if (res.busy) return ctx.info('One moment', 'Your last clan action is still going through.');
   if (res.problem) return ctx.warn(...res.problem);
   await emit(engine, 'clan:founded', { user: uid, clan: res.clan.id, server_id: null });
-  return ctx.reply({ embeds: [card({ title: `🛡️ ${res.clan.name} [${res.clan.tag}] is founded!`, body: `<@${uid}> leads a brand new clan${res.cost ? ` (paid ${shards(res.cost)})` : ''}.\nInvite friends with \`/clan invite @name\` and grow the bank with \`/clan deposit 100\`.`, color: COLOR, footer: false })] });
+  return ctx.reply({ embeds: [card({ title: `🛡️ ${res.clan.name} [${res.clan.tag}] is founded!`, body: `<@${uid}> leads a brand new clan${res.cost ? ` (paid ${shards(res.cost)})` : ''}.\nInvite friends with \`/clan invite @name\` or their user id (it goes to their DMs) and grow the bank with \`/clan deposit 100\`.`, color: COLOR, footer: false })] });
+}
+
+function within(fn, ms, fallback) {
+  let timer;
+  const late = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+    timer.unref?.();
+  });
+  return Promise.race([Promise.resolve().then(fn), late]).finally(() => clearTimeout(timer));
+}
+
+async function resolveInvitee(ctx, q) {
+  const { engine } = ctx;
+  const me = engine.bot.me?.id;
+  const raw = idOf(q.replace(/^@(?=[0-9a-f]{8}-)/i, ''));
+  const id = raw && ID_RE.test(raw) ? raw.toLowerCase() : null;
+  let member = null;
+  if (ctx.serverId) {
+    member = await ctx.findUser(q).catch(() => null);
+    if (member?.id && member.username) return { id: member.id, bot: !!member.bot };
+  }
+  const want = id || (member?.id ? String(member.id).toLowerCase() : null);
+  if (!want) return { problem: ctx.serverId ? 'nobody' : 'needId' };
+  const self = String(ctx.userId).toLowerCase();
+  const bot = String(me ?? '').toLowerCase();
+  if (want === self || want === bot) return { id: want === self ? ctx.userId : me, bot: want === bot };
+  if (typeof engine.bot.user !== 'function') return { id: want };
+  const u = await within(() => engine.bot.user(want), LOOKUP_MS, 'late').catch((e) => (e?.status === 404 || e?.status === 400 ? null : 'late'));
+  if (u === 'late') return { id: want };
+  if (!u || typeof u !== 'object') return { problem: 'unknown' };
+  return { id: u.id ? String(u.id).toLowerCase() : want, bot: !!(u.bot || u.is_bot) };
+}
+
+function inviteMessage(c, from, to, note = '') {
+  const lines = [
+    `<@${from}> invited you to join ${label(c)}.`,
+    c.banner ? `*${c.banner}*` : null,
+    `👥 ${c.members.length}/${capOf(c)} members · one clan across every server`,
+    '',
+    `Press **Join** below, or type \`/clan accept ${c.tag}\` within 7 days.`,
+    note ? `-# ${note}` : null,
+  ].filter((x) => x !== null);
+  return {
+    embeds: [card({ title: '✉️ Clan invite', body: lines.join('\n'), color: Number.isInteger(c.colour) ? c.colour : COLOR, footer: false })],
+    components: [row(button(`Join [${c.tag}]`, cid('accept', to, c.id), 'success', '✅'), button('No thanks', cid('decline', to, c.id), 'secondary'))],
+  };
+}
+
+function unmarkDm(engine, target, clanId) {
+  write(engine, (d) => {
+    const inv = (Array.isArray(d.invites[target]) ? d.invites[target] : []).find((x) => x?.clan === clanId);
+    if (inv) delete inv.dmAt;
+  });
+}
+
+function pruneTimes(map, t, ms) {
+  for (const [k, v] of Object.entries(map)) {
+    const kept = (Array.isArray(v) ? v : []).filter((x) => t - x < ms);
+    if (kept.length) map[k] = kept;
+    else delete map[k];
+  }
+}
+
+async function dmInvite(ctx, target, clanId, payload) {
+  const { engine } = ctx;
+  const sid = ctx.serverId;
+  if (engine.caps.state(sid, 'dms') === false || typeof engine.bot.dm !== 'function') return 'failed';
+  try {
+    const channel = await within(() => engine.bot.dm(target), DM_MS, null);
+    if (!channel) return 'failed';
+    const job = engine.budget.send({ serverId: null, channelId: channel, content: '', opts: { embeds: payload.embeds, components: payload.components }, priority: 'normal', key: `clans:invite:${target}:${clanId}` });
+    const out = await within(() => job, SEND_MS, 'queued');
+    if (out === 'queued') {
+      job.catch((e) => {
+        engine.log.info('[clans] a queued clan invite DM did not go through', e?.message);
+        unmarkDm(engine, target, clanId);
+      });
+      return 'queued';
+    }
+    if (engine.caps.state(sid, 'dms') !== true) engine.caps.mark(sid, 'dms', true);
+    return 'sent';
+  } catch (e) {
+    if (looksLikeFeatureOff(e)) engine.caps.mark(sid, 'dms', false, e?.message);
+    engine.log.debug('[clans] could not DM an invite (DMs may be closed)', e?.message);
+    return 'failed';
+  }
 }
 
 async function inviteUser(ctx, query) {
@@ -376,30 +472,63 @@ async function inviteUser(ctx, query) {
   if (!c) return ctx.warn('No clan yet', 'Create one first with `/clan create Name TAG`.');
   if (c.leader !== uid) return ctx.warn('Only the leader can invite', `Ask <@${c.leader}> to send the invite.`);
   const q = String(query ?? '').trim();
-  if (!q) return ctx.warn('Invite who?', 'Try `/clan invite @sam`.');
-  if (!ctx.serverId) return ctx.warn('Invite from a server', 'Run `/clan invite @sam` in a server you share with them.');
-  const found = await ctx.findUser(q);
-  if (!found?.id) return ctx.warn("I couldn't find them", `Nobody here matches **${clip(cleanText(q), 40) || 'that'}**. Try a mention, like \`/clan invite @sam\`.`);
-  if (found.id === uid) return ctx.info("That's you", 'You are already in your clan!');
-  if (found.id === engine.bot.me?.id || found.bot) return ctx.warn("Bots can't join clans", 'Invite a person instead.');
+  if (!q) return ctx.warn('Invite who?', "Try `/clan invite @sam`, or use their Yapin' user id. The invite goes to their DMs.");
   if (c.members.length >= capOf(c)) return ctx.warn('Your clan is full', `${label(c)} has ${c.members.length}/${capOf(c)} members. Buy more room with \`/clan upgrade members\`.`);
+  const who = await resolveInvitee(ctx, q);
+  if (who.problem === 'needId') return ctx.warn('Use their user id here', "I can't search names in DMs. Use their Yapin' user id or a mention, like `/clan invite 1a2b3c4d-...`. Names work when you run it in a server.");
+  if (who.problem === 'nobody') return ctx.warn("I couldn't find them", `Nobody here matches **${clip(cleanText(q), 40) || 'that'}**. Try a mention like \`/clan invite @sam\`, or their Yapin' user id.`);
+  if (who.problem === 'unknown') return ctx.warn('No account found', "No Yapin' account has that id. Check it and try again.");
+  if (who.id === uid) return ctx.info("That's you", 'You are already in your clan!');
+  if (who.id === engine.bot.me?.id || who.bot) return ctx.warn("Bots can't join clans", 'Invite a person instead.');
   const t = nowOf(engine);
   const res = write(engine, (d) => {
-    const theirs = clanOfUser(d, found.id);
+    const theirs = clanOfUser(d, who.id);
     if (theirs) return { inClan: theirs.id === c.id ? 'yours' : 'other' };
-    const list = liveInvites(d, found.id, t).filter((x) => x.clan !== c.id);
-    list.push({ clan: c.id, by: uid, at: t });
-    d.invites[found.id] = list.slice(-MAX_INVITES);
+    for (const [k, v] of Object.entries(d.declined)) {
+      const kept = Object.fromEntries(Object.entries(v && typeof v === 'object' ? v : {}).filter(([, at]) => t - at < DECLINE_MS));
+      if (Object.keys(kept).length) d.declined[k] = kept;
+      else delete d.declined[k];
+    }
+    if (d.declined[who.id]?.[c.id]) return { declined: true };
+    const live = liveInvites(d, who.id, t);
+    const prev = live.find((x) => x.clan === c.id);
+    const list = live.filter((x) => x.clan !== c.id);
+    if (prev && t - (Number(prev.dmAt) || 0) < REINVITE_MS) {
+      list.push({ ...prev, by: uid, at: t });
+      d.invites[who.id] = list.slice(-MAX_INVITES);
+      return { repeat: true };
+    }
+    pruneTimes(d.outbox, t, INVITE_WINDOW_MS);
+    pruneTimes(d.inbox, t, REINVITE_MS);
+    const sent = d.outbox[uid] || [];
+    if (sent.length >= INVITE_RATE) return { limited: sent[0] + INVITE_WINDOW_MS - t };
+    const got = d.inbox[who.id] || [];
+    if (got.length >= TARGET_DM_CAP) {
+      list.push({ clan: c.id, by: uid, at: t });
+      d.invites[who.id] = list.slice(-MAX_INVITES);
+      return { quiet: true };
+    }
+    d.outbox[uid] = [...sent, t];
+    d.inbox[who.id] = [...got, t];
+    list.push({ clan: c.id, by: uid, at: t, dmAt: t });
+    d.invites[who.id] = list.slice(-MAX_INVITES);
     return { ok: true };
   });
-  if (res.inClan === 'yours') return ctx.info('Already in', `<@${found.id}> is already in ${label(c)}.`);
-  if (res.inClan) return ctx.warn('They have a clan', `<@${found.id}> is already in another clan. They need to leave it first.`);
-  return ctx.reply({
-    content: `<@${found.id}>`,
-    embeds: [card({ title: `✉️ Clan invite`, body: `<@${uid}> invited you to join ${label(c)}.\nPress **Join** below, or type \`/clan accept ${c.tag}\` within 7 days.`, color: Number.isInteger(c.colour) ? c.colour : COLOR, footer: false })],
-    components: [row(button(`Join [${c.tag}]`, cid('accept', found.id, c.id), 'success', '✅'), button('No thanks', cid('decline', found.id, c.id), 'secondary'))],
-    open: true,
-  });
+  if (res.inClan === 'yours') return ctx.info('Already in', `<@${who.id}> is already in ${label(c)}.`);
+  if (res.inClan) return ctx.warn('They have a clan', `<@${who.id}> is already in another clan. They need to leave it first.`);
+  if (res.limited !== undefined) {
+    const mins = Math.max(1, Math.ceil(res.limited / 60_000));
+    return ctx.warn('Slow down a little', `Leaders can send ${INVITE_RATE} clan invites an hour. Try again in ${mins} minute${mins === 1 ? '' : 's'}.`);
+  }
+  if (res.declined) return ctx.info('They said no thanks', `<@${who.id}> turned down an invite to ${label(c)} this week, so I won't send another one yet.`);
+  if (res.quiet) return ctx.info('Invite saved', `<@${who.id}> has had a lot of clan invites today, so I saved yours without a DM. It lasts 7 days, and they can join with \`/clan accept ${c.tag}\`.`);
+  if (res.repeat) return ctx.info('Already invited', `<@${who.id}> got an invite to ${label(c)} in the last 24 hours, so I didn't DM them again. Their invite now lasts 7 more days, and they can join with \`/clan accept ${c.tag}\`.`);
+  const how = await dmInvite(ctx, who.id, c.id, inviteMessage(c, uid, who.id));
+  if (how === 'sent') return ctx.ok('Invite sent', `Sent your invite to <@${who.id}> in their DMs.`);
+  if (how === 'queued') return ctx.ok('Invite on its way', `Your invite to <@${who.id}> is queued and will reach their DMs shortly.`);
+  if (ctx.serverId) return ctx.reply({ content: `<@${who.id}>`, ...inviteMessage(c, uid, who.id, "I couldn't DM you, so here it is."), open: true });
+  unmarkDm(engine, who.id, c.id);
+  return ctx.warn('Their DMs are closed', `I couldn't DM <@${who.id}>. The invite is saved for 7 days, so they can join with \`/clan accept ${c.tag}\`. Or run \`/clan invite\` in a server you share and I'll post it there.`);
 }
 
 async function acceptInvite(ctx, which, how = 'reply') {
@@ -414,14 +543,17 @@ async function acceptInvite(ctx, which, how = 'reply') {
     const c = findClan(doc, which);
     pick = c ? invites.find((x) => x.clan === c.id) : null;
   } else if (invites.length === 1) pick = invites[0];
-  const say = (title, body) => (how === 'update' ? ctx.update({ embeds: [dialog.warn(title, body)], components: [] }) : ctx.warn(title, body));
+  const say = (title, body) => (how === 'update' ? ctx.update({ content: '', embeds: [dialog.warn(title, body)], components: [] }) : ctx.warn(title, body));
   if (clanOfUser(doc, uid)) return say('You already have a clan', 'Leave it first with `/clan leave`, then accept.');
+  if (which && /^c\d+$/.test(which) && !doc.clans[which]) return say('That clan is gone', 'It was closed after the invite was sent.');
+  if (which && doc.clans[which] && !pick) return say('That invite ran out', `Invites last 7 days. Ask <@${doc.clans[which].leader}> for a new one.`);
   if (!invites.length) return say('No invites', 'Nobody has invited you yet, or the invite is older than 7 days.');
   if (!pick) return say('Which clan?', `You have invites from ${invites.map((x) => label(doc.clans[x.clan])).join(', ')}. Try \`/clan accept ${doc.clans[invites[0].clan].tag}\`.`);
   const res = write(engine, (d) => {
     if (clanOfUser(d, uid)) return { problem: 'inClan' };
     const c = d.clans[pick.clan];
     if (!c) return { problem: 'gone' };
+    if (!liveInvites(d, uid, t).some((x) => x.clan === c.id)) return { problem: 'expired', c };
     if (c.members.length >= capOf(c)) return { problem: 'full', c };
     c.members.push(uid);
     c.joined = c.joined && typeof c.joined === 'object' ? c.joined : {};
@@ -432,6 +564,7 @@ async function acceptInvite(ctx, which, how = 'reply') {
   });
   if (res.problem === 'inClan') return say('You already have a clan', 'Leave it first with `/clan leave`.');
   if (res.problem === 'gone') return say('That clan is gone', 'It was disbanded after the invite was sent.');
+  if (res.problem === 'expired') return say('That invite ran out', `Ask <@${res.c.leader}> for a new one.`);
   if (res.problem === 'full') return say('That clan is full', `${label(res.c)} has no room right now. Ask the leader to upgrade.`);
   await emit(engine, 'clan:joined', { user: uid, clan: res.c.id, server_id: null });
   const embed = card({ title: `🛡️ Welcome to ${res.c.name} [${res.c.tag}]!`, body: `<@${uid}> joined the clan. ${res.c.members.length}/${capOf(res.c)} members now.`, color: Number.isInteger(res.c.colour) ? res.c.colour : COLOR, footer: false });
@@ -446,6 +579,9 @@ async function declineInvite(ctx, which, how = 'reply') {
   write(engine, (d) => {
     const list = Array.isArray(d.invites[uid]) ? d.invites[uid] : [];
     const kept = c ? list.filter((x) => x?.clan !== c.id) : [];
+    const said = d.declined[uid] && typeof d.declined[uid] === 'object' ? d.declined[uid] : {};
+    for (const x of c ? [{ clan: c.id }] : list) if (x?.clan) said[x.clan] = nowOf(engine);
+    if (Object.keys(said).length) d.declined[uid] = said;
     if (kept.length) d.invites[uid] = kept;
     else delete d.invites[uid];
   });
@@ -507,7 +643,7 @@ async function setLook(ctx, field, raw) {
   let patch;
   let done;
   if (field === 'tag') {
-    const tag = checkTag(raw);
+    const tag = checkTag(raw, { owner: typeof engine.isBotOwner === 'function' && engine.isBotOwner(uid) });
     if (tag.error) return ctx.warn("That tag didn't work", tag.error);
     if (Object.values(read(engine).clans).some((x) => x.id !== c.id && x.tag === tag.value)) return ctx.warn('That tag is taken', `Another clan already uses **[${tag.value}]**.`);
     patch = { tag: tag.value };
@@ -525,7 +661,7 @@ async function setLook(ctx, field, raw) {
         patch = { banner: null };
         done = 'The banner is cleared.';
       } else {
-        if (blocked(text)) return ctx.warn("That banner isn't allowed", 'Pick different words.');
+        if (blocked(text, { owner: typeof engine.isBotOwner === 'function' && engine.isBotOwner(uid) })) return ctx.warn("That banner isn't allowed", 'Pick different words.');
         patch = { banner: text };
         done = `Your banner reads: *${text}*`;
       }
@@ -725,7 +861,7 @@ export const { setup, teardown, check } = defineApp({
   defaults: { createCost: CREATE_COST },
 
   commands: {
-    clan: { description: 'Your clan: /clan, create Night Owls OWL, invite @sam, accept, deposit 100, upgrade, top, leave', serverOnly: false, run: runClan },
+    clan: { description: 'Your clan: /clan, create Night Owls OWL, invite @sam or a user id (sent by DM), accept, deposit, top', serverOnly: false, run: runClan },
   },
 
   components: {
@@ -766,7 +902,7 @@ export const { setup, teardown, check } = defineApp({
     ] })),
     depsave: mine((ctx) => deposit(ctx, ctx.values?.amount)),
     invform: mine((ctx) => ctx.form({ title: 'Invite to your clan', action: 'invsave', args: [ctx.userId], fields: [
-      { id: 'user', label: 'Who? (@name or username)', style: 'short', placeholder: '@sam', max: 100 },
+      { id: 'user', label: 'Who? (@name, username or Yapin user id)', style: 'short', placeholder: '@sam', max: 100 },
     ] })),
     invsave: mine((ctx) => inviteUser(ctx, ctx.values?.user)),
   },
@@ -798,7 +934,8 @@ export const { setup, teardown, check } = defineApp({
 
   help: [
     `Clans are small groups (${CAPS[0]} members, up to ${CAPS[CAPS.length - 1]} with upgrades) that follow you to every server. You can be in one clan at a time.`,
-    `Start one with /clan create Night Owls OWL (costs ${CREATE_COST} ${CURRENCY.name} by default). The leader invites with /clan invite @sam, people join with /clan accept.`,
+    `Start one with /clan create Night Owls OWL (costs ${CREATE_COST} ${CURRENCY.name} by default). The leader invites with /clan invite @sam or /clan invite followed by a Yapin' user id (works in DMs with me too). The invite arrives in their DMs with a Join button, or they type /clan accept TAG.`,
+    `Leaders can send ${INVITE_RATE} invites an hour. Inviting the same person again within a day refreshes their invite without another DM. Someone who says No thanks isn't asked by that clan again for a week, and nobody gets more than 3 invite DMs a day.`,
     `The clan bank only goes one way: members deposit with /clan deposit 100 and the leader spends it on upgrades (/clan upgrade). Nobody can take ${CURRENCY.name} out.`,
     `Upgrades: more members, a custom colour and banner, and +${Math.round(BOOST * 100)}% XP for every member from chatting and voice.`,
     'Leaders: /clan kick @sam · /clan leader @sam · /clan tag OWL · /clan colour #ff8800 · /clan banner Night owls never sleep · /clan disband',

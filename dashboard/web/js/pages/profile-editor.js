@@ -15,11 +15,23 @@ export const LOOK_API = '/api/me/profile-look';
 export const BANNER_API = '/api/me/profile-banner';
 export const BANNER_W = 1500;
 export const BANNER_H = 500;
-export const BANNER_BYTES = 400 * 1024;
-export const CROP_PREVIEW_W = 750;
-export const CROP_PREVIEW_H = 250;
-export const CROP_STEP = 0.05;
+export const BANNER_RATIO = 3;
+export const BANNER_MIN_OUT_W = 600;
+export const BANNER_MAX_OUT_W = 3000;
+export const BANNER_BYTES = 760 * 1024;
 export const BANNER_FILE_MAX = 15 * 1024 * 1024;
+export const BANNER_STEP_WIDTHS = Object.freeze([2400, 1800, 1500]);
+export const TOP_QUALITIES = Object.freeze([0.92, 0.86, 0.8]);
+export const LOW_QUALITIES = Object.freeze([0.72, 0.64, 0.56]);
+export const CROP_MAX_ZOOM = 4;
+export const CROP_ZOOM_LIMIT = 8;
+export const CROP_ZOOM_STEP = 1.1;
+export const CROP_PAN_STEP = 0.05;
+export const CROP_STAGE_W = 1200;
+export const CROP_STAGE_H = 600;
+export const CROP_FRAME = Object.freeze({ x: 0.05, y: 0.2, w: 0.9, h: 0.6 });
+export const CROP_PREVIEW_W = 600;
+export const CROP_PREVIEW_H = 200;
 export const PRONOUN_IDEAS = Object.freeze(['she/her', 'he/him', 'they/them', 'any pronouns']);
 export const PICK_SEARCH_AT = 12;
 
@@ -31,88 +43,292 @@ const TABS = Object.freeze([
   Object.freeze({ id: 'layout', label: 'Layout', icon: 'list' }),
 ]);
 
-const unit = (v) => {
+const num = (v, d = 0) => {
   const n = Number(v);
-  return v !== null && v !== undefined && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5;
+  return v !== null && v !== undefined && v !== '' && Number.isFinite(n) ? n : d;
 };
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const round2 = (v) => Math.round(v * 100) / 100;
+const dims = (width, height) => [Math.max(1, Math.floor(num(width, 1))), Math.max(1, Math.floor(num(height, 1)))];
 
-export function cleanFocus(focus) {
-  return { x: unit(focus && focus.x), y: unit(focus && focus.y) };
+export function coverSize(width, height, ratio = BANNER_RATIO) {
+  const [w, ht] = dims(width, height);
+  return w / ht > ratio ? { sw: ht * ratio, sh: ht } : { sw: w, sh: w / ratio };
 }
 
-export function bannerCrop(width, height, { focus = null, ratio = BANNER_W / BANNER_H } = {}) {
-  const w = Math.max(1, Math.floor(Number(width) || 1));
-  const ht = Math.max(1, Math.floor(Number(height) || 1));
-  const f = cleanFocus(focus);
-  if (w / ht > ratio) {
-    const sw = Math.min(w, Math.round(ht * ratio));
-    return { sx: Math.floor((w - sw) * f.x), sy: 0, sw, sh: ht };
+export function maxZoom(width, height) {
+  return round2(clamp(coverSize(width, height).sw / BANNER_W, CROP_MAX_ZOOM, CROP_ZOOM_LIMIT));
+}
+
+export function startView(width, height) {
+  const [w, ht] = dims(width, height);
+  return { zoom: 1, cx: w / 2, cy: ht / 2 };
+}
+
+export function clampView(width, height, view) {
+  const [w, ht] = dims(width, height);
+  const base = coverSize(w, ht);
+  const zoom = clamp(num(view && view.zoom, 1), 1, maxZoom(w, ht));
+  const sw = base.sw / zoom;
+  const sh = sw / BANNER_RATIO;
+  return {
+    zoom,
+    cx: clamp(num(view && view.cx, w / 2), sw / 2, w - sw / 2),
+    cy: clamp(num(view && view.cy, ht / 2), sh / 2, ht - sh / 2),
+  };
+}
+
+export function cropRect(width, height, view) {
+  const [w, ht] = dims(width, height);
+  const v = clampView(w, ht, view);
+  const sw = coverSize(w, ht).sw / v.zoom;
+  const sh = sw / BANNER_RATIO;
+  return { sx: round2(clamp(v.cx - sw / 2, 0, w - sw)), sy: round2(clamp(v.cy - sh / 2, 0, ht - sh)), sw: round2(sw), sh: round2(sh) };
+}
+
+export function panView(width, height, view, dx, dy, frameWidth) {
+  const v = clampView(width, height, view);
+  const scale = cropRect(width, height, v).sw / Math.max(1e-6, num(frameWidth, 1));
+  return clampView(width, height, { zoom: v.zoom, cx: v.cx - num(dx) * scale, cy: v.cy - num(dy) * scale });
+}
+
+export function zoomView(width, height, view, factor, ax = 0.5, ay = 0.5) {
+  const v = clampView(width, height, view);
+  const r = cropRect(width, height, v);
+  const px = r.sx + num(ax, 0.5) * r.sw;
+  const py = r.sy + num(ay, 0.5) * r.sh;
+  const zoom = clamp(v.zoom * (num(factor, 1) > 0 ? num(factor, 1) : 1), 1, maxZoom(width, height));
+  const sw = coverSize(width, height).sw / zoom;
+  const sh = sw / BANNER_RATIO;
+  return clampView(width, height, { zoom, cx: px - num(ax, 0.5) * sw + sw / 2, cy: py - num(ay, 0.5) * sh + sh / 2 });
+}
+
+export function setZoom(width, height, view, zoom) {
+  const v = clampView(width, height, view);
+  return zoomView(width, height, v, num(zoom, v.zoom) / v.zoom);
+}
+
+export function outputSize(rect) {
+  const width = clamp(Math.round(num(rect && rect.sw, BANNER_W)), BANNER_MIN_OUT_W, BANNER_MAX_OUT_W);
+  return { width, height: Math.round(width / BANNER_RATIO) };
+}
+
+export function downscaleSteps(from, to) {
+  const target = Math.max(1, Math.round(num(to, 1)));
+  const out = [];
+  let w = Math.max(1, num(from, 1));
+  while (w / 2 > target) {
+    w = Math.round(w / 2);
+    out.push(w);
   }
-  const sh = Math.min(ht, Math.round(w / ratio));
-  return { sx: 0, sy: Math.floor((ht - sh) * f.y), sw: w, sh };
+  out.push(target);
+  return out;
 }
 
-export function cropAxis(width, height, ratio = BANNER_W / BANNER_H) {
-  const r = bannerCrop(width, height, { ratio });
-  const w = Math.max(1, Math.floor(Number(width) || 1));
-  const ht = Math.max(1, Math.floor(Number(height) || 1));
-  if (w - r.sw >= Math.max(4, w * 0.01)) return 'x';
-  if (ht - r.sh >= Math.max(4, ht * 0.01)) return 'y';
-  return null;
+export function encodePlan(width) {
+  const widths = [width];
+  for (const w of BANNER_STEP_WIDTHS) if (w < widths[widths.length - 1]) widths.push(w);
+  const plan = [];
+  for (const type of ['image/webp', 'image/jpeg']) {
+    for (const w of widths) for (const q of TOP_QUALITIES) plan.push({ type, w, q });
+    for (const q of LOW_QUALITIES) plan.push({ type, w: widths[widths.length - 1], q });
+  }
+  return plan;
 }
 
-export function moveFocus(focus, axis, delta) {
-  const f = cleanFocus(focus);
-  if (axis === 'x') f.x = unit(f.x + delta);
-  if (axis === 'y') f.y = unit(f.y + delta);
-  return f;
+export function softNote(width, height, rect) {
+  const used = Math.round(num(rect && rect.sw, BANNER_W));
+  if (used >= BANNER_W) return '';
+  if (coverSize(width, height).sw < BANNER_W) return 'This picture is smaller than 1500 by 500, so your banner will look a little soft. A bigger picture looks sharper.';
+  return `Zoomed in this far, only ${used} pixels of your picture fill the banner, so it will look soft. Zoom out a little for a sharper banner.`;
 }
 
-export function dragDelta(axis, dx, dy, frameWidth, width, height) {
-  const r = bannerCrop(width, height);
-  const scale = r.sw / Math.max(1, Number(frameWidth) || 1);
-  if (axis === 'x') return -((Number(dx) || 0) * scale) / Math.max(1, Math.floor(Number(width) || 1) - r.sw);
-  if (axis === 'y') return -((Number(dy) || 0) * scale) / Math.max(1, Math.floor(Number(height) || 1) - r.sh);
-  return 0;
+export const zoomText = (zoom) => `${Math.round(num(zoom, 1) * 100)}%`;
+
+function freshCanvas(doc, width, height) {
+  const canvas = doc.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+  if (!ctx) throw new Error("Your browser can't resize pictures here. Try another browser.");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  return { canvas, ctx };
 }
 
-export function focusText(focus, axis) {
-  const v = Math.round((axis === 'x' ? focus.x : focus.y) * 100);
-  if (v === 50) return 'Centred';
-  if (axis === 'x') return v < 50 ? `${50 - v}% toward the left` : `${v - 50}% toward the right`;
-  return v < 50 ? `${50 - v}% toward the top` : `${v - 50}% toward the bottom`;
+export function drawBanner(src, rect, width, { doc = document } = {}) {
+  let from = src;
+  let box = [rect.sx, rect.sy, rect.sw, rect.sh];
+  let last = null;
+  for (const w of downscaleSteps(rect.sw, width)) {
+    const ht = Math.round(w / BANNER_RATIO);
+    const { canvas, ctx } = freshCanvas(doc, w, ht);
+    ctx.drawImage(from, ...box, 0, 0, w, ht);
+    from = canvas;
+    box = [0, 0, w, ht];
+    last = canvas;
+  }
+  return last;
+}
+
+export function encodeBanner(src, { doc = document, max = BANNER_BYTES, rect = null } = {}) {
+  const width = src.naturalWidth || src.width;
+  const height = src.naturalHeight || src.height;
+  const r = rect || cropRect(width, height, startView(width, height));
+  const made = new Map();
+  const missing = new Set();
+  for (const step of encodePlan(outputSize(r).width)) {
+    if (missing.has(step.type)) continue;
+    if (!made.has(step.w)) made.set(step.w, drawBanner(src, r, step.w, { doc }));
+    const url = made.get(step.w).toDataURL(step.type, step.q);
+    if (!url.startsWith(`data:${step.type}`)) {
+      missing.add(step.type);
+      continue;
+    }
+    if (dataUrlBytes(url) <= max) return url;
+  }
+  throw new Error('That picture is too detailed to use as a banner. Try a simpler one.');
 }
 
 export function chooseBannerCrop(src, { doc = document } = {}) {
   const width = src.naturalWidth || src.width;
   const height = src.naturalHeight || src.height;
-  const axis = cropAxis(width, height);
-  if (!axis) return Promise.resolve(cleanFocus(null));
   return new Promise((resolve) => {
-    let focus = cleanFocus(null);
+    let view = startView(width, height);
     let done = false;
-    let drag = null;
+    const pointers = new Map();
+    let gesture = null;
     const titleId = nextId('crop');
     const helpId = nextId('crop-help');
+    const rangeId = nextId('crop-zoom');
     const previous = doc.activeElement;
-    const canvas = h('canvas', { class: 'pe-crop-canvas', attrs: { width: String(CROP_PREVIEW_W), height: String(CROP_PREVIEW_H), 'aria-hidden': 'true' } });
-    const frame = h('div', {
-      class: ['pe-crop-frame', `is-${axis}`],
-      attrs: { tabindex: '0', role: 'slider', 'aria-label': axis === 'x' ? 'Banner position, left to right' : 'Banner position, top to bottom', 'aria-describedby': helpId, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-orientation': axis === 'x' ? 'horizontal' : 'vertical' },
-    }, canvas);
-    const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+    const top = maxZoom(width, height);
+    const canvas = h('canvas', { class: 'pe-crop-canvas', attrs: { width: String(CROP_STAGE_W), height: String(CROP_STAGE_H), 'aria-hidden': 'true' } });
+    const stage = h('div', {
+      class: 'pe-crop-stage',
+      attrs: { tabindex: '0', role: 'group', 'aria-label': 'Banner picture. Drag to move it.', 'aria-describedby': helpId },
+    }, canvas, h('div', { class: 'pe-crop-frame', attrs: { 'aria-hidden': 'true' } }));
+    const range = h('input', { type: 'range', id: rangeId, class: 'range pe-crop-range', attrs: { min: '1', max: String(top), step: '0.01', 'aria-label': 'Zoom' } });
+    const level = h('span', { class: 'pe-crop-level', attrs: { 'aria-hidden': 'true' } });
+    const zoomOut = h('button', { type: 'button', class: 'icon-btn pe-crop-out', attrs: { 'aria-label': 'Zoom out' } }, icon('minus', { size: 16 }));
+    const zoomIn = h('button', { type: 'button', class: 'icon-btn pe-crop-in', attrs: { 'aria-label': 'Zoom in' } }, icon('plus', { size: 16 }));
+    const note = h('p', { class: 'pe-crop-note', attrs: { role: 'status', 'aria-live': 'polite' } });
+    const preview = (kind, label) => {
+      const c = h('canvas', { class: 'pe-crop-prev-canvas', attrs: { width: String(CROP_PREVIEW_W), height: String(CROP_PREVIEW_H), 'aria-hidden': 'true' } });
+      const fig = h('figure', { class: ['pe-crop-prev', `is-${kind}`] },
+        h('div', { class: 'pe-crop-prev-box' }, c, h('span', { class: 'pe-crop-prev-avatar', attrs: { 'aria-hidden': 'true' } })),
+        h('figcaption', { class: 'pe-crop-prev-label', text: label }));
+      return { fig, ctx: typeof c.getContext === 'function' ? c.getContext('2d') : null };
+    };
+    const onProfile = preview('profile', 'On your profile');
+    const onParty = preview('party', 'On the Party card');
+    const stageCtx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+    const fx = CROP_FRAME.x * CROP_STAGE_W;
+    const fy = CROP_FRAME.y * CROP_STAGE_H;
+    const fw = CROP_FRAME.w * CROP_STAGE_W;
     const paint = () => {
-      frame.setAttribute('aria-valuenow', String(Math.round((axis === 'x' ? focus.x : focus.y) * 100)));
-      frame.setAttribute('aria-valuetext', focusText(focus, axis));
-      if (!ctx) return;
-      const r = bannerCrop(width, height, { focus });
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(src, r.sx, r.sy, r.sw, r.sh, 0, 0, CROP_PREVIEW_W, CROP_PREVIEW_H);
+      const r = cropRect(width, height, view);
+      if (stageCtx) {
+        const scale = fw / r.sw;
+        const x0 = Math.max(0, r.sx - fx / scale);
+        const y0 = Math.max(0, r.sy - fy / scale);
+        const x1 = Math.min(width, r.sx + (CROP_STAGE_W - fx) / scale);
+        const y1 = Math.min(height, r.sy + (CROP_STAGE_H - fy) / scale);
+        stageCtx.imageSmoothingEnabled = true;
+        stageCtx.imageSmoothingQuality = 'high';
+        stageCtx.clearRect(0, 0, CROP_STAGE_W, CROP_STAGE_H);
+        if (x1 > x0 && y1 > y0) stageCtx.drawImage(src, x0, y0, x1 - x0, y1 - y0, fx + (x0 - r.sx) * scale, fy + (y0 - r.sy) * scale, (x1 - x0) * scale, (y1 - y0) * scale);
+      }
+      for (const p of [onProfile, onParty]) {
+        if (!p.ctx) continue;
+        p.ctx.imageSmoothingEnabled = true;
+        p.ctx.imageSmoothingQuality = 'high';
+        p.ctx.drawImage(src, r.sx, r.sy, r.sw, r.sh, 0, 0, CROP_PREVIEW_W, CROP_PREVIEW_H);
+      }
+      return r;
+    };
+    const sync = () => {
+      const r = paint();
+      const z = round2(view.zoom);
+      range.value = String(z);
+      range.setAttribute('aria-valuetext', zoomText(z));
+      range.style.setProperty('--fill', `${top > 1 ? Math.round(((z - 1) / (top - 1)) * 100) : 0}%`);
+      level.textContent = zoomText(z);
+      zoomOut.disabled = z <= 1;
+      zoomIn.disabled = z >= top;
+      const soft = softNote(width, height, r);
+      note.textContent = soft;
+      note.hidden = !soft;
     };
     const set = (next) => {
-      focus = cleanFocus(next);
-      paint();
+      view = clampView(width, height, next);
+      sync();
     };
+    const box = () => {
+      const b = stage.getBoundingClientRect();
+      return { left: b.left, top: b.top, width: Math.max(1, b.width || 0), height: Math.max(1, b.height || 0) };
+    };
+    const anchor = (b, x, y) => [((x - b.left) / b.width - CROP_FRAME.x) / CROP_FRAME.w, ((y - b.top) / b.height - CROP_FRAME.y) / CROP_FRAME.h];
+    const begin = () => {
+      gesture = pointers.size ? { view, b: box(), pts: [...pointers.values()].map((p) => ({ ...p })) } : null;
+      stage.classList.toggle('is-dragging', pointers.size > 0);
+    };
+    stage.addEventListener('pointerdown', (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      e.preventDefault();
+      if (doc.activeElement !== stage) stage.focus();
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try {
+        stage.setPointerCapture(e.pointerId);
+      } catch {}
+      begin();
+    });
+    stage.addEventListener('pointermove', (e) => {
+      if (!gesture || !pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const now = [...pointers.values()];
+      const { b, pts } = gesture;
+      const frameW = b.width * CROP_FRAME.w;
+      if (now.length === 1 || pts.length === 1) {
+        set(panView(width, height, gesture.view, now[0].x - pts[0].x, now[0].y - pts[0].y, frameW));
+        return;
+      }
+      const d0 = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+      const d1 = Math.hypot(now[1].x - now[0].x, now[1].y - now[0].y) || 1;
+      const m0 = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+      const m1 = { x: (now[0].x + now[1].x) / 2, y: (now[0].y + now[1].y) / 2 };
+      const [ax, ay] = anchor(b, m0.x, m0.y);
+      const zoomed = zoomView(width, height, gesture.view, d1 / d0, ax, ay);
+      set(panView(width, height, zoomed, m1.x - m0.x, m1.y - m0.y, frameW));
+    });
+    const lift = (e) => {
+      if (!pointers.delete(e.pointerId)) return;
+      begin();
+    };
+    stage.addEventListener('pointerup', lift);
+    stage.addEventListener('pointercancel', lift);
+    stage.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const unitPx = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+      const b = box();
+      const [ax, ay] = anchor(b, num(e.clientX, b.left + b.width / 2), num(e.clientY, b.top + b.height / 2));
+      set(zoomView(width, height, view, Math.exp(-clamp(num(e.deltaY) * unitPx, -240, 240) * 0.002), clamp(ax, 0, 1), clamp(ay, 0, 1)));
+    }, { passive: false });
+    stage.addEventListener('keydown', (e) => {
+      const step = CROP_PAN_STEP * (e.shiftKey ? 4 : 1);
+      const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+      let next = null;
+      if (moves[e.key]) next = panView(width, height, view, moves[e.key][0], moves[e.key][1], 1);
+      else if (e.key === '+' || e.key === '=') next = zoomView(width, height, view, CROP_ZOOM_STEP);
+      else if (e.key === '-' || e.key === '_') next = zoomView(width, height, view, 1 / CROP_ZOOM_STEP);
+      else if (e.key === '0') next = startView(width, height);
+      if (!next) return;
+      e.preventDefault();
+      set(next);
+    });
+    range.addEventListener('input', () => set(setZoom(width, height, view, Number(range.value))));
+    zoomOut.addEventListener('click', () => set(zoomView(width, height, view, 1 / CROP_ZOOM_STEP)));
+    zoomIn.addEventListener('click', () => set(zoomView(width, height, view, CROP_ZOOM_STEP)));
     function onKey(e) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -128,73 +344,25 @@ export function chooseBannerCrop(src, { doc = document } = {}) {
       if (previous && previous.focus && previous.isConnected) previous.focus();
       resolve(value);
     };
-    frame.addEventListener('pointerdown', (e) => {
-      if (e.button !== undefined && e.button !== 0) return;
-      e.preventDefault();
-      drag = { x: e.clientX, y: e.clientY, from: focus, w: frame.getBoundingClientRect().width };
-      frame.classList.add('is-dragging');
-      try {
-        frame.setPointerCapture(e.pointerId);
-      } catch {}
-    });
-    frame.addEventListener('pointermove', (e) => {
-      if (!drag) return;
-      set(moveFocus(drag.from, axis, dragDelta(axis, e.clientX - drag.x, e.clientY - drag.y, drag.w, width, height)));
-    });
-    const endDrag = () => {
-      drag = null;
-      frame.classList.remove('is-dragging');
-    };
-    frame.addEventListener('pointerup', endDrag);
-    frame.addEventListener('pointercancel', endDrag);
-    frame.addEventListener('keydown', (e) => {
-      const back = axis === 'x' ? 'ArrowLeft' : 'ArrowUp';
-      const fwd = axis === 'x' ? 'ArrowRight' : 'ArrowDown';
-      let next = null;
-      if (e.key === back) next = moveFocus(focus, axis, -CROP_STEP);
-      else if (e.key === fwd) next = moveFocus(focus, axis, CROP_STEP);
-      else if (e.key === 'Home') next = moveFocus(focus, axis, -1);
-      else if (e.key === 'End') next = moveFocus(focus, axis, 1);
-      if (!next) return;
-      e.preventDefault();
-      set(next);
-    });
+    const reset = button({ label: 'Reset', icon: 'refresh', variant: 'ghost', className: 'pe-crop-reset', onClick: () => set(startView(width, height)) });
     const cancel = button({ label: 'Cancel', className: 'pe-crop-cancel', onClick: () => finish(null) });
-    const centre = button({ label: 'Centre', icon: 'refresh', variant: 'ghost', className: 'pe-crop-centre', onClick: () => set(null) });
-    const ok = button({ label: 'Use this banner', icon: 'check', variant: 'primary', className: 'pe-crop-ok', onClick: () => finish(focus) });
+    const ok = button({ label: 'Use this banner', icon: 'check', variant: 'primary', className: 'pe-crop-ok', onClick: () => finish(cropRect(width, height, view)) });
     const panel = h('div', { class: ['dialog-panel', 'pe-crop-panel'], attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId } },
-      h('h2', { class: 'dialog-title', id: titleId, text: 'Choose what your banner shows' }),
-      h('p', { class: 'dialog-body', id: helpId, text: `Banners are 1500 by 500. Your picture is ${axis === 'x' ? 'wider' : 'taller'} than that, so drag it, or use the arrow keys, to pick which part shows.` }),
-      frame,
-      h('div', { class: 'dialog-actions' }, centre, cancel, ok));
+      h('h2', { class: 'dialog-title', id: titleId, text: 'Position your banner' }),
+      h('p', { class: 'dialog-body', id: helpId, text: 'Drag the picture to move it, and zoom with the slider, your mouse wheel or a pinch. On a keyboard, the arrow keys move it and + and - zoom.' }),
+      stage,
+      h('div', { class: 'pe-crop-zoom' }, zoomOut, range, zoomIn, level),
+      note,
+      h('div', { class: 'pe-crop-previews' }, onProfile.fig, onParty.fig),
+      h('div', { class: 'dialog-actions' }, reset, cancel, ok));
     const root = h('div', { class: ['dialog-root', 'pe-crop'] }, h('div', { class: 'dialog-overlay', on: { click: () => finish(null) } }), panel);
     doc.addEventListener('keydown', onKey, true);
     doc.body.appendChild(root);
     doc.body.classList.add('has-modal');
-    paint();
+    sync();
     focusFirst(panel);
-    frame.focus();
+    stage.focus();
   });
-}
-
-export function encodeBanner(src, { doc = document, max = BANNER_BYTES, focus = null } = {}) {
-  const canvas = doc.createElement('canvas');
-  canvas.width = BANNER_W;
-  canvas.height = BANNER_H;
-  const c = canvas.getContext('2d');
-  if (!c) throw new Error("Your browser can't resize pictures here. Try another browser.");
-  const r = bannerCrop(src.naturalWidth || src.width, src.naturalHeight || src.height, { focus });
-  c.imageSmoothingEnabled = true;
-  c.imageSmoothingQuality = 'high';
-  c.drawImage(src, r.sx, r.sy, r.sw, r.sh, 0, 0, BANNER_W, BANNER_H);
-  for (const [type, qualities] of [['image/webp', [0.9, 0.8, 0.7, 0.6, 0.5]], ['image/jpeg', [0.85, 0.72, 0.6, 0.5]]]) {
-    for (const q of qualities) {
-      const url = canvas.toDataURL(type, q);
-      if (!url.startsWith(`data:${type}`)) break;
-      if (dataUrlBytes(url) <= max) return url;
-    }
-  }
-  throw new Error('That picture is too detailed to use as a banner. Try a simpler one.');
 }
 
 export async function processBanner(file, { choose = chooseBannerCrop } = {}) {
@@ -206,9 +374,9 @@ export async function processBanner(file, { choose = chooseBannerCrop } = {}) {
   if (!['png', 'jpeg', 'webp', 'gif'].includes(kind)) throw new Error("That file isn't a picture YapOS can use. Use a PNG, JPG, WebP or GIF.");
   const src = await loadPicture(file);
   try {
-    const focus = choose ? await choose(src) : null;
-    if (choose && !focus) return null;
-    return encodeBanner(src, { focus });
+    const rect = choose ? await choose(src) : null;
+    if (choose && !rect) return null;
+    return encodeBanner(src, { rect });
   } finally {
     if (typeof src.close === 'function') src.close();
   }
@@ -690,7 +858,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
     heading('Banner'),
     bannerWrap,
     h('div', { class: 'pe-actions-row' }, uploadBtn, removeBtn, fileInput),
-    h('p', { class: 'field-help', text: 'Best size 1500 x 500. PNG, JPG, WebP or GIF. Other sizes are cropped to fit, and you can drag to choose which part shows. Uploads are saved straight away and everyone can see them, so keep it friendly.' }),
+    h('p', { class: 'field-help', text: 'Best size 3000 x 1000, and at least 1500 x 500. PNG, JPG, WebP or GIF. After you pick a picture you can drag and zoom it to choose what shows. Uploads are saved straight away and everyone can see them, so keep it friendly.' }),
     heading('Accent colour'),
     accentGroup.el,
     h('div', { class: 'pe-custom' },

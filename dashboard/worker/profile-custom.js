@@ -9,12 +9,12 @@ import { clearPartyProfileCache } from './party-profile.js';
 import { isBannerImagePath } from './security.js';
 import { cleanLook, defaultLook, isDefaultLook, lookTexts, themeColours, LookError, LOOK_VERSION, LOOK_BODY_MAX, ACH_PREFIX, PIN_MAX, BIO_MAX, PRONOUNS_MAX, STATUS_MAX } from '../web/js/profile-look.js';
 
-export const BANNER_MAX = 450 * 1024;
-export const BANNER_BODY_LIMIT = 640 * 1024;
+export const BANNER_MAX = 800 * 1024;
+export const BANNER_BODY_LIMIT = 1120 * 1024;
 export const BANNER_MIN_W = 600;
-export const BANNER_MAX_W = 1600;
+export const BANNER_MAX_W = 3000;
 export const BANNER_MIN_H = 200;
-export const BANNER_MAX_H = 600;
+export const BANNER_MAX_H = 1000;
 export const BANNER_MIN_RATIO = 2;
 export const BANNER_MAX_RATIO = 4;
 export const BANNER_PREFIX = '/banner-img/';

@@ -64,9 +64,8 @@
 }
 
 .pcard {
-  --pc-banner: 56px;
-  --pc-stat: 48px;
-  --pc-fav: 48px;
+  --pc-stat: 44px;
+  --pc-fav: 44px;
   --pc-badge: 44px;
   --pc-ac-mix: var(--pc-ac, var(--accent));
   position: relative;
@@ -151,7 +150,7 @@
 
 .pcard-banner {
   position: relative;
-  height: var(--pc-banner);
+  aspect-ratio: 3;
   overflow: hidden;
   background: radial-gradient(90% 160% at 85% 0%, var(--glow-c), transparent 60%), linear-gradient(120deg, var(--glow-a), var(--glow-b));
 }
@@ -212,7 +211,7 @@
   display: flex;
   align-items: flex-end;
   gap: 10px;
-  height: 40px;
+  height: 26px;
 }
 
 .pcard-avatar {
@@ -220,7 +219,7 @@
   flex: none;
   width: 72px;
   height: 72px;
-  margin-top: -32px;
+  margin-top: -46px;
   padding: 4px;
   border-radius: 50%;
   background: var(--surface);
@@ -350,7 +349,7 @@
 }
 
 .pcard-name {
-  margin: 6px 0 0;
+  margin: 2px 0 0;
   font-size: 20px;
   font-weight: var(--weight-display);
   letter-spacing: var(--tracking-tight);
@@ -401,7 +400,7 @@
   align-items: center;
   gap: var(--space-2);
   height: 16px;
-  margin: 6px var(--space-4) 0;
+  margin: 4px var(--space-4) 0;
 }
 
 .pcard-xp-track {
@@ -434,8 +433,8 @@
 .pcard-main {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
-  padding: var(--space-3) var(--space-4) 0;
+  gap: 8px;
+  padding: var(--space-2) var(--space-4) 0;
 }
 
 .pcard-stats,
@@ -485,7 +484,7 @@
   display: flex;
   justify-content: center;
   gap: var(--space-2);
-  height: 28px;
+  height: 24px;
 }
 
 .pcard-fact {
@@ -521,7 +520,7 @@
 
 .pcard-sec {
   display: grid;
-  grid-template-rows: 20px auto;
+  grid-template-rows: 18px auto;
   gap: 6px;
 }
 
@@ -533,7 +532,7 @@
 
 .pcard-more {
   position: relative;
-  height: 20px;
+  height: 18px;
   padding: 0 6px;
   border: 0;
   border-radius: var(--radius-xs);
@@ -547,7 +546,7 @@
 
 .pcard-fav {
   display: grid;
-  grid-template-rows: 18px 26px;
+  grid-template-rows: 18px 22px;
   place-items: center;
   align-content: center;
   gap: 2px;
@@ -687,7 +686,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 50px;
+  height: 44px;
   margin-top: var(--space-3);
   padding: 0 var(--space-4);
   border-top: 1px solid var(--border);

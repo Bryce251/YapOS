@@ -64,8 +64,6 @@ export function noticeBox(lines) {
     h('div', { class: 'profile-staff-notice-text' }, ...lines.map((l) => h('p', { text: l.text }))));
 }
 export const BADGE_TILES = 12;
-export const BANNER_COLLAPSE = 0.62;
-export const SHRINK_VAR = '--shrink';
 const NS = 'http://www.w3.org/2000/svg';
 
 export const BADGE_GROUPS = Object.freeze([
@@ -219,7 +217,7 @@ function bannerEl(look, image) {
   if (look.banner === 'image') {
     if (!image) return null;
     return h('div', { class: 'profile-banner banner-image', attrs: { 'aria-hidden': 'true' } },
-      h('img', { class: 'profile-banner-img', src: image, alt: '', loading: 'lazy', decoding: 'async', attrs: { draggable: 'false' } }));
+      h('img', { class: 'profile-banner-img', src: image, alt: '', decoding: 'async', attrs: { draggable: 'false', fetchpriority: 'high' } }));
   }
   return h('div', { class: ['profile-banner', `banner-${look.banner}`], attrs: { 'aria-hidden': 'true' } });
 }
@@ -305,71 +303,6 @@ export function profileCard(p, opts = {}) {
   return card;
 }
 
-function reducedMotion(win) {
-  try {
-    return Boolean(win.matchMedia && win.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  } catch {
-    return true;
-  }
-}
-
-export function shrinkProgress(scrollY, start, distance) {
-  if (!(distance > 0)) return 0;
-  const v = (Number(scrollY) - start) / distance;
-  return v <= 0 ? 0 : v >= 1 ? 1 : Math.round(v * 1000) / 1000;
-}
-
-export function shrinkBanner(card, { win = window, signal = null } = {}) {
-  const banner = card && card.querySelector ? card.querySelector('.profile-banner') : null;
-  const hero = card && card.querySelector ? card.querySelector('.profile-hero') : null;
-  if (!banner || !hero || card.classList.contains('is-preview') || reducedMotion(win) || typeof win.requestAnimationFrame !== 'function') return () => {};
-  card.classList.add('can-shrink');
-  let start = 0;
-  let distance = 0;
-  let frame = 0;
-  let last = -1;
-  let stopped = false;
-  const px = (v) => Number.parseFloat(v) || 0;
-  const measure = () => {
-    const cs = win.getComputedStyle ? win.getComputedStyle(banner) : null;
-    const gap = win.getComputedStyle ? px(win.getComputedStyle(card).rowGap) : 0;
-    const height = banner.offsetHeight || 0;
-    const naturalBottom = hero.getBoundingClientRect().top + (win.scrollY || 0) - gap - (cs ? px(cs.marginBottom) : 0);
-    start = naturalBottom - height - (cs ? px(cs.top) : 0);
-    distance = height * BANNER_COLLAPSE;
-  };
-  const paint = () => {
-    frame = 0;
-    if (stopped) return;
-    const next = shrinkProgress(win.scrollY || 0, start, distance);
-    if (next === last) return;
-    last = next;
-    card.style.setProperty(SHRINK_VAR, String(next));
-  };
-  const onScroll = () => {
-    if (!frame) frame = win.requestAnimationFrame(paint);
-  };
-  const onResize = () => {
-    measure();
-    onScroll();
-  };
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    win.removeEventListener('scroll', onScroll);
-    win.removeEventListener('resize', onResize);
-    if (frame && typeof win.cancelAnimationFrame === 'function') win.cancelAnimationFrame(frame);
-    card.classList.remove('can-shrink');
-    card.style.removeProperty(SHRINK_VAR);
-  };
-  win.addEventListener('scroll', onScroll, { passive: true });
-  win.addEventListener('resize', onResize, { passive: true });
-  if (signal) signal.addEventListener('abort', stop, { once: true });
-  measure();
-  paint();
-  return stop;
-}
-
 function profileSkeleton() {
   return loadingRegion('Loading profile', h('div', { class: 'profile-card' },
     h('div', { class: 'profile-hero' }, skeleton('skeleton-avatar-xl'), h('div', { class: 'profile-who' }, skeleton('skeleton-title skeleton-w-50'), skeleton('skeleton-text skeleton-w-30')))));
@@ -391,7 +324,6 @@ export function renderProfile(root, ctx) {
   let user = null;
   let shown = null;
   let editor = null;
-  let stopShrink = () => {};
   let notices = null;
   let asked = false;
   ctx.getUser?.().then((u) => {
@@ -411,11 +343,9 @@ export function renderProfile(root, ctx) {
     shown = v;
     ctx.setTitle(v.profile.name);
     const own = isOwn(v);
-    stopShrink();
     const card = profileCard(v.profile, { own, look: v.look, bannerImage: v.bannerImage, hints: v.hints, onCustomize: own ? () => edit(v) : null });
     replace(content, own ? noticeBox(notices) : null, card);
     if (own) askNotices();
-    stopShrink = shrinkBanner(card, { signal });
   }
 
   function askNotices() {
@@ -429,7 +359,6 @@ export function renderProfile(root, ctx) {
   }
 
   function edit(v) {
-    stopShrink();
     editor = openProfileEditor({
       mount: content,
       profile: v.profile,

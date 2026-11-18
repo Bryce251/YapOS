@@ -12,7 +12,9 @@ export const BADGES_SHOWN = 5;
 export const FAVS_SHOWN = 3;
 export const COPIED_MS = 2400;
 export const PROFILE_SITE = 'https://yapos.dev';
-export const LAYOUT = Object.freeze({ banner: 56, top: 40, name: 32, sub: 34, xp: 22, pad: 12, stat: 48, facts: 28, sectionHead: 26, fav: 48, badge: 44, gap: 10, foot: 62, sheet: 8 });
+export const CARD_MAX_W = 360;
+export const BANNER_RATIO = 3;
+export const LAYOUT = Object.freeze({ banner: CARD_MAX_W / BANNER_RATIO, top: 26, name: 28, sub: 34, xp: 20, pad: 8, stat: 44, facts: 24, sectionHead: 24, fav: 44, badge: 44, gap: 8, foot: 56, sheet: 8 });
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const HEX_RE = /^#[0-9a-f]{6}$/;
@@ -163,9 +165,14 @@ export function cardModel(card) {
   return { stats, facts, favourites, row: all.slice(0, BADGES_SHOWN), all, total, unlisted: Math.max(0, total - all.length) };
 }
 
-export function cardHeight(status = 'ready') {
+export function bannerHeight(width = CARD_MAX_W) {
+  const w = Number(width);
+  return Math.ceil((Number.isFinite(w) && w > 0 ? w : CARD_MAX_W) / BANNER_RATIO);
+}
+
+export function cardHeight(status = 'ready', width = CARD_MAX_W) {
   const L = LAYOUT;
-  const head = L.banner + L.top + L.name + L.sub;
+  const head = bannerHeight(width) + L.top + L.name + L.sub;
   if (status === 'ready' || status === 'loading') return head + L.xp + L.pad + L.stat + L.facts + 2 * L.sectionHead + L.fav + L.badge + 3 * L.gap + L.foot + L.sheet;
   return head + L.pad + 96 + L.sheet;
 }
