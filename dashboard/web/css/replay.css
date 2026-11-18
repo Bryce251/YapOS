@@ -777,6 +777,73 @@
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.party-add [hidden],
+.blocked-mode[hidden] {
+  display: none !important;
+}
+
+.blocked-mode {
+  align-self: flex-start;
+}
+
+.pattern-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pattern-input,
+.pattern-src {
+  font-family: var(--mono);
+}
+
+.pattern-src {
+  overflow-wrap: anywhere;
+}
+
+.pattern-try-out {
+  min-height: 40px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.pattern-hit {
+  padding: 0 2px;
+  border-radius: 4px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 600;
+  text-decoration: line-through;
+}
+
+.pattern-try-note.is-bad {
+  color: var(--danger);
+}
+
+.blocked-patterns:not(:empty) {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.blocked-patterns .party-row-end {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.blocked-sub {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .cheat-tools {
   display: flex;
   flex-wrap: wrap;

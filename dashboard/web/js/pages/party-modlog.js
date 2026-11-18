@@ -45,6 +45,11 @@ export const ACTION_LABELS = Object.freeze({
   owner_badge_create: ['\u{1F3C5}', 'Owner: badges made'],
   owner_badge_edit: ['\u{1F3C5}', 'Owner: badges edited'],
   owner_badge_delete: ['\u{1F3C5}', 'Owner: badges deleted'],
+  owner_banner_remove: ['\u{1F5BC}️', 'Owner: profile banners removed'],
+  owner_profile_text_clear: ['\u{1F4DD}', 'Owner: profile text cleared'],
+  owner_pattern_add: ['\u{1F6E1}️', 'Owner: blocked patterns added'],
+  owner_pattern_edit: ['\u{1F6E1}️', 'Owner: blocked patterns changed'],
+  owner_pattern_remove: ['\u{1F6E1}️', 'Owner: blocked patterns removed'],
 });
 export const CHEAT_LABELS = Object.freeze({
   daily_points: 'Daily points cap',
@@ -151,6 +156,12 @@ export function modLogSentence(e) {
       return `${who} blocked ${d.word ? `the word “${clip(d.word, 40)}”` : 'a word'}`;
     case 'word_remove':
       return `${who} unblocked ${d.word ? `the word “${clip(d.word, 40)}”` : 'a word'}`;
+    case 'owner_pattern_add':
+      return `${who} blocked ${str(d.pattern) ? `the pattern “${clip(d.pattern, 120)}”` : 'a pattern'}`;
+    case 'owner_pattern_edit':
+      return `${who} changed ${str(d.before) ? `the pattern “${clip(d.before, 120)}”` : 'a pattern'}${str(d.pattern) ? ` to “${clip(d.pattern, 120)}”` : ''}`;
+    case 'owner_pattern_remove':
+      return `${who} unblocked ${str(d.pattern) ? `the pattern “${clip(d.pattern, 120)}”` : 'a pattern'}`;
     case 'pack_dismiss':
     case 'pack_hide':
     case 'pack_restore': {
@@ -198,6 +209,10 @@ export function modLogSentence(e) {
       const n = Number(d.holders) || 0;
       return `${who} deleted the badge${str(d.name) ? ` “${clip(d.name, 40)}”` : ''}${n ? ` and took it off ${n} ${n === 1 ? 'person' : 'people'}` : ''}`;
     }
+    case 'owner_banner_remove':
+      return `${who} removed ${them}'s profile banner picture`;
+    case 'owner_profile_text_clear':
+      return `${who} cleared ${them}'s about me and status`;
     case 'owner_stats_add':
     case 'owner_points_set':
     case 'owner_record_set':

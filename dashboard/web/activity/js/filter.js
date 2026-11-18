@@ -1,3 +1,7 @@
+import { PATTERN_MAX, PATTERN_CHARS, compilePattern, patternProblem, windowSpans, trialRun } from './patterns.js';
+
+export { PATTERN_MAX, PATTERN_CHARS };
+
 const SHIFT = 7;
 const STEP = 3;
 const MAX_SPAN = 16;
@@ -357,6 +361,7 @@ export function findBlocked(raw) {
     const memo = new Map();
     for (const [split, leet] of [[true, true], [true, false], [false, true], [false, false]]) scanCustom(tokenize(list, split, leet), hits, memo);
   }
+  if (customPatterns.length) patternSpans(list, text, customPatterns, hits);
   NUMBERS.lastIndex = 0;
   let m = NUMBERS.exec(text);
   while (m) {
@@ -377,6 +382,7 @@ export function isBlockedWord(word, { strict = false } = {}) {
   if (!w) return false;
   if (strict && gameHit(w)) return true;
   if (customCompact.size && hasCustom(w)) return true;
+  if (customPatterns.length && patternSpans(chars(w), w).length) return true;
   if (SAFE.has(w)) return false;
   if (/^[a-z]+$/.test(w)) return WORD_RE.test(w) || PHRASE_RE.test(w) || variant(w) || stemHit(w);
   return findBlocked(w).length > 0;
@@ -490,4 +496,131 @@ function hasCustom(word) {
   const memo = new Map();
   for (const [split, leet] of [[true, true], [true, false], [false, true], [false, false]]) scanCustom(tokenize(list, split, leet), hits, memo);
   return hits.length > 0;
+}
+
+export const PATTERN_SLOW_MS = 40;
+export const PATTERN_STRIKES = 3;
+export const PATTERN_SAMPLES = Object.freeze([
+  'hello', 'hi there', 'hey everyone', 'good game', 'gg', 'nice drawing', 'well played', 'thank you', 'thanks so much', 'lol', 'haha', 'wow',
+  'ok', 'yes', 'no', 'what is this', 'my turn', 'your turn', 'great job everyone', 'i think it is a cat', 'is it a dog or a bird',
+  'the quick brown fox jumps over the lazy dog', 'see you later', 'can you help me', 'round 2', '10 points', 'how are you', 'that was fun',
+  'one more game', 'play again', 'nice one', 'good luck have fun', 'pizza and pasta', 'my favourite colour is blue', 'i love this song',
+  'café olé', 'gracias amigo 😀', 'привет всем', 'γεια σου', 'こんにちは', '谢谢', 'مرحبا', 'नमस्ते', '👍 ❤️ 🎉',
+]);
+
+let customPatterns = [];
+
+const clock = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
+
+function normalMap(list) {
+  let text = '';
+  const s = [];
+  const e = [];
+  let gap = true;
+  for (const c of list) {
+    const k = c.m.kind;
+    if (k === 'skip' || k === 'join') continue;
+    if (k === 'letter' || k === 'leet') {
+      for (const ch of c.m.out) {
+        if (text && text[text.length - 1] === ch) {
+          e[e.length - 1] = c.e;
+          continue;
+        }
+        text += ch;
+        s.push(c.s);
+        e.push(c.e);
+      }
+      gap = false;
+    } else if (!gap) {
+      text += ' ';
+      s.push(c.s);
+      e.push(c.e);
+      gap = true;
+    }
+  }
+  if (text.endsWith(' ')) {
+    text = text.slice(0, -1);
+    s.pop();
+    e.pop();
+  }
+  return { text, s, e };
+}
+
+function joinSingles(norm) {
+  const { text } = norm;
+  let out = '';
+  const s = [];
+  const e = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === ' ' && (i === 1 || text[i - 2] === ' ') && (i + 2 >= text.length || text[i + 2] === ' ')) continue;
+    if (out && out[out.length - 1] === ch && ch !== ' ') {
+      e[e.length - 1] = norm.e[i];
+      continue;
+    }
+    out += ch;
+    s.push(norm.s[i]);
+    e.push(norm.e[i]);
+  }
+  return { text: out, s, e };
+}
+
+function patternSpans(list, text, res = customPatterns, out = []) {
+  let norm = null;
+  for (const p of res) {
+    if (p.strikes >= PATTERN_STRIKES) continue;
+    const start = clock();
+    try {
+      windowSpans(p.re, text, (a, b) => out.push([a, b]));
+      if (!norm) {
+        const base = normalMap(list);
+        const joined = joinSingles(base);
+        norm = [base, joined].filter((n, i) => n.text && n.text !== text && (i === 0 || n.text !== base.text));
+      }
+      for (const n of norm) windowSpans(p.re, n.text, (a, b) => out.push([n.s[a], n.e[b - 1]]));
+    } catch {
+      p.strikes = PATTERN_STRIKES;
+    }
+    if (clock() - start > PATTERN_SLOW_MS) p.strikes = (p.strikes || 0) + 1;
+  }
+  return out;
+}
+
+export function setCustomPatterns(list, { encoded = true } = {}) {
+  const next = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(list) ? list.slice(0, PATTERN_MAX) : []) {
+    if (typeof raw !== 'string') continue;
+    const src = encoded ? decodeTerm(raw) : raw;
+    if (seen.has(src) || patternProblem(src)) continue;
+    const re = compilePattern(src);
+    if (!re) continue;
+    seen.add(src);
+    next.push({ src, re, strikes: 0 });
+  }
+  customPatterns = next;
+  return next.length;
+}
+
+export function customPatternCount() {
+  return customPatterns.length;
+}
+
+export function testPattern(src, text) {
+  const re = typeof src === 'string' ? compilePattern(src) : null;
+  const raw = String(text ?? '');
+  if (!re || !raw) return [];
+  const hits = patternSpans(chars(raw), raw, [{ re, strikes: 0 }]);
+  return merge(hits.map(([a, b]) => [a, extend(raw, b)])).map(([start, end]) => ({ start, end, text: raw.slice(start, end) }));
+}
+
+export function validatePattern(value, { now, budget, trial = true } = {}) {
+  const src = typeof value === 'string' ? value.trim() : value;
+  const shape = patternProblem(src);
+  if (shape) return shape;
+  for (const sample of PATTERN_SAMPLES) {
+    if (testPattern(src, sample).length) return { code: 'too_broad', message: `That pattern would also hide "${sample}", which is harmless. Make it more specific.` };
+  }
+  if (trial && !trialRun(compilePattern(src), src, now, budget)) return { code: 'too_slow', message: 'That pattern is too slow on long messages. Make it simpler.' };
+  return null;
 }

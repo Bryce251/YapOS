@@ -48,7 +48,6 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--game, var(--accent)) 22%, transparent);
 }
 
-.word-input.is-invalid,
 .word-input[aria-invalid="true"] {
   border-color: var(--danger);
   box-shadow: 0 0 0 3px var(--danger-soft);
@@ -1068,11 +1067,6 @@
   line-height: 1;
 }
 
-.play:has(.game-draw) > .strip > .strip-list,
-.play:has(.game-draw) > .strip > .strip-empty {
-  display: none;
-}
-
 @media (max-width: 420px) {
   .reveal-drawer {
     flex-direction: column;
@@ -1195,10 +1189,6 @@
 .timer-num {
   font-weight: var(--weight-heavy);
   text-shadow: var(--fx-num-shadow);
-}
-
-.play-card.is-urgent {
-  box-shadow: var(--fx-depth-2), var(--inset-hi), inset 0 3px 0 var(--danger), inset 0 0 0 1px var(--danger-line);
 }
 
 .reveal-gain,

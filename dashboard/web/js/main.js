@@ -186,7 +186,7 @@ async function render() {
   }
   if (PUBLIC_PAGES[route.name]) {
     shell = null;
-    PUBLIC_PAGES[route.name](root, { api, params: route.params, signal, setTitle, getUser: () => ensureUser(signal).catch(() => null) });
+    PUBLIC_PAGES[route.name](root, { api, params: route.params, signal, setTitle, getUser: () => ensureUser(signal).catch(() => null), setLeaveGuard: (guard) => { leaveGuard = guard; } });
     return;
   }
   if (route.name === 'not-found') {

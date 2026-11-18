@@ -57,6 +57,21 @@ export function readUser(u) {
     known: u.known !== false,
     globalHidden: u.globalHidden === true,
     account: ACCOUNT_STATES.has(u.account) ? u.account : 'real',
+    look: readOwnerLook(u.look),
+  };
+}
+
+const BANNER_URL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg)$/;
+
+export function readOwnerLook(l) {
+  if (!l || typeof l !== 'object') return { banner: null, bio: '', pronouns: '', status: '', statusEmoji: '', custom: false };
+  return {
+    banner: typeof l.banner === 'string' && BANNER_URL_RE.test(l.banner) ? l.banner : null,
+    bio: str(l.bio),
+    pronouns: str(l.pronouns),
+    status: str(l.status),
+    statusEmoji: str(l.statusEmoji),
+    custom: l.custom === true,
   };
 }
 
@@ -620,6 +635,46 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
   const badgeSearch = h('input', { type: 'search', id: badgeSearchId, class: 'input', placeholder: 'Search badges', autocomplete: 'off' });
   const badgeList = h('div', { class: 'owner-checklist-wrap' });
   const userLog = h('div', { class: 'owner-log-wrap' });
+  const lookBox = h('div', { class: 'owner-look' });
+  const removeBanner = button({ label: 'Remove banner picture', icon: 'trash', variant: 'danger', className: 'owner-remove-banner' });
+  const clearText = button({ label: 'Clear about me and status', icon: 'x', className: 'owner-clear-look' });
+  async function lookAction(what, btn) {
+    const u = getDetail().user;
+    const who = personName(u);
+    const ask = what === 'banner'
+      ? { title: `Remove ${who}'s banner picture?`, body: 'It is deleted straight away and their card goes back to no banner. They can upload a new one. This is written to the mod log.' }
+      : { title: `Clear ${who}'s about me and status?`, body: 'Their about me, pronouns and status are emptied straight away. This is written to the mod log.' };
+    const ok = await confirmDialog({ title: ask.title, body: ask.body, confirmLabel: what === 'banner' ? 'Remove picture' : 'Clear text' });
+    if (!ok || ctx.signal?.aborted) return;
+    setBusy(btn, true, 'Working');
+    try {
+      const data = await ctx.api.request('DELETE', `${OWNER_USERS_PATH}/${encodeURIComponent(u.id)}/${what === 'banner' ? 'banner' : 'look-text'}`, { signal: ctx.signal });
+      if (ctx.signal?.aborted) return;
+      getDetail().user.look = readOwnerLook(data?.look);
+      update(getDetail());
+      toast(what === 'banner' ? 'Banner picture removed.' : 'Profile text cleared.');
+    } catch (err) {
+      if (ctx.signal?.aborted) return;
+      toast(err instanceof ApiError ? err.message : 'That did not work. Try again.', { tone: 'danger', title: "Couldn't do that" });
+    } finally {
+      if (btn.isConnected) setBusy(btn, false);
+    }
+  }
+  removeBanner.addEventListener('click', () => lookAction('banner', removeBanner));
+  clearText.addEventListener('click', () => lookAction('text', clearText));
+
+  function updateLook(look) {
+    const hasText = Boolean(look.bio || look.pronouns || look.status || look.statusEmoji);
+    removeBanner.hidden = !look.banner;
+    clearText.hidden = !hasText;
+    replace(lookBox,
+      look.banner ? h('img', { class: 'owner-look-banner', src: look.banner, alt: 'Their banner picture', loading: 'lazy', decoding: 'async' }) : h('p', { class: 'owner-empty muted', text: 'No banner picture.' }),
+      hasText ? h('dl', { class: 'owner-look-text' },
+        look.status || look.statusEmoji ? [h('dt', { text: 'Status' }), h('dd', { text: [look.statusEmoji, look.status].filter(Boolean).join(' ') })] : null,
+        look.pronouns ? [h('dt', { text: 'Pronouns' }), h('dd', { text: look.pronouns })] : null,
+        look.bio ? [h('dt', { text: 'About me' }), h('dd', { class: 'owner-look-bio', text: look.bio })] : null)
+        : h('p', { class: 'owner-empty muted', text: 'No about me or status.' }));
+  }
 
   const boardStatus = h('div', { class: 'owner-board-status' });
   const boardStats = h('div', { class: 'owner-stats' });
@@ -874,6 +929,7 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
     replace(achBox, h('h3', { class: 'owner-section-title', text: 'Achievements' }), pills(u.achievements, d.catalog.achievements, 'No achievements yet.'));
     checklist(achList, d.catalog.achievements, new Set(u.achievements), { grant: 'achievement.grant', revoke: 'achievement.revoke', filter: achSearch.value, what: 'achievement', pending: pendingRefs(d.actions, ['achievement.grant', 'achievement.revoke']) });
     checklist(badgeList, d.catalog.badges, new Set(u.badges), { grant: 'badge.grant', revoke: 'badge.revoke', earned: new Set(u.earnedBadges), filter: badgeSearch.value, what: 'badge', pending: pendingRefs(d.actions, ['badge.grant', 'badge.revoke']) });
+    updateLook(u.look);
     replace(userLog, d.actions.length
       ? h('ul', { class: 'owner-log' }, ...d.actions.map((a) => logRow(a, { catalog: d.catalog })))
       : h('p', { class: 'owner-empty muted', text: 'Nothing given or taken yet.' }));
@@ -962,6 +1018,10 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
         h('label', { class: 'sr-only', htmlFor: achSearchId, text: 'Search achievements' }), achSearch, achList),
       card({ title: 'Badges', icon: 'sparkles' },
         h('label', { class: 'sr-only', htmlFor: badgeSearchId, text: 'Search badges' }), badgeSearch, badgeList)),
+    card({ title: 'Profile look', icon: 'palette', className: 'owner-look-card' },
+      h('p', { class: 'owner-text', text: 'What they show on their public profile. Remove anything that breaks the rules.' }),
+      lookBox,
+      row(removeBanner, clearText)),
     card({ title: 'Changes for this person', icon: 'list', actions: linkButton({ label: 'All changes', href: '/owner', size: 'sm' }) }, userLog),
     staffLinks());
   update(first);

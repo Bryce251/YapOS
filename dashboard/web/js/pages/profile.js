@@ -1,15 +1,26 @@
 import { h, replace } from '../dom.js';
 import { icon } from '../icons.js';
-import { avatar, badgeArt, copyButton, emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
+import { avatar, badgeArt, button, copyButton, drawer, emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
 import { formatNumber, relativeTime } from '../format.js';
 import { ApiError, isAbort } from '../api.js';
 import { profilePath } from '../router.js';
 import { publicFrame } from '../public-frame.js';
 import { levelProgress, normalizeProfile, SEASON_KINDS } from '../community-data.js';
 import { medalFor } from '../public-data.js';
+import { ACH_PREFIX, defaultLook, featuredValue, readLook, themeColours } from '../profile-look.js';
+import { openProfileEditor } from './profile-editor.js';
 
 export const PROFILE_API = '/api/u';
+export const BADGE_TILES = 12;
 const NS = 'http://www.w3.org/2000/svg';
+
+export const BADGE_GROUPS = Object.freeze([
+  Object.freeze({ id: 'party', label: 'Party badges', blurb: 'Earned by playing YapOS Party.' }),
+  Object.freeze({ id: 'special', label: 'Special badges', blurb: 'Given by the YapOS team.' }),
+  Object.freeze({ id: 'custom', label: 'One-of-a-kind badges', blurb: 'Made by Jolli for special moments.' }),
+  Object.freeze({ id: 'season', label: 'Season badges', blurb: 'Top finishes in a monthly season.' }),
+  Object.freeze({ id: 'achievement', label: 'Achievements', blurb: 'Earned with the YapOS bot in your servers.' }),
+]);
 
 function svg(tag, attrs = {}) {
   const el = document.createElementNS(NS, tag);
@@ -41,6 +52,13 @@ function stat(label, value, iconName) {
     h('span', { class: 'profile-stat-label', text: label }));
 }
 
+function featureTile(f) {
+  const text = `${formatNumber(f.value)}${f.suffix || ''}`;
+  return h('div', { class: 'profile-feature', dataset: { featured: f.id }, attrs: { role: 'img', 'aria-label': `${f.label}: ${text}` } },
+    h('span', { class: 'profile-feature-num', text }),
+    h('span', { class: 'profile-feature-cap', text: f.label }));
+}
+
 function clanTag(clan) {
   if (!clan) return null;
   const el = h('span', { class: 'clan-tag', title: clan.name },
@@ -50,17 +68,19 @@ function clanTag(clan) {
   return el;
 }
 
-function tileGrid(items, label) {
+function tileGrid(items, label, pinned = new Set()) {
   return h('ul', { class: 'badge-grid', attrs: { 'aria-label': label } },
-    ...items.map((b) => h('li', { class: ['badge-tile', b.note ? 'has-note' : ''], title: b.note ? `${b.label}: ${b.note}` : b.label },
+    ...items.map((b) => h('li', { class: ['badge-tile', b.note ? 'has-note' : '', pinned.has(b.key) ? 'is-pinned' : ''], title: b.note ? `${b.label}: ${b.note}` : b.label },
       b.image ? badgeArt(b, 'badge-tile-emoji', 'badge-tile-img') : h('span', { class: 'badge-tile-emoji', attrs: { 'aria-hidden': 'true' }, text: b.emoji }),
       h('span', { class: 'badge-tile-label', text: b.label }),
       b.note ? h('span', { class: 'badge-tile-note', text: b.note }) : null)));
 }
 
-function section(title, iconName, body) {
-  return h('section', { class: 'profile-section' },
-    h('h2', { class: 'profile-section-title' }, icon(iconName, { size: 16 }), h('span', { text: title })),
+function section(id, title, iconName, body, { wide = false, action = null } = {}) {
+  return h('section', { class: ['profile-section', wide ? 'is-wide' : ''], dataset: { section: id } },
+    h('div', { class: 'profile-section-head' },
+      h('h2', { class: 'profile-section-title' }, icon(iconName, { size: 16 }), h('span', { text: title })),
+      action),
     body);
 }
 
@@ -78,45 +98,165 @@ function placingRow(s) {
     h('span', { class: 'placing-text', text: placingText(s) }));
 }
 
-export function profileCard(p, { own = false } = {}) {
+export function badgeKind(id, hints = {}) {
+  if (/^c-[a-z0-9]{8}$/.test(id)) return 'custom';
+  if (id.startsWith('season-')) return 'season';
+  if (Object.prototype.hasOwnProperty.call(hints, id)) return 'party';
+  return 'special';
+}
+
+export function allBadges(p, hints = {}) {
+  const out = [
+    ...p.badges.map((b) => ({ ...b, key: b.id, kind: badgeKind(b.id, hints) })),
+    ...p.achievements.map((a) => ({ ...a, key: `${ACH_PREFIX}${a.id}`, kind: 'achievement' })),
+  ];
+  return out.map((b) => ({ ...b, about: b.note || hints[b.id] || '' }));
+}
+
+export function pinnedItems(p, pins, hints = {}) {
+  const all = allBadges(p, hints);
+  return pins.map((k) => all.find((b) => b.key === k)).filter(Boolean);
+}
+
+export function groupBadges(list) {
+  return BADGE_GROUPS.map((g) => ({ ...g, items: list.filter((b) => b.kind === g.id) })).filter((g) => g.items.length);
+}
+
+export function openAllBadges(p, { pins = [], hints = {}, name = '' } = {}) {
+  const list = allBadges(p, hints);
+  const pinned = new Set(pins);
+  const d = drawer({ title: 'All badges', subtitle: `${name || p.name} has ${formatNumber(list.length)} ${list.length === 1 ? 'badge' : 'badges'}` });
+  d.root.classList.add('allbadges');
+  const groups = groupBadges(list);
+  replace(d.body, groups.length
+    ? h('div', { class: 'allbadges-groups' }, ...groups.map((g) => h('section', { class: 'allbadges-group', dataset: { group: g.id } },
+      h('h3', { class: 'allbadges-title' }, h('span', { text: g.label }), h('span', { class: 'allbadges-count', text: formatNumber(g.items.length) })),
+      h('p', { class: 'allbadges-blurb muted', text: g.blurb }),
+      h('ul', { class: 'allbadges-list' }, ...g.items.map((b) => h('li', { class: ['allbadges-row', pinned.has(b.key) ? 'is-pinned' : ''] },
+        h('span', { class: 'allbadges-art' }, badgeArt(b, 'allbadges-emoji', 'allbadges-img')),
+        h('span', { class: 'allbadges-main' },
+          h('span', { class: 'allbadges-name', text: b.label }),
+          b.about ? h('span', { class: 'allbadges-about', text: b.about }) : null),
+        pinned.has(b.key) ? h('span', { class: 'allbadges-pin' }, icon('star', { size: 12 }), h('span', { text: 'Pinned' })) : null))))))
+    : emptyState({ icon: 'star', title: 'No badges yet', body: 'Badges come from playing YapOS Party and using the YapOS bot.', compact: true }));
+  return d;
+}
+
+function nameHeading(name, look) {
+  const el = h('h1', {
+    class: ['profile-name', look.nameGradient ? `name-grad-${look.nameGradient}` : '', look.nameColour && !look.nameGradient ? 'has-name-colour' : '', look.nameFont !== 'default' ? `name-font-${look.nameFont}` : ''],
+    text: name,
+  });
+  const c = !look.nameGradient && look.nameColour ? themeColours(look.nameColour) : null;
+  if (c) {
+    el.style.setProperty('--nc-light', c.light);
+    el.style.setProperty('--nc-dark', c.dark);
+  }
+  return el;
+}
+
+function bannerEl(look, image) {
+  if (look.banner === 'none') return null;
+  if (look.banner === 'image') {
+    if (!image) return null;
+    return h('div', { class: 'profile-banner banner-image', attrs: { 'aria-hidden': 'true' } },
+      h('img', { class: 'profile-banner-img', src: image, alt: '', loading: 'lazy', decoding: 'async', attrs: { draggable: 'false' } }));
+  }
+  return h('div', { class: ['profile-banner', `banner-${look.banner}`], attrs: { 'aria-hidden': 'true' } });
+}
+
+function pinRow(items) {
+  if (!items.length) return null;
+  return h('ul', { class: 'profile-pins', attrs: { 'aria-label': 'Pinned badges' } },
+    ...items.map((b) => h('li', { class: 'profile-pin', title: b.about ? `${b.label}: ${b.about}` : b.label },
+      h('span', { class: 'profile-pin-art' }, badgeArt(b, 'profile-pin-emoji', 'profile-pin-img')),
+      h('span', { class: 'profile-pin-label', text: b.label }))));
+}
+
+export function profileCard(p, opts = {}) {
+  const { own = false, look: given = null, bannerImage = null, hints = {}, onCustomize = null, editing = false } = opts;
+  const look = given || defaultLook();
   const share = `${window.location.origin}${profilePath(p.username || p.name)}`;
-  const stats = [
-    stat('Party games', formatNumber(p.games), 'sparkles'),
-    stat('Party wins', formatNumber(p.wins), 'trophy'),
-  ];
-  if (p.shards !== null) stats.push(stat('💎 Shards', formatNumber(p.shards), 'coins'));
-  const sections = [
-    section('Badges', 'star', p.badges.length ? tileGrid(p.badges, 'Badges') : h('p', { class: 'muted', text: 'No badges yet. They come from playing YapOS Party.' })),
-  ];
-  if (p.achievements.length) sections.push(section('Achievements', 'trophy', tileGrid(p.achievements, 'Achievements')));
-  sections.push(section('Favourite games', 'smile', p.favourites.length
-    ? h('ul', { class: 'fav-list' }, ...p.favourites.map((g) => h('li', { class: 'fav-row' },
-      h('span', { class: 'fav-emoji', attrs: { 'aria-hidden': 'true' }, text: g.emoji }),
-      h('span', { class: 'fav-name', text: g.name }),
-      g.plays !== null ? h('span', { class: 'fav-plays', text: `${formatNumber(g.plays)} ${g.plays === 1 ? 'game' : 'games'}${g.won ? ` · ${formatNumber(g.won)} ${g.won === 1 ? 'win' : 'wins'}` : ''}` }) : null)))
-    : h('p', { class: 'muted', text: 'No Party games played yet.' })));
-  sections.push(section('Season placings', 'activity', p.season.length
-    ? h('ol', { class: 'placing-list' }, ...p.season.slice(0, 12).map(placingRow))
-    : h('p', { class: 'muted', text: 'No top 10 finishes yet.' })));
-  return h('article', { class: 'profile-card' },
+  const hidden = new Set(look.hidden);
+  const pins = pinnedItems(p, look.pins, hints);
+  const pinKeys = new Set(pins.map((b) => b.key));
+  const total = p.badges.length + p.achievements.length;
+  const openAll = () => openAllBadges(p, { pins: look.pins, hints });
+
+  const featured = featuredValue(look.featured, p);
+  const stats = [];
+  if (featured.id !== 'level') stats.push(stat('Level', formatNumber(p.level), 'star'));
+  if (featured.id !== 'games') stats.push(stat('Party games', formatNumber(p.games), 'sparkles'));
+  if (featured.id !== 'wins') stats.push(stat('Party wins', formatNumber(p.wins), 'trophy'));
+  if (p.shards !== null && featured.id !== 'shards') stats.push(stat('💎 Shards', formatNumber(p.shards), 'coins'));
+
+  const badgeItems = [...pins.filter((b) => b.kind !== 'achievement'), ...p.badges.map((b) => ({ ...b, key: b.id })).filter((b) => !pinKeys.has(b.key))];
+  const achItems = [...pins.filter((b) => b.kind === 'achievement'), ...p.achievements.map((a) => ({ ...a, key: `${ACH_PREFIX}${a.id}` })).filter((a) => !pinKeys.has(a.key))];
+  const viewAll = total ? button({ label: `View all badges (${formatNumber(total)})`, icon: 'list', size: 'sm', variant: 'ghost', className: 'profile-all-badges', onClick: openAll }) : null;
+
+  const builders = {
+    about: () => (look.bio ? section('about', 'About me', 'user', h('p', { class: 'profile-bio', text: look.bio }), { wide: true }) : null),
+    stats: () => h('div', { class: 'profile-stats', dataset: { section: 'stats' } }, featured.id === 'level' ? levelRing(p.level, p.xp) : featureTile(featured), ...stats),
+    badges: () => section('badges', 'Badges', 'star', badgeItems.length
+      ? tileGrid(badgeItems.slice(0, BADGE_TILES), 'Badges', pinKeys)
+      : h('p', { class: 'muted', text: 'No badges yet. They come from playing YapOS Party.' }), { wide: true, action: viewAll }),
+    achievements: () => (achItems.length ? section('achievements', 'Achievements', 'trophy', tileGrid(achItems, 'Achievements', pinKeys)) : null),
+    favourites: () => section('favourites', 'Favourite games', 'smile', p.favourites.length
+      ? h('ul', { class: 'fav-list' }, ...p.favourites.map((g) => h('li', { class: 'fav-row' },
+        h('span', { class: 'fav-emoji', attrs: { 'aria-hidden': 'true' }, text: g.emoji }),
+        h('span', { class: 'fav-name', text: g.name }),
+        g.plays !== null ? h('span', { class: 'fav-plays', text: `${formatNumber(g.plays)} ${g.plays === 1 ? 'game' : 'games'}${g.won ? ` · ${formatNumber(g.won)} ${g.won === 1 ? 'win' : 'wins'}` : ''}` }) : null)))
+      : h('p', { class: 'muted', text: 'No Party games played yet.' })),
+    placings: () => section('placings', 'Season placings', 'activity', p.season.length
+      ? h('ol', { class: 'placing-list' }, ...p.season.slice(0, 12).map(placingRow))
+      : h('p', { class: 'muted', text: 'No top 10 finishes yet.' })),
+  };
+  const blocks = look.order.filter((id) => !hidden.has(id) && builders[id]).map((id) => builders[id]()).filter(Boolean);
+
+  const banner = bannerEl(look, bannerImage);
+  const status = look.status || look.statusEmoji
+    ? h('p', { class: 'profile-status' },
+      look.statusEmoji ? h('span', { class: 'profile-status-emoji', attrs: { 'aria-hidden': 'true' }, text: look.statusEmoji }) : null,
+      look.status ? h('span', { class: 'profile-status-text', text: look.status }) : null)
+    : null;
+  const card = h('article', { class: ['profile-card', `look-${look.density}`, banner ? 'has-banner' : '', look.accent ? 'has-accent' : '', editing ? 'is-preview' : ''] },
+    banner,
     h('div', { class: 'profile-hero' },
-      h('div', { class: 'profile-avatar-wrap' }, avatar({ name: p.name, url: p.avatar, id: p.id || p.username, size: 'xl' })),
+      h('div', { class: ['profile-avatar-wrap', look.ring !== 'none' ? `ring-${look.ring}` : ''] }, avatar({ name: p.name, url: p.avatar, id: p.id || p.username, size: 'xl' })),
       h('div', { class: 'profile-who' },
-        h('h1', { class: 'profile-name', text: p.name }),
+        nameHeading(p.name, look),
         h('div', { class: 'profile-sub' },
           p.username ? h('span', { class: 'profile-handle', text: `@${p.username}` }) : null,
+          look.pronouns ? h('span', { class: 'profile-pronouns', text: look.pronouns }) : null,
           clanTag(p.clan)),
+        status,
+        pinRow(pins),
         p.updatedAt ? h('p', { class: 'public-meta' }, icon('clock', { size: 14 }), h('span', { text: `Updated ${relativeTime(p.updatedAt)}` })) : null),
-      h('div', { class: 'profile-actions' },
+      editing ? null : h('div', { class: 'profile-actions' },
         copyButton({ getText: () => share, label: 'Copy link', size: 'sm' }),
+        own && onCustomize ? button({ label: 'Customize profile', icon: 'palette', size: 'sm', variant: 'primary', className: 'profile-customize', onClick: onCustomize }) : null,
         own ? linkButton({ label: 'Privacy', href: '/account', icon: 'lock', size: 'sm' }) : null)),
-    h('div', { class: 'profile-stats' }, levelRing(p.level, p.xp), ...stats),
-    h('div', { class: 'profile-sections' }, ...sections));
+    h('div', { class: 'profile-sections' }, ...blocks));
+  if (look.accent) {
+    const c = themeColours(look.accent);
+    card.style.setProperty('--ac-base', c.base);
+    card.style.setProperty('--ac-light', c.light);
+    card.style.setProperty('--ac-dark', c.dark);
+  }
+  return card;
 }
 
 function profileSkeleton() {
   return loadingRegion('Loading profile', h('div', { class: 'profile-card' },
     h('div', { class: 'profile-hero' }, skeleton('skeleton-avatar-xl'), h('div', { class: 'profile-who' }, skeleton('skeleton-title skeleton-w-50'), skeleton('skeleton-text skeleton-w-30')))));
+}
+
+export function hintsFrom(data) {
+  const out = {};
+  for (const b of Array.isArray(data?.partyBadges) ? data.partyBadges : []) {
+    if (b && typeof b.id === 'string' && typeof b.hint === 'string') out[b.id] = b.hint.slice(0, 160);
+  }
+  return out;
 }
 
 export function renderProfile(root, ctx) {
@@ -126,21 +266,47 @@ export function renderProfile(root, ctx) {
   frame.setUser(null);
   let user = null;
   let shown = null;
+  let editor = null;
   ctx.getUser?.().then((u) => {
     if (signal.aborted) return;
     user = u || null;
     frame.setUser(user);
-    if (shown) draw(shown);
+    if (shown && !editor) draw(shown);
   }).catch(() => {});
 
-  function isOwn(p) {
+  function isOwn(v) {
+    const p = v.profile;
     return Boolean(user && ((p.id && user.id === p.id) || (p.username && String(user.username || '').toLowerCase() === p.username.toLowerCase())));
   }
 
-  function draw(p) {
-    shown = p;
-    ctx.setTitle(p.name);
-    replace(content, profileCard(p, { own: isOwn(p) }));
+  function draw(v) {
+    shown = v;
+    ctx.setTitle(v.profile.name);
+    const own = isOwn(v);
+    replace(content, profileCard(v.profile, { own, look: v.look, bannerImage: v.bannerImage, hints: v.hints, onCustomize: own ? () => edit(v) : null }));
+  }
+
+  function edit(v) {
+    editor = openProfileEditor({
+      mount: content,
+      profile: v.profile,
+      look: v.look,
+      bannerImage: v.bannerImage,
+      hints: v.hints,
+      api,
+      signal,
+      renderCard: (look, bannerImage) => profileCard(v.profile, { own: true, look, bannerImage, hints: v.hints, editing: true }),
+      onDone: (saved) => {
+        editor = null;
+        ctx.setLeaveGuard?.(null);
+        if (saved) {
+          v.look = saved.look;
+          v.bannerImage = saved.bannerImage;
+        }
+        draw(v);
+      },
+    });
+    ctx.setLeaveGuard?.({ isDirty: () => Boolean(editor && editor.isDirty()) });
   }
 
   const load = async () => {
@@ -150,7 +316,8 @@ export function renderProfile(root, ctx) {
       if (signal.aborted) return;
       const p = normalizeProfile(data);
       if (!p) throw new ApiError("We couldn't find that.", { status: 404, code: 'not_found' });
-      draw(p);
+      const custom = readLook(data?.profile?.custom);
+      draw({ profile: p, look: custom.look, bannerImage: custom.bannerImage, hints: hintsFrom(data) });
     } catch (err) {
       if (isAbort(err) || signal.aborted) return;
       if (err instanceof ApiError && err.status === 404) {
@@ -168,3 +335,4 @@ export function renderProfile(root, ctx) {
   };
   load();
 }
+

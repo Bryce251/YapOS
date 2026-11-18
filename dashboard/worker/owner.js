@@ -10,6 +10,7 @@ import { logModAction, actorName, personName, ownerLogAction } from './party-mod
 import { GLOBAL_OWNER_KINDS, globalActionPlan, isGlobalHidden } from './owner-global.js';
 import { accountState, requireAccount, noAccountStatement } from './owner-account.js';
 import { listCustomBadges, catalogEntry, isCustomBadge, liveBadges, badgesRoute } from './custom-badges.js';
+import { ownerLookView, ownerLookRoute } from './profile-custom.js';
 
 export const OWNER_ACTIONS_PER_MIN = 120;
 export const OWNER_READS_PER_MIN = 300;
@@ -380,6 +381,7 @@ async function userDetail(env, raw, t) {
   user.partyBoard = await partyBoardView(db, id, t, isPlainObject(counters) ? counters : {});
   user.known = Boolean(pub || prof || (sess && sess.user_id) || known || stats || user.partyBoard.points || user.partyBoard.games);
   user.account = await accountState(db, id, t);
+  user.look = await ownerLookView(db, id).catch(() => null);
   return json({ user, actions: rowsOf(actions).map(actionOut), catalog });
 }
 
@@ -449,6 +451,11 @@ export async function ownerApi(request, env, route, url, t, { csrf }) {
   if (n === 3 && route[1] === 'users') {
     if (readOnly) return userDetail(env, route[2], t);
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  }
+  if (n === 4 && route[1] === 'users' && (route[3] === 'banner' || route[3] === 'look-text')) {
+    const id = String(route[2] || '').trim().toLowerCase();
+    if (!USER_ID_RE.test(id)) return fail(400, 'bad_user', "That user id doesn't look right.");
+    return ownerLookRoute(request, env, session, id, route[3] === 'banner' ? 'banner' : 'text', t);
   }
   if (n === 2 && route[1] === 'actions') {
     if (readOnly) return listActions(env, url);

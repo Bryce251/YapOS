@@ -1,16 +1,30 @@
 import { h as defaultH } from './dom.js';
 import { profileAvatar } from '../profiles.js';
 import { gameById } from '../games/index.js';
+import { copyText } from './copy.js';
 
 export const PROFILE_CARD_ENDPOINT = '/api/activity/profile/';
 export const CARD_CACHE_MS = 3 * 60 * 1000;
 export const CARD_CACHE_MAX = 100;
 export const DRAG_PX = 8;
 export const CLOSE_MS = 220;
-export const BADGES_SHOWN = 6;
+export const BADGES_SHOWN = 5;
+export const FAVS_SHOWN = 3;
+export const COPIED_MS = 2400;
+export const PROFILE_SITE = 'https://yapos.dev';
+export const LAYOUT = Object.freeze({ banner: 56, top: 40, name: 32, sub: 34, xp: 22, pad: 12, stat: 48, facts: 28, sectionHead: 26, fav: 48, badge: 44, gap: 10, foot: 62, sheet: 8 });
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const HEX_RE = /^#[0-9a-f]{6}$/;
+const PIN_RE = /^(ach:)?[a-z0-9][a-z0-9_-]{0,39}$/;
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+export const GRADIENT_COLOURS = Object.freeze({ sunset: '#ff8a6b', ocean: '#6bc4ff', aurora: '#8ab4ff', candy: '#ff8fd1', forest: '#6fdc8c', gold: '#ffd66b' });
+export const BANNERS = Object.freeze(['accent', 'sunset', 'ocean', 'aurora', 'forest', 'candy', 'midnight', 'dots', 'grid', 'stripes']);
+export const RINGS = Object.freeze(['accent', 'rainbow', 'gold', 'glow']);
+export const FONTS = Object.freeze(['rounded', 'serif', 'mono', 'caps']);
+export const PIN_MAX = 5;
 export const BADGE_IMAGE_RE = /^\/badge-img\/c-[a-z0-9]{8}-[0-9a-f]{16}\.(png|webp|jpg)$/;
+export const BANNER_IMAGE_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg)$/;
 const FOCUSABLE = 'button, a, input, select, textarea, [tabindex]';
 const INTERACTIVE = 'button, a, input, select, textarea, label, summary, [role="button"], [role="option"], [role="radio"], [role="checkbox"], [role="tab"], [role="menuitem"], [role="link"], [contenteditable]';
 
@@ -19,12 +33,57 @@ function num(n) {
   return v.toLocaleString('en-US');
 }
 
+export function short(n) {
+  const v = Math.max(0, Math.floor(Number(n) || 0));
+  if (v < 100000) return num(v);
+  return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: v < 1000000 ? 0 : 1 }).format(v);
+}
+
 function text(value, max = 64) {
   if (typeof value !== 'string') return null;
   const t = value.replace(/\s+/g, ' ').trim();
   if (!t) return null;
   const chars = Array.from(t);
   return chars.length > max ? chars.slice(0, max).join('') : t;
+}
+
+function hex(value) {
+  return typeof value === 'string' && HEX_RE.test(value) ? value : null;
+}
+
+export function cleanLook(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const pins = [];
+  for (const p of Array.isArray(raw.pins) ? raw.pins : []) {
+    if (typeof p === 'string' && PIN_RE.test(p) && !pins.includes(p)) pins.push(p);
+    if (pins.length >= PIN_MAX) break;
+  }
+  const gradient = typeof raw.nameGradient === 'string' && Object.prototype.hasOwnProperty.call(GRADIENT_COLOURS, raw.nameGradient) ? GRADIENT_COLOURS[raw.nameGradient] : null;
+  const named = raw.nameColour && typeof raw.nameColour === 'object' ? raw.nameColour : null;
+  const ac = raw.accent && typeof raw.accent === 'object' ? raw.accent : null;
+  const accent = ac && hex(ac.base) ? { base: ac.base, text: hex(ac.dark) || ac.base } : null;
+  const bannerImage = typeof raw.bannerImage === 'string' && BANNER_IMAGE_RE.test(raw.bannerImage) ? raw.bannerImage : null;
+  const banner = raw.banner === 'image' ? (bannerImage ? 'image' : null) : BANNERS.includes(raw.banner) ? raw.banner : null;
+  const status = text(raw.status, 60);
+  const look = {
+    pins,
+    colour: gradient || (named && hex(named.dark)),
+    accent,
+    banner,
+    bannerImage: banner === 'image' ? bannerImage : null,
+    ring: RINGS.includes(raw.ring) ? raw.ring : null,
+    font: FONTS.includes(raw.nameFont) ? raw.nameFont : null,
+    pronouns: text(raw.pronouns, 24),
+    status,
+    statusEmoji: text(raw.statusEmoji, 8),
+  };
+  return Object.values(look).some((v) => (Array.isArray(v) ? v.length : v)) ? look : null;
+}
+
+export function pinnedFirst(list, pins, prefix = '') {
+  const keyed = list.map((b) => ({ ...b, pinned: pins.includes(`${prefix}${b.id}`) }));
+  const order = (b) => pins.indexOf(`${prefix}${b.id}`);
+  return [...keyed.filter((b) => b.pinned).sort((a, b) => order(a) - order(b)), ...keyed.filter((b) => !b.pinned)];
 }
 
 function initialsOf(name) {
@@ -69,7 +128,49 @@ export function cleanCard(raw) {
     },
     rank,
     page: raw.page === true,
+    look: cleanLook(raw.look),
   };
+}
+
+export function cardModel(card) {
+  const pins = card.look ? card.look.pins : [];
+  const keyOf = (b) => (b.kind === 'achievement' ? `ach:${b.id}` : b.id);
+  const merged = [...card.badges.map((b) => ({ ...b, kind: 'badge' })), ...card.achievements.map((b) => ({ ...b, kind: 'achievement' }))].map((b) => ({ ...b, pinned: pins.includes(keyOf(b)) }));
+  const all = [...merged.filter((b) => b.pinned).sort((a, b) => pins.indexOf(keyOf(a)) - pins.indexOf(keyOf(b))), ...merged.filter((b) => !b.pinned)];
+  const total = Math.max(card.badgeCount, card.badges.length) + card.achievements.length;
+  const p = card.party;
+  const stats = [
+    { key: 'games', value: num(p.games), label: p.games === 1 ? 'Game' : 'Games' },
+    { key: 'wins', value: num(p.wins), label: p.wins === 1 ? 'Win' : 'Wins' },
+    { key: 'rate', value: p.games ? `${Math.round((p.wins / p.games) * 100)}%` : '–', label: 'Win rate' },
+  ];
+  if (p.bestStreak > 0) stats.push({ key: 'streak', value: num(p.bestStreak), label: 'Streak' });
+  const facts = [];
+  if (card.rank) {
+    const pts = `${card.rank.points === 1 ? 'point' : 'points'}`;
+    facts.push({ key: 'rank', icon: '🏆', text: `#${num(card.rank.rank)} · ${short(card.rank.points)} ${card.rank.points === 1 ? 'pt' : 'pts'}`, title: `#${num(card.rank.rank)} on the Party leaderboard with ${num(card.rank.points)} ${pts}`, top: card.rank.rank <= 3 ? card.rank.rank : 0 });
+  }
+  if (card.shards !== null) facts.push({ key: 'shards', icon: '💎', text: `${short(card.shards)} Shards`, title: `${num(card.shards)} Shards` });
+  const favourites = p.favourites
+    .map((f) => {
+      const g = gameById(f.game);
+      return g ? { id: g.id, name: g.name, emoji: g.emoji, played: f.played } : null;
+    })
+    .filter(Boolean)
+    .slice(0, FAVS_SHOWN);
+  return { stats, facts, favourites, row: all.slice(0, BADGES_SHOWN), all, total, unlisted: Math.max(0, total - all.length) };
+}
+
+export function cardHeight(status = 'ready') {
+  const L = LAYOUT;
+  const head = L.banner + L.top + L.name + L.sub;
+  if (status === 'ready' || status === 'loading') return head + L.xp + L.pad + L.stat + L.facts + 2 * L.sectionHead + L.fav + L.badge + 3 * L.gap + L.foot + L.sheet;
+  return head + L.pad + 96 + L.sheet;
+}
+
+export function profileUrl(handle, loc = null) {
+  const local = loc && LOCAL_HOSTS.has(loc.hostname) && /^https?:$/.test(loc.protocol) && loc.origin;
+  return `${local ? loc.origin : PROFILE_SITE}/u/${encodeURIComponent(handle)}`;
 }
 
 function resolve(value) {
@@ -90,15 +191,12 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
   let down = null;
   const unbinders = [];
 
-  const closeBtn = h('button', { class: 'pcard-close', type: 'button', attrs: { 'aria-label': 'Close' }, on: { click: () => close() } }, h('span', { text: '✕', attrs: { 'aria-hidden': 'true' } }));
+  let copyTimer = null;
+
+  const closeBtn = h('button', { class: 'pcard-close', type: 'button', attrs: { 'aria-label': 'Close', title: 'Close' }, on: { click: () => close() } }, h('span', { text: '✕', attrs: { 'aria-hidden': 'true' } }));
   const body = h('div', { class: 'pcard-body' });
-  const panel = h(
-    'section',
-    { class: 'pcard', attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'pcard-name', tabindex: '-1' } },
-    h('span', { class: 'pcard-grab', attrs: { 'aria-hidden': 'true' } }),
-    closeBtn,
-    body,
-  );
+  const scroller = h('div', { class: 'pcard-scroll' }, h('div', { class: 'pcard-bar' }, closeBtn), body);
+  const panel = h('section', { class: 'pcard', attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'pcard-name', tabindex: '-1' } }, scroller);
   const backdrop = h('div', { class: 'pcard-backdrop', attrs: { 'aria-hidden': 'true' }, on: { click: () => close() } });
   const el = h('div', { class: 'pcard-layer', attrs: { hidden: true } }, backdrop, panel);
   el.hidden = true;
@@ -182,9 +280,40 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
       });
   }
 
+  function docOf() {
+    return win && win.document ? win.document : globalThis.document;
+  }
+
+  function later(fn, ms) {
+    if (copyTimer !== null && win && typeof win.clearTimeout === 'function') win.clearTimeout(copyTimer);
+    copyTimer = win && typeof win.setTimeout === 'function' ? win.setTimeout(fn, ms) : null;
+  }
+
+  function stopTimers() {
+    if (copyTimer !== null && win && typeof win.clearTimeout === 'function') win.clearTimeout(copyTimer);
+    copyTimer = null;
+  }
+
+  function bone(extra) {
+    return h('span', { class: ['pcard-bone', extra] });
+  }
+
+  function bannerEl(look) {
+    const id = look && look.banner ? look.banner : look && look.accent ? 'accent' : 'none';
+    const box = h('div', { class: ['pcard-banner', `banner-${id === 'image' ? 'accent' : id}`], attrs: { 'aria-hidden': 'true' } });
+    if (id === 'image') {
+      const img = h('img', { class: 'pcard-banner-img', alt: '', attrs: { decoding: 'async', draggable: 'false' } });
+      img.addEventListener('error', () => img.remove());
+      img.src = look.bannerImage;
+      box.append(img);
+    }
+    return box;
+  }
+
   function heroAvatar(who, card) {
     const pic = (card && card.avatar) || profileAvatar(who.avatar) || null;
-    const box = h('div', { class: ['pcard-avatar', who.isMe ? 'is-me' : null, who.away ? 'is-away' : null, pic ? 'has-img' : null], vars: { '--hue': who.hue } });
+    const ring = card && card.look && card.look.ring;
+    const box = h('div', { class: ['pcard-avatar', ring ? `ring-${ring}` : null, who.away ? 'is-away' : null, pic ? 'has-img' : null], vars: { '--hue': who.hue } });
     const face = h('span', { class: 'pcard-face' });
     const letters = () => face.replaceChildren(h('span', { class: 'pcard-initials', text: who.initials }));
     if (pic) {
@@ -201,18 +330,34 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     return box;
   }
 
-  function tags(who, card) {
+  function tags(who, card, loading) {
     const out = [];
     if (card && card.level !== null && card.level !== undefined) out.push(h('span', { class: 'pcard-level', text: `Level ${num(card.level)}` }));
+    else if (loading) out.push(bone('is-pill'));
     if (who.isHost) out.push(h('span', { class: ['pcard-tag', 'is-host'], text: 'Host' }));
     if (who.isMe) out.push(h('span', { class: ['pcard-tag', 'is-you'], text: 'You' }));
     if (who.watching) out.push(h('span', { class: 'pcard-tag', text: 'Watching' }));
-    if (card && card.clan) out.push(h('span', { class: ['pcard-tag', 'is-clan'], text: card.clan.tag ? `[${card.clan.tag}] ${card.clan.name}` : card.clan.name }));
-    return out.length ? h('div', { class: 'pcard-meta' }, out) : null;
+    return h('div', { class: 'pcard-tags' }, out);
   }
 
-  function xpBar(card) {
-    if (!card || !card.progress) return null;
+  function head(who, card, name, handle, loading) {
+    const look = card && card.look;
+    const nameEl = h('h2', { class: ['pcard-name', look && look.font ? `font-${look.font}` : null, look && look.colour ? 'has-colour' : null], text: name, attrs: { id: 'pcard-name', title: name }, vars: look && look.colour ? { '--pc-name': look.colour } : null });
+    const clan = card && card.clan ? (card.clan.tag ? `[${card.clan.tag}] ${card.clan.name}` : card.clan.name) : null;
+    const line = [handle ? `@${handle}` : null, look && look.pronouns, clan].filter(Boolean).join(' · ');
+    const status = look && look.status ? `${look.statusEmoji ? `${look.statusEmoji} ` : ''}${look.status}` : null;
+    return h(
+      'div',
+      { class: 'pcard-head' },
+      h('div', { class: 'pcard-top' }, heroAvatar(who, card), tags(who, card, loading)),
+      nameEl,
+      h('div', { class: 'pcard-sub' }, line ? h('p', { class: 'pcard-handle', text: line, attrs: { title: line } }) : loading ? bone('is-line') : null, status ? h('p', { class: 'pcard-status', text: status, attrs: { title: status } }) : null),
+    );
+  }
+
+  function xpBar(card, loading) {
+    if (loading) return h('div', { class: 'pcard-xp', attrs: { 'aria-hidden': 'true' } }, bone('is-bar'));
+    if (!card || !card.progress) return h('div', { class: 'pcard-xp', attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'pcard-xp-track' }), h('span', { class: 'pcard-xp-text', text: card ? 'No XP yet' : '' }));
     const pct = Math.max(0, Math.min(100, Math.round((card.progress.into / card.progress.need) * 100)));
     return h(
       'div',
@@ -222,120 +367,186 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     );
   }
 
-  function stat(value, label, extra) {
-    return h('li', { class: ['pcard-stat', extra] }, h('span', { class: 'pcard-stat-value', text: value }), h('span', { class: 'pcard-stat-label', text: label }));
+  function section(title, id, extra, ...kids) {
+    return h('section', { class: 'pcard-sec', attrs: { 'aria-labelledby': id } }, h('div', { class: 'pcard-sec-head' }, h('h3', { class: 'pcard-sec-title', text: title, attrs: { id } }), extra), ...kids);
   }
 
-  function skeleton() {
-    return [
-      h('ul', { class: 'pcard-stats', attrs: { 'aria-hidden': 'true' } }, [0, 1, 2].map(() => h('li', { class: ['pcard-stat', 'is-skeleton'] }, h('span', { class: 'pcard-bone' }), h('span', { class: ['pcard-bone', 'is-short'] })))),
-      h('div', { class: 'pcard-badges', attrs: { 'aria-hidden': 'true' } }, h('ul', { class: 'pcard-badge-list' }, [0, 1, 2, 3].map(() => h('li', { class: ['pcard-badge', 'is-skeleton'] })))),
-      h('p', { class: 'pcard-status', attrs: { role: 'status' }, text: 'Loading profile…' }),
-    ];
+  function badgeIcon(b, size) {
+    if (b.image) return h('span', { class: 'pcard-icon', attrs: { 'aria-hidden': 'true' } }, h('img', { src: b.image, alt: '', attrs: { width: size, height: size, loading: 'lazy', decoding: 'async', draggable: 'false' } }));
+    return h('span', { class: 'pcard-icon', text: b.emoji || '🏅', attrs: { 'aria-hidden': 'true' } });
   }
 
-  function stats(card) {
-    const p = card.party;
-    const rate = p.games ? `${Math.round((p.wins / p.games) * 100)}%` : '–';
-    return h('ul', { class: 'pcard-stats', attrs: { 'aria-label': 'Party stats' } }, stat(num(p.games), p.games === 1 ? 'Game' : 'Games'), stat(num(p.wins), p.wins === 1 ? 'Win' : 'Wins'), stat(rate, 'Win rate'));
+  function tip(btn, row) {
+    const on = !btn.classList.contains('is-tip');
+    for (const n of row.querySelectorAll('.is-tip')) n.classList.remove('is-tip');
+    if (on) btn.classList.add('is-tip');
   }
 
-  function rankRow(card) {
-    const bits = [];
-    if (card.rank) {
-      bits.push(
-        h(
-          'p',
-          { class: ['pcard-rank', card.rank.rank <= 3 ? `is-top-${card.rank.rank}` : null] },
-          h('span', { class: 'pcard-rank-num', text: `#${num(card.rank.rank)}` }),
-          h('span', { class: 'pcard-rank-text', text: ` on the Party leaderboard · ${num(card.rank.points)} ${card.rank.points === 1 ? 'point' : 'points'}` }),
-        ),
-      );
-    }
-    const extras = [];
-    if (card.party.bestStreak > 0) extras.push(h('span', { class: 'pcard-chip', text: `📅 Best daily streak ${num(card.party.bestStreak)}` }));
-    if (card.shards !== null) extras.push(h('span', { class: 'pcard-chip', text: `💎 ${num(card.shards)} Shards` }));
-    const favs = card.party.favourites
-      .map((f) => {
-        const g = gameById(f.game);
-        return g ? h('span', { class: 'pcard-chip', attrs: { title: `${num(f.played)} played` } }, h('span', { text: g.emoji, attrs: { 'aria-hidden': 'true' } }), h('span', { text: ` ${g.name}` })) : null;
-      })
-      .filter(Boolean);
-    if (favs.length) bits.push(h('div', { class: 'pcard-favs' }, h('h3', { class: 'pcard-section-title', text: 'Favourite games' }), h('div', { class: 'pcard-chips' }, favs)));
-    if (extras.length) bits.push(h('div', { class: 'pcard-chips' }, extras));
-    return bits;
+  function badgeRow(model) {
+    if (!model.row.length) return h('p', { class: ['pcard-none', 'is-tall'], text: 'No badges yet. Play a few games to earn some.' });
+    const row = h('ul', { class: 'pcard-row' });
+    model.row.forEach((b, i) => {
+      const said = b.note ? `${b.label}: ${b.note}` : b.label;
+      const btn = h('button', { class: ['pcard-badge', b.pinned ? 'is-pinned' : null], type: 'button', dataset: { key: `badge-${i}` }, attrs: { 'aria-label': b.pinned ? `${said} (pinned)` : said } }, badgeIcon(b, '28'), h('span', { class: 'pcard-tip', attrs: { 'aria-hidden': 'true' } }, h('strong', { text: b.label }), b.note ? h('span', { text: b.note }) : null));
+      btn.addEventListener('click', () => tip(btn, row));
+      btn.addEventListener('blur', () => btn.classList.remove('is-tip'));
+      row.append(h('li', null, btn));
+    });
+    return row;
   }
 
-  function badges(card) {
-    const all = [...card.badges, ...card.achievements];
-    const total = Math.max(card.badgeCount, card.badges.length) + card.achievements.length;
-    const shown = all.slice(0, total > BADGES_SHOWN ? BADGES_SHOWN - 1 : BADGES_SHOWN);
-    const more = total - shown.length;
+  function mainView(who, card, model) {
+    const fav = model.favourites.length
+      ? h('ul', { class: 'pcard-favs' }, model.favourites.map((f) => h('li', { class: 'pcard-fav', attrs: { title: `${f.name}: ${num(f.played)} played` } }, h('span', { text: f.emoji, attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'pcard-fav-name', text: f.name }))))
+      : h('p', { class: 'pcard-none', text: 'No favourites yet.' });
+    const facts = model.facts.length ? model.facts : [{ key: 'rank', icon: '🏆', text: 'Not ranked yet', title: 'Not on the Party leaderboard yet', top: 0 }];
+    const all = model.all.length ? h('button', { class: 'pcard-more', type: 'button', dataset: { key: 'all-badges' }, attrs: { 'aria-label': `View all ${model.total} badges` }, on: { click: showAll } }, h('span', { text: `View all (${num(model.total)})` })) : null;
     return h(
-      'section',
-      { class: 'pcard-badges', attrs: { 'aria-labelledby': 'pcard-badges-title' } },
-      h('h3', { class: 'pcard-section-title', text: 'Badges', attrs: { id: 'pcard-badges-title' } }),
-      shown.length
-        ? h(
-            'ul',
-            { class: 'pcard-badge-list' },
-            shown.map((b) => h('li', { class: 'pcard-badge', attrs: { title: b.note ? `${b.label}: ${b.note}` : b.label, 'aria-label': b.note ? `${b.label}: ${b.note}` : b.label } },
-              b.image
-                ? h('span', { class: ['pcard-badge-emoji', 'has-image'], attrs: { 'aria-hidden': 'true' } }, h('img', { class: 'pcard-badge-img', src: b.image, alt: b.label, attrs: { width: '32', height: '32', loading: 'lazy', decoding: 'async', draggable: 'false' } }))
-                : h('span', { class: 'pcard-badge-emoji', text: b.emoji || '🏅', attrs: { 'aria-hidden': 'true' } }),
-              h('span', { class: 'pcard-badge-label', text: b.label, attrs: { 'aria-hidden': 'true' } }))),
-            more > 0 ? h('li', { class: ['pcard-badge', 'is-more'], attrs: { 'aria-label': `${more} more` } }, h('span', { class: 'pcard-badge-emoji', text: `+${more}`, attrs: { 'aria-hidden': 'true' } })) : null,
-          )
-        : h('p', { class: 'pcard-empty', text: 'No badges yet. Play a few games to earn some.' }),
+      'div',
+      { class: 'pcard-main' },
+      h('ul', { class: 'pcard-stats', attrs: { 'aria-label': 'Party stats' } }, model.stats.map((s) => h('li', { class: 'pcard-stat' }, h('span', { class: 'pcard-stat-value', text: s.value }), h('span', { class: 'pcard-stat-label', text: s.label })))),
+      h('div', { class: 'pcard-facts' }, facts.map((f) => h('span', { class: ['pcard-fact', f.top ? `is-top-${f.top}` : null, f.key === 'rank' && !card.rank ? 'is-muted' : null], attrs: { title: f.title } }, h('span', { text: f.icon, attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'pcard-fact-text', text: f.text })))),
+      section('Favourite games', 'pcard-favs-title', null, fav),
+      section('Badges', 'pcard-badges-title', all, badgeRow(model)),
     );
   }
 
-  function note(card, who) {
+  function skeletonMain() {
+    const tiles = (n, cls) => Array.from({ length: n }, () => h('li', null, bone(cls)));
+    return h(
+      'div',
+      { class: 'pcard-main', attrs: { 'aria-hidden': 'true' } },
+      h('ul', { class: 'pcard-stats' }, tiles(3, 'is-stat')),
+      h('div', { class: 'pcard-facts' }, bone('is-fact'), bone('is-fact')),
+      section('Favourite games', 'pcard-favs-title', null, h('ul', { class: 'pcard-favs' }, tiles(3, 'is-fav'))),
+      section('Badges', 'pcard-badges-title', null, h('ul', { class: 'pcard-row' }, tiles(5, 'is-badge'))),
+    );
+  }
+
+  function foot(card, who, loading) {
+    if (loading) return h('div', { class: 'pcard-foot' }, bone('is-btn'), h('p', { class: 'pcard-status-line', attrs: { role: 'status' }, text: 'Loading profile…' }));
     const handle = (card && card.page && card.username) || null;
-    if (!handle) return null;
-    if (alone) return h('div', { class: 'pcard-note' }, h('a', { class: 'btn btn-ghost btn-sm pcard-link', attrs: { href: `/u/${encodeURIComponent(handle)}` } }, h('span', { class: 'btn-label', text: who.isMe ? 'Open your full profile' : 'Open full profile' })));
-    return h('p', { class: 'pcard-note', text: `Full profile at yapos.dev/u/${handle}` });
+    if (!handle) return h('div', { class: 'pcard-foot' }, h('p', { class: 'pcard-status-line', text: card ? 'No public profile page yet.' : '' }));
+    const url = profileUrl(handle, win && win.location);
+    const shown = url.replace(/^https?:\/\//, '');
+    const out = h('p', { class: 'pcard-status-line', text: shown, attrs: { role: 'status', title: shown } });
+    const label = who.isMe ? 'View your profile' : 'View full profile';
+    if (alone) return h('div', { class: 'pcard-foot' }, h('a', { class: 'btn btn-secondary btn-sm pcard-link', attrs: { href: `/u/${encodeURIComponent(handle)}` } }, h('span', { class: 'btn-label', text: label })), out);
+    const btnLabel = h('span', { class: 'btn-label', text: label });
+    const btn = h('button', { class: 'btn btn-secondary btn-sm pcard-link', type: 'button', dataset: { key: 'full-profile' } }, btnLabel);
+    btn.addEventListener('click', () => openFull(url, shown, btn, btnLabel, out, label));
+    return h('div', { class: 'pcard-foot' }, btn, out);
+  }
+
+  async function openFull(url, shown, btn, btnLabel, out, label) {
+    let opened = null;
+    try {
+      opened = win && typeof win.open === 'function' ? win.open(url, '_blank') : null;
+    } catch {
+      opened = null;
+    }
+    if (opened) {
+      try {
+        opened.opener = null;
+      } catch {}
+      out.textContent = 'Opened in a new tab';
+      return 'opened';
+    }
+    const ok = await copyText({ win, doc: docOf(), value: url, host: panel });
+    if (!btn.isConnected) return ok ? 'copied' : 'shown';
+    if (ok) {
+      btn.classList.add('is-copied');
+      btnLabel.textContent = 'Link copied';
+      out.textContent = 'Paste it in your browser';
+      later(() => {
+        copyTimer = null;
+        btn.classList.remove('is-copied');
+        btnLabel.textContent = label;
+        out.textContent = shown;
+      }, COPIED_MS);
+      return 'copied';
+    }
+    out.textContent = `Copy this link: ${shown}`;
+    out.classList.add('is-select');
+    return 'shown';
+  }
+
+  function allView(model) {
+    const back = h('button', { class: 'pcard-back', type: 'button', dataset: { key: 'badges-back' }, attrs: { 'aria-label': 'Back to profile' }, on: { click: showMain } }, h('span', { text: '‹', attrs: { 'aria-hidden': 'true' } }), h('span', { text: 'Back' }));
+    return h(
+      'div',
+      { class: ['pcard-view', 'is-all'] },
+      h('div', { class: 'pcard-all-head' }, back, h('h2', { class: 'pcard-all-title', text: `All badges (${num(model.total)})`, attrs: { id: 'pcard-all-title' } })),
+      h('ul', { class: 'pcard-all', attrs: { 'aria-labelledby': 'pcard-all-title' } }, model.all.map((b) => {
+        const kind = [b.pinned ? 'Pinned' : null, b.kind === 'achievement' ? 'Achievement' : null].filter(Boolean).join(' · ');
+        return h('li', { class: ['pcard-all-item', b.pinned ? 'is-pinned' : null] }, badgeIcon(b, '32'), h('div', { class: 'pcard-all-text' }, h('span', { class: 'pcard-all-name', text: b.label }), b.note ? h('span', { class: 'pcard-all-note', text: b.note }) : null, kind ? h('span', { class: 'pcard-all-kind', text: kind }) : null));
+      }), model.unlisted > 0 ? h('li', { class: 'pcard-none', text: `${num(model.unlisted)} more on their full profile.` }) : null),
+    );
+  }
+
+  function showAll() {
+    if (!state || state.status !== 'ready') return;
+    state = { ...state, view: 'all' };
+    paint();
+    scroller.scrollTop = 0;
+    const back = body.querySelector('.pcard-back');
+    if (back) back.focus();
+  }
+
+  function showMain() {
+    if (!state) return;
+    state = { ...state, view: 'main' };
+    paint();
+    scroller.scrollTop = 0;
+    const more = body.querySelector('.pcard-more');
+    if (more) more.focus();
+    else closeBtn.focus();
+  }
+
+  function message(kind) {
+    if (kind === 'hidden') return h('p', { class: 'pcard-empty', text: 'This player keeps their profile private.' });
+    if (kind === 'none') return h('p', { class: 'pcard-empty', text: "Stats aren't available for this player yet. They show up after a finished game." });
+    return h(
+      'div',
+      { class: 'pcard-error' },
+      h('p', { class: 'pcard-empty', attrs: { role: 'status' }, text: "We couldn't load this profile right now." }),
+      h('button', { class: 'btn btn-secondary btn-sm pcard-retry', type: 'button', on: { click: retry } }, h('span', { class: 'btn-label', text: 'Try again' })),
+    );
   }
 
   function paint() {
     if (!state) return;
+    stopTimers();
     const who = known(state.id, state.hint);
     const card = state.status === 'ready' ? state.card : null;
     const hiddenCard = state.status === 'hidden' ? state.card : null;
+    const loading = state.status === 'loading';
+    panel.classList.toggle('is-loading', loading);
+    panel.classList.toggle('is-error', state.status === 'error');
+    if (card && state.view === 'all') {
+      panel.setAttribute('aria-labelledby', 'pcard-all-title');
+      body.replaceChildren(allView(cardModel(card)));
+      return;
+    }
+    panel.setAttribute('aria-labelledby', 'pcard-name');
     const name = (card && card.name) || who.name;
     const handle = (card && card.username) || who.username;
-    panel.classList.toggle('is-loading', state.status === 'loading');
-    panel.classList.toggle('is-error', state.status === 'error');
-    const parts = [
-      h(
-        'div',
-        { class: 'pcard-hero' },
-        heroAvatar(who, card || (hiddenCard && hiddenCard.avatar ? hiddenCard : null)),
-        h('h2', { class: 'pcard-name', text: name, attrs: { id: 'pcard-name' } }),
-        handle ? h('p', { class: 'pcard-handle', text: `@${handle}` }) : null,
-        tags(who, card),
-      ),
-    ];
-    if (state.status === 'loading') parts.push(...skeleton());
-    else if (card) {
-      parts.push(xpBar(card), stats(card), ...rankRow(card), badges(card), note(card, who));
-    } else if (state.status === 'hidden') {
-      parts.push(h('p', { class: 'pcard-empty', text: 'This player keeps their profile private.' }));
-    } else if (state.status === 'none') {
-      parts.push(h('p', { class: 'pcard-empty', text: "Stats aren't available for this player yet. They show up after a finished game." }));
-    } else {
-      parts.push(
-        h('div', { class: 'pcard-error' },
-          h('p', { class: 'pcard-empty', attrs: { role: 'status' }, text: "We couldn't load this profile right now." }),
-          h('button', { class: 'btn btn-secondary btn-sm pcard-retry', type: 'button', on: { click: retry } }, h('span', { class: 'btn-label', text: 'Try again' }))),
-      );
-    }
-    body.replaceChildren(...parts.filter(Boolean));
+    const look = card && card.look;
+    const view = h(
+      'div',
+      { class: ['pcard-view', look && look.accent ? 'has-accent' : null], vars: look && look.accent ? { '--pc-ac': look.accent.base, '--pc-ac-text': look.accent.text } : null },
+      bannerEl(look),
+      head(who, card || (hiddenCard && hiddenCard.avatar ? hiddenCard : null), name, handle, loading),
+    );
+    if (loading) view.append(xpBar(null, true), skeletonMain(), foot(null, who, true));
+    else if (card) view.append(xpBar(card, false), mainView(who, card, cardModel(card)), foot(card, who, false));
+    else view.append(message(state.status));
+    body.replaceChildren(view);
   }
 
   function retry() {
     if (!state) return;
-    state = { ...state, status: 'loading' };
+    state = { ...state, status: 'loading', view: 'main' };
     paint();
     fetchFor(state.id);
     closeBtn.focus();
@@ -350,7 +561,8 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     if (e.key === 'Escape' || e.key === 'Esc') {
       e.preventDefault();
       if (typeof e.stopPropagation === 'function') e.stopPropagation();
-      close();
+      if (state.view === 'all') showMain();
+      else close();
       return;
     }
     if (e.key !== 'Tab') return;
@@ -382,7 +594,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
       opener = from || (doc ? doc.activeElement : null);
     }
     const hit = cached(id);
-    state = { id, hint, card: hit || null, status: hit === undefined ? 'loading' : hit.none ? 'none' : hit.hidden ? 'hidden' : 'ready' };
+    state = { id, hint, view: 'main', card: hit || null, status: hit === undefined ? 'loading' : hit.none ? 'none' : hit.hidden ? 'hidden' : 'ready' };
     paint();
     el.hidden = false;
     el.removeAttribute('hidden');
@@ -406,6 +618,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     const id = state.id;
     state = null;
     token += 1;
+    stopTimers();
     el.classList.remove('is-open');
     el.classList.add('is-closing');
     if (boundRoot) boundRoot.classList.remove('has-modal');

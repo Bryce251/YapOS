@@ -5,6 +5,7 @@ import { PARTY_BADGES, badgesFor, partySeasonBadges } from './party-badges.js';
 import { liveBadges } from './custom-badges.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 import { readCatalog } from './owner.js';
+import { lookForProfile, ownedSet } from './profile-custom.js';
 
 export const MAX_SNAPSHOTS = 50;
 export const MAX_BADGES = 64;
@@ -207,6 +208,8 @@ export async function getPublicProfile(request, env, raw, t) {
   const earned = badgesFor({ games: party.games, wins: party.wins, counters: isPlainObject(counters) ? counters : {}, dailyBest: Number(streak && streak.best) || 0 });
   const badges = liveBadges([...new Set([...earned, ...partySeason, ...idList(parseJsonSafe(row.badges, []), MAX_BADGES)])], catalog.badges);
   const clan = cleanClan(parseJsonSafe(row.clan, null));
+  const achievements = idList(parseJsonSafe(row.achievements, []), MAX_ACHIEVEMENTS);
+  const custom = await lookForProfile(env.DB, row.user_id, ownedSet(badges, achievements), t).catch(() => null);
   const profile = {
     username: row.username,
     name: displayNameOf(row, prof),
@@ -215,14 +218,25 @@ export async function getPublicProfile(request, env, raw, t) {
     xp: Number(row.xp) || 0,
     shards: view.showShards && row.shards !== null && row.shards !== undefined ? Number(row.shards) : null,
     badges,
-    achievements: idList(parseJsonSafe(row.achievements, []), MAX_ACHIEVEMENTS),
+    achievements,
     season: cleanSeason(parseJsonSafe(row.season, [])),
     clan,
     party,
     updatedAt: Number(row.updated) || null,
+    custom,
   };
   const pick = (list) => (Array.isArray(list) ? list : []).filter((x) => x && typeof x.id === 'string').map((x) => ({ id: x.id, label: x.label, emoji: x.emoji || null, ...(x.image ? { image: x.image } : {}), ...(x.note ? { note: x.note } : {}) }));
   return json({ profile, partyBadges: PARTY_BADGES, catalog: { achievements: pick(catalog.achievements), badges: pick(catalog.badges) } }, 200, { 'Cache-Control': 'public, max-age=30' });
+}
+
+export async function isProfileHidden(db, userId) {
+  const id = String(userId || '').toLowerCase();
+  const [settings, row] = await Promise.all([
+    db.prepare('SELECT hidden, show_shards, claimed, updated FROM profile_settings WHERE user_id = ?').bind(id).first(),
+    db.prepare('SELECT hidden, shards, updated FROM public_profiles WHERE user_id = ?').bind(id).first(),
+  ]);
+  if (!row) return true;
+  return applySettings(row, settings).hidden;
 }
 
 async function readVisibility(env, userId) {

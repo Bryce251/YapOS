@@ -37,10 +37,14 @@ export function isBadgeImagePath(pathname) {
   return String(pathname).startsWith('/badge-img/');
 }
 
+export function isBannerImagePath(pathname) {
+  return String(pathname).startsWith('/banner-img/');
+}
+
 export function withSecurityHeaders(response, secure, pathname = '') {
   const out = new Response(response.body, response);
   if (isActivityPath(pathname)) activityHeaders(out.headers, secure);
   else securityHeaders(out.headers, secure);
-  if (isBadgeImagePath(pathname)) out.headers.set('Content-Security-Policy', BADGE_IMG_CSP);
+  if (isBadgeImagePath(pathname) || isBannerImagePath(pathname)) out.headers.set('Content-Security-Policy', BADGE_IMG_CSP);
   return out;
 }

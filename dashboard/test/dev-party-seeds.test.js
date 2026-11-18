@@ -70,8 +70,11 @@ test('the dev server seeds a temp ban with time left, an unseen warning, blocked
   assert.match(unseen[0].text, /drawings clean/);
   const words = await (await h.request('GET', '/api/activity/blocked')).json();
   assert.equal(words.n, 3);
+  assert.equal(words.p.length, 1);
+  assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM party_blocked_patterns').get().n, 1);
   const rows = h.db.raw.prepare('SELECT * FROM party_mod_log ORDER BY created DESC, id DESC').all();
-  assert.equal(rows.length, 15);
+  assert.equal(rows.length, 16);
+  assert.ok(rows.some((r) => r.action === 'owner_pattern_add'));
   const humans = new Set(rows.map((r) => r.actor_id).filter((id) => id !== 'yapos'));
   assert.deepEqual([...humans].sort(), [IDS.owner, dev.DEV_PARTY_ADMIN].sort());
   for (const a of ['ban', 'unban', 'ban_expire', 'warn', 'dismiss', 'note_add', 'word_add']) assert.ok(rows.some((r) => r.action === a), a);

@@ -528,6 +528,15 @@ CREATE TABLE IF NOT EXISTS party_blocked_words (
 );
 CREATE INDEX IF NOT EXISTS party_blocked_words_created ON party_blocked_words (created);
 
+CREATE TABLE IF NOT EXISTS party_blocked_patterns (
+  id TEXT PRIMARY KEY,
+  pattern TEXT NOT NULL UNIQUE,
+  added_by TEXT NOT NULL,
+  added_name TEXT,
+  created INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_blocked_patterns_created ON party_blocked_patterns (created);
+
 CREATE TABLE IF NOT EXISTS party_cheat_alerts (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -581,3 +590,20 @@ CREATE TABLE IF NOT EXISTS custom_badges (
   created_by TEXT
 );
 CREATE INDEX IF NOT EXISTS custom_badges_created ON custom_badges (created);
+CREATE TABLE IF NOT EXISTS profile_custom (
+  user_id TEXT PRIMARY KEY,
+  v INTEGER NOT NULL,
+  data TEXT NOT NULL,
+  updated INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS profile_banners (
+  user_id TEXT PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  image BLOB NOT NULL,
+  mime TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  bytes INTEGER NOT NULL,
+  updated INTEGER NOT NULL
+);

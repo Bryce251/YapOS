@@ -964,3 +964,39 @@
     transform: none;
   }
 }
+
+.owner-look-card [hidden] {
+  display: none;
+}
+
+.owner-look {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.owner-look-banner {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  aspect-ratio: 4 / 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  object-fit: cover;
+}
+
+.owner-look-text {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  font-size: 14px;
+}
+
+.owner-look-text dt {
+  color: var(--text-3);
+}
+
+.owner-look-bio {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}

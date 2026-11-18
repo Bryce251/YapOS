@@ -29,6 +29,8 @@ export const LIMITS = {
   modNotes: 10,
   modWarnings: 10,
   activityWarnings: 30,
+  profileLook: 20,
+  profileBanner: 6,
 };
 
 export async function hit(db, key, limit, t, weight = 1) {

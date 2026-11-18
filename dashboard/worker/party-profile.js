@@ -2,11 +2,12 @@ import { ID_RE, json, fail, isPlainObject, parseJsonSafe, clientIp } from './uti
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanAvatar, cleanUsername } from './profiles.js';
 import { safeName } from './public-profiles.js';
-import { badgesFor, partySeasonBadges, seasonBadgeInfo } from './party-badges.js';
+import { PARTY_BADGES, badgesFor, partySeasonBadges, seasonBadgeInfo } from './party-badges.js';
 import { readCatalog } from './owner.js';
 import { liveBadges } from './custom-badges.js';
 import { LEADERBOARD_GAMES, isOffBoard, offBoard } from './party-leaderboard.js';
 import { findBlocked } from '../web/activity/js/filter.js';
+import { readCustom, cardLook, ownedSet, safeTexts } from './profile-custom.js';
 
 export const CARD_TTL = 30_000;
 export const CARD_CACHE_MAX = 500;
@@ -76,7 +77,9 @@ function label(list, id) {
   const emoji = hit && typeof hit.emoji === 'string' && hit.emoji.length <= 16 ? hit.emoji : null;
   const out = { id, label: text, emoji };
   if (hit && typeof hit.image === 'string' && hit.image.startsWith('/badge-img/')) out.image = hit.image;
-  const note = hit && typeof hit.note === 'string' ? safeName(hit.note, 100, null) : null;
+  const party = PARTY_BADGES.find((b) => b.id === id);
+  const about = hit && typeof hit.note === 'string' ? hit.note : party ? party.hint : null;
+  const note = about ? safeName(about, 100, null) : null;
   if (note) out.note = note;
   return out;
 }
@@ -106,7 +109,7 @@ async function rankOf(db, id, points) {
   return { rank: (Number(above && above.n) || 0) + 1, points };
 }
 
-export async function buildCard(db, rawId) {
+export async function buildCard(db, rawId, t = Date.now()) {
   const id = rawId.toLowerCase();
   const pair = id === rawId ? [id, id] : [id, rawId];
   const [pub, settings, prof, stats, streak, pts, catalog, partySeason] = await Promise.all([
@@ -134,8 +137,13 @@ export async function buildCard(db, rawId) {
   const counters = parseJsonSafe(stats && stats.counters, {});
   const bestStreak = Math.max(0, Math.floor(Number(streak && streak.best) || 0));
   const earned = badgesFor({ games, wins, counters: isPlainObject(counters) ? counters : {}, dailyBest: bestStreak });
-  const badgeIds = liveBadges([...new Set([...earned, ...partySeason, ...ids(parseJsonSafe(pub && pub.badges, []), 64)])], catalog.badges);
+  const allBadges = liveBadges([...new Set([...earned, ...partySeason, ...ids(parseJsonSafe(pub && pub.badges, []), 64)])], catalog.badges);
   const achievementIds = ids(parseJsonSafe(pub && pub.achievements, []), CARD_ACHIEVEMENTS);
+  const custom = await readCustom(db, id).catch(() => null);
+  const shown = custom ? await safeTexts(db, custom.look, t).catch(() => ({ ...custom.look, pronouns: '', status: '', statusEmoji: '' })) : null;
+  const look = custom ? cardLook(shown, ownedSet(allBadges, achievementIds), custom.banner) : null;
+  const pinned = look ? look.pins.filter((p) => !p.startsWith('ach:')) : [];
+  const badgeIds = [...pinned, ...allBadges.filter((b) => !pinned.includes(b))];
   const badgeList = Array.isArray(catalog.badges) ? catalog.badges : [];
   const achList = Array.isArray(catalog.achievements) ? catalog.achievements : [];
   const level = pub ? Math.min(MAX_LEVEL, Math.max(0, Math.floor(Number(pub.level) || 0))) : null;
@@ -157,6 +165,7 @@ export async function buildCard(db, rawId) {
     party: { games, wins, bestStreak, favourites: favourites(parseJsonSafe(stats && stats.by_game, {})) },
     rank: await rankOf(db, pts ? String(pts.user_id) : id, Math.floor(Number(pts && pts.points) || 0)),
     page: Boolean(pub && username && handle(pub.username) === username),
+    look,
   };
 }
 
@@ -173,7 +182,7 @@ export async function getPartyProfile(request, env, raw, t) {
   const key = raw.toLowerCase();
   let entry = cards.get(key);
   if (!entry || entry.at + CARD_TTL < t || entry.at > t) {
-    entry = { at: t, card: await buildCard(env.DB, raw) };
+    entry = { at: t, card: await buildCard(env.DB, raw, t) };
     cards.delete(key);
     cards.set(key, entry);
     if (cards.size > CARD_CACHE_MAX) cards.delete(cards.keys().next().value);

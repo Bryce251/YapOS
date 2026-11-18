@@ -9,6 +9,7 @@ import { dailyRoute } from './party-daily.js';
 import { packsRoute, getPublicPack } from './party-packs.js';
 import { browsePacks, packReportsRoute } from './pack-browse.js';
 import { getPublicProfile, visibilityRoute, publicHandles } from './public-profiles.js';
+import { lookRoute, bannerRoute } from './profile-custom.js';
 import { globalHiddenIds, withoutHidden } from './owner-global.js';
 import { getSeasons } from './seasons.js';
 import { getLeaderboard } from './party-leaderboard.js';
@@ -16,7 +17,7 @@ import { getPartyProfile } from './party-profile.js';
 import { activityAuthRoute, isActivityAuthPath, linkSessionRoute } from './activity-auth.js';
 import { ownerApi } from './owner.js';
 import { activityWarningsRoute } from './party-mod.js';
-import { getBlockedPublic, blockedWordsRoute } from './party-blocked.js';
+import { getBlockedPublic, blockedWordsRoute, blockedPatternsRoute } from './party-blocked.js';
 import { parseDays, readStats } from './server-stats.js';
 import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
 
@@ -504,8 +505,11 @@ export async function handleApi(request, env, deps, url) {
     return json({ user: publicUser(session), partyOwner: role === 'owner', partyAdmin: Boolean(role) });
   }
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-visibility') return visibilityRoute(request, env, session, t);
+  if (n === 2 && route[0] === 'me' && route[1] === 'profile-look') return lookRoute(request, env, session, t);
+  if (n === 2 && route[0] === 'me' && route[1] === 'profile-banner') return bannerRoute(request, env, session, t);
   if (n === 2 && (route[0] === 'link' || (route[0] === 'me' && route[1] === 'party-signins'))) return linkSessionRoute(request, env, session, route, t);
   if (route[0] === 'party' && route[1] === 'blocked-words') return blockedWordsRoute(request, env, session, route, t);
+  if (route[0] === 'party' && route[1] === 'blocked-patterns') return blockedPatternsRoute(request, env, session, route, t);
   if (route[0] === 'party' && route[1] === 'pack-reports') return packReportsRoute(request, env, session, route, url, t);
   if (route[0] === 'party' && (route[1] === 'reports' || route[1] === 'bans' || route[1] === 'modlog')) return partyStaffRoute(request, env, session, route, url, t);
   if (route[0] === 'party') return partyRoute(request, env, session, route, t);

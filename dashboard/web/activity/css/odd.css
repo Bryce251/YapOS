@@ -420,11 +420,6 @@
   animation: pop 360ms var(--pop);
 }
 
-.play:has(.game-odd) > .strip > .strip-list,
-.play:has(.game-odd) > .strip > .strip-empty {
-  display: none;
-}
-
 @media (hover: hover) {
   .odd-pick:hover:not(:disabled) {
     border-color: var(--game);

@@ -101,7 +101,7 @@ function readAsDataUrl(file) {
   });
 }
 
-async function loadPicture(file) {
+export async function loadPicture(file) {
   if (typeof createImageBitmap === 'function') {
     try {
       return await createImageBitmap(file);

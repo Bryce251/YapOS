@@ -16,12 +16,13 @@ export const BADGE_NOTE_MAX = 100;
 export const BADGE_EMOJI_MAX = 8;
 export const BADGE_EMOJI_DEFAULT = '\u{1F3C5}';
 export const BADGE_IMG_PREFIX = '/badge-img/';
+export const IMAGE_EXT = Object.freeze({ 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpg' });
 export const BADGE_IMG_CACHE = 'public, max-age=31536000, immutable';
 export const BADGE_WRITES_PER_MIN = 30;
 export const BADGE_BODY_LIMIT = 100 * 1024;
 
 const FIELDS = new Set(['name', 'note', 'emoji', 'image']);
-const EXT = Object.freeze({ 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpg' });
+const EXT = IMAGE_EXT;
 const IMG_PATH_RE = /^\/badge-img\/(c-[a-z0-9]{8})-([0-9a-f]{16})\.(png|webp|jpg)$/;
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const DATA_URL_RE = /^data:[a-z0-9.+/-]{0,40}(;[a-z0-9=.-]{0,40})*;base64,/i;
@@ -102,10 +103,11 @@ export function toBytes(value) {
   return new Uint8Array(0);
 }
 
-export function decodeImage(raw) {
-  if (typeof raw !== 'string' || !raw) throw bad('bad_image', 'Pick a picture for the badge.');
+export function base64Bytes(raw, max, { missing = 'Pick a picture for the badge.' } = {}) {
+  if (typeof raw !== 'string' || !raw) throw bad('bad_image', missing);
+  const tooBig = () => new HttpError(413, 'image_too_big', `The picture is too big. Keep it under ${Math.round(max / 1024)} KB.`);
   const text = raw.replace(DATA_URL_RE, '').replace(/\s+/g, '');
-  if (text.length > Math.ceil((BADGE_IMAGE_MAX * 4) / 3) + 8) throw new HttpError(413, 'image_too_big', `The picture is too big. Keep it under ${Math.round(BADGE_IMAGE_MAX / 1024)} KB.`);
+  if (text.length > Math.ceil((max * 4) / 3) + 8) throw tooBig();
   if (!B64_RE.test(text) || text.length % 4 !== 0) throw bad('bad_image', "That picture couldn't be read. Pick it again.");
   let bin;
   try {
@@ -115,14 +117,19 @@ export function decodeImage(raw) {
   }
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  if (bytes.length > BADGE_IMAGE_MAX) throw new HttpError(413, 'image_too_big', `The picture is too big. Keep it under ${Math.round(BADGE_IMAGE_MAX / 1024)} KB.`);
+  if (bytes.length > max) throw tooBig();
   const kind = sniffImage(bytes);
   if (!kind) throw bad('bad_image', 'Use a PNG, JPG or WebP picture. Other kinds of files, like SVG, are not allowed.');
-  const { width, height } = kind;
+  return { bytes, ...kind };
+}
+
+export function decodeImage(raw) {
+  const img = base64Bytes(raw, BADGE_IMAGE_MAX);
+  const { width, height } = img;
   if (width < BADGE_IMAGE_MIN_SIDE || height < BADGE_IMAGE_MIN_SIDE || width > BADGE_IMAGE_MAX_SIDE || height > BADGE_IMAGE_MAX_SIDE) {
     throw bad('bad_image_size', `The picture must be between ${BADGE_IMAGE_MIN_SIDE} and ${BADGE_IMAGE_MAX_SIDE} pixels on each side.`);
   }
-  return { bytes, ...kind };
+  return img;
 }
 
 export async function imageHash(bytes) {

@@ -548,6 +548,90 @@ export function seedCustomBadge(db, ownerId, t = Date.now()) {
   return { id: b.id, hash, bytes: png.length };
 }
 
+export const DEV_LOOKS = Object.freeze({
+  owner: Object.freeze({
+    v: 1,
+    pins: ['c-devstar1', 'wins-10', 'ach:messages-10k'],
+    order: ['about', 'stats', 'badges', 'favourites', 'achievements', 'placings'],
+    hidden: [],
+    nameColour: null,
+    nameGradient: 'sunset',
+    nameFont: 'default',
+    accent: '#7c5cff',
+    banner: 'aurora',
+    bio: 'Making YapOS. Game night every Friday, bring snacks.\nAsk me about the badge maker.',
+    pronouns: '',
+    status: 'Hosting game night',
+    statusEmoji: '\u{1F3AE}',
+    ring: 'rainbow',
+    density: 'cozy',
+    featured: 'wins',
+  }),
+  member: Object.freeze({
+    v: 1,
+    pins: ['first-game'],
+    order: ['stats', 'badges', 'about', 'favourites', 'achievements', 'placings'],
+    hidden: ['placings'],
+    nameColour: '#2fa84f',
+    nameGradient: null,
+    nameFont: 'rounded',
+    accent: '#2fa84f',
+    banner: 'image',
+    bio: 'Draw & Guess main. I will guess your doodle in two seconds.',
+    pronouns: 'they/them',
+    status: 'Practising stick figures',
+    statusEmoji: '\u{1F3A8}',
+    ring: 'accent',
+    density: 'compact',
+    featured: 'level',
+  }),
+});
+
+export const DEV_BANNER_ID = 'b-devbanner1';
+
+export function devBannerPng(width = 640, height = 160) {
+  const rows = [];
+  for (let y = 0; y < height; y++) {
+    const row = Buffer.alloc(1 + width * 3);
+    for (let x = 0; x < width; x++) {
+      const t = x / (width - 1);
+      const wave = Math.sin((x / width) * Math.PI * 4 + (y / height) * Math.PI) * 0.5 + 0.5;
+      const at = 1 + x * 3;
+      row[at] = Math.round(30 + 40 * t + 30 * wave);
+      row[at + 1] = Math.round(140 + 60 * (1 - t) + 30 * wave);
+      row[at + 2] = Math.round(90 + 120 * t);
+    }
+    rows.push(row);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(Buffer.concat(rows))),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+export function seedProfileLooks(db, t = Date.now()) {
+  db.raw.prepare("INSERT INTO public_profiles (user_id, username, username_key, name, level, xp, shards, badges, achievements, season, clan, hidden, updated) VALUES (?, 'sam', 'sam', 'Sam', 9, 2650, 1250, ?, ?, '[]', NULL, 0, ?) ON CONFLICT (user_id) DO NOTHING")
+    .run(IDS.member, JSON.stringify(['first-game', 'games-10']), JSON.stringify(['messages-1k']), t);
+  db.raw.prepare('INSERT INTO party_stats (user_id, games, wins, by_game, counters, updated) VALUES (?, 14, 4, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING')
+    .run(IDS.member, JSON.stringify({ draw: { p: 10, w: 4 }, odd: { p: 4, w: 0 } }), '{}', t);
+  upsertProfile(db, IDS.member, 'sam', 'Sam', t);
+  const png = devBannerPng();
+  const hash = createHash('sha256').update(png).digest('hex').slice(0, 16);
+  db.raw.prepare('INSERT INTO profile_banners (user_id, id, image, mime, hash, width, height, bytes, updated) VALUES (?, ?, ?, ?, ?, 640, 160, ?, ?) ON CONFLICT (user_id) DO NOTHING')
+    .run(IDS.member, DEV_BANNER_ID, new Uint8Array(png), 'image/png', hash, png.length, t);
+  const look = db.raw.prepare('INSERT INTO profile_custom (user_id, v, data, updated) VALUES (?, 1, ?, ?) ON CONFLICT (user_id) DO NOTHING');
+  look.run(IDS.owner, JSON.stringify(DEV_LOOKS.owner), t);
+  look.run(IDS.member, JSON.stringify(DEV_LOOKS.member), t);
+  return { bannerHash: hash, bannerBytes: png.length };
+}
+
 export function seedPublicPacks(db, t = Date.now()) {
   const owners = { admin: IDS.admin, member: IDS.member, owner: IDS.owner };
   for (const u of TEST_USERS) upsertProfile(db, u.id, u.username, u.display_name, t);
@@ -604,7 +688,11 @@ export function seedBlockedWords(db, t = Date.now()) {
   const juno = fakeProfile(DEV_PARTY_ADMIN);
   row.run('devword00002', 'skibidi', customKey('skibidi'), DEV_PARTY_ADMIN, juno.display_name, t - 3_600_000);
   row.run('devword00003', 'sussy baka', customKey('sussy baka'), DEV_PARTY_ADMIN, juno.display_name, t - 20 * 60_000);
+  db.raw.prepare('INSERT INTO party_blocked_patterns (id, pattern, added_by, added_name, created) VALUES (?, ?, ?, ?, ?) ON CONFLICT (pattern) DO NOTHING')
+    .run('devpattern01', DEV_BLOCKED_PATTERN, IDS.owner, 'Jolli', t - 2 * 3_600_000);
 }
+
+export const DEV_BLOCKED_PATTERN = 'sk[i1]b+[i1]d[i1]+ ?t[o0]+[i1]l+e?t';
 
 export const DEV_TEMP_BANNED = DEV_ARTISTS[3];
 export const DEV_EXPIRED_BAN = DEV_ARTISTS[2];
@@ -650,6 +738,7 @@ export function seedPartyModeration(db, t = Date.now()) {
     ['devmodlog0013', DEV_PARTY_ADMIN, juno.display_name, 'word_add', null, null, { word: 'skibidi' }, t - HOUR],
     ['devmodlog0014', DEV_PARTY_ADMIN, juno.display_name, 'warn', DEV_WARNED, samName, { text: 'Keep drawings clean, please. Next time it is a ban.' }, t - 20 * MIN],
     ['devmodlog0015', DEV_PARTY_ADMIN, juno.display_name, 'word_add', null, null, { word: 'sussy baka' }, t - 20 * MIN + 1],
+    ['devmodlog0016', IDS.owner, 'Jolli', 'owner_pattern_add', null, null, { pattern: DEV_BLOCKED_PATTERN }, t - 2 * HOUR + 1],
   ];
   for (const [id, actor, actorName, action, target, targetName, detail, at] of rows) log.run(id, actor, actorName, action, target, targetName, detail ? JSON.stringify(detail) : null, at);
 }
@@ -1095,6 +1184,7 @@ export async function startDev({
   seedDailyScores(db);
   seedPublicProfile(db);
   seedCustomBadge(db, IDS.owner);
+  seedProfileLooks(db);
   seedPublicPacks(db);
   seedSeason(db);
   seedPartyLeaderboard(db);
@@ -1226,6 +1316,7 @@ async function main() {
     "Daily puzzle: today's Letter Hive and Scramble already have a few scores on the leaderboard (/api/activity/daily/top?kind=hive).",
     `Owner panel: sign in as Jolli and open /owner to give people Shards, XP, achievements and badges. The Badge maker at the bottom has a sample picture badge, ${DEV_CUSTOM_BADGE.name}, that Jolli already has. ${dev.ownerSimulated ? 'A stand-in bot finishes each change about 2 seconds later.' : 'The test bot applies each change for real.'}`,
     `Global leaderboard: open /p/global?tab=shards and click any row to see their profile. Sign in as Jolli to get the mod view: "${DEV_FAKE_ACCOUNT.name}" is a fake account with ${DEV_FAKE_ACCOUNT.shards.toLocaleString('en-US')} Shards to set to 0 or hide.`,
+    'Profile looks: sign in as Jolli and open /u/jolli, then press Customize profile to pin badges, pick name colours, banners and more. /u/sam shows someone else\'s look with an uploaded banner picture, which the owner can remove from /owner.',
     'Community: /u/jolli is a sample public profile, /packs/browse lists 3 public packs with likes, /seasons shows last month, and Test Town has 30 days of stats on its Stats page.',
     '',
     'Test users (pick one on the sign-in page):',

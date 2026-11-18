@@ -58,7 +58,9 @@ test('the Party profile card shows level, badges, Party stats, rank and clan by 
   const first = profile.badges.find((b) => b.id === 'first-game');
   assert.equal(first.emoji, '🎈');
   assert.equal(first.label, 'First game');
+  assert.equal(first.note, 'Finish your first YapOS Party game.', 'Party badges carry their description for the all badges list');
   assert.ok(profile.badges.some((b) => b.id === 'games-10'));
+  assert.equal(profile.badges.find((b) => b.id === 'chatterbox').note, undefined);
   assert.ok(profile.badges.some((b) => b.id === 'chatterbox' && b.label === 'Chatterbox'));
   assert.deepEqual(profile.achievements.map((a) => a.id), ['messages-10k']);
   assert.deepEqual(profile.clan, { name: 'Night Owls', tag: 'OWL', colour: '#aa33ff' });

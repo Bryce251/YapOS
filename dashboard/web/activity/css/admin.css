@@ -13,11 +13,6 @@
   background: var(--accent);
 }
 
-.admin-shield-icon {
-  font-size: var(--text-sm);
-  line-height: 1;
-}
-
 .top .btn-admin .btn-label {
   display: inline;
 }
@@ -172,11 +167,6 @@
   font-weight: var(--weight-semibold);
   cursor: pointer;
   transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
-}
-
-.admin-tab-icon {
-  font-size: var(--text-sm);
-  line-height: 1;
 }
 
 .admin-tab.is-on {
@@ -532,10 +522,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.admin-person-all {
-  font-size: var(--text-base);
 }
 
 .admin-emoji {

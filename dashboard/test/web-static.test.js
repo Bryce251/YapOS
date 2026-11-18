@@ -196,7 +196,8 @@ test('no external resources and no forbidden wording', () => {
     const urls = rel(f) === '_headers' || rel(f) === 'activity/data/words-credits.txt' ? [] : src.match(/https?:\/\/[^\s'"`)]+/g) || [];
     for (const u of urls) {
       const bridgeOrigin = rel(f) === 'activity/js/bridge.js' && ACTIVITY_PARENT_ORIGINS.includes(u);
-      assert.ok(bridgeOrigin || u.startsWith('http://www.w3.org/2000/svg') || (rel(f) === 'js/links.js' && u.startsWith('https://www.yapin.gg/bot/')), `${rel(f)} references ${u}`);
+      const ownSite = rel(f) === 'activity/js/ui/profilecard.js' && u === 'https://yapos.dev';
+      assert.ok(bridgeOrigin || ownSite || u.startsWith('http://www.w3.org/2000/svg') || (rel(f) === 'js/links.js' && u.startsWith('https://www.yapin.gg/bot/')), `${rel(f)} references ${u}`);
     }
     assert.equal(/url\(/.test(src) && f.endsWith('.css'), false, `${rel(f)} loads a url()`);
     if (rel(f) === 'activity/data/words.txt') continue;

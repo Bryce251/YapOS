@@ -130,7 +130,7 @@ test('adding and removing words lands in the mod log', async () => {
 test('the public list is encoded, cached for a minute and refreshed after changes', async () => {
   const { h, owner } = await setup();
   const empty = await publicList(h);
-  assert.deepEqual(empty.body, { v: 'none', n: 0, t: [] });
+  assert.deepEqual(empty.body, { v: 'none', n: 0, t: [], p: [] });
   assert.match(empty.headers.get('Cache-Control'), /max-age=60/);
   await call(h, 'POST', PATH, owner, { word: 'Pineapple pizza' });
   await call(h, 'POST', PATH, owner, { word: 'banana' });

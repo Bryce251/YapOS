@@ -1,4 +1,4 @@
-import { setCustomTerms, customTermCount } from './filter.js';
+import { setCustomTerms, customTermCount, setCustomPatterns, customPatternCount } from './filter.js';
 
 export const BLOCKED_ENDPOINT = '/api/activity/blocked';
 export const BLOCKED_REFRESH_MS = 5 * 60 * 1000;
@@ -32,6 +32,7 @@ export function resetBlocked() {
   version = '';
   env = defaults();
   setCustomTerms([]);
+  setCustomPatterns([]);
 }
 
 export async function loadBlocked() {
@@ -44,6 +45,7 @@ export async function loadBlocked() {
     const v = typeof body.v === 'string' ? body.v : '';
     if (v && v === version) return true;
     setCustomTerms(body.t);
+    setCustomPatterns(Array.isArray(body.p) ? body.p : []);
     version = v;
     return true;
   } catch {
@@ -70,4 +72,8 @@ export async function startBlocked(opts = {}) {
 
 export function blockedCount() {
   return customTermCount();
+}
+
+export function blockedPatternCount() {
+  return customPatternCount();
 }
