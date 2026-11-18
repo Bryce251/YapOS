@@ -248,8 +248,90 @@ export function badgeGifts(engine, uid) {
 
 export function withGiftBadges(engine, uid, list) {
   const { gift, hide } = badgeGifts(engine, uid);
+  const known = new Set(customBadges(engine).map((b) => b.id));
   const base = Array.isArray(list) ? list.filter((b) => typeof b === 'string') : [];
-  return [...new Set([...base, ...gift])].filter((b) => !hide.includes(b)).slice(0, BADGES_PER_USER);
+  return [...new Set([...base, ...gift])].filter((b) => !hide.includes(b) && (!isCustomBadge(b) || known.has(b))).slice(0, BADGES_PER_USER);
+}
+
+export const CUSTOM_BADGE_NS = 'custombadges';
+export const CUSTOM_BADGE_RE = /^c-[a-z0-9]{8}$/;
+export const CUSTOM_BADGES_MAX = 100;
+const CUSTOM_DEFAULT_EMOJI = '🏅';
+const liveCustom = new Map();
+
+export function isCustomBadge(id) {
+  return typeof id === 'string' && CUSTOM_BADGE_RE.test(id);
+}
+
+const clip = (v, max) => Array.from(String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, max).join('');
+
+export function cleanCustomBadges(list) {
+  const out = [];
+  const seen = new Set();
+  for (const b of Array.isArray(list) ? list : []) {
+    if (!b || typeof b !== 'object' || !isCustomBadge(b.id) || seen.has(b.id)) continue;
+    const label = clip(b.label ?? b.name, 32);
+    if (!label) continue;
+    seen.add(b.id);
+    const emoji = clip(b.emoji, 8).replace(/\s+/g, '');
+    const note = clip(b.note, 100);
+    out.push({ id: b.id, label, emoji: emoji || CUSTOM_DEFAULT_EMOJI, ...(note ? { note } : {}) });
+    if (out.length >= CUSTOM_BADGES_MAX) break;
+  }
+  return out;
+}
+
+function rememberCustom(list) {
+  liveCustom.clear();
+  for (const b of list) liveCustom.set(b.id, b);
+}
+
+export function customBadges(engine) {
+  const doc = globalDoc(engine, CUSTOM_BADGE_NS, null);
+  const list = cleanCustomBadges(doc && doc.list);
+  rememberCustom(list);
+  return list;
+}
+
+export function customBadgeVersion(engine) {
+  const doc = globalDoc(engine, CUSTOM_BADGE_NS, null);
+  return doc && typeof doc.version === 'string' ? doc.version : '';
+}
+
+export function customBadgeInfo(id) {
+  return isCustomBadge(id) ? liveCustom.get(id) || null : null;
+}
+
+function purgeCustom(engine, keep) {
+  const users = new Set();
+  mutateGlobal(engine, BADGE_NS, (d) => {
+    fixBadges(d);
+    for (const k of ['gift', 'hide']) {
+      for (const [uid, list] of Object.entries(d[k])) {
+        const ids = idsIn(list);
+        const left = ids.filter((id) => !isCustomBadge(id) || keep.has(id));
+        if (left.length === ids.length) continue;
+        users.add(uid);
+        if (left.length) d[k][uid] = left;
+        else delete d[k][uid];
+      }
+    }
+  }, blankBadges());
+  return [...users];
+}
+
+export function setCustomBadges(engine, list, version) {
+  const clean = cleanCustomBadges(list);
+  const before = customBadges(engine);
+  const keep = new Set(clean.map((b) => b.id));
+  const removed = before.filter((b) => !keep.has(b.id)).map((b) => b.id);
+  mutateGlobal(engine, CUSTOM_BADGE_NS, (d) => {
+    d.list = clean;
+    d.version = typeof version === 'string' ? version.slice(0, 64) : '';
+  }, {});
+  rememberCustom(clean);
+  const affected = purgeCustom(engine, keep);
+  return { badges: clean, removed, affected };
 }
 
 function editSeasonBadge(engine, uid, parsed, add) {

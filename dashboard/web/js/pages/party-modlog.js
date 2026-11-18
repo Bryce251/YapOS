@@ -42,6 +42,9 @@ export const ACTION_LABELS = Object.freeze({
   owner_board_show: ['\u{1F451}', 'Owner: put back on leaderboards'],
   owner_global_hide: ['\u{1F451}', 'Owner: hidden from the global leaderboard'],
   owner_global_show: ['\u{1F451}', 'Owner: put back on the global leaderboard'],
+  owner_badge_create: ['\u{1F3C5}', 'Owner: badges made'],
+  owner_badge_edit: ['\u{1F3C5}', 'Owner: badges edited'],
+  owner_badge_delete: ['\u{1F3C5}', 'Owner: badges deleted'],
 });
 export const CHEAT_LABELS = Object.freeze({
   daily_points: 'Daily points cap',
@@ -182,6 +185,19 @@ export function modLogSentence(e) {
       return `${who} put ${them} back on the global leaderboard`;
     case 'owner_reset':
       return `${who} reset ${them}'s Party leaderboard stats`;
+    case 'owner_badge_create':
+      return `${who} made a new badge${str(d.name) ? `, “${clip(d.name, 40)}”` : ''}`;
+    case 'owner_badge_edit': {
+      const before = str(d.before);
+      const now = str(d.name);
+      if (before && now && before !== now) return `${who} renamed the badge “${clip(before, 40)}” to “${clip(now, 40)}”`;
+      const parts = (Array.isArray(d.changed) ? d.changed : []).filter((x) => typeof x === 'string').slice(0, 4);
+      return `${who} changed the ${parts.length ? parts.join(', ') : 'details'} of the badge${now ? ` “${clip(now, 40)}”` : ''}`;
+    }
+    case 'owner_badge_delete': {
+      const n = Number(d.holders) || 0;
+      return `${who} deleted the badge${str(d.name) ? ` “${clip(d.name, 40)}”` : ''}${n ? ` and took it off ${n} ${n === 1 ? 'person' : 'people'}` : ''}`;
+    }
     case 'owner_stats_add':
     case 'owner_points_set':
     case 'owner_record_set':

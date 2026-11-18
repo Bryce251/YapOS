@@ -1,4 +1,4 @@
-import { GLOBAL_KEY, CURRENCY, allowGiver, denyGiver, ownerIds, grantBadge, revokeBadge, parseSeasonBadge, seasonMonth, seasonName, seasonBadgeText, withGiftBadges, BADGE_ID_RE, SEASON_KINDS } from './global.js';
+import { GLOBAL_KEY, CURRENCY, allowGiver, denyGiver, ownerIds, grantBadge, revokeBadge, parseSeasonBadge, seasonMonth, seasonName, seasonBadgeText, withGiftBadges, BADGE_ID_RE, SEASON_KINDS, isCustomBadge, customBadges } from './global.js';
 import { profileSync } from './profiles-sync.js';
 import { privacyOf, achievementsOf } from './profile-data.js';
 
@@ -181,7 +181,7 @@ export function createOwnerActions(engine, { now = () => Date.now(), partyStats 
   function badgeName(id) {
     const season = parseSeasonBadge(id);
     if (season) return `#${season.rank} ${season.kind === 'xp' ? 'XP' : CURRENCY.name} · ${seasonName(season.month)}`;
-    const b = badgeList().find((x) => x.id === id);
+    const b = isCustomBadge(id) ? customBadges(engine).find((x) => x.id === id) : badgeList().find((x) => x.id === id);
     return b ? `${b.emoji ? `${b.emoji} ` : ''}${b.label}` : id;
   }
 
@@ -197,7 +197,7 @@ export function createOwnerActions(engine, { now = () => Date.now(), partyStats 
     } catch (e) {
       log?.debug?.('[owner] reading achievements failed', e?.message);
     }
-    const badges = badgeList().map((b) => ({ id: b.id, label: clipText(b.label, 64), emoji: clipText(b.emoji, 8) }));
+    const badges = badgeList().filter((b) => !isCustomBadge(b.id)).map((b) => ({ id: b.id, label: clipText(b.label, 64), emoji: clipText(b.emoji, 8) }));
     if (engine.service?.('levels') || engine.service?.('economy')) badges.push(...seasonCatalog());
     return { achievements, badges };
   }
@@ -291,8 +291,12 @@ export function createOwnerActions(engine, { now = () => Date.now(), partyStats 
         const season = parseSeasonBadge(a.ref);
         if (season) {
           if (season.month > seasonMonth(now())) return { ok: false, message: "That season hasn't happened yet." };
-        } else if (!badgeList().some((b) => b.id === a.ref)) {
-          return { ok: false, message: "That badge doesn't exist on the bot." };
+        } else if (isCustomBadge(a.ref) ? !customBadges(engine).some((b) => b.id === a.ref) : !badgeList().some((b) => b.id === a.ref)) {
+          if (isCustomBadge(a.ref) && kind === 'badge.revoke') {
+            revokeBadge(engine, user, a.ref);
+            return { ok: true, message: 'That badge was deleted, so nobody has it anymore.' };
+          }
+          return { ok: false, message: isCustomBadge(a.ref) ? "That badge was deleted or hasn't reached the bot yet. Try again in a minute." : "That badge doesn't exist on the bot." };
         }
         const name = badgeName(a.ref);
         if (kind === 'badge.grant') {

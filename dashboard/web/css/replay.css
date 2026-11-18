@@ -799,3 +799,14 @@
     justify-content: space-between;
   }
 }
+
+.person-badge {
+  align-items: center;
+}
+
+.person-badge-img {
+  display: block;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}

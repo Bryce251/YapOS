@@ -4,6 +4,7 @@ import { login, callback, logout } from './auth.js';
 import { handleApi } from './api.js';
 import { handleBot } from './bot.js';
 import { cleanup } from './cron.js';
+import { isBadgeImagePath, serveBadgeImage } from './custom-badges.js';
 
 const SPA_RE = /^\/(servers(\/.*)?|party(\/reports|\/leaderboard|\/modlog)?|packs(\/browse)?|p\/.+|u\/[^/]+|seasons|account|link|owner(\/[0-9a-fA-F-]{36})?)$/;
 
@@ -42,6 +43,7 @@ async function route(request, env, deps) {
     return fail(503, 'not_configured', 'The dashboard database is not set up yet.');
   }
   if (isActivityPath(path)) return activity(request, env, url);
+  if (isBadgeImagePath(path)) return serveBadgeImage(request, env, url);
   if (path === '/api' || path.startsWith('/api/')) return handleApi(request, env, deps, url);
   if (path === '/bot' || path.startsWith('/bot/')) return handleBot(request, env, deps, url);
   if (path === '/auth/login') {

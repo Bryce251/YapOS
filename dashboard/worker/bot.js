@@ -7,6 +7,7 @@ import { MAX_SNAPSHOTS, isSnapshot, cleanSnapshot, snapshotStatements, settingsP
 import { postSeason } from './seasons.js';
 import { postStats } from './server-stats.js';
 import { ownerPoll, postOwnerResults, postOwnerCatalog } from './owner.js';
+import { botCustomBadges } from './custom-badges.js';
 
 const RESULTS_LIMIT = 2 * 1024 * 1024;
 const PROFILE_UPLOAD_LIMIT = 256 * 1024;
@@ -62,7 +63,7 @@ function cleanServers(list) {
   return out;
 }
 
-async function poll(env, t) {
+async function poll(env, t, url) {
   await expireJobs(env.DB, t);
   const jobs = await claimJobs(env.DB, t, 25);
   const wanted = await claimWanted(env.DB, t);
@@ -70,7 +71,8 @@ async function poll(env, t) {
   const hot = wanted.length > 0 || owner.length > 0 || (await isHot(env.DB, t)) || (await hasWanted(env.DB, t));
   const party = await partyPoll(env.DB);
   const profileSettings = await settingsPoll(env.DB, t);
-  return json({ jobs, hot, wanted, party, profileSettings, owner });
+  const customBadges = await botCustomBadges(env.DB, url.searchParams.has('badges') ? url.searchParams.get('badges') : null);
+  return json(customBadges ? { jobs, hot, wanted, party, profileSettings, owner, customBadges } : { jobs, hot, wanted, party, profileSettings, owner });
 }
 
 async function results(request, env, t) {
@@ -284,7 +286,7 @@ export async function handleBot(request, env, deps, url) {
   const t = deps.now();
   const segs = url.pathname.split('/').filter(Boolean);
   const method = request.method;
-  if (segs.length === 2 && segs[1] === 'poll' && method === 'GET') return poll(env, t);
+  if (segs.length === 2 && segs[1] === 'poll' && method === 'GET') return poll(env, t, url);
   if (segs.length === 2 && segs[1] === 'results' && method === 'POST') return results(request, env, t);
   if (segs.length === 3 && segs[1] === 'party' && segs[2] === 'ack') {
     if (method === 'POST') return ackParty(request, env, t);

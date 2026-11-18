@@ -1,13 +1,14 @@
 import { h, nextId, replace } from '../dom.js';
 import { icon } from '../icons.js';
-import { avatar, badge, button, card, confirmDialog, emptyState, linkButton, loadingRegion, pageHeader, setBusy, skeleton, toast } from '../ui.js';
+import { avatar, badge, badgeArt, button, card, confirmDialog, emptyState, linkButton, loadingRegion, pageHeader, setBusy, skeleton, toast } from '../ui.js';
 import { ApiError } from '../api.js';
 import { formatNumber, relativeTime } from '../format.js';
 import { ownerPath, profilePath } from '../router.js';
 import { state } from '../state.js';
 import { mountAsync } from './common.js';
-import { PARTY_GAMES, PARTY_BADGE_COUNTERS, BADGES } from '../community-data.js';
+import { PARTY_GAMES, PARTY_BADGE_COUNTERS, BADGES, badgeImage } from '../community-data.js';
 import { cheatAlertsCard } from './owner-cheats.js';
+import { badgeMakerCard } from './owner-badges.js';
 
 export const OWNER_USERS_PATH = '/api/owner/users';
 export const OWNER_ACTIONS_PATH = '/api/owner/actions';
@@ -117,7 +118,11 @@ export function readActions(list) {
 
 function readEntry(e) {
   if (!e || typeof e !== 'object' || typeof e.id !== 'string') return null;
-  return { id: e.id, label: str(e.label) || e.id, emoji: str(e.emoji), reward: num(e.reward) || 0, source: str(e.source) };
+  const out = { id: e.id, label: str(e.label) || e.id, emoji: str(e.emoji), reward: num(e.reward) || 0, source: str(e.source) };
+  const image = badgeImage(e.image);
+  if (image) out.image = image;
+  if (str(e.note)) out.note = str(e.note);
+  return out;
 }
 
 export function readCatalog(c) {
@@ -331,7 +336,8 @@ export function renderOwner(ctx) {
       input,
       h('p', { class: 'field-help', text: 'Anyone who used YapOS, signed in here or has a profile shows up. Paste a user id to reach someone YapOS has never seen.' }),
       results),
-    card({ title: 'Recent changes', icon: 'clock' }, log)));
+    card({ title: 'Recent changes', icon: 'clock' }, log),
+    badgeMakerCard(ctx)));
 
   let token = 0;
   let typing = null;
@@ -423,7 +429,7 @@ function pills(ids, list, empty) {
   if (!ids.length) return h('p', { class: 'owner-empty muted', text: empty });
   return h('ul', { class: 'owner-pills' }, ...ids.map((id) => {
     const e = list.find((x) => x.id === id);
-    return h('li', { class: 'owner-pill', title: id }, e?.emoji ? h('span', { attrs: { 'aria-hidden': 'true' }, text: e.emoji }) : null, h('span', { text: e ? e.label : id }));
+    return h('li', { class: 'owner-pill', title: e?.note ? `${e.label}: ${e.note}` : id }, e?.image ? badgeArt(e, '', 'owner-pill-img') : e?.emoji ? h('span', { attrs: { 'aria-hidden': 'true' }, text: e.emoji }) : null, h('span', { text: e ? e.label : id }));
   }));
 }
 
@@ -829,10 +835,10 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
       btn.addEventListener('click', () => send(has ? revoke : grant, { ref: e.id, btn, notify: !has && notifyOn() }));
       return h('li', { class: ['owner-check-row', has ? 'is-owned' : ''] },
         h('span', { class: 'owner-check-mark', attrs: { 'aria-hidden': 'true' } }, has ? icon('check', { size: 14 }) : null),
-        h('span', { class: 'owner-check-emoji', attrs: { 'aria-hidden': 'true' }, text: e.emoji || '•' }),
+        e.image ? h('span', { class: 'owner-check-emoji' }, badgeArt(e, '', 'owner-check-img')) : h('span', { class: 'owner-check-emoji', attrs: { 'aria-hidden': 'true' }, text: e.emoji || '•' }),
         h('span', { class: 'owner-check-main' },
           h('span', { class: 'owner-check-label', text: e.label }),
-          h('span', { class: 'owner-check-sub', text: auto ? 'Earned from Party stats' : busy ? 'Waiting for YapOS' : has ? 'They have this' : (e.reward ? `Normally pays ${formatNumber(e.reward)} 💎, not paid when you give it` : (what === 'badge' && Object.prototype.hasOwnProperty.call(BADGES, e.id) && BADGES[e.id].note) || e.id) })),
+          h('span', { class: 'owner-check-sub', text: auto ? 'Earned from Party stats' : busy ? 'Waiting for YapOS' : has ? 'They have this' : (e.reward ? `Normally pays ${formatNumber(e.reward)} 💎, not paid when you give it` : (what === 'badge' && (e.note || (Object.prototype.hasOwnProperty.call(BADGES, e.id) && BADGES[e.id].note))) || (e.source === 'custom' ? 'Your own badge' : e.id)) })),
         btn);
     })));
   }

@@ -1,6 +1,6 @@
 import { h, replace } from '../dom.js';
 import { icon } from '../icons.js';
-import { avatar, copyButton, emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
+import { avatar, badgeArt, copyButton, emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
 import { formatNumber, relativeTime } from '../format.js';
 import { ApiError, isAbort } from '../api.js';
 import { profilePath } from '../router.js';
@@ -53,7 +53,7 @@ function clanTag(clan) {
 function tileGrid(items, label) {
   return h('ul', { class: 'badge-grid', attrs: { 'aria-label': label } },
     ...items.map((b) => h('li', { class: ['badge-tile', b.note ? 'has-note' : ''], title: b.note ? `${b.label}: ${b.note}` : b.label },
-      h('span', { class: 'badge-tile-emoji', attrs: { 'aria-hidden': 'true' }, text: b.emoji }),
+      b.image ? badgeArt(b, 'badge-tile-emoji', 'badge-tile-img') : h('span', { class: 'badge-tile-emoji', attrs: { 'aria-hidden': 'true' }, text: b.emoji }),
       h('span', { class: 'badge-tile-label', text: b.label }),
       b.note ? h('span', { class: 'badge-tile-note', text: b.note }) : null)));
 }

@@ -10,6 +10,7 @@ export const CLOSE_MS = 220;
 export const BADGES_SHOWN = 6;
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+export const BADGE_IMAGE_RE = /^\/badge-img\/c-[a-z0-9]{8}-[0-9a-f]{16}\.(png|webp|jpg)$/;
 const FOCUSABLE = 'button, a, input, select, textarea, [tabindex]';
 const INTERACTIVE = 'button, a, input, select, textarea, label, summary, [role="button"], [role="option"], [role="radio"], [role="checkbox"], [role="tab"], [role="menuitem"], [role="link"], [contenteditable]';
 
@@ -37,7 +38,13 @@ function initialsOf(name) {
 export function cleanCard(raw) {
   if (!raw || typeof raw !== 'object') return null;
   if (raw.hidden === true) return { hidden: true, name: text(raw.name), avatar: profileAvatar(raw.avatar) };
-  const list = (v) => (Array.isArray(v) ? v : []).filter((b) => b && typeof b.id === 'string').map((b) => ({ id: b.id.slice(0, 40), label: text(b.label, 48) || b.id.slice(0, 40), emoji: text(b.emoji, 16) }));
+  const list = (v) => (Array.isArray(v) ? v : []).filter((b) => b && typeof b.id === 'string').map((b) => {
+    const out = { id: b.id.slice(0, 40), label: text(b.label, 48) || b.id.slice(0, 40), emoji: text(b.emoji, 16) };
+    if (typeof b.image === 'string' && BADGE_IMAGE_RE.test(b.image)) out.image = b.image;
+    const note = text(b.note, 100);
+    if (note) out.note = note;
+    return out;
+  });
   const party = raw.party && typeof raw.party === 'object' ? raw.party : {};
   const prog = raw.progress && typeof raw.progress === 'object' ? { into: Math.max(0, Number(raw.progress.into) || 0), need: Math.max(1, Number(raw.progress.need) || 1) } : null;
   const rank = raw.rank && typeof raw.rank === 'object' && Number(raw.rank.rank) > 0 ? { rank: Math.floor(Number(raw.rank.rank)), points: Math.max(0, Number(raw.rank.points) || 0) } : null;
@@ -272,7 +279,11 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
         ? h(
             'ul',
             { class: 'pcard-badge-list' },
-            shown.map((b) => h('li', { class: 'pcard-badge', attrs: { title: b.label, 'aria-label': b.label } }, h('span', { class: 'pcard-badge-emoji', text: b.emoji || '🏅', attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'pcard-badge-label', text: b.label, attrs: { 'aria-hidden': 'true' } }))),
+            shown.map((b) => h('li', { class: 'pcard-badge', attrs: { title: b.note ? `${b.label}: ${b.note}` : b.label, 'aria-label': b.note ? `${b.label}: ${b.note}` : b.label } },
+              b.image
+                ? h('span', { class: ['pcard-badge-emoji', 'has-image'], attrs: { 'aria-hidden': 'true' } }, h('img', { class: 'pcard-badge-img', src: b.image, alt: b.label, attrs: { width: '32', height: '32', loading: 'lazy', decoding: 'async', draggable: 'false' } }))
+                : h('span', { class: 'pcard-badge-emoji', text: b.emoji || '🏅', attrs: { 'aria-hidden': 'true' } }),
+              h('span', { class: 'pcard-badge-label', text: b.label, attrs: { 'aria-hidden': 'true' } }))),
             more > 0 ? h('li', { class: ['pcard-badge', 'is-more'], attrs: { 'aria-label': `${more} more` } }, h('span', { class: 'pcard-badge-emoji', text: `+${more}`, attrs: { 'aria-hidden': 'true' } })) : null,
           )
         : h('p', { class: 'pcard-empty', text: 'No badges yet. Play a few games to earn some.' }),

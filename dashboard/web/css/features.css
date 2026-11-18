@@ -3739,3 +3739,10 @@ a.plb-name:hover {
 .party-signins-actions {
   justify-content: flex-start;
 }
+
+.badge-tile-img {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}

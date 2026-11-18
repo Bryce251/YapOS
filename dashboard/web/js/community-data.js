@@ -114,13 +114,27 @@ export function gameInfo(id, name = '') {
   return { id: key, name: str(name) || known?.name || humanize(key) || 'Party game', emoji: known?.emoji || '🎮' };
 }
 
+export const BADGE_IMAGE_RE = /^\/badge-img\/c-[a-z0-9]{8}-[0-9a-f]{16}\.(png|webp|jpg)$/;
+
+export function badgeImage(v) {
+  return typeof v === 'string' && BADGE_IMAGE_RE.test(v) ? v : '';
+}
+
+function withExtras(out, entry, known) {
+  const image = badgeImage(entry?.image) || badgeImage(known?.image);
+  const note = str(entry?.note) || str(known?.note);
+  if (image) out.image = image;
+  if (note) out.note = Array.from(note).slice(0, 100).join('');
+  return out;
+}
+
 function catalogFrom(list, base) {
   if (!Array.isArray(list) || !list.length) return base;
   const out = { ...base };
   for (const b of list) {
     if (!b || typeof b !== 'object' || typeof b.id !== 'string' || !b.id) continue;
     const emoji = str(b.emoji);
-    out[b.id] = { label: str(b.label) || base[b.id]?.label || humanize(b.id), emoji: emoji && Array.from(emoji).length <= 4 ? emoji : (base[b.id]?.emoji || '🏅') };
+    out[b.id] = withExtras({ label: str(b.label) || base[b.id]?.label || humanize(b.id), emoji: emoji && Array.from(emoji).length <= 4 ? emoji : (base[b.id]?.emoji || '🏅') }, b, base[b.id]);
   }
   return out;
 }
@@ -144,19 +158,20 @@ function catalogItem(entry, catalog, fallbackEmoji) {
     const id = entry.trim();
     if (!id) return null;
     const known = catalog[id] || seasonBadge(id);
-    return { id, label: known?.label || humanize(id), emoji: known?.emoji || fallbackEmoji };
+    return withExtras({ id, label: known?.label || humanize(id), emoji: known?.emoji || fallbackEmoji }, null, known);
   }
   if (!entry || typeof entry !== 'object') return null;
   const id = str(entry.id);
   if (!id) return null;
   const known = catalog[id] || seasonBadge(id);
   const emoji = str(entry.emoji);
-  return { id, label: str(entry.label) || str(entry.name) || known?.label || humanize(id), emoji: emoji && Array.from(emoji).length <= 4 ? emoji : (known?.emoji || fallbackEmoji) };
+  return withExtras({ id, label: str(entry.label) || str(entry.name) || known?.label || humanize(id), emoji: emoji && Array.from(emoji).length <= 4 ? emoji : (known?.emoji || fallbackEmoji) }, entry, known);
 }
 
 export function badgeInfo(entry, catalog = BADGES) {
   const out = catalogItem(entry, catalog, '🏅');
-  const note = out && Object.prototype.hasOwnProperty.call(BADGES, out.id) ? BADGES[out.id].note : null;
+  if (!out || out.note) return out;
+  const note = Object.prototype.hasOwnProperty.call(BADGES, out.id) ? BADGES[out.id].note : null;
   return note ? { ...out, note } : out;
 }
 

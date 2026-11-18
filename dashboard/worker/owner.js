@@ -9,6 +9,7 @@ import { cheatsRoute } from './owner-cheats.js';
 import { logModAction, actorName, personName, ownerLogAction } from './party-mod.js';
 import { GLOBAL_OWNER_KINDS, globalActionPlan, isGlobalHidden } from './owner-global.js';
 import { accountState, requireAccount, noAccountStatement } from './owner-account.js';
+import { listCustomBadges, catalogEntry, isCustomBadge, liveBadges, badgesRoute } from './custom-badges.js';
 
 export const OWNER_ACTIONS_PER_MIN = 120;
 export const OWNER_READS_PER_MIN = 300;
@@ -125,9 +126,10 @@ export function cleanCatalog(body) {
 }
 
 export async function readCatalog(db) {
-  const [row, awarded] = await Promise.all([
+  const [row, awarded, custom] = await Promise.all([
     db.prepare('SELECT data, updated FROM owner_catalog WHERE id = ?').bind(CATALOG_KEY).first(),
     db.prepare('SELECT DISTINCT month, rank FROM party_season_awards ORDER BY month DESC, rank ASC LIMIT 36').all().catch(() => null),
+    listCustomBadges(db),
   ]);
   const data = row ? parseJsonSafe(row.data, {}) : {};
   const achievements = Array.isArray(data.achievements) ? data.achievements : [];
@@ -137,9 +139,10 @@ export async function readCatalog(db) {
     const info = seasonBadgeInfo(partySeasonBadgeId(Number(r.rank), r.month));
     if (info) badges.push({ id: info.id, label: info.label, emoji: info.emoji, source: 'season' });
   }
+  for (const c of custom) badges.push(catalogEntry(c));
   const have = new Set(badges.map((b) => b.id));
   for (const b of botBadges) {
-    if (!b || have.has(b.id)) continue;
+    if (!b || have.has(b.id) || isCustomBadge(b.id)) continue;
     have.add(b.id);
     badges.push({ id: b.id, label: b.label, emoji: b.emoji ?? null, source: b.id.startsWith('season-') ? 'season' : 'bot' });
   }
@@ -366,7 +369,7 @@ async function userDetail(env, raw, t) {
   const seasonIds = idList(user.season
     .filter((s) => (s.kind === 'xp' || s.kind === 'shards') && Number.isInteger(s.rank) && typeof s.month === 'string' && /^\d{4}-\d{2}$/.test(s.month))
     .map((s) => `season-${s.kind}-${s.rank}-${s.month}`));
-  user.badges = [...new Set([...user.badges, ...seasonIds, ...partySeason])];
+  user.badges = liveBadges([...new Set([...user.badges, ...seasonIds, ...partySeason])], catalog.badges);
   const clan = parseJsonSafe(pub && pub.clan, null);
   user.clan = isPlainObject(clan) && typeof clan.name === 'string'
     ? { name: cleanText(clan.name, 32), tag: cleanText(clan.tag, 6), colour: typeof clan.colour === 'string' && /^#[0-9a-f]{6}$/i.test(clan.colour) ? clan.colour.toLowerCase() : null }
@@ -453,6 +456,7 @@ export async function ownerApi(request, env, route, url, t, { csrf }) {
     return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   }
   if (route[1] === 'cheats') return cheatsRoute(request, env, session, route, url, t);
+  if (route[1] === 'badges') return badgesRoute(request, env, session, route, t);
   return fail(404, 'not_found', MISSING);
 }
 

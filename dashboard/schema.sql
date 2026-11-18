@@ -564,3 +564,20 @@ CREATE TABLE IF NOT EXISTS party_cheat_pairs (
   PRIMARY KEY (a, b, day)
 );
 CREATE INDEX IF NOT EXISTS party_cheat_pairs_day ON party_cheat_pairs (day);
+
+CREATE TABLE IF NOT EXISTS custom_badges (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  note TEXT,
+  emoji TEXT NOT NULL,
+  image BLOB NOT NULL,
+  mime TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  bytes INTEGER NOT NULL,
+  created INTEGER NOT NULL,
+  updated INTEGER NOT NULL,
+  created_by TEXT
+);
+CREATE INDEX IF NOT EXISTS custom_badges_created ON custom_badges (created);

@@ -2,6 +2,7 @@ import { DAY, ID_RE, USER_BODY_LIMIT, HttpError, json, fail, readJson, isPlainOb
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanText, cleanUsername, cleanAvatar } from './profiles.js';
 import { PARTY_BADGES, badgesFor, partySeasonBadges } from './party-badges.js';
+import { liveBadges } from './custom-badges.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 import { readCatalog } from './owner.js';
 
@@ -204,7 +205,7 @@ export async function getPublicProfile(request, env, raw, t) {
     favourites: favourites(byGame),
   };
   const earned = badgesFor({ games: party.games, wins: party.wins, counters: isPlainObject(counters) ? counters : {}, dailyBest: Number(streak && streak.best) || 0 });
-  const badges = [...new Set([...earned, ...partySeason, ...idList(parseJsonSafe(row.badges, []), MAX_BADGES)])];
+  const badges = liveBadges([...new Set([...earned, ...partySeason, ...idList(parseJsonSafe(row.badges, []), MAX_BADGES)])], catalog.badges);
   const clan = cleanClan(parseJsonSafe(row.clan, null));
   const profile = {
     username: row.username,
@@ -220,7 +221,7 @@ export async function getPublicProfile(request, env, raw, t) {
     party,
     updatedAt: Number(row.updated) || null,
   };
-  const pick = (list) => (Array.isArray(list) ? list : []).filter((x) => x && typeof x.id === 'string').map((x) => ({ id: x.id, label: x.label, emoji: x.emoji || null }));
+  const pick = (list) => (Array.isArray(list) ? list : []).filter((x) => x && typeof x.id === 'string').map((x) => ({ id: x.id, label: x.label, emoji: x.emoji || null, ...(x.image ? { image: x.image } : {}), ...(x.note ? { note: x.note } : {}) }));
   return json({ profile, partyBadges: PARTY_BADGES, catalog: { achievements: pick(catalog.achievements), badges: pick(catalog.badges) } }, 200, { 'Cache-Control': 'public, max-age=30' });
 }
 

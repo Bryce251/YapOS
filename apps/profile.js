@@ -4,7 +4,7 @@ import { customId } from '../engine/router.js';
 import { clip, parseBool } from '../engine/parse.js';
 import { avatarUrl } from '../engine/links.js';
 import { looksLikeFeatureOff } from '../engine/errors.js';
-import { CURRENCY, seasonName, BADGE_NOTES } from '../engine/global.js';
+import { CURRENCY, seasonName, BADGE_NOTES, customBadgeInfo } from '../engine/global.js';
 import { profileData, partyOf, privacyOf, setPrivacy } from '../engine/profile-data.js';
 import { profileSync, dropProfileSync } from '../engine/profiles-sync.js';
 import { seasonSync, dropSeasonSync } from '../engine/seasons-sync.js';
@@ -45,12 +45,23 @@ export function partyGameName(id) {
   return PARTY_GAMES[id] || null;
 }
 
+function badgeText(id) {
+  if (PARTY_BADGES[id]) return PARTY_BADGES[id];
+  const custom = customBadgeInfo(id);
+  return custom ? `${custom.emoji} ${custom.label}` : null;
+}
+
+function badgeNote(id) {
+  if (PARTY_BADGES[id]) return BADGE_NOTES[id] || null;
+  return customBadgeInfo(id)?.note || null;
+}
+
 export function badgeNames(ids) {
-  return (ids || []).map((b) => PARTY_BADGES[b]).filter(Boolean);
+  return (ids || []).map(badgeText).filter(Boolean);
 }
 
 export function badgeNotes(ids) {
-  return [...new Set(ids || [])].filter((b) => BADGE_NOTES[b] && PARTY_BADGES[b]).map((b) => `${PARTY_BADGES[b]}: ${BADGE_NOTES[b]}`);
+  return [...new Set(ids || [])].filter((b) => badgeText(b) && badgeNote(b)).map((b) => `${badgeText(b)}: ${badgeNote(b)}`);
 }
 
 export function bestSeason(list) {

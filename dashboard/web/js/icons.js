@@ -49,6 +49,7 @@ const ICONS = {
   sort: [['path', { d: 'M8 5v14M5 8l3-3 3 3M16 19V5M13 16l3 3 3-3' }]],
   'arrow-up': [['path', { d: 'M12 19V5M6 11l6-6 6 6' }]],
   download: [['path', { d: 'M12 4v11M7 10.5l5 5 5-5M5 19.5h14' }]],
+  upload: [['path', { d: 'M12 15.5v-11M7 9l5-5 5 5M5 19.5h14' }]],
   'arrow-down': [['path', { d: 'M12 5v14M6 13l6 6 6-6' }]],
   'arrow-right': [['path', { d: 'M5 12h14M13 6l6 6-6 6' }]],
   plus: [['path', { d: 'M12 5v14M5 12h14' }]],

@@ -3,12 +3,14 @@ import { readFile, stat, mkdir, rm } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
+import { deflateSync } from 'node:zlib';
 import { createWorker } from './worker/app.js';
 import { approveCode } from './worker/activity-auth.js';
 import { D1Database } from './test/d1-shim.js';
 import { createHarness, IDS } from '../test/harness.js';
 import { createDashboard } from '../engine/dashboard.js';
+import { setCustomBadges, grantBadge } from '../engine/global.js';
 import { createBudget } from '../engine/budget.js';
 import { createLogger } from '../engine/log.js';
 import { monthKey, shiftMonth } from '../apps/wrapped.js';
@@ -479,6 +481,73 @@ export function seedPublicProfile(db, t = Date.now()) {
   upsertProfile(db, IDS.owner, 'jolli', 'Jolli', t);
 }
 
+export const DEV_CUSTOM_BADGE = Object.freeze({ id: 'c-devstar1', name: 'Dev star', note: 'Made in the badge maker for local testing', emoji: '\u2B50' });
+
+function pngChunk(type, data) {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, 'ascii');
+  const body = Buffer.concat([head.subarray(4), data]);
+  let c = ~0;
+  for (const byte of body) {
+    c ^= byte;
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE((~c) >>> 0, 0);
+  return Buffer.concat([head, data, crc]);
+}
+
+export function devBadgePng(size = 32) {
+  const rows = [];
+  const mid = (size - 1) / 2;
+  for (let y = 0; y < size; y++) {
+    const row = Buffer.alloc(1 + size * 4);
+    for (let x = 0; x < size; x++) {
+      const dx = x - mid;
+      const dy = y - mid;
+      const r = Math.hypot(dx, dy);
+      const a = Math.atan2(dy, dx);
+      const edge = mid * (0.55 + 0.4 * Math.abs(Math.cos(2.5 * a)));
+      const at = 1 + x * 4;
+      if (r <= edge) {
+        const glow = Math.max(0, 1 - r / edge);
+        row[at] = 255;
+        row[at + 1] = Math.round(170 + 70 * glow);
+        row[at + 2] = Math.round(40 + 120 * glow);
+        row[at + 3] = 255;
+      }
+    }
+    rows.push(row);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(Buffer.concat(rows))),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+export function seedCustomBadge(db, ownerId, t = Date.now()) {
+  const png = devBadgePng(32);
+  const hash = createHash('sha256').update(png).digest('hex').slice(0, 16);
+  const b = DEV_CUSTOM_BADGE;
+  db.raw.prepare('INSERT INTO custom_badges (id, name, note, emoji, image, mime, hash, width, height, bytes, created, updated, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, 32, 32, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING')
+    .run(b.id, b.name, b.note, b.emoji, new Uint8Array(png), 'image/png', hash, png.length, t, t, ownerId);
+  const row = db.raw.prepare('SELECT badges FROM public_profiles WHERE user_id = ?').get(ownerId);
+  if (row) {
+    let list = [];
+    try { list = JSON.parse(row.badges); } catch {}
+    if (Array.isArray(list) && !list.includes(b.id)) db.raw.prepare('UPDATE public_profiles SET badges = ? WHERE user_id = ?').run(JSON.stringify([...list, b.id]), ownerId);
+  }
+  return { id: b.id, hash, bytes: png.length };
+}
+
 export function seedPublicPacks(db, t = Date.now()) {
   const owners = { admin: IDS.admin, member: IDS.member, owner: IDS.owner };
   for (const u of TEST_USERS) upsertProfile(db, u.id, u.username, u.display_name, t);
@@ -858,6 +927,8 @@ function followRealTime(clock) {
 
 async function seedBot(h) {
   const { engine } = h;
+  setCustomBadges(engine, [{ id: DEV_CUSTOM_BADGE.id, label: DEV_CUSTOM_BADGE.name, emoji: DEV_CUSTOM_BADGE.emoji, note: DEV_CUSTOM_BADGE.note }], '');
+  grantBadge(engine, IDS.owner, DEV_CUSTOM_BADGE.id);
   const S = IDS.server;
   const C = IDS.channels;
   const now = Date.now();
@@ -1023,6 +1094,7 @@ export async function startDev({
   seedPartyPack(db, IDS.owner);
   seedDailyScores(db);
   seedPublicProfile(db);
+  seedCustomBadge(db, IDS.owner);
   seedPublicPacks(db);
   seedSeason(db);
   seedPartyLeaderboard(db);
@@ -1152,7 +1224,7 @@ async function main() {
     'Party leaderboard: the This month tab is filled in, and last month\'s top 3 have Party badges (Jolli is #2, with the new skill badges too).',
     `Word packs: sign in as Jolli and open /packs to edit the sample pack. Type the code ${DEV_PACK_CODE} into Draw & Guess or Trivia settings to play with it.`,
     "Daily puzzle: today's Letter Hive and Scramble already have a few scores on the leaderboard (/api/activity/daily/top?kind=hive).",
-    `Owner panel: sign in as Jolli and open /owner to give people Shards, XP, achievements and badges. ${dev.ownerSimulated ? 'A stand-in bot finishes each change about 2 seconds later.' : 'The test bot applies each change for real.'}`,
+    `Owner panel: sign in as Jolli and open /owner to give people Shards, XP, achievements and badges. The Badge maker at the bottom has a sample picture badge, ${DEV_CUSTOM_BADGE.name}, that Jolli already has. ${dev.ownerSimulated ? 'A stand-in bot finishes each change about 2 seconds later.' : 'The test bot applies each change for real.'}`,
     `Global leaderboard: open /p/global?tab=shards and click any row to see their profile. Sign in as Jolli to get the mod view: "${DEV_FAKE_ACCOUNT.name}" is a fake account with ${DEV_FAKE_ACCOUNT.shards.toLocaleString('en-US')} Shards to set to 0 or hide.`,
     'Community: /u/jolli is a sample public profile, /packs/browse lists 3 public packs with likes, /seasons shows last month, and Test Town has 30 days of stats on its Stats page.',
     '',

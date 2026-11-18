@@ -31,9 +31,16 @@ export function activityHeaders(headers, secure) {
   return headers;
 }
 
+export const BADGE_IMG_CSP = "default-src 'none'; sandbox";
+
+export function isBadgeImagePath(pathname) {
+  return String(pathname).startsWith('/badge-img/');
+}
+
 export function withSecurityHeaders(response, secure, pathname = '') {
   const out = new Response(response.body, response);
   if (isActivityPath(pathname)) activityHeaders(out.headers, secure);
   else securityHeaders(out.headers, secure);
+  if (isBadgeImagePath(pathname)) out.headers.set('Content-Security-Policy', BADGE_IMG_CSP);
   return out;
 }

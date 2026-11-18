@@ -3,6 +3,13 @@ import { icon } from './icons.js';
 import { hueFrom, initials, safeImageUrl } from './format.js';
 import { OFFLINE_MESSAGE, SLOW_AFTER_MS } from './api.js';
 
+export function badgeArt(b, emojiClass = '', imgClass = 'badge-art') {
+  if (b && typeof b.image === 'string' && b.image) {
+    return h('img', { class: ['badge-art', imgClass], src: b.image, alt: b.label || '', title: b.note || b.label || '', loading: 'lazy', decoding: 'async', attrs: { draggable: 'false' } });
+  }
+  return h('span', { class: emojiClass, attrs: { 'aria-hidden': 'true' }, text: (b && b.emoji) || '\u{1F3C5}' });
+}
+
 export function avatar({ name = '', url = '', id = '', size = 'md', shape = 'circle' } = {}) {
   const el = h('span', { class: ['avatar', `avatar-${size}`, shape === 'square' ? 'avatar-square' : ''], attrs: { 'aria-hidden': 'true' } });
   el.style.setProperty('--avatar-hue', String(hueFrom(id || name)));

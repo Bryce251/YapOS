@@ -2,7 +2,7 @@ import { VERSION, hideSecret } from './config.js';
 import { parseBool, parseDuration } from './parse.js';
 import { avatarUrl } from './links.js';
 import { HARD_CAP } from './limits.js';
-import { canGiveCurrency, CURRENCY, GLOBAL_KEY, withGiftBadges, badgeGifts } from './global.js';
+import { canGiveCurrency, CURRENCY, GLOBAL_KEY, withGiftBadges, badgeGifts, customBadges, customBadgeVersion, setCustomBadges } from './global.js';
 import { profileSync } from './profiles-sync.js';
 import { createOwnerActions } from './owner-actions.js';
 
@@ -1425,6 +1425,24 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
   }
 
   const owner = createOwnerActions(engine, { now, partyStats: (ids) => partyStats(ids) });
+  try { customBadges(engine); } catch (e) { log.debug('[dashboard] reading custom badges failed', e?.message); }
+
+  function applyCustomBadges(data) {
+    if (!plainObject(data) || !Array.isArray(data.badges) || typeof data.version !== 'string') return null;
+    const out = setCustomBadges(engine, data.badges, data.version);
+    if (out.affected.length) {
+      state.partyStats.clear();
+      try {
+        const sync = profileSync(engine, { fetch: fetchImpl });
+        for (const id of out.affected) sync.markDirty(id);
+        Promise.resolve(sync.push()).catch((e) => log.debug('[dashboard] pushing profiles after a badge change failed', e?.message));
+      } catch (e) {
+        log.debug('[dashboard] marking profiles after a badge change failed', e?.message);
+      }
+    }
+    if (out.removed.length) log.info(`[dashboard] ${out.removed.length} custom ${out.removed.length === 1 ? 'badge was' : 'badges were'} deleted, taken off ${out.affected.length} ${out.affected.length === 1 ? 'person' : 'people'}`);
+    return out;
+  }
 
   async function sendCatalog() {
     const body = owner.catalog();
@@ -1455,7 +1473,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     state.busy = true;
     let delay;
     try {
-      const r = await request('GET', '/bot/poll?wait=0');
+      const r = await request('GET', `/bot/poll?wait=0&badges=${encodeURIComponent(customBadgeVersion(engine))}`);
       if (!r.ok) throw Object.assign(new Error(`poll answered ${r.status}`), { status: r.status });
       const jobs = Array.isArray(r.data?.jobs) ? r.data.jobs.slice(0, MAX_JOBS) : [];
       state.hot = r.data?.hot === true;
@@ -1465,6 +1483,9 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       await postResults(results);
       if (r.data?.party !== undefined) await applyParty(r.data.party).catch((e) => log.debug('[dashboard] Party sync failed', e?.message));
       if (Array.isArray(r.data?.profileSettings) && r.data.profileSettings.length) await profileSync(engine, { fetch: fetchImpl }).applySettings(r.data.profileSettings).catch((e) => log.debug('[dashboard] profile settings sync failed', e?.message));
+      if (r.data?.customBadges !== undefined) {
+        try { applyCustomBadges(r.data.customBadges); } catch (e) { log.debug('[dashboard] custom badge sync failed', e?.message); }
+      }
       await syncOwner(r.data?.owner).catch((e) => log.debug('[dashboard] owner sync failed', e?.message));
       if (state.catalogMonth && state.catalogMonth !== owner.catalogMonth()) state.catalogDirty = true;
       if (state.catalogDirty && !state.catalogRun) state.catalogRun = sendCatalog().catch((e) => log.debug('[dashboard] owner catalog push failed', e?.message)).finally(() => { state.catalogRun = null; });

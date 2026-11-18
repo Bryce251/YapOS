@@ -4,6 +4,7 @@ import { cleanAvatar, cleanUsername } from './profiles.js';
 import { safeName } from './public-profiles.js';
 import { badgesFor, partySeasonBadges, seasonBadgeInfo } from './party-badges.js';
 import { readCatalog } from './owner.js';
+import { liveBadges } from './custom-badges.js';
 import { LEADERBOARD_GAMES, isOffBoard, offBoard } from './party-leaderboard.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 
@@ -73,7 +74,11 @@ function label(list, id) {
   const hit = list.find((x) => x && x.id === id) || seasonBadgeInfo(id);
   const text = hit && typeof hit.label === 'string' && hit.label.trim() ? safeName(hit.label, 48, pretty(id)) : pretty(id);
   const emoji = hit && typeof hit.emoji === 'string' && hit.emoji.length <= 16 ? hit.emoji : null;
-  return { id, label: text, emoji };
+  const out = { id, label: text, emoji };
+  if (hit && typeof hit.image === 'string' && hit.image.startsWith('/badge-img/')) out.image = hit.image;
+  const note = hit && typeof hit.note === 'string' ? safeName(hit.note, 100, null) : null;
+  if (note) out.note = note;
+  return out;
 }
 
 function favourites(byGame) {
@@ -129,7 +134,7 @@ export async function buildCard(db, rawId) {
   const counters = parseJsonSafe(stats && stats.counters, {});
   const bestStreak = Math.max(0, Math.floor(Number(streak && streak.best) || 0));
   const earned = badgesFor({ games, wins, counters: isPlainObject(counters) ? counters : {}, dailyBest: bestStreak });
-  const badgeIds = [...new Set([...earned, ...partySeason, ...ids(parseJsonSafe(pub && pub.badges, []), 64)])];
+  const badgeIds = liveBadges([...new Set([...earned, ...partySeason, ...ids(parseJsonSafe(pub && pub.badges, []), 64)])], catalog.badges);
   const achievementIds = ids(parseJsonSafe(pub && pub.achievements, []), CARD_ACHIEVEMENTS);
   const badgeList = Array.isArray(catalog.badges) ? catalog.badges : [];
   const achList = Array.isArray(catalog.achievements) ? catalog.achievements : [];

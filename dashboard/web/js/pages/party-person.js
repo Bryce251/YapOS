@@ -1,5 +1,5 @@
 import { h, replace, nextId } from '../dom.js';
-import { avatar, badge, button, confirmDialog, drawer, errorState, loadingRegion, setBusy, skeleton, toast } from '../ui.js';
+import { avatar, badge, badgeArt, button, confirmDialog, drawer, errorState, loadingRegion, setBusy, skeleton, toast } from '../ui.js';
 import { ApiError } from '../api.js';
 import { formatDate, relativeTime } from '../format.js';
 import { badgeInfo } from '../community-data.js';
@@ -133,7 +133,7 @@ function readCard(c) {
     hidden: false,
     level: Number.isInteger(c.level) ? c.level : null,
     username: str(c.username),
-    badges: (Array.isArray(c.badges) ? c.badges : []).map((b) => (typeof b === 'string' ? badgeInfo(b) : b && typeof b === 'object' ? { id: str(b.id), label: str(b.label) || str(b.id), emoji: str(b.emoji) } : null)).filter((b) => b && b.label).slice(0, 12),
+    badges: (Array.isArray(c.badges) ? c.badges : []).map((b) => (typeof b === 'string' ? badgeInfo(b) : b && typeof b === 'object' ? badgeInfo(b) : null)).filter((b) => b && b.label).slice(0, 12),
     badgeCount: Number(c.badgeCount) || 0,
     games: Number(party.games) || 0,
     wins: Number(party.wins) || 0,
@@ -261,7 +261,7 @@ export function personStats(model) {
 export function personBadges(model) {
   const card = model.person.card;
   if (!card || card.hidden || !card.badges.length) return null;
-  return h('ul', { class: 'person-badges', attrs: { 'aria-label': 'Badges' } }, ...card.badges.map((b) => h('li', { class: 'person-badge', attrs: { title: b.note ? `${b.label}: ${b.note}` : b.label } }, b.emoji ? h('span', { text: b.emoji, attrs: { 'aria-hidden': 'true' } }) : null, h('span', { text: b.label }))));
+  return h('ul', { class: 'person-badges', attrs: { 'aria-label': 'Badges' } }, ...card.badges.map((b) => h('li', { class: 'person-badge', attrs: { title: b.note ? `${b.label}: ${b.note}` : b.label } }, b.image ? badgeArt(b, '', 'person-badge-img') : b.emoji ? h('span', { text: b.emoji, attrs: { 'aria-hidden': 'true' } }) : null, h('span', { text: b.label }))));
 }
 
 export function banHistory(model) {

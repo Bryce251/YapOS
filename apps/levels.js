@@ -5,7 +5,7 @@ import { tokenize, didYouMean, fillTemplate, clip, normalizeName, parseBool, cha
 import { permName, explain, friendly } from '../engine/errors.js';
 import { avatarUrl } from '../engine/links.js';
 import { accept, reject, boolField, channelById, roleById, idList, plainObject } from '../engine/dashboard.js';
-import { globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, mergeOnce, canGiveCurrency, addSeason, seasonBoard, seasonScore, seasonBadges, seasonBadgeText, seasonName, rollSeason, CURRENCY, GIFT_BADGES } from '../engine/global.js';
+import { globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, mergeOnce, canGiveCurrency, addSeason, seasonBoard, seasonScore, seasonBadges, seasonBadgeText, seasonName, rollSeason, CURRENCY, GIFT_BADGES, customBadges, customBadgeInfo, isCustomBadge } from '../engine/global.js';
 
 const ID = 'levels';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -633,6 +633,9 @@ function humanize(id) {
 export function partyBadgeName(id) {
   const key = String(id || '');
   if (PARTY_BADGES[key]) return PARTY_BADGES[key];
+  const custom = customBadgeInfo(key);
+  if (custom) return `${custom.emoji} ${custom.label}`;
+  if (isCustomBadge(key)) return null;
   const h = humanize(key);
   return h ? `🎖️ ${h}` : null;
 }
@@ -1497,6 +1500,11 @@ export const { setup, teardown, check } = defineApp({
       engine.log.debug('[levels] folding old server XP failed', e?.message);
     }
     try {
+      customBadges(engine);
+    } catch (e) {
+      engine.log.debug('[levels] reading custom badges failed', e?.message);
+    }
+    try {
       rollSeason(engine);
       engine.scheduler?.schedule({ kind: `${ID}.${SEASON_JOB}`, key: 'season', repeat: { monthly: { day: 1, time: '00:00' }, tz: 'UTC' } });
     } catch (e) {
@@ -1518,10 +1526,13 @@ export const { setup, teardown, check } = defineApp({
     ownerLevel: (uid, level) => ownerXp(engine, uid, { level }),
     rewardsEverywhere: (uid, level) => rewardsEverywhere(engine, uid, level),
     maxLevel: () => MAX_LEVEL,
-    badges: () => Object.entries(PARTY_BADGES).map(([id, text]) => {
-      const at = text.indexOf(' ');
-      return { id, emoji: at > 0 ? text.slice(0, at) : '', label: at > 0 ? text.slice(at + 1) : text };
-    }),
+    badges: () => [
+      ...Object.entries(PARTY_BADGES).map(([id, text]) => {
+        const at = text.indexOf(' ');
+        return { id, emoji: at > 0 ? text.slice(0, at) : '', label: at > 0 ? text.slice(at + 1) : text };
+      }),
+      ...customBadges(engine).map((b) => ({ id: b.id, emoji: b.emoji, label: b.label, custom: true })),
+    ],
     levelFor,
     xpForLevel,
   }),
