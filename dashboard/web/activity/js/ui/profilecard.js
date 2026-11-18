@@ -2,6 +2,7 @@ import { h as defaultH } from './dom.js';
 import { profileAvatar } from '../profiles.js';
 import { gameById } from '../games/index.js';
 import { copyText } from './copy.js';
+import { cleanPalette, readMotion, readCrop, cropBox, themeOf, paintTheme, gradientOf, motionOk, ensureSheet, createCardFx, pick, EFFECT_IDS, FEATURED_IDS } from './cardlook.js';
 
 export const PROFILE_CARD_ENDPOINT = '/api/activity/profile/';
 export const CARD_CACHE_MS = 3 * 60 * 1000;
@@ -10,6 +11,7 @@ export const DRAG_PX = 8;
 export const CLOSE_MS = 220;
 export const BADGES_SHOWN = 5;
 export const FAVS_SHOWN = 3;
+export const STATS_SHOWN = 4;
 export const COPIED_MS = 2400;
 export const PROFILE_SITE = 'https://yapos.dev';
 export const CARD_MAX_W = 360;
@@ -26,7 +28,7 @@ export const RINGS = Object.freeze(['accent', 'rainbow', 'gold', 'glow']);
 export const FONTS = Object.freeze(['rounded', 'serif', 'mono', 'caps']);
 export const PIN_MAX = 5;
 export const BADGE_IMAGE_RE = /^\/badge-img\/c-[a-z0-9]{8}-[0-9a-f]{16}\.(png|webp|jpg)$/;
-export const BANNER_IMAGE_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg)$/;
+export const BANNER_IMAGE_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg|gif)$/;
 export const RARE = Object.freeze({ custom: 'One of a kind', special: 'Special' });
 const FOCUSABLE = 'button, a, input, select, textarea, [tabindex]';
 const INTERACTIVE = 'button, a, input, select, textarea, label, summary, [role="button"], [role="option"], [role="radio"], [role="checkbox"], [role="tab"], [role="menuitem"], [role="link"], [contenteditable]';
@@ -64,16 +66,28 @@ export function cleanLook(raw) {
   const gradient = typeof raw.nameGradient === 'string' && Object.prototype.hasOwnProperty.call(GRADIENT_COLOURS, raw.nameGradient) ? GRADIENT_COLOURS[raw.nameGradient] : null;
   const named = raw.nameColour && typeof raw.nameColour === 'object' ? raw.nameColour : null;
   const ac = raw.accent && typeof raw.accent === 'object' ? raw.accent : null;
-  const accent = ac && hex(ac.base) ? { base: ac.base, text: hex(ac.dark) || ac.base } : null;
+  const accent = ac && hex(ac.base) ? { base: ac.base, text: hex(ac.dark) || ac.base, light: hex(ac.light) || ac.base } : null;
   const bannerImage = typeof raw.bannerImage === 'string' && BANNER_IMAGE_RE.test(raw.bannerImage) ? raw.bannerImage : null;
   const banner = raw.banner === 'image' ? (bannerImage ? 'image' : null) : BANNERS.includes(raw.banner) ? raw.banner : null;
   const status = text(raw.status, 60);
+  const gradientId = gradient ? raw.nameGradient : null;
+  const motion = banner === 'image' ? readMotion(raw.bannerMotion) : null;
+  const palette = cleanPalette(raw.palette);
+  const effect = pick(EFFECT_IDS, raw.effect, 'none');
+  const featured = pick(FEATURED_IDS, raw.featured, 'level');
   const look = {
     pins,
     colour: gradient || (named && hex(named.dark)),
+    colourLight: gradientId ? null : named && hex(named.light),
+    gradient: gradientId,
     accent,
     banner,
     bannerImage: banner === 'image' ? bannerImage : null,
+    bannerMotion: motion,
+    bannerCrop: motion ? readCrop(raw.bannerCrop) : null,
+    palette,
+    effect: effect === 'none' ? null : effect,
+    featured: featured === 'level' ? null : featured,
     ring: RINGS.includes(raw.ring) ? raw.ring : null,
     font: FONTS.includes(raw.nameFont) ? raw.nameFont : null,
     pronouns: text(raw.pronouns, 24),
@@ -136,6 +150,17 @@ export function cleanCard(raw) {
   };
 }
 
+function featuredStat(card, total, stats) {
+  const id = card.look && card.look.featured;
+  if (!id) return null;
+  const key = id === 'winrate' ? 'rate' : id;
+  const known = stats.find((s) => s.key === key);
+  if (known) return known;
+  if (id === 'badges') return { key, value: num(total), label: total === 1 ? 'Badge' : 'Badges' };
+  if (id === 'shards' && card.shards !== null) return { key, value: short(card.shards), label: 'Shards' };
+  return null;
+}
+
 export function cardModel(card) {
   const pins = card.look ? card.look.pins : [];
   const keyOf = (b) => (b.kind === 'achievement' ? `ach:${b.id}` : b.id);
@@ -143,18 +168,20 @@ export function cardModel(card) {
   const all = [...merged.filter((b) => b.pinned).sort((a, b) => pins.indexOf(keyOf(a)) - pins.indexOf(keyOf(b))), ...merged.filter((b) => !b.pinned)];
   const total = Math.max(card.badgeCount, card.badges.length) + card.achievements.length;
   const p = card.party;
-  const stats = [
+  let stats = [
     { key: 'games', value: num(p.games), label: p.games === 1 ? 'Game' : 'Games' },
     { key: 'wins', value: num(p.wins), label: p.wins === 1 ? 'Win' : 'Wins' },
     { key: 'rate', value: p.games ? `${Math.round((p.wins / p.games) * 100)}%` : '–', label: 'Win rate' },
   ];
   if (p.bestStreak > 0) stats.push({ key: 'streak', value: num(p.bestStreak), label: 'Streak' });
+  const feat = featuredStat(card, total, stats);
+  if (feat) stats = [{ ...feat, featured: true }, ...stats.filter((s) => s.key !== feat.key)].slice(0, STATS_SHOWN);
   const facts = [];
   if (card.rank) {
     const pts = `${card.rank.points === 1 ? 'point' : 'points'}`;
     facts.push({ key: 'rank', icon: '🏆', text: `#${num(card.rank.rank)} · ${short(card.rank.points)} ${card.rank.points === 1 ? 'pt' : 'pts'}`, title: `#${num(card.rank.rank)} on the Party leaderboard with ${num(card.rank.points)} ${pts}`, top: card.rank.rank <= 3 ? card.rank.rank : 0 });
   }
-  if (card.shards !== null) facts.push({ key: 'shards', icon: '💎', text: `${short(card.shards)} Shards`, title: `${num(card.shards)} Shards` });
+  if (card.shards !== null && !(feat && feat.key === 'shards')) facts.push({ key: 'shards', icon: '💎', text: `${short(card.shards)} Shards`, title: `${num(card.shards)} Shards` });
   const favourites = p.favourites
     .map((f) => {
       const g = gameById(f.game);
@@ -201,6 +228,13 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
   const unbinders = [];
 
   let copyTimer = null;
+  let revealed = null;
+  let fx = null;
+
+  function effects() {
+    if (!fx) fx = createCardFx({ win, doc: docOf() });
+    return fx;
+  }
 
   const closeBtn = h('button', { class: 'pcard-close', type: 'button', attrs: { 'aria-label': 'Close', title: 'Close' }, on: { click: () => close() } }, h('span', { text: '✕', attrs: { 'aria-hidden': 'true' } }));
   const body = h('div', { class: 'pcard-body' });
@@ -308,14 +342,31 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
   }
 
   function bannerEl(look) {
-    const id = look && look.banner ? look.banner : look && look.accent ? 'accent' : 'none';
-    const box = h('div', { class: ['pcard-banner', `banner-${id === 'image' ? 'accent' : id}`], attrs: { 'aria-hidden': 'true' } });
-    if (id === 'image') {
-      const img = h('img', { class: 'pcard-banner-img', alt: '', attrs: { decoding: 'async', draggable: 'false' } });
-      img.addEventListener('error', () => img.remove());
-      img.src = look.bannerImage;
-      box.append(img);
+    const id = look && look.banner ? look.banner : look && (look.accent || look.palette) ? 'accent' : 'none';
+    const motion = id === 'image' ? look.bannerMotion : null;
+    const box = h('div', { class: ['pcard-banner', `banner-${id === 'image' ? 'accent' : id}`, motion ? 'is-moving' : null], attrs: { 'aria-hidden': 'true' } });
+    if (id !== 'image') return box;
+    const still = Boolean(motion) && !motionOk(win);
+    const img = h('img', { class: ['pcard-banner-img', motion ? 'is-crop' : null, still ? 'is-still' : null], alt: '', attrs: { decoding: 'async', draggable: 'false' } });
+    if (motion) {
+      const crop = cropBox(motion.width, motion.height, look.bannerCrop);
+      img.style.setProperty('--crop-w', `${crop.width}%`);
+      img.style.setProperty('--crop-h', `${crop.height}%`);
+      img.style.setProperty('--crop-x', `${crop.left}%`);
+      img.style.setProperty('--crop-y', `${crop.top}%`);
     }
+    img.addEventListener('error', () => {
+      if (motion && img.getAttribute('src') !== motion.still) {
+        img.setAttribute('src', motion.still);
+        img.src = motion.still;
+        return;
+      }
+      img.remove();
+    });
+    img.setAttribute('src', still ? motion.still : look.bannerImage);
+    img.src = still ? motion.still : look.bannerImage;
+    if (motion && !still) box.append(h('picture', { class: 'pcard-banner-pic' }, h('source', { attrs: { media: '(prefers-reduced-motion: reduce)', srcset: motion.still } }), img));
+    else box.append(img);
     return box;
   }
 
@@ -349,9 +400,12 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     return h('div', { class: 'pcard-tags' }, out);
   }
 
-  function head(who, card, name, handle, loading) {
+  function head(who, card, name, handle, loading, theme) {
     const look = card && card.look;
-    const nameEl = h('h2', { class: ['pcard-name', look && look.font ? `font-${look.font}` : null, look && look.colour ? 'has-colour' : null], text: name, attrs: { id: 'pcard-name', title: name }, vars: look && look.colour ? { '--pc-name': look.colour } : null });
+    const light = Boolean(theme && theme.light);
+    const colour = look ? (light ? look.colourLight || look.colour : look.colour) : null;
+    const grad = look && look.gradient ? gradientOf(look.gradient, light) : null;
+    const nameEl = h('h2', { class: ['pcard-name', look && look.font ? `font-${look.font}` : null, colour ? 'has-colour' : null, grad ? 'has-grad' : null], text: name, attrs: { id: 'pcard-name', title: name }, vars: colour || grad ? { '--pc-name': colour, '--pc-grad': grad } : null });
     const clan = card && card.clan ? (card.clan.tag ? `[${card.clan.tag}] ${card.clan.name}` : card.clan.name) : null;
     const line = [handle ? `@${handle}` : null, look && look.pronouns, clan].filter(Boolean).join(' · ');
     const status = look && look.status ? `${look.statusEmoji ? `${look.statusEmoji} ` : ''}${look.status}` : null;
@@ -413,7 +467,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     return h(
       'div',
       { class: 'pcard-main' },
-      h('ul', { class: 'pcard-stats', attrs: { 'aria-label': 'Party stats' } }, model.stats.map((s) => h('li', { class: 'pcard-stat' }, h('span', { class: 'pcard-stat-value', text: s.value }), h('span', { class: 'pcard-stat-label', text: s.label })))),
+      h('ul', { class: 'pcard-stats', attrs: { 'aria-label': 'Party stats' } }, model.stats.map((s) => h('li', { class: ['pcard-stat', s.featured ? 'is-featured' : null], attrs: s.featured ? { title: `Featured: ${s.label}` } : null },h('span', { class: 'pcard-stat-value', text: s.value }), h('span', { class: 'pcard-stat-label', text: s.label })))),
       h('div', { class: 'pcard-facts' }, facts.map((f) => h('span', { class: ['pcard-fact', f.top ? `is-top-${f.top}` : null, f.key === 'rank' && !card.rank ? 'is-muted' : null], attrs: { title: f.title } }, h('span', { text: f.icon, attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'pcard-fact-text', text: f.text })))),
       section('Favourite games', 'pcard-favs-title', null, fav),
       section('Badges', 'pcard-badges-title', all, badgeRow(model)),
@@ -532,6 +586,12 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     const loading = state.status === 'loading';
     panel.classList.toggle('is-loading', loading);
     panel.classList.toggle('is-error', state.status === 'error');
+    const look = card && card.look;
+    const theme = themeOf(look && look.palette);
+    paintTheme(panel, theme);
+    panel.classList.toggle('has-fx', Boolean(look && look.effect));
+    if (look && look.effect) effects().start(panel, look.effect);
+    else effects().stop();
     if (card && state.view === 'all') {
       panel.setAttribute('aria-labelledby', 'pcard-all-title');
       body.replaceChildren(allView(cardModel(card)));
@@ -540,12 +600,14 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     panel.setAttribute('aria-labelledby', 'pcard-name');
     const name = (card && card.name) || who.name;
     const handle = (card && card.username) || who.username;
-    const look = card && card.look;
+    const ac = look && look.accent && !theme ? look.accent : null;
+    const reveal = Boolean(card) && revealed !== state.id;
+    if (card) revealed = state.id;
     const view = h(
       'div',
-      { class: ['pcard-view', look && look.accent ? 'has-accent' : null], vars: look && look.accent ? { '--pc-ac': look.accent.base, '--pc-ac-text': look.accent.text } : null },
+      { class: ['pcard-view', ac || theme ? 'has-accent' : null, reveal ? 'is-reveal' : null], vars: ac ? { '--pc-ac': ac.base, '--pc-ac-text': ac.text } : null },
       bannerEl(look),
-      head(who, card || (hiddenCard && hiddenCard.avatar ? hiddenCard : null), name, handle, loading),
+      head(who, card || (hiddenCard && hiddenCard.avatar ? hiddenCard : null), name, handle, loading, theme),
     );
     if (loading) view.append(xpBar(null, true), skeletonMain(), foot(null, who, true));
     else if (card) view.append(xpBar(card, false), mainView(who, card, cardModel(card)), foot(card, who, false));
@@ -602,6 +664,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
       const doc = win && win.document ? win.document : globalThis.document;
       opener = from || (doc ? doc.activeElement : null);
     }
+    ensureSheet(docOf());
     const hit = cached(id);
     state = { id, hint, view: 'main', card: hit || null, status: hit === undefined ? 'loading' : hit.none ? 'none' : hit.hidden ? 'hidden' : 'ready' };
     paint();
@@ -627,7 +690,9 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     const id = state.id;
     state = null;
     token += 1;
+    revealed = null;
     stopTimers();
+    if (fx) fx.stop();
     el.classList.remove('is-open');
     el.classList.add('is-closing');
     if (boundRoot) boundRoot.classList.remove('has-modal');

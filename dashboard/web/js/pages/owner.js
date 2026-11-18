@@ -10,6 +10,7 @@ import { PARTY_GAMES, PARTY_BADGE_COUNTERS, BADGES, badgeImage } from '../commun
 import { cheatAlertsCard } from './owner-cheats.js';
 import { badgeMakerCard } from './owner-badges.js';
 import { staffProfileUrl } from './party-person.js';
+import { EFFECTS, THEMES } from '../profile-look.js';
 
 export const OWNER_USERS_PATH = '/api/owner/users';
 export const OWNER_ACTIONS_PATH = '/api/owner/actions';
@@ -65,12 +66,24 @@ export function readUser(u) {
   };
 }
 
-const BANNER_URL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg)$/;
+const BANNER_URL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg|gif)$/;
+const STILL_URL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}-still\.(png|webp|jpg)$/;
+const OWNER_THEMES = Object.freeze(Object.fromEntries([...THEMES.map((t) => [t.id, t.label]), ['custom', 'Custom']]));
+const OWNER_EFFECTS = Object.freeze(Object.fromEntries(EFFECTS.filter((e) => e.id !== 'none').map((e) => [e.id, e.label])));
+const LOOK_ACTIONS = Object.freeze({
+  banner: { part: 'banner', title: (who) => `Remove ${who}'s banner picture?`, body: 'It is deleted straight away and their card goes back to no banner. They can upload a new one. This is written to the mod log.', confirm: 'Remove picture', done: 'Banner picture removed.' },
+  text: { part: 'text', title: (who) => `Clear ${who}'s about me and status?`, body: 'Their about me, pronouns and status are emptied straight away. This is written to the mod log.', confirm: 'Clear text', done: 'Profile text cleared.' },
+  theme: { part: 'theme', title: (who) => `Reset ${who}'s profile theme?`, body: 'Their profile page goes back to the normal YapOS colours straight away. This is written to the mod log.', confirm: 'Reset theme', done: 'Profile theme reset.' },
+  effect: { part: 'effect', title: (who) => `Turn off ${who}'s profile effect?`, body: 'The effect over their profile page stops straight away. This is written to the mod log.', confirm: 'Turn off effect', done: 'Profile effect turned off.' },
+});
 
 export function readOwnerLook(l) {
-  if (!l || typeof l !== 'object') return { banner: null, bio: '', pronouns: '', status: '', statusEmoji: '', custom: false };
+  if (!l || typeof l !== 'object') return { banner: null, bannerStill: null, theme: 'none', effect: 'none', bio: '', pronouns: '', status: '', statusEmoji: '', custom: false };
   return {
     banner: typeof l.banner === 'string' && BANNER_URL_RE.test(l.banner) ? l.banner : null,
+    bannerStill: typeof l.bannerStill === 'string' && STILL_URL_RE.test(l.bannerStill) ? l.bannerStill : null,
+    theme: Object.prototype.hasOwnProperty.call(OWNER_THEMES, l.theme) ? l.theme : 'none',
+    effect: Object.prototype.hasOwnProperty.call(OWNER_EFFECTS, l.effect) ? l.effect : 'none',
     bio: str(l.bio),
     pronouns: str(l.pronouns),
     status: str(l.status),
@@ -642,21 +655,21 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
   const lookBox = h('div', { class: 'owner-look' });
   const removeBanner = button({ label: 'Remove banner picture', icon: 'trash', variant: 'danger', className: 'owner-remove-banner' });
   const clearText = button({ label: 'Clear about me and status', icon: 'x', className: 'owner-clear-look' });
+  const resetTheme = button({ label: 'Reset theme', icon: 'sun', className: 'owner-reset-theme' });
+  const clearEffect = button({ label: 'Turn off effect', icon: 'sparkles', className: 'owner-clear-effect' });
   async function lookAction(what, btn) {
     const u = getDetail().user;
     const who = personName(u);
-    const ask = what === 'banner'
-      ? { title: `Remove ${who}'s banner picture?`, body: 'It is deleted straight away and their card goes back to no banner. They can upload a new one. This is written to the mod log.' }
-      : { title: `Clear ${who}'s about me and status?`, body: 'Their about me, pronouns and status are emptied straight away. This is written to the mod log.' };
-    const ok = await confirmDialog({ title: ask.title, body: ask.body, confirmLabel: what === 'banner' ? 'Remove picture' : 'Clear text' });
+    const act = LOOK_ACTIONS[what] || LOOK_ACTIONS.text;
+    const ok = await confirmDialog({ title: act.title(who), body: act.body, confirmLabel: act.confirm });
     if (!ok || ctx.signal?.aborted) return;
     setBusy(btn, true, 'Working');
     try {
-      const data = await ctx.api.request('DELETE', staffProfileUrl(u.id, 'look', what === 'banner' ? 'banner' : 'text'), { signal: ctx.signal });
+      const data = await ctx.api.request('DELETE', staffProfileUrl(u.id, 'look', act.part), { signal: ctx.signal });
       if (ctx.signal?.aborted) return;
       getDetail().user.look = readOwnerLook(data?.look);
       update(getDetail());
-      toast(what === 'banner' ? 'Banner picture removed.' : 'Profile text cleared.');
+      toast(act.done);
     } catch (err) {
       if (ctx.signal?.aborted) return;
       toast(err instanceof ApiError ? err.message : 'That did not work. Try again.', { tone: 'danger', title: "Couldn't do that" });
@@ -666,13 +679,22 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
   }
   removeBanner.addEventListener('click', () => lookAction('banner', removeBanner));
   clearText.addEventListener('click', () => lookAction('text', clearText));
+  resetTheme.addEventListener('click', () => lookAction('theme', resetTheme));
+  clearEffect.addEventListener('click', () => lookAction('effect', clearEffect));
 
   function updateLook(look) {
     const hasText = Boolean(look.bio || look.pronouns || look.status || look.statusEmoji);
     removeBanner.hidden = !look.banner;
     clearText.hidden = !hasText;
+    resetTheme.hidden = look.theme === 'none';
+    clearEffect.hidden = look.effect === 'none';
     replace(lookBox,
-      look.banner ? h('img', { class: 'owner-look-banner', src: look.banner, alt: 'Their banner picture', loading: 'lazy', decoding: 'async' }) : h('p', { class: 'owner-empty muted', text: 'No banner picture.' }),
+      look.banner ? h('img', { class: 'owner-look-banner', src: look.bannerStill || look.banner, alt: 'Their banner picture', loading: 'lazy', decoding: 'async' }) : h('p', { class: 'owner-empty muted', text: 'No banner picture.' }),
+      look.theme !== 'none' || look.effect !== 'none'
+        ? h('dl', { class: 'owner-look-text owner-look-style' },
+          look.theme !== 'none' ? [h('dt', { text: 'Theme' }), h('dd', { text: OWNER_THEMES[look.theme] })] : null,
+          look.effect !== 'none' ? [h('dt', { text: 'Effect' }), h('dd', { text: OWNER_EFFECTS[look.effect] })] : null)
+        : null,
       hasText ? h('dl', { class: 'owner-look-text' },
         look.status || look.statusEmoji ? [h('dt', { text: 'Status' }), h('dd', { text: [look.statusEmoji, look.status].filter(Boolean).join(' ') })] : null,
         look.pronouns ? [h('dt', { text: 'Pronouns' }), h('dd', { text: look.pronouns })] : null,
@@ -1026,7 +1048,7 @@ function buildUserPage(ctx, body, first, { send, getDetail }) {
     card({ title: 'Profile look', icon: 'palette', className: 'owner-look-card' },
       h('p', { class: 'owner-text', text: 'What they show on their public profile. Remove anything that breaks the rules.' }),
       lookBox,
-      row(removeBanner, clearText)),
+      row(removeBanner, clearText, resetTheme, clearEffect)),
     card({ title: 'Changes for this person', icon: 'list', actions: linkButton({ label: 'All changes', href: '/owner', size: 'sm' }) }, userLog),
     staffLinks());
   update(first);

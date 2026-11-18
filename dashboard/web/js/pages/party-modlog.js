@@ -51,6 +51,8 @@ export const ACTION_LABELS = Object.freeze({
   profile_text_clear: ['\u{1F9FD}','Profile text cleared'],
   profile_name_style_reset: ['\u{1F3A8}', 'Name styles reset'],
   profile_pins_clear: ['\u{1F4CC}', 'Pinned badges cleared'],
+  profile_theme_reset: ['\u{1F308}', 'Profile themes reset'],
+  profile_effect_clear: ['\u{2728}', 'Profile effects turned off'],
   profile_reset: ['\u{1F504}', 'Whole profiles reset'],
   name_hide: ['\u{1F648}', 'Names hidden'],
   name_unhide: ['\u{1F440}', 'Names shown again'],
@@ -229,6 +231,10 @@ export function modLogSentence(e) {
       return `${who} reset ${them}'s name colour and style`;
     case 'profile_pins_clear':
       return `${who} cleared ${them}'s pinned badges`;
+    case 'profile_theme_reset':
+      return `${who} reset ${them}'s profile theme`;
+    case 'profile_effect_clear':
+      return `${who} turned off ${them}'s profile effect`;
     case 'profile_reset':
       return `${who} reset ${them}'s whole profile look`;
     case 'name_hide':

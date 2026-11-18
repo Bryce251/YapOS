@@ -5,10 +5,12 @@ import { tabBar } from '../kit.js';
 import { ApiError } from '../api.js';
 import { formatNumber } from '../format.js';
 import {
-  BANNERS, BIO_MAX, DENSITIES, FEATURED, NAME_FONTS, NAME_GRADIENTS, NAME_PALETTE, PIN_MAX, PRONOUNS_MAX, RINGS, SECTIONS, STATUS_EMOJI_MAX, STATUS_MAX,
-  cleanStatusEmoji, defaultLook, lookBody, moveItem, normalHex, readLook, sameLook, textLength, themeColours,
+  BANNERS, BIO_MAX, DENSITIES, EFFECTS, FEATURED, NAME_FONTS, NAME_GRADIENTS, NAME_PALETTE, PIN_MAX, PRONOUNS_MAX, RINGS, SECTIONS, STATUS_EMOJI_MAX, STATUS_MAX, THEMES, THEME_MODES, THEME_PATTERNS,
+  cleanStatusEmoji, defaultLook, lookBody, moveItem, normalHex, readCrop, readLook, readMotion, sameLook, textLength, themeById, themeColours, themeShades,
 } from '../profile-look.js';
-import { allBadges, isSpecial, openAllBadges } from './profile.js';
+import { ANIM_MAX_BYTES, AnimError, animatedFrames, checkAnimSize, readAnimated, webpAnimated } from '../banner-anim.js';
+import { effectThumb } from '../profile-fx.js';
+import { allBadges, cropVars, isSpecial, openAllBadges } from './profile.js';
 import { dataUrlBytes, loadPicture, sniffFile } from './owner-badges.js';
 
 export const LOOK_API = '/api/me/profile-look';
@@ -34,11 +36,17 @@ export const CROP_PREVIEW_W = 600;
 export const CROP_PREVIEW_H = 200;
 export const PRONOUN_IDEAS = Object.freeze(['she/her', 'he/him', 'they/them', 'any pronouns']);
 export const PICK_SEARCH_AT = 12;
+export const STILL_MAX_W = 1500;
+export const STILL_BYTES = 280 * 1024;
+export const STILL_WIDTHS = Object.freeze([1500, 1000, 700]);
+export const STILL_QUALITIES = Object.freeze([0.86, 0.76, 0.66, 0.56]);
+export const CUSTOM_THEME_START = Object.freeze({ base: '#7c5cff', alt: '#0ea5e9', accent: '#f2613f' });
 
 const TABS = Object.freeze([
   Object.freeze({ id: 'badges', label: 'Badges', icon: 'star' }),
   Object.freeze({ id: 'name', label: 'Name', icon: 'palette' }),
   Object.freeze({ id: 'card', label: 'Card', icon: 'sparkles' }),
+  Object.freeze({ id: 'theme', label: 'Theme', icon: 'sun' }),
   Object.freeze({ id: 'about', label: 'About', icon: 'user' }),
   Object.freeze({ id: 'layout', label: 'Layout', icon: 'list' }),
 ]);
@@ -190,11 +198,23 @@ export function encodeBanner(src, { doc = document, max = BANNER_BYTES, rect = n
   throw new Error('That picture is too detailed to use as a banner. Try a simpler one.');
 }
 
-export function chooseBannerCrop(src, { doc = document } = {}) {
+export function viewToCrop(width, height, view) {
+  const [w, ht] = dims(width, height);
+  const v = clampView(w, ht, view);
+  return readCrop({ zoom: clamp(v.zoom, 1, 8), x: clamp(v.cx / w, 0, 1), y: clamp(v.cy / ht, 0, 1) });
+}
+
+export function cropToView(width, height, crop) {
+  const [w, ht] = dims(width, height);
+  const c = readCrop(crop);
+  return c ? clampView(w, ht, { zoom: c.zoom, cx: c.x * w, cy: c.y * ht }) : startView(w, ht);
+}
+
+export function chooseBannerCrop(src, { doc = document, moving = null, crop = null } = {}) {
   const width = src.naturalWidth || src.width;
   const height = src.naturalHeight || src.height;
   return new Promise((resolve) => {
-    let view = startView(width, height);
+    let view = moving && crop ? cropToView(width, height, crop) : startView(width, height);
     let done = false;
     const pointers = new Map();
     let gesture = null;
@@ -203,9 +223,12 @@ export function chooseBannerCrop(src, { doc = document } = {}) {
     const rangeId = nextId('crop-zoom');
     const previous = doc.activeElement;
     const top = maxZoom(width, height);
-    const canvas = h('canvas', { class: 'pe-crop-canvas', attrs: { width: String(CROP_STAGE_W), height: String(CROP_STAGE_H), 'aria-hidden': 'true' } });
+    const motion = moving ? { width, height, still: moving } : null;
+    const movingImg = (cls) => h('img', { class: ['pe-crop-moving', cls, 'is-crop'], src: moving, alt: '', attrs: { draggable: 'false', 'aria-hidden': 'true' } });
+    const stageImg = motion ? movingImg('pe-crop-moving-stage') : null;
+    const canvas = motion ? h('div', { class: 'pe-crop-window', attrs: { 'aria-hidden': 'true' } }, stageImg) : h('canvas', { class: 'pe-crop-canvas', attrs: { width: String(CROP_STAGE_W), height: String(CROP_STAGE_H), 'aria-hidden': 'true' } });
     const stage = h('div', {
-      class: 'pe-crop-stage',
+      class: ['pe-crop-stage', motion ? 'is-moving' : ''],
       attrs: { tabindex: '0', role: 'group', 'aria-label': 'Banner picture. Drag to move it.', 'aria-describedby': helpId },
     }, canvas, h('div', { class: 'pe-crop-frame', attrs: { 'aria-hidden': 'true' } }));
     const range = h('input', { type: 'range', id: rangeId, class: 'range pe-crop-range', attrs: { min: '1', max: String(top), step: '0.01', 'aria-label': 'Zoom' } });
@@ -214,20 +237,26 @@ export function chooseBannerCrop(src, { doc = document } = {}) {
     const zoomIn = h('button', { type: 'button', class: 'icon-btn pe-crop-in', attrs: { 'aria-label': 'Zoom in' } }, icon('plus', { size: 16 }));
     const note = h('p', { class: 'pe-crop-note', attrs: { role: 'status', 'aria-live': 'polite' } });
     const preview = (kind, label) => {
-      const c = h('canvas', { class: 'pe-crop-prev-canvas', attrs: { width: String(CROP_PREVIEW_W), height: String(CROP_PREVIEW_H), 'aria-hidden': 'true' } });
+      const img = motion ? movingImg('pe-crop-moving-prev') : null;
+      const c = img ? h('span', { class: 'pe-crop-prev-clip' }, img) : h('canvas', { class: 'pe-crop-prev-canvas', attrs: { width: String(CROP_PREVIEW_W), height: String(CROP_PREVIEW_H), 'aria-hidden': 'true' } });
       const fig = h('figure', { class: ['pe-crop-prev', `is-${kind}`] },
         h('div', { class: 'pe-crop-prev-box' }, c, h('span', { class: 'pe-crop-prev-avatar', attrs: { 'aria-hidden': 'true' } })),
         h('figcaption', { class: 'pe-crop-prev-label', text: label }));
-      return { fig, ctx: typeof c.getContext === 'function' ? c.getContext('2d') : null };
+      return { fig, img, ctx: !img && typeof c.getContext === 'function' ? c.getContext('2d') : null };
     };
     const onProfile = preview('profile', 'On your profile');
     const onParty = preview('party', 'On the Party card');
-    const stageCtx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+    const stageCtx = !motion && typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
     const fx = CROP_FRAME.x * CROP_STAGE_W;
     const fy = CROP_FRAME.y * CROP_STAGE_H;
     const fw = CROP_FRAME.w * CROP_STAGE_W;
     const paint = () => {
       const r = cropRect(width, height, view);
+      if (motion) {
+        const c = viewToCrop(width, height, view);
+        for (const img of [stageImg, onProfile.img, onParty.img]) cropVars(img, motion, c);
+        return r;
+      }
       if (stageCtx) {
         const scale = fw / r.sw;
         const x0 = Math.max(0, r.sx - fx / scale);
@@ -256,7 +285,7 @@ export function chooseBannerCrop(src, { doc = document } = {}) {
       level.textContent = zoomText(z);
       zoomOut.disabled = z <= 1;
       zoomIn.disabled = z >= top;
-      const soft = softNote(width, height, r);
+      const soft = motion ? '' : softNote(width, height, r);
       note.textContent = soft;
       note.hidden = !soft;
     };
@@ -346,10 +375,10 @@ export function chooseBannerCrop(src, { doc = document } = {}) {
     };
     const reset = button({ label: 'Reset', icon: 'refresh', variant: 'ghost', className: 'pe-crop-reset', onClick: () => set(startView(width, height)) });
     const cancel = button({ label: 'Cancel', className: 'pe-crop-cancel', onClick: () => finish(null) });
-    const ok = button({ label: 'Use this banner', icon: 'check', variant: 'primary', className: 'pe-crop-ok', onClick: () => finish(cropRect(width, height, view)) });
+    const ok = button({ label: 'Use this banner', icon: 'check', variant: 'primary', className: 'pe-crop-ok', onClick: () => finish(motion ? viewToCrop(width, height, view) : cropRect(width, height, view)) });
     const panel = h('div', { class: ['dialog-panel', 'pe-crop-panel'], attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId } },
-      h('h2', { class: 'dialog-title', id: titleId, text: 'Position your banner' }),
-      h('p', { class: 'dialog-body', id: helpId, text: 'Drag the picture to move it, and zoom with the slider, your mouse wheel or a pinch. On a keyboard, the arrow keys move it and + and - zoom.' }),
+      h('h2', { class: 'dialog-title', id: titleId, text: motion ? 'Position your moving banner' : 'Position your banner' }),
+      h('p', { class: 'dialog-body', id: helpId, text: `Drag the picture to move it, and zoom with the slider, your mouse wheel or a pinch. On a keyboard, the arrow keys move it and + and - zoom.${motion ? ' Your GIF keeps moving on your profile and Party card. People who prefer less motion see its first frame.' : ''}` }),
       stage,
       h('div', { class: 'pe-crop-zoom' }, zoomOut, range, zoomIn, level),
       note,
@@ -365,21 +394,131 @@ export function chooseBannerCrop(src, { doc = document } = {}) {
   });
 }
 
-export async function processBanner(file, { choose = chooseBannerCrop } = {}) {
+export function stillPlan(width, height) {
+  const [w, ht] = dims(width, height);
+  const plan = [];
+  for (const max of STILL_WIDTHS) {
+    const sw = Math.min(max, w, STILL_MAX_W);
+    if (plan.some((p) => p.w === sw)) continue;
+    plan.push({ w: sw, h: Math.max(1, Math.round((sw * ht) / w)) });
+  }
+  return plan;
+}
+
+export function encodeStill(src, { doc = document, max = STILL_BYTES } = {}) {
+  const width = src.naturalWidth || src.width;
+  const height = src.naturalHeight || src.height;
+  const missing = new Set();
+  for (const size of stillPlan(width, height)) {
+    const { canvas, ctx } = freshCanvas(doc, size.w, size.h);
+    ctx.drawImage(src, 0, 0, width, height, 0, 0, size.w, size.h);
+    for (const type of ['image/webp', 'image/jpeg']) {
+      if (missing.has(type)) continue;
+      for (const q of STILL_QUALITIES) {
+        const url = canvas.toDataURL(type, q);
+        if (!url.startsWith(`data:${type}`)) {
+          missing.add(type);
+          break;
+        }
+        if (dataUrlBytes(url) <= max) return url;
+      }
+    }
+  }
+  throw new Error("That GIF couldn't be turned into a banner. Try a smaller one.");
+}
+
+function readDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.onerror = () => reject(new Error("That file couldn't be read. Pick it again."));
+    r.readAsDataURL(file);
+  });
+}
+
+export function movingSizeText(bytes) {
+  return `${(Math.max(0, Number(bytes) || 0) / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export async function processMoving(file, bytes, { choose = chooseBannerCrop, readUrl = readDataUrl, doc = document } = {}) {
+  if (bytes.length > ANIM_MAX_BYTES) throw new Error(`Moving banners must be under ${Math.round(ANIM_MAX_BYTES / 1024)} KB, and this one is ${movingSizeText(bytes.length)}. Try a shorter or smaller GIF.`);
+  let info;
+  try {
+    info = readAnimated(bytes);
+    checkAnimSize(info);
+  } catch (err) {
+    throw new Error(err instanceof AnimError ? err.message : "That GIF couldn't be read. Pick it again.");
+  }
+  const url = await readUrl(file);
+  const src = await loadPicture(file);
+  try {
+    const crop = choose ? await choose({ width: info.width, height: info.height }, { moving: url }) : { zoom: 1, x: 0.5, y: 0.5 };
+    if (!crop) return null;
+    return { image: url, still: encodeStill(src, { doc }), crop, width: info.width, height: info.height, frames: info.frames };
+  } finally {
+    if (typeof src.close === 'function') src.close();
+  }
+}
+
+export async function processBanner(file, { choose = chooseBannerCrop, readUrl = readDataUrl, doc = document } = {}) {
   if (!file) throw new Error('Pick a picture first.');
   if (Number(file.size) > BANNER_FILE_MAX) throw new Error('That file is bigger than 15 MB. Pick a smaller picture.');
   const head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
   const kind = sniffFile(head, file.type, file.name);
   if (kind === 'svg') throw new Error("SVG files can't be used for banners. Save it as a PNG first.");
   if (!['png', 'jpeg', 'webp', 'gif'].includes(kind)) throw new Error("That file isn't a picture YapOS can use. Use a PNG, JPG, WebP or GIF.");
+  if (kind === 'gif' || (kind === 'webp' && webpAnimated(head))) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const frames = animatedFrames(bytes);
+    if (frames > 1 || (kind === 'webp' && frames !== 1)) return processMoving(file, bytes, { choose, readUrl, doc });
+    if (frames < 0 && kind === 'gif') throw new Error("That GIF couldn't be read. It may be damaged. Try saving it again.");
+  }
   const src = await loadPicture(file);
   try {
     const rect = choose ? await choose(src) : null;
     if (choose && !rect) return null;
-    return encodeBanner(src, { rect });
+    return encodeBanner(src, { rect, doc });
   } finally {
     if (typeof src.close === 'function') src.close();
   }
+}
+
+export function currentScheme(doc = globalThis.document, win = globalThis.window) {
+  const forced = doc && doc.documentElement && typeof doc.documentElement.getAttribute === 'function' ? doc.documentElement.getAttribute('data-theme') : null;
+  if (forced === 'dark' || forced === 'light') return forced;
+  try {
+    return win && typeof win.matchMedia === 'function' && win.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+export function themeTile(t, label) {
+  const thumb = h('span', { class: ['pe-theme-thumb', t ? `pat-${t.pattern}` : ''], attrs: { 'aria-hidden': 'true' } },
+    h('span', { class: 'pe-theme-card' }, h('span', { class: 'pe-theme-line' }), h('span', { class: 'pe-theme-line is-short' }), h('span', { class: 'pe-theme-dot' })));
+  if (t) {
+    const s = themeShades(t, t.mode === 'auto' ? currentScheme() : t.mode);
+    thumb.style.setProperty('--tt-bg', s.bg);
+    thumb.style.setProperty('--tt-bg2', s.bg2);
+    thumb.style.setProperty('--tt-glow', s.glow);
+    thumb.style.setProperty('--tt-surface', s.surface);
+    thumb.style.setProperty('--tt-border', s.border);
+    thumb.style.setProperty('--tt-text', s.text2);
+    thumb.style.setProperty('--tt-accent', s.accent);
+  }
+  return [thumb, h('span', { class: 'pe-theme-name', text: label })];
+}
+
+export function effectTile(e) {
+  const box = h('span', { class: 'pe-effect-thumb', attrs: { 'aria-hidden': 'true' } });
+  if (e.id !== 'none') {
+    const c = effectThumb(e.id, { width: 96, height: 60 });
+    if (c) {
+      c.classList?.add?.('pe-effect-canvas');
+      box.appendChild(c);
+    }
+  } else box.appendChild(icon('x', { size: 18 }));
+  return [box, h('span', { class: 'pe-effect-name', text: e.label })];
 }
 
 function choiceGroup({ label, options, value, onPick, className = '' }) {
@@ -496,10 +635,11 @@ function counterFor(input, max) {
   return { el, sync };
 }
 
-export function openProfileEditor({ mount, profile, look, bannerImage = null, hints = {}, api, signal = null, renderCard, onDone }) {
+export function openProfileEditor({ mount, profile, look, bannerImage = null, bannerMotion = null, hints = {}, api, signal = null, renderCard, onLook = null, onDone }) {
   let saved = readLook({ ...look, bannerImage }).look;
   let draft = readLook({ ...look, bannerImage }).look;
   let banner = bannerImage;
+  let motion = banner ? readMotion(bannerMotion) : null;
   let bannerTouched = false;
   let busy = false;
   let closed = false;
@@ -520,7 +660,8 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
   const isDirty = () => !sameLook(draft, saved);
 
   function refresh() {
-    replace(preview, renderCard(draft, banner));
+    replace(preview, renderCard(draft, banner, motion));
+    if (!closed) onLook?.(draft);
     if (draft.accent) bannerWrap.style.setProperty('--ac-base', themeColours(draft.accent).base);
     else bannerWrap.style.removeProperty('--ac-base');
     const dirty = isDirty();
@@ -732,7 +873,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
     id: b.id,
     label: b.label,
     className: ['pe-banner-swatch', `banner-${b.id}`].join(' '),
-    body: b.id === 'image' ? h('img', { class: 'pe-banner-thumb', src: banner, alt: '', attrs: { draggable: 'false' } }) : h('span', { class: 'pe-choice-text', text: b.id === 'none' ? 'None' : '' }),
+    body: b.id === 'image' ? h('img', { class: 'pe-banner-thumb', src: motion ? motion.still : banner, alt: '', attrs: { draggable: 'false' } }) : h('span', { class: 'pe-choice-text', text: b.id === 'none' ? 'None' : '' }),
   }));
   const bannerWrap = h('div', { class: 'pe-banner-wrap' });
   let bannerGroup = null;
@@ -743,6 +884,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
   const fileInput = h('input', { type: 'file', class: 'sr-only', attrs: { accept: 'image/png,image/jpeg,image/webp,image/gif', tabindex: '-1', 'aria-hidden': 'true' } });
   const uploadBtn = button({ label: 'Upload a picture', icon: 'upload', size: 'sm', className: 'pe-upload' });
   const removeBtn = button({ label: 'Remove picture', icon: 'trash', size: 'sm', variant: 'ghost', className: 'pe-remove-banner' });
+  const moveBtn = button({ label: 'Reposition', icon: 'sliders', size: 'sm', variant: 'ghost', className: 'pe-move-banner', onClick: () => reposition() });
   uploadBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files && fileInput.files[0];
@@ -752,12 +894,13 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
     try {
       const image = await processBanner(file);
       if (!image || closed) return;
-      const data = await api.post(BANNER_API, { image }, { signal });
+      const body = typeof image === 'string' ? { image } : { image: image.image, still: image.still, crop: image.crop };
+      const data = await api.post(BANNER_API, body, { signal });
       if (closed) return;
       const url = data && data.banner && typeof data.banner.url === 'string' ? data.banner.url : null;
       if (!url) throw new Error('The banner could not be saved. Try again.');
-      bannerUploaded(url);
-      toast('Banner picture uploaded.');
+      bannerUploaded(url, readMotion(data.banner.motion), readCrop(data.banner.crop));
+      toast(typeof image === 'string' ? 'Banner picture uploaded.' : 'Moving banner uploaded.');
     } catch (err) {
       if (closed) return;
       const text = err instanceof Error ? err.message : 'That did not work. Try again.';
@@ -784,20 +927,22 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
     }
   });
 
-  function bannerUploaded(url) {
+  function bannerUploaded(url, nextMotion = null, crop = null) {
     banner = url;
+    motion = nextMotion;
     bannerTouched = true;
-    saved = { ...saved, banner: 'image' };
-    draft = { ...draft, banner: 'image' };
+    saved = { ...saved, banner: 'image', bannerCrop: motion ? crop : null };
+    draft = { ...draft, banner: 'image', bannerCrop: motion ? crop : null };
     syncBanner();
     refresh();
   }
 
   function bannerRemoved() {
     banner = null;
+    motion = null;
     bannerTouched = true;
-    if (saved.banner === 'image') saved = { ...saved, banner: 'none' };
-    if (draft.banner === 'image') draft = { ...draft, banner: 'none' };
+    saved = { ...saved, banner: saved.banner === 'image' ? 'none' : saved.banner, bannerCrop: null };
+    draft = { ...draft, banner: draft.banner === 'image' ? 'none' : draft.banner, bannerCrop: null };
     syncBanner();
     refresh();
   }
@@ -805,6 +950,15 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
   function syncBanner() {
     drawBanners();
     removeBtn.hidden = !banner;
+    moveBtn.hidden = !(banner && motion);
+  }
+
+  async function reposition() {
+    if (!banner || !motion) return;
+    const crop = await chooseBannerCrop({ width: motion.width, height: motion.height }, { moving: banner, crop: draft.bannerCrop });
+    if (!crop || closed) return;
+    update({ bannerCrop: crop, banner: 'image' });
+    bannerGroup?.set('image');
   }
 
   const accentId = nextId('pe-accent-hex');
@@ -857,8 +1011,8 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
   panels.card = h('div', { class: 'pe-panel' },
     heading('Banner'),
     bannerWrap,
-    h('div', { class: 'pe-actions-row' }, uploadBtn, removeBtn, fileInput),
-    h('p', { class: 'field-help', text: 'Best size 3000 x 1000, and at least 1500 x 500. PNG, JPG, WebP or GIF. After you pick a picture you can drag and zoom it to choose what shows. Uploads are saved straight away and everyone can see them, so keep it friendly.' }),
+    h('div', { class: 'pe-actions-row' }, uploadBtn, moveBtn, removeBtn, fileInput),
+    h('p', { class: 'field-help', text: 'Best size 3000 x 1000, and at least 1500 x 500. PNG, JPG, WebP or GIF. Moving GIFs and animated WebPs up to 900 KB keep moving on your profile and Party card. After you pick a picture you can drag and zoom it to choose what shows. Uploads are saved straight away and everyone can see them, so keep it friendly.' }),
     heading('Accent colour'),
     accentGroup.el,
     h('div', { class: 'pe-custom' },
@@ -880,6 +1034,105 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
     densityGroup.set(draft.density);
     featuredGroup.set(draft.featured);
   });
+
+  const themeGroup = choiceGroup({
+    label: 'Profile theme',
+    options: [
+      { id: 'none', label: 'No theme', className: 'pe-theme is-none', body: themeTile(null, 'None') },
+      ...THEMES.map((t) => ({ id: t.id, label: `${t.label} theme`, className: 'pe-theme', body: themeTile(t, t.label) })),
+      { id: 'custom', label: 'Custom theme', className: 'pe-theme is-custom', body: themeTile(null, 'Custom') },
+    ],
+    value: draft.theme,
+    className: 'pe-themes',
+    onPick: (id) => {
+      if (id === 'custom') update({ theme: 'custom', themeCustom: draft.themeCustom || customStart() });
+      else if (id === 'none') update({ theme: 'none', themeCustom: null, themeMode: 'auto', themePattern: 'glow' });
+      else {
+        const t = themeById(id);
+        update({ theme: id, themeCustom: null, themeMode: t.mode, themePattern: t.pattern });
+      }
+      syncTheme();
+    },
+  });
+  function customStart() {
+    const t = themeById(draft.theme);
+    if (t) return { base: t.base, alt: t.alt, accent: t.accent };
+    return { ...CUSTOM_THEME_START, accent: draft.accent || CUSTOM_THEME_START.accent };
+  }
+  const customFields = ['base', 'alt', 'accent'].map((k) => {
+    const id = nextId(`pe-theme-${k}`);
+    const label = { base: 'Main colour', alt: 'Second colour', accent: 'Highlight' }[k];
+    const pickerEl = h('input', { type: 'color', class: 'pe-colour', attrs: { 'aria-label': `Pick the ${label.toLowerCase()}` } });
+    const hexEl = h('input', { type: 'text', id, class: 'input input-mono pe-hex', maxLength: 7, placeholder: CUSTOM_THEME_START[k], autocomplete: 'off', spellcheck: false });
+    const set = (raw) => {
+      const hex = normalHex(raw);
+      if (!hex) {
+        themeError.textContent = 'Use a colour like #7c5cff.';
+        hexEl.classList.add('is-invalid');
+        return;
+      }
+      themeError.textContent = '';
+      hexEl.classList.remove('is-invalid');
+      update({ theme: 'custom', themeCustom: { ...(draft.themeCustom || customStart()), [k]: hex } });
+      syncTheme();
+    };
+    pickerEl.addEventListener('input', () => set(pickerEl.value));
+    hexEl.addEventListener('change', () => set(hexEl.value));
+    hexEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        set(hexEl.value);
+      }
+    });
+    const el = h('div', { class: 'pe-custom pe-theme-colour' }, h('label', { class: 'field-label', htmlFor: id, text: label }), h('div', { class: 'pe-custom-row' }, pickerEl, hexEl));
+    return { k, el, pickerEl, hexEl };
+  });
+  const themeError = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
+  const customBox = h('div', { class: 'pe-theme-custom' }, ...customFields.map((f) => f.el));
+  const modeGroup = choiceGroup({ label: 'Light or dark', options: THEME_MODES.map((m) => ({ id: m.id, label: m.label, className: 'pe-chip' })), value: draft.themeMode, onPick: (id) => update({ themeMode: id }) });
+  const patternGroup = choiceGroup({
+    label: 'Background pattern',
+    options: THEME_PATTERNS.map((p) => ({ id: p.id, label: p.label, className: `pe-chip pe-pattern pat-${p.id}`, body: h('span', { class: 'pe-choice-text', text: p.label }) })),
+    value: draft.themePattern,
+    onPick: (id) => update({ themePattern: id }),
+  });
+  const themeOptions = h('div', { class: 'pe-theme-options' },
+    heading('Light or dark'),
+    modeGroup.el,
+    h('p', { class: 'field-help', text: 'Match follows each visitor’s light or dark mode. Always dark or always light keeps your theme the same for everyone.' }),
+    heading('Background pattern'),
+    patternGroup.el);
+  const effectGroup = choiceGroup({
+    label: 'Profile effect',
+    options: EFFECTS.map((e) => ({ id: e.id, label: e.label, className: ['pe-effect', `fx-${e.id}`].join(' '), body: effectTile(e) })),
+    value: draft.effect,
+    className: 'pe-effects',
+    onPick: (id) => update({ effect: id }),
+  });
+  function syncTheme() {
+    themeGroup.set(draft.theme);
+    customBox.hidden = draft.theme !== 'custom';
+    themeOptions.hidden = draft.theme === 'none';
+    for (const f of customFields) {
+      const v = draft.themeCustom ? draft.themeCustom[f.k] : CUSTOM_THEME_START[f.k];
+      if (document.activeElement !== f.hexEl) f.hexEl.value = draft.themeCustom ? v : '';
+      f.pickerEl.value = v;
+    }
+    modeGroup.set(draft.themeMode);
+    patternGroup.set(draft.themePattern);
+    effectGroup.set(draft.effect);
+  }
+  panels.theme = h('div', { class: 'pe-panel' },
+    heading('Profile theme'),
+    h('p', { class: 'field-help', text: 'Colours your whole profile page: the background, cards, buttons and badges. Text is tuned so it always stays easy to read.' }),
+    themeGroup.el,
+    customBox,
+    themeError,
+    themeOptions,
+    heading('Profile effect'),
+    h('p', { class: 'field-help', text: 'Effects drift over your whole profile page. Visitors can switch them off, and they stay still for people who prefer less motion.' }),
+    effectGroup.el);
+  syncers.push(syncTheme);
 
   const emojiId = nextId('pe-emoji');
   const statusId = nextId('pe-status');
@@ -978,11 +1231,11 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
     try {
       const data = await api.post(LOOK_API, lookBody(draft), { signal });
       if (closed) return;
-      const next = readLook({ ...(data && data.look ? data.look : draft), bannerImage: data?.look?.bannerImage ?? banner });
+      const next = readLook({ ...(data && data.look ? data.look : draft), bannerImage: data?.look?.bannerImage ?? banner, bannerMotion: data?.look ? data.look.bannerMotion : motion });
       saved = next.look;
       draft = { ...next.look };
       busy = false;
-      finish({ look: saved, bannerImage: next.bannerImage });
+      finish({ look: saved, bannerImage: next.bannerImage, bannerMotion: next.bannerMotion });
       toast('Your profile is saved.');
     } catch (err) {
       if (closed) return;
@@ -1012,7 +1265,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, hi
       const ok = await confirmDialog({ title: 'Discard your changes?', body: 'Your profile goes back to how it was when you last saved.', confirmLabel: 'Discard changes' });
       if (!ok) return;
     }
-    finish(bannerTouched ? { look: saved, bannerImage: banner } : null);
+    finish(bannerTouched ? { look: saved, bannerImage: banner, bannerMotion: motion } : null);
   }
 
   function reset() {

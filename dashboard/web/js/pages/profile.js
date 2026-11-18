@@ -7,8 +7,81 @@ import { profilePath } from '../router.js';
 import { publicFrame } from '../public-frame.js';
 import { levelProgress, normalizeProfile, SEASON_KINDS } from '../community-data.js';
 import { medalFor } from '../public-data.js';
-import { ACH_PREFIX, SPECIAL_KINDS, badgeKindOf, defaultLook, featuredValue, readLook, specialFirst, themeColours } from '../profile-look.js';
+import { ACH_PREFIX, EFFECTS, SPECIAL_KINDS, THEME_KEYS, badgeKindOf, cropBox, defaultLook, featuredValue, readLook, specialFirst, themeColours, themePalette } from '../profile-look.js';
+import { effectsAllowed, prefersReducedMotion, setEffectsAllowed, startEffect } from '../profile-fx.js';
 import { openProfileEditor } from './profile-editor.js';
+
+export const THEME_VARS = Object.freeze(THEME_KEYS.map((k) => k.replace(/[A-Z0-9]/g, (c) => `-${c.toLowerCase()}`)));
+const THEME_CLASSES = Object.freeze(['has-ptheme', 'pt-mode-auto', 'pt-mode-dark', 'pt-mode-light', 'pt-pat-glow', 'pt-pat-dots', 'pt-pat-grid', 'pt-pat-waves', 'pt-pat-stars', 'pt-pat-plain']);
+
+export function applyTheme(el, look) {
+  if (!el) return null;
+  for (const c of THEME_CLASSES) el.classList.remove(c);
+  for (const v of THEME_VARS) {
+    el.style.removeProperty(`--ptl-${v}`);
+    el.style.removeProperty(`--ptd-${v}`);
+  }
+  const pal = look ? themePalette(look) : null;
+  if (!pal) return null;
+  const light = pal.mode === 'dark' ? pal.dark : pal.light;
+  const dark = pal.mode === 'light' ? pal.light : pal.dark;
+  THEME_KEYS.forEach((k, i) => {
+    el.style.setProperty(`--ptl-${THEME_VARS[i]}`, light[k]);
+    el.style.setProperty(`--ptd-${THEME_VARS[i]}`, dark[k]);
+  });
+  el.classList.add('has-ptheme', `pt-mode-${pal.mode}`, `pt-pat-${pal.pattern}`);
+  return pal;
+}
+
+export function cropVars(el, motion, crop) {
+  const box = cropBox(motion.width, motion.height, crop);
+  el.style.setProperty('--crop-w', `${box.width}%`);
+  el.style.setProperty('--crop-h', `${box.height}%`);
+  el.style.setProperty('--crop-x', `${box.left}%`);
+  el.style.setProperty('--crop-y', `${box.top}%`);
+  return box;
+}
+
+export function effectLabel(id) {
+  const e = EFFECTS.find((x) => x.id === id);
+  return e ? e.label : 'None';
+}
+
+export function effectStage(host, { signal = null, win = globalThis.window, doc = globalThis.document } = {}) {
+  let current = null;
+  let id = 'none';
+  let forced = false;
+  const run = () => {
+    if (current) current.stop();
+    current = null;
+    if (id === 'none' || !host || (!forced && !effectsAllowed())) return;
+    current = startEffect(host, id, { win, doc });
+  };
+  signal?.addEventListener?.('abort', () => {
+    if (current) current.stop();
+    current = null;
+  });
+  return {
+    set(next, { always = false } = {}) {
+      const want = typeof next === 'string' ? next : 'none';
+      if (want === id && always === forced && (current || want === 'none' || (!always && !effectsAllowed()))) return;
+      id = want;
+      forced = always;
+      run();
+    },
+    toggle(on) {
+      setEffectsAllowed(on);
+      run();
+    },
+    get id() { return id; },
+    get running() { return Boolean(current && current.running); },
+    stop() {
+      if (current) current.stop();
+      current = null;
+      id = 'none';
+    },
+  };
+}
 
 export const PROFILE_API = '/api/u';
 export const NOTICES_API = '/api/me/profile-notices';
@@ -17,6 +90,8 @@ const RESET_TEXT = Object.freeze({
   profile_banner_remove: 'your banner picture was removed',
   profile_name_style_reset: 'your name colour and style were reset',
   profile_pins_clear: 'your pinned badges were cleared',
+  profile_theme_reset: 'your profile theme was reset',
+  profile_effect_clear: 'your profile effect was turned off',
   profile_reset: 'your whole profile look was reset to the default',
 });
 const FIELD_TEXT = Object.freeze({ bio: 'about me', status: 'status', pronouns: 'pronouns' });
@@ -122,7 +197,7 @@ function clanTag(clan) {
 
 function tileGrid(items, label, pinned = new Set()) {
   return h('ul', { class: 'badge-grid', attrs: { 'aria-label': label } },
-    ...items.map((b) => h('li', { class: ['badge-tile', b.note ? 'has-note' : '', pinned.has(b.key) ? 'is-pinned' : '', isSpecial(b) ? 'is-special' : ''], title: b.note ? `${b.label}: ${b.note}` : b.label },
+    ...items.map((b, i) => h('li', { class: ['badge-tile', b.note ? 'has-note' : '', pinned.has(b.key) ? 'is-pinned' : '', isSpecial(b) ? 'is-special' : ''], title: b.note ? `${b.label}: ${b.note}` : b.label, style: { '--i': String(Math.min(i, 12)) } },
       b.image ? badgeArt(b, 'badge-tile-emoji', 'badge-tile-img') : h('span', { class: 'badge-tile-emoji', attrs: { 'aria-hidden': 'true' }, text: b.emoji }),
       h('span', { class: 'badge-tile-label', text: b.label }),
       b.note ? h('span', { class: 'badge-tile-note', text: b.note }) : null)));
@@ -212,10 +287,17 @@ function nameHeading(name, look) {
   return el;
 }
 
-function bannerEl(look, image) {
+export function movingBanner(image, motion, crop, { className = 'profile-banner-img', priority = true } = {}) {
+  const img = h('img', { class: [className, 'is-crop'], src: image, alt: '', decoding: 'async', attrs: { draggable: 'false', fetchpriority: priority ? 'high' : null } });
+  cropVars(img, motion, crop);
+  return h('picture', { class: 'banner-pic' }, h('source', { attrs: { media: '(prefers-reduced-motion: reduce)', srcset: motion.still } }), img);
+}
+
+function bannerEl(look, image, motion) {
   if (look.banner === 'none') return null;
   if (look.banner === 'image') {
     if (!image) return null;
+    if (motion) return h('div', { class: 'profile-banner banner-image is-moving', attrs: { 'aria-hidden': 'true' } }, movingBanner(image, motion, look.bannerCrop));
     return h('div', { class: 'profile-banner banner-image', attrs: { 'aria-hidden': 'true' } },
       h('img', { class: 'profile-banner-img', src: image, alt: '', decoding: 'async', attrs: { draggable: 'false', fetchpriority: 'high' } }));
   }
@@ -225,13 +307,51 @@ function bannerEl(look, image) {
 function pinRow(items) {
   if (!items.length) return null;
   return h('ul', { class: 'profile-pins', attrs: { 'aria-label': 'Pinned badges' } },
-    ...items.map((b) => h('li', { class: 'profile-pin', title: b.about ? `${b.label}: ${b.about}` : b.label },
+    ...items.map((b, i) => h('li', { class: ['profile-pin', isSpecial(b) ? 'is-special' : ''], title: b.about ? `${b.label}: ${b.about}` : b.label, style: { '--i': String(i) } },
       h('span', { class: 'profile-pin-art' }, badgeArt(b, 'profile-pin-emoji', 'profile-pin-img')),
       h('span', { class: 'profile-pin-label', text: b.label }))));
 }
 
+export const TILT_MAX = 10;
+export const TILT_SELECTOR = '.badge-tile, .profile-pin, .profile-stat, .profile-feature';
+
+export function tiltFor(x, y, rect, max = TILT_MAX) {
+  const w = Math.max(1, Number(rect && rect.width) || 1);
+  const ht = Math.max(1, Number(rect && rect.height) || 1);
+  const nx = Math.min(1, Math.max(0, (x - (Number(rect && rect.left) || 0)) / w)) - 0.5;
+  const ny = Math.min(1, Math.max(0, (y - (Number(rect && rect.top) || 0)) / ht)) - 0.5;
+  return { rx: Math.round(-ny * max * 2 * 100) / 100 + 0, ry: Math.round(nx * max * 2 * 100) / 100 + 0, gx: Math.round((nx + 0.5) * 100), gy: Math.round((ny + 0.5) * 100) };
+}
+
+export function addTilt(card, win = globalThis.window) {
+  if (!card || prefersReducedMotion(win)) return;
+  let active = null;
+  const reset = (el) => {
+    if (!el) return;
+    el.classList.remove('is-tilting');
+    for (const k of ['--rx', '--ry', '--gx', '--gy']) el.style.removeProperty(k);
+  };
+  card.addEventListener('pointermove', (e) => {
+    if (e.pointerType && e.pointerType !== 'mouse') return;
+    const el = e.target && typeof e.target.closest === 'function' ? e.target.closest(TILT_SELECTOR) : null;
+    if (active && active !== el) reset(active);
+    active = el;
+    if (!el) return;
+    const t = tiltFor(e.clientX, e.clientY, el.getBoundingClientRect());
+    el.classList.add('is-tilting');
+    el.style.setProperty('--rx', `${t.rx}deg`);
+    el.style.setProperty('--ry', `${t.ry}deg`);
+    el.style.setProperty('--gx', `${t.gx}%`);
+    el.style.setProperty('--gy', `${t.gy}%`);
+  });
+  card.addEventListener('pointerleave', () => {
+    reset(active);
+    active = null;
+  });
+}
+
 export function profileCard(p, opts = {}) {
-  const { own = false, look: given = null, bannerImage = null, hints = {}, onCustomize = null, editing = false } = opts;
+  const { own = false, look: given = null, bannerImage = null, bannerMotion = null, hints = {}, onCustomize = null, editing = false, fx = null } = opts;
   const look = given || defaultLook();
   const share = `${window.location.origin}${profilePath(p.username || p.sharePath || p.name)}`;
   const hidden = new Set(look.hidden);
@@ -270,13 +390,24 @@ export function profileCard(p, opts = {}) {
   };
   const blocks = look.order.filter((id) => !hidden.has(id) && builders[id]).map((id) => builders[id]()).filter(Boolean);
 
-  const banner = bannerEl(look, bannerImage);
+  const banner = bannerEl(look, bannerImage, bannerMotion);
   const status = look.status || look.statusEmoji
     ? h('p', { class: 'profile-status' },
       look.statusEmoji ? h('span', { class: 'profile-status-emoji', attrs: { 'aria-hidden': 'true' }, text: look.statusEmoji }) : null,
       look.status ? h('span', { class: 'profile-status-text', text: look.status }) : null)
     : null;
-  const card = h('article', { class: ['profile-card', `look-${look.density}`, banner ? 'has-banner' : '', look.accent ? 'has-accent' : '', editing ? 'is-preview' : ''] },
+  const themed = look.theme && look.theme !== 'none';
+  const fxOn = !editing && fx && look.effect && look.effect !== 'none';
+  const fxBtn = fxOn ? h('button', { type: 'button', class: ['btn', 'btn-ghost', 'btn-sm', 'profile-fx-toggle'], attrs: { 'aria-pressed': effectsAllowed() ? 'true' : 'false', title: `${effectLabel(look.effect)} effect` } }, icon('sparkles', { size: 14 }), h('span', { class: 'btn-label profile-fx-text', text: effectsAllowed() ? 'Effects on' : 'Effects off' })) : null;
+  if (fxBtn) {
+    fxBtn.addEventListener('click', () => {
+      const on = !effectsAllowed();
+      fx.toggle(on);
+      fxBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      fxBtn.querySelector('.profile-fx-text').textContent = on ? 'Effects on' : 'Effects off';
+    });
+  }
+  const card = h('article', { class: ['profile-card', `look-${look.density}`, banner ? 'has-banner' : '', look.accent ? 'has-accent' : '', themed ? 'is-themed' : '', editing ? 'is-preview' : 'is-enter', look.ring !== 'none' ? 'has-ring' : ''] },
     banner,
     h('div', { class: 'profile-hero' },
       h('div', { class: ['profile-avatar-wrap', look.ring !== 'none' ? `ring-${look.ring}` : ''] }, avatar({ name: p.name, url: p.avatar, id: p.id || p.username, size: 'xl' })),
@@ -292,7 +423,8 @@ export function profileCard(p, opts = {}) {
       editing ? null : h('div', { class: 'profile-actions' },
         copyButton({ getText: () => share, label: 'Copy link', size: 'sm' }),
         own && onCustomize ? button({ label: 'Customize profile', icon: 'palette', size: 'sm', variant: 'primary', className: 'profile-customize', onClick: onCustomize }) : null,
-        own ? linkButton({ label: 'Privacy', href: '/account', icon: 'lock', size: 'sm' }) : null)),
+        own ? linkButton({ label: 'Privacy', href: '/account', icon: 'lock', size: 'sm' }) : null,
+        fxBtn)),
     h('div', { class: 'profile-sections' }, ...blocks));
   if (look.accent) {
     const c = themeColours(look.accent);
@@ -300,6 +432,8 @@ export function profileCard(p, opts = {}) {
     card.style.setProperty('--ac-light', c.light);
     card.style.setProperty('--ac-dark', c.dark);
   }
+  card.querySelectorAll('.profile-section, .profile-stats').forEach((el, i) => el.style.setProperty('--i', String(i)));
+  addTilt(card);
   return card;
 }
 
@@ -320,6 +454,8 @@ export function renderProfile(root, ctx) {
   const { api, params, signal } = ctx;
   const frame = publicFrame(root);
   const { content } = frame;
+  const fx = effectStage(frame.site, { signal });
+  signal?.addEventListener?.('abort', () => applyTheme(frame.site, null));
   frame.setUser(null);
   let user = null;
   let shown = null;
@@ -343,7 +479,9 @@ export function renderProfile(root, ctx) {
     shown = v;
     ctx.setTitle(v.profile.name);
     const own = isOwn(v);
-    const card = profileCard(v.profile, { own, look: v.look, bannerImage: v.bannerImage, hints: v.hints, onCustomize: own ? () => edit(v) : null });
+    const card = profileCard(v.profile, { own, look: v.look, bannerImage: v.bannerImage, bannerMotion: v.bannerMotion, hints: v.hints, fx, onCustomize: own ? () => edit(v) : null });
+    applyTheme(frame.site, v.look);
+    fx.set(v.look.effect);
     replace(content, own ? noticeBox(notices) : null, card);
     if (own) askNotices();
   }
@@ -364,16 +502,22 @@ export function renderProfile(root, ctx) {
       profile: v.profile,
       look: v.look,
       bannerImage: v.bannerImage,
+      bannerMotion: v.bannerMotion,
       hints: v.hints,
       api,
       signal,
-      renderCard: (look, bannerImage) => profileCard(v.profile, { own: true, look, bannerImage, hints: v.hints, editing: true }),
+      renderCard: (look, bannerImage, bannerMotion) => profileCard(v.profile, { own: true, look, bannerImage, bannerMotion, hints: v.hints, editing: true }),
+      onLook: (look) => {
+        applyTheme(frame.site, look);
+        fx.set(look.effect, { always: true });
+      },
       onDone: (saved) => {
         editor = null;
         ctx.setLeaveGuard?.(null);
         if (saved) {
           v.look = saved.look;
           v.bannerImage = saved.bannerImage;
+          v.bannerMotion = saved.bannerMotion || null;
         }
         draw(v);
       },
@@ -392,7 +536,7 @@ export function renderProfile(root, ctx) {
       p.nameHidden = data?.profile?.nameHidden === true;
       p.usernameHidden = data?.profile?.usernameHidden === true;
       if (p.usernameHidden) p.sharePath = String(params.name || '').trim().replace(/^@+/, '');
-      draw({ profile: p, look: custom.look, bannerImage: custom.bannerImage, hints: hintsFrom(data) });
+      draw({ profile: p, look: custom.look, bannerImage: custom.bannerImage, bannerMotion: custom.bannerMotion, hints: hintsFrom(data) });
     } catch (err) {
       if (isAbort(err) || signal.aborted) return;
       if (err instanceof ApiError && err.status === 404) {

@@ -144,7 +144,7 @@ export async function buildCard(db, rawId, t = Date.now()) {
   const achievementIds = ids(parseJsonSafe(pub && pub.achievements, []), CARD_ACHIEVEMENTS);
   const custom = await readCustom(db, id).catch(() => null);
   const shown = custom ? await safeTexts(db, custom.look, t).catch(() => ({ ...custom.look, pronouns: '', status: '', statusEmoji: '' })) : null;
-  const look = custom ? cardLook(shown, ownedSet(allBadges, achievementIds), custom.banner) : null;
+  const look = custom ? cardLook(shown, ownedSet(allBadges, achievementIds), custom.banner, custom.still) : null;
   const pinned = look ? look.pins.filter((p) => !p.startsWith('ach:')) : [];
   const badgeIds = [...pinned, ...specialBadgesFirst(allBadges.filter((b) => !pinned.includes(b)))];
   const badgeList = Array.isArray(catalog.badges) ? catalog.badges : [];

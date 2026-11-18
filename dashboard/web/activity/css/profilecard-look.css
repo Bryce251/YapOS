@@ -1,0 +1,260 @@
+.pcard-view {
+  --pc-ac-mix: var(--pc-ac, var(--accent));
+}
+
+.pcard.has-theme {
+  background: radial-gradient(90% 55% at 15% 0%, color-mix(in srgb, var(--pt-glow) 55%, transparent), transparent 70%), radial-gradient(70% 45% at 100% 100%, color-mix(in srgb, var(--pt-bg2) 80%, transparent), transparent 75%), linear-gradient(170deg, var(--pt-bg), var(--pt-bg2));
+  box-shadow: var(--modal-shadow), 0 0 0 1px color-mix(in srgb, var(--pt-glow) 45%, transparent), 0 30px 70px -30px color-mix(in srgb, var(--pt-glow) 75%, transparent);
+}
+
+.pcard.is-light {
+  color-scheme: light;
+  --crown: #a16207;
+  --gold: #a16207;
+  --silver: #4b5563;
+  --bronze: #9a3412;
+  --success: #15803d;
+  --success-line: #15803d;
+}
+
+.pcard.has-theme::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pcard.has-theme .pcard-scroll {
+  position: relative;
+  z-index: 1;
+}
+
+.pcard.pat-dots::before {
+  background: radial-gradient(circle, color-mix(in srgb, var(--text) 16%, transparent) 1.2px, transparent 1.8px) 0 0 / 18px 18px;
+  -webkit-mask-image: linear-gradient(180deg, #000, transparent 85%);
+  mask-image: linear-gradient(180deg, #000, transparent 85%);
+}
+
+.pcard.pat-grid::before {
+  background: linear-gradient(color-mix(in srgb, var(--text) 8%, transparent) 1px, transparent 1px) 0 0 / 28px 28px, linear-gradient(90deg, color-mix(in srgb, var(--text) 8%, transparent) 1px, transparent 1px) 0 0 / 28px 28px;
+  -webkit-mask-image: radial-gradient(120% 80% at 50% 0%, #000, transparent 85%);
+  mask-image: radial-gradient(120% 80% at 50% 0%, #000, transparent 85%);
+}
+
+.pcard.pat-waves::before {
+  background: repeating-radial-gradient(circle at 50% 130%, transparent 0 18px, color-mix(in srgb, var(--text) 8%, transparent) 18px 19px);
+  -webkit-mask-image: linear-gradient(0deg, #000, transparent 70%);
+  mask-image: linear-gradient(0deg, #000, transparent 70%);
+}
+
+.pcard.pat-stars::before {
+  background: radial-gradient(1.5px 1.5px at 20px 30px, color-mix(in srgb, var(--text) 70%, transparent), transparent), radial-gradient(1px 1px at 90px 80px, color-mix(in srgb, var(--text) 55%, transparent), transparent), radial-gradient(1.5px 1.5px at 150px 20px, color-mix(in srgb, var(--accent-text) 70%, transparent), transparent), radial-gradient(2px 2px at 60px 160px, color-mix(in srgb, var(--text) 40%, transparent), transparent);
+  background-size: 190px 190px;
+}
+
+.pcard-fx {
+  z-index: 2;
+  opacity: 0.9;
+}
+
+.pcard-banner::after {
+  content: "";
+  position: absolute;
+  inset: 45% 0 0;
+  background: linear-gradient(transparent, color-mix(in srgb, var(--pt-bg, var(--surface)) 70%, transparent));
+  pointer-events: none;
+}
+
+.pcard.is-light .pcard-banner::after {
+  inset: 62% 0 0;
+  background: linear-gradient(transparent, color-mix(in srgb, var(--pt-bg, var(--surface)) 45%, transparent));
+}
+
+.pcard-banner-img.is-crop {
+  inset: auto;
+  left: var(--crop-x, 0%);
+  top: var(--crop-y, 0%);
+  width: var(--crop-w, 100%);
+  height: var(--crop-h, 100%);
+  max-width: none;
+  object-fit: fill;
+}
+
+.pcard-view.is-reveal .pcard-banner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--fx-shine);
+  pointer-events: none;
+  animation: pcard-shine 1100ms var(--ease-out) 180ms both;
+}
+
+.pcard-avatar {
+  box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.6);
+}
+
+.pcard-avatar[class*="ring-"] {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pt-bg, var(--surface)) 80%, transparent), 0 0 24px -2px color-mix(in srgb, var(--pc-ac-mix) 65%, transparent);
+}
+
+.pcard-avatar.ring-rainbow {
+  box-shadow: 0 0 22px -2px rgba(124, 92, 255, 0.55), 0 0 30px -8px rgba(242, 97, 63, 0.6);
+}
+
+.pcard-avatar.ring-gold {
+  box-shadow: 0 0 24px -2px rgba(245, 197, 66, 0.6);
+}
+
+.pcard-name {
+  text-shadow: 0 1px 14px color-mix(in srgb, var(--pc-name, var(--pc-ac-mix)) 35%, transparent);
+}
+
+.pcard-name.has-grad {
+  background-image: var(--pc-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: none;
+}
+
+.pcard-level {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--pc-ac-mix) 26%, var(--surface)), color-mix(in srgb, var(--pc-ac-mix) 8%, var(--surface)));
+  box-shadow: 0 0 14px -6px var(--pc-ac-mix);
+}
+
+.pcard-xp-track {
+  background: color-mix(in srgb, var(--bar-zero) 85%, transparent);
+}
+
+.has-accent .pcard-xp-fill {
+  background: linear-gradient(90deg, var(--pc-ac), color-mix(in srgb, var(--pc-ac) 55%, #fff));
+  box-shadow: 0 0 10px -2px var(--pc-ac);
+}
+
+.pcard-stat {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--pc-ac-mix) 9%, var(--surface-2)), var(--surface-2));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.pcard-stat.is-featured {
+  border-color: color-mix(in srgb, var(--pc-ac-mix) 60%, transparent);
+  background: radial-gradient(90% 90% at 50% 0%, color-mix(in srgb, var(--pc-ac-mix) 30%, transparent), transparent 75%), var(--surface-2);
+  box-shadow: 0 0 18px -8px var(--pc-ac-mix), inset 0 1px 0 color-mix(in srgb, var(--pc-ac-mix) 35%, transparent);
+}
+
+.pcard-stat.is-featured .pcard-stat-value {
+  color: var(--pc-ac-text, var(--accent-text));
+}
+
+.pcard-fact.is-top-1 {
+  box-shadow: 0 0 14px -6px var(--gold);
+}
+
+.pcard-fav {
+  background: linear-gradient(180deg, var(--surface-2), color-mix(in srgb, var(--surface-2) 70%, var(--surface-3)));
+}
+
+.pcard-badge.is-special,
+.pcard-all-item.is-special {
+  background: radial-gradient(80% 80% at 50% 0%, color-mix(in srgb, var(--gold) 26%, transparent), transparent 75%), var(--surface-2);
+  box-shadow: 0 0 16px -5px color-mix(in srgb, var(--gold) 80%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--gold) 30%, transparent);
+}
+
+.pcard-badge.is-pinned {
+  box-shadow: 0 0 14px -6px var(--pc-ac-mix);
+}
+
+.pcard-badge.is-pinned::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pc-ac-mix);
+  box-shadow: 0 0 6px var(--pc-ac-mix);
+}
+
+.pcard.has-theme .pcard-foot {
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+}
+
+.pcard-view.is-reveal .pcard-head,
+.pcard-view.is-reveal .pcard-xp,
+.pcard-view.is-reveal .pcard-main > *,
+.pcard-view.is-reveal .pcard-foot {
+  animation: pcard-rise 380ms var(--ease-out) both;
+}
+
+.pcard-view.is-reveal .pcard-xp {
+  animation-delay: 40ms;
+}
+
+.pcard-view.is-reveal .pcard-main > :nth-child(1) {
+  animation-delay: 70ms;
+}
+
+.pcard-view.is-reveal .pcard-main > :nth-child(2) {
+  animation-delay: 100ms;
+}
+
+.pcard-view.is-reveal .pcard-main > :nth-child(3) {
+  animation-delay: 130ms;
+}
+
+.pcard-view.is-reveal .pcard-main > :nth-child(4) {
+  animation-delay: 160ms;
+}
+
+.pcard-view.is-reveal .pcard-foot {
+  animation-delay: 190ms;
+}
+
+@keyframes pcard-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pcard-shine {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+[data-fx="lite"] .pcard-view.is-reveal .pcard-banner::before,
+[data-fx="static"] .pcard-view.is-reveal .pcard-banner::before {
+  display: none;
+}
+
+[data-fx="static"] .pcard-view.is-reveal * {
+  animation: none;
+}
+
+[data-fx="lite"] .pcard-fx,
+[data-fx="static"] .pcard-fx {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pcard-view.is-reveal *,
+  .pcard-view.is-reveal .pcard-banner::before {
+    animation: none;
+  }
+
+  .pcard-fx {
+    display: none;
+  }
+}

@@ -16,12 +16,14 @@ export function publicFrame(root, { current = '' } = {}) {
   const nav = h('nav', { class: 'public-nav', attrs: { 'aria-label': 'Explore' } },
     ...LINKS.map((l) => h('a', { href: l.href, class: ['public-nav-link', current === l.href ? 'is-active' : ''], dataset: { link: '' }, attrs: { 'aria-current': current === l.href ? 'page' : null }, text: l.label })));
   const content = h('div', { class: 'public-content' });
-  root.replaceChildren(h('div', { class: 'public-site' },
+  const site = h('div', { class: 'public-site' },
     h('header', { class: 'site-header' }, h('div', { class: 'site-header-inner' }, brand({ href: '/' }), nav, h('div', { class: 'site-header-actions' }, account, themeToggle()))),
     h('main', { class: 'public-main', id: 'main', tabIndex: -1 }, content),
-    h('footer', { class: 'site-footer' }, h('span', { text: 'Powered by YapOS' }))));
+    h('footer', { class: 'site-footer' }, h('span', { text: 'Powered by YapOS' })));
+  root.replaceChildren(site);
   return {
     content,
+    site,
     setUser(user) {
       const here = `${window.location.pathname}${window.location.search}`;
       replace(account, user

@@ -91,6 +91,57 @@ export const FEATURED = Object.freeze([
   Object.freeze({ id: 'shards', label: 'Shards' }),
 ]);
 
+export const THEMES = Object.freeze([
+  Object.freeze({ id: 'midnight', label: 'Midnight', base: '#3b4bd8', alt: '#151a4a', accent: '#8ab4ff', mode: 'dark', pattern: 'stars' }),
+  Object.freeze({ id: 'sakura', label: 'Sakura', base: '#f472b6', alt: '#fda4af', accent: '#db2777', mode: 'light', pattern: 'glow' }),
+  Object.freeze({ id: 'ocean', label: 'Ocean', base: '#0ea5e9', alt: '#1e40af', accent: '#22d3ee', mode: 'auto', pattern: 'waves' }),
+  Object.freeze({ id: 'forest', label: 'Forest', base: '#15803d', alt: '#4d7c0f', accent: '#4ade80', mode: 'auto', pattern: 'glow' }),
+  Object.freeze({ id: 'sunset', label: 'Sunset', base: '#f97316', alt: '#be185d', accent: '#fb923c', mode: 'auto', pattern: 'glow' }),
+  Object.freeze({ id: 'candy', label: 'Candy', base: '#f472b6', alt: '#818cf8', accent: '#d946ef', mode: 'light', pattern: 'dots' }),
+  Object.freeze({ id: 'mono', label: 'Mono', base: '#71717a', alt: '#27272a', accent: '#a1a1aa', mode: 'auto', pattern: 'grid' }),
+  Object.freeze({ id: 'neon', label: 'Neon', base: '#d946ef', alt: '#06b6d4', accent: '#39ff14', mode: 'dark', pattern: 'grid' }),
+  Object.freeze({ id: 'aurora', label: 'Aurora', base: '#10b981', alt: '#6366f1', accent: '#a78bfa', mode: 'dark', pattern: 'glow' }),
+  Object.freeze({ id: 'ember', label: 'Ember', base: '#dc2626', alt: '#ea580c', accent: '#fb923c', mode: 'dark', pattern: 'glow' }),
+  Object.freeze({ id: 'frost', label: 'Frost', base: '#7dd3fc', alt: '#c7d2fe', accent: '#0284c7', mode: 'light', pattern: 'dots' }),
+  Object.freeze({ id: 'royal', label: 'Royal', base: '#7c3aed', alt: '#b45309', accent: '#fbbf24', mode: 'dark', pattern: 'stars' }),
+]);
+export const THEME_IDS = Object.freeze(['none', ...THEMES.map((t) => t.id), 'custom']);
+
+export const THEME_MODES = Object.freeze([
+  Object.freeze({ id: 'auto', label: 'Match light or dark mode' }),
+  Object.freeze({ id: 'dark', label: 'Always dark' }),
+  Object.freeze({ id: 'light', label: 'Always light' }),
+]);
+
+export const THEME_PATTERNS = Object.freeze([
+  Object.freeze({ id: 'glow', label: 'Glow' }),
+  Object.freeze({ id: 'dots', label: 'Dots' }),
+  Object.freeze({ id: 'grid', label: 'Grid' }),
+  Object.freeze({ id: 'waves', label: 'Waves' }),
+  Object.freeze({ id: 'stars', label: 'Stars' }),
+  Object.freeze({ id: 'plain', label: 'Plain' }),
+]);
+
+export const EFFECTS = Object.freeze([
+  Object.freeze({ id: 'none', label: 'None' }),
+  Object.freeze({ id: 'snow', label: 'Snow' }),
+  Object.freeze({ id: 'snowflakes', label: 'Snowflakes' }),
+  Object.freeze({ id: 'sakura', label: 'Sakura petals' }),
+  Object.freeze({ id: 'stars', label: 'Twinkling stars' }),
+  Object.freeze({ id: 'fireflies', label: 'Fireflies' }),
+  Object.freeze({ id: 'confetti', label: 'Confetti' }),
+  Object.freeze({ id: 'hearts', label: 'Hearts' }),
+  Object.freeze({ id: 'bubbles', label: 'Bubbles' }),
+  Object.freeze({ id: 'rain', label: 'Rain' }),
+  Object.freeze({ id: 'embers', label: 'Embers' }),
+  Object.freeze({ id: 'sparkles', label: 'Sparkles' }),
+]);
+export const EFFECT_IDS = Object.freeze(EFFECTS.map((e) => e.id));
+
+export const THEME_KEYS = Object.freeze(['bg', 'bg2', 'glow', 'surface', 'surface2', 'surface3', 'border', 'borderStrong', 'text', 'text2', 'text3', 'accent', 'accentHover', 'onAccent', 'accentText', 'accentSoft']);
+export const BANNER_RATIO = 3;
+export const CROP_ZOOM_MAX = 8;
+
 const ids = (list) => new Set(list.map((x) => x.id));
 const GRADIENT_IDS = ids(NAME_GRADIENTS);
 const FONT_IDS = ids(NAME_FONTS);
@@ -99,7 +150,13 @@ const RING_IDS = ids(RINGS);
 const DENSITY_IDS = ids(DENSITIES);
 const FEATURED_IDS = ids(FEATURED);
 const SECTION_SET = new Set(SECTION_IDS);
-const FIELDS = new Set(['v', 'pins', 'order', 'hidden', 'nameColour', 'nameGradient', 'nameFont', 'accent', 'banner', 'bio', 'pronouns', 'status', 'statusEmoji', 'ring', 'density', 'featured']);
+const THEME_SET = new Set(THEME_IDS);
+const MODE_IDS = ids(THEME_MODES);
+const PATTERN_IDS = ids(THEME_PATTERNS);
+const EFFECT_SET = new Set(EFFECT_IDS);
+const FIELDS = new Set(['v', 'pins', 'order', 'hidden', 'nameColour', 'nameGradient', 'nameFont', 'accent', 'banner', 'bio', 'pronouns', 'status', 'statusEmoji', 'ring', 'density', 'featured', 'theme', 'themeCustom', 'themeMode', 'themePattern', 'effect', 'bannerCrop']);
+const CUSTOM_KEYS = Object.freeze(['base', 'alt', 'accent']);
+const CROP_KEYS = Object.freeze(['zoom', 'x', 'y']);
 
 export const HEX_RE = /^#[0-9a-f]{6}$/;
 export const PIN_RE = /^(ach:)?[a-z0-9][a-z0-9_-]{0,39}$/;
@@ -124,6 +181,12 @@ export const DEFAULT_LOOK = Object.freeze({
   ring: 'none',
   density: 'cozy',
   featured: 'level',
+  theme: 'none',
+  themeCustom: null,
+  themeMode: 'auto',
+  themePattern: 'glow',
+  effect: 'none',
+  bannerCrop: null,
 });
 
 export class LookError extends Error {
@@ -369,7 +432,182 @@ export function cleanLook(raw, { owned = null, strict = false } = {}) {
   look.ring = pick(RING_IDS, src.ring, 'none', strict, 'bad_ring', "That avatar ring doesn't exist.");
   look.density = pick(DENSITY_IDS, src.density, 'cozy', strict, 'bad_density', "That card layout doesn't exist.");
   look.featured = pick(FEATURED_IDS, src.featured, 'level', strict, 'bad_featured', "That featured stat doesn't exist.");
+  look.theme = pick(THEME_SET, src.theme, 'none', strict, 'bad_theme', "That profile theme doesn't exist.");
+  look.themeCustom = readThemeCustom(src.themeCustom, strict);
+  if (look.theme === 'custom' && !look.themeCustom) {
+    fail(strict, 'bad_theme', 'Pick the colours for your custom theme.');
+    look.theme = 'none';
+  }
+  if (look.theme !== 'custom') look.themeCustom = null;
+  look.themeMode = pick(MODE_IDS, src.themeMode, 'auto', strict, 'bad_theme_mode', "That theme mode doesn't exist.");
+  look.themePattern = pick(PATTERN_IDS, src.themePattern, 'glow', strict, 'bad_theme_pattern', "That background pattern doesn't exist.");
+  if (look.theme === 'none') {
+    look.themeMode = 'auto';
+    look.themePattern = 'glow';
+  }
+  look.effect = pick(EFFECT_SET, src.effect, 'none', strict, 'bad_effect', "That profile effect doesn't exist.");
+  look.bannerCrop = readCrop(src.bannerCrop, strict);
   return look;
+}
+
+function readThemeCustom(value, strict) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some((k) => !CUSTOM_KEYS.includes(k))) {
+    fail(strict, 'bad_theme', 'Pick three colours for your custom theme, like #7c5cff.');
+    return null;
+  }
+  const out = {};
+  for (const k of CUSTOM_KEYS) {
+    if (typeof value[k] !== 'string' || !HEX_RE.test(value[k])) {
+      fail(strict, 'bad_theme', 'Theme colours must look like #7c5cff.');
+      return null;
+    }
+    out[k] = value[k];
+  }
+  return out;
+}
+
+const round4 = (v) => Math.round(v * 10000) / 10000;
+
+export function readCrop(value, strict = false) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some((k) => !CROP_KEYS.includes(k))) {
+    fail(strict, 'bad_crop', 'The banner position could not be read. Position it again.');
+    return null;
+  }
+  const { zoom, x, y } = value;
+  const ok = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+  if (!ok(zoom, 1, CROP_ZOOM_MAX) || !ok(x, 0, 1) || !ok(y, 0, 1)) {
+    fail(strict, 'bad_crop', 'The banner position is out of range. Position it again.');
+    return null;
+  }
+  return { zoom: round4(zoom), x: round4(x), y: round4(y) };
+}
+
+export function themeById(id) {
+  return THEMES.find((t) => t.id === id) || null;
+}
+
+function ensure(colour, surfaces, min) {
+  const ok = (c) => surfaces.every((s) => contrast(c, s) >= min);
+  if (ok(colour)) return colour;
+  const light = surfaces.reduce((a, s) => a + luminance(s), 0) / surfaces.length > 0.18;
+  const toward = light ? '#000000' : '#ffffff';
+  for (let i = 1; i <= 40; i++) {
+    const next = mixHex(colour, toward, i / 40);
+    if (ok(next)) return next;
+  }
+  return toward;
+}
+
+function onColour(bg) {
+  return contrast('#ffffff', bg) >= contrast('#0b0b0d', bg) ? '#ffffff' : '#0b0b0d';
+}
+
+export function themeShades({ base, alt, accent }, mode) {
+  const dark = mode === 'dark';
+  const ink = dark ? '#0d0d12' : '#ffffff';
+  const page = dark ? '#06060a' : '#ffffff';
+  const far = dark ? '#ffffff' : '#000000';
+  const bg = mixHex(base, page, dark ? 0.74 : 0.8);
+  const bg2 = mixHex(alt, page, dark ? 0.64 : 0.72);
+  const surface = mixHex(base, ink, dark ? 0.86 : 0.94);
+  const surface2 = mixHex(base, ink, dark ? 0.8 : 0.89);
+  const surface3 = mixHex(base, ink, dark ? 0.74 : 0.85);
+  const all = [surface, surface2, surface3, bg, bg2];
+  const text = ensure(mixHex(base, far, dark ? 0.94 : 0.88), all, 7);
+  const text2 = ensure(mixHex(base, far, dark ? 0.62 : 0.5), all, MIN_CONTRAST);
+  const text3 = ensure(mixHex(base, far, dark ? 0.46 : 0.36), all, MIN_CONTRAST);
+  let fill = accent;
+  const on = onColour(fill);
+  if (contrast(on, fill) < MIN_CONTRAST) fill = readableOn(fill, on);
+  return {
+    bg,
+    bg2,
+    glow: mixHex(accent, page, dark ? 0.55 : 0.6),
+    surface,
+    surface2,
+    surface3,
+    border: mixHex(base, ink, dark ? 0.66 : 0.76),
+    borderStrong: mixHex(base, ink, dark ? 0.54 : 0.62),
+    text,
+    text2,
+    text3,
+    accent: fill,
+    accentHover: mixHex(fill, on === '#ffffff' ? '#000000' : '#ffffff', 0.14),
+    onAccent: on,
+    accentText: ensure(accent, all, MIN_CONTRAST),
+    accentSoft: mixHex(accent, surface, 0.84),
+  };
+}
+
+export function themeColoursOf(look) {
+  if (!look || typeof look !== 'object') return null;
+  if (look.theme === 'custom') {
+    const c = look.themeCustom;
+    return c && typeof c === 'object' && CUSTOM_KEYS.every((k) => typeof c[k] === 'string' && HEX_RE.test(c[k])) ? { base: c.base, alt: c.alt, accent: c.accent } : null;
+  }
+  const t = themeById(look.theme);
+  return t ? { base: t.base, alt: t.alt, accent: t.accent } : null;
+}
+
+export function themePalette(look) {
+  const colours = themeColoursOf(look);
+  if (!colours) return null;
+  return {
+    id: look.theme,
+    mode: MODE_IDS.has(look.themeMode) ? look.themeMode : 'auto',
+    pattern: PATTERN_IDS.has(look.themePattern) ? look.themePattern : 'glow',
+    light: themeShades(colours, 'light'),
+    dark: themeShades(colours, 'dark'),
+  };
+}
+
+export function cleanPalette(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const shades = (s) => {
+    if (!s || typeof s !== 'object') return null;
+    const out = {};
+    for (const k of THEME_KEYS) {
+      if (typeof s[k] !== 'string' || !HEX_RE.test(s[k])) return null;
+      out[k] = s[k];
+    }
+    return out;
+  };
+  const light = shades(raw.light);
+  const dark = shades(raw.dark);
+  if (!light || !dark || !THEME_SET.has(raw.id) || raw.id === 'none') return null;
+  return { id: raw.id, mode: MODE_IDS.has(raw.mode) ? raw.mode : 'auto', pattern: PATTERN_IDS.has(raw.pattern) ? raw.pattern : 'glow', light, dark };
+}
+
+function whole(v) {
+  return Math.max(1, Math.floor(Number(v) || 1));
+}
+
+export function coverSize(width, height, ratio = BANNER_RATIO) {
+  const w = whole(width);
+  const ht = whole(height);
+  return w / ht > ratio ? { sw: ht * ratio, sh: ht } : { sw: w, sh: w / ratio };
+}
+
+export function cropRectFor(width, height, crop) {
+  const w = whole(width);
+  const ht = whole(height);
+  const c = crop && typeof crop === 'object' ? crop : {};
+  const fin = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+  const zoom = Math.min(CROP_ZOOM_MAX, Math.max(1, fin(c.zoom, 1)));
+  const sw = coverSize(w, ht).sw / zoom;
+  const sh = sw / BANNER_RATIO;
+  const cx = Math.min(w - sw / 2, Math.max(sw / 2, fin(c.x, 0.5) * w));
+  const cy = Math.min(ht - sh / 2, Math.max(sh / 2, fin(c.y, 0.5) * ht));
+  return { sx: cx - sw / 2, sy: cy - sh / 2, sw, sh };
+}
+
+export function cropBox(width, height, crop) {
+  const w = whole(width);
+  const ht = whole(height);
+  const r = cropRectFor(w, ht, crop);
+  return { width: round4((w / r.sw) * 100), height: round4((ht / r.sh) * 100), left: round4((-r.sx / r.sw) * 100) + 0, top: round4((-r.sy / r.sh) * 100) + 0 };
 }
 
 export function lookTexts(look) {
@@ -380,13 +618,24 @@ export function pinKey(item, kind) {
   return kind === 'achievement' ? `${ACH_PREFIX}${item.id}` : item.id;
 }
 
-export const BANNER_IMAGE_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg)$/;
+export const BANNER_IMAGE_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg|gif)$/;
+export const BANNER_STILL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}-still\.(png|webp|jpg)$/;
+
+export function readMotion(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const still = typeof raw.still === 'string' && BANNER_STILL_RE.test(raw.still) ? raw.still : null;
+  const w = Number(raw.width);
+  const ht = Number(raw.height);
+  if (!still || !Number.isInteger(w) || !Number.isInteger(ht) || w < 1 || ht < 1 || w > 10000 || ht > 10000) return null;
+  return { still, width: w, height: ht };
+}
 
 export function readLook(raw) {
   const look = cleanLook(raw && typeof raw === 'object' ? raw : {});
   const image = raw && typeof raw.bannerImage === 'string' && BANNER_IMAGE_RE.test(raw.bannerImage) ? raw.bannerImage : null;
   if (look.banner === 'image' && !image) look.banner = 'none';
-  return { look, bannerImage: image };
+  const motion = image ? readMotion(raw.bannerMotion) : null;
+  return { look, bannerImage: image, bannerMotion: motion };
 }
 
 export function lookBody(look) {

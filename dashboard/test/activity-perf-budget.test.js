@@ -11,6 +11,7 @@ const jsDir = path.join(activity, 'js');
 
 const TOTAL_CSS_BUDGET = 455000;
 const FX_CSS_BUDGET = 20000;
+const LAZY_SHEETS = Object.freeze({ 'profilecard-look.css': { cap: 12000, loader: 'ui/cardlook.js' } });
 
 const CHEAP_PROPS = new Set(['transform', 'opacity', 'translate', 'scale', 'rotate', 'visibility', 'animation-timing-function']);
 const LAYOUT_PROPS = /(^|[\s,])(all|width|height|min-width|min-height|max-width|max-height|top|left|right|bottom|inset|margin[\w-]*|padding[\w-]*|flex[\w-]*|gap|font-size|line-height|grid[\w-]*|border-width)(?=[\s,]|$)/;
@@ -124,7 +125,7 @@ function load() {
   const frames = new Map();
   for (const file of files) {
     const css = readFileSync(path.join(cssDir, file), 'utf8');
-    const idx = sheets.indexOf(file);
+    const idx = Object.prototype.hasOwnProperty.call(LAZY_SHEETS, file) ? sheets.length : sheets.indexOf(file);
     rules.push(...parseCss(css, file, idx < 0 ? 999 : idx));
     for (const [k, v] of keyframesOf(css)) frames.set(k, { file, props: v });
   }
@@ -173,10 +174,25 @@ const all = load();
 
 test('every activity stylesheet is linked and the total stays under the byte budget', () => {
   let total = 0;
-  for (const f of all.files) total += readFileSync(path.join(cssDir, f), 'utf8').length;
-  for (const f of all.files) assert.ok(all.sheets.includes(f), `${f} is linked`);
-  assert.ok(total <= TOTAL_CSS_BUDGET, `activity css is ${total} bytes, budget ${TOTAL_CSS_BUDGET}`);
+  const lazy = (f) => Object.prototype.hasOwnProperty.call(LAZY_SHEETS, f);
+  for (const f of all.files) if (!lazy(f)) total += readFileSync(path.join(cssDir, f), 'utf8').length;
+  for (const f of all.files) if (!lazy(f)) assert.ok(all.sheets.includes(f), `${f} is linked`);
+  assert.ok(total <= TOTAL_CSS_BUDGET, `initial activity css is ${total} bytes, budget ${TOTAL_CSS_BUDGET}`);
   assert.ok(readFileSync(path.join(cssDir, 'fx.css'), 'utf8').length <= FX_CSS_BUDGET);
+});
+
+test('lazy stylesheets stay out of the first load, under their own caps, and are loaded by their module', () => {
+  const sources = new Map(jsFiles(jsDir).map((f) => [f.rel, f.src]));
+  for (const [file, { cap, loader }] of Object.entries(LAZY_SHEETS)) {
+    assert.ok(all.files.includes(file), `${file} exists`);
+    assert.equal(all.sheets.includes(file), false, `${file} is not in the first load`);
+    const size = readFileSync(path.join(cssDir, file), 'utf8').length;
+    assert.ok(size <= cap, `${file} is ${size} bytes, cap ${cap}`);
+    assert.ok((sources.get(loader) || '').includes(`/activity/css/${file}`), `${loader} loads ${file}`);
+    const html = readFileSync(path.join(activity, 'index.html'), 'utf8');
+    assert.equal(html.includes(file), false);
+  }
+  assert.equal(all.rules.some((r) => r.file in LAZY_SHEETS && r.decls.some((d) => /infinite/.test(d.value))), false, 'lazy sheets hold no endless loops');
 });
 
 test('keyframes only animate transform and opacity', () => {

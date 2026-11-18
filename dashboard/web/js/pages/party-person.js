@@ -4,6 +4,7 @@ import { ApiError } from '../api.js';
 import { formatDate, relativeTime } from '../format.js';
 import { badgeInfo } from '../community-data.js';
 import { state } from '../state.js';
+import { EFFECTS, THEMES } from '../profile-look.js';
 
 export const PERSON_PATH = '/api/party/reports/person/';
 export const PERSON_BANS_PATH = '/api/party/bans';
@@ -406,7 +407,10 @@ function reasonField(id) {
 export const STAFF_PROFILE_PATH = '/api/party/profile/';
 export const HIDE_REASON_MAX = 200;
 export const HIDDEN_TAG = 'Hidden from others';
-const BANNER_URL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg)$/;
+const BANNER_URL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg|gif)$/;
+const STILL_URL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}-still\.(png|webp|jpg)$/;
+const THEME_LABELS = Object.freeze(Object.fromEntries([...THEMES.map((t) => [t.id, t.label]), ['custom', 'Custom']]));
+const EFFECT_LABELS = Object.freeze(Object.fromEntries(EFFECTS.map((e) => [e.id, e.label])));
 
 export const RESET_PARTS = Object.freeze([
   Object.freeze({ part: 'banner', label: 'Remove banner picture', icon: 'trash', done: 'Banner picture removed.', ask: 'Their banner picture is deleted straight away and their card goes back to no banner. They can upload a new one.' }),
@@ -415,7 +419,9 @@ export const RESET_PARTS = Object.freeze([
   Object.freeze({ part: 'pronouns', label: 'Clear pronouns', icon: 'x', done: 'Pronouns cleared.', ask: 'Their pronouns are emptied straight away.' }),
   Object.freeze({ part: 'name-style', label: 'Reset name colour and style', icon: 'palette', done: 'Name colour and style reset.', ask: 'Their name goes back to the default colour, no gradient and the default font.' }),
   Object.freeze({ part: 'pins', label: 'Clear pinned badges', icon: 'x', done: 'Pinned badges cleared.', ask: 'Their pinned badges are unpinned. They keep the badges themselves.' }),
-  Object.freeze({ part: 'all', label: 'Reset everything', icon: 'refresh', done: 'Their profile look is back to the default.', ask: 'Their banner picture, about me, status, pronouns, name style, pins, colours and layout all go back to the default.' }),
+  Object.freeze({ part: 'theme', label: 'Reset profile theme', icon: 'sun', done: 'Profile theme reset.', ask: 'Their profile page goes back to the normal YapOS colours.' }),
+  Object.freeze({ part: 'effect', label: 'Turn off profile effect', icon: 'sparkles', done: 'Profile effect turned off.', ask: 'The effect that plays over their profile page is switched off.' }),
+  Object.freeze({ part: 'all', label: 'Reset everything', icon: 'refresh', done: 'Their profile look is back to the default.', ask: 'Their banner picture, about me, status, pronouns, name style, pins, theme, effect, colours and layout all go back to the default.' }),
 ]);
 
 export const HIDE_KINDS = Object.freeze([
@@ -443,6 +449,10 @@ export function readStaffProfile(data) {
   return {
     look: {
       banner: typeof l.banner === 'string' && BANNER_URL_RE.test(l.banner) ? l.banner : null,
+      bannerStill: typeof l.bannerStill === 'string' && STILL_URL_RE.test(l.bannerStill) ? l.bannerStill : null,
+      bannerAnimated: l.bannerAnimated === true,
+      theme: Object.prototype.hasOwnProperty.call(THEME_LABELS, l.theme) ? l.theme : 'none',
+      effect: Object.prototype.hasOwnProperty.call(EFFECT_LABELS, l.effect) && l.effect !== 'none' ? l.effect : 'none',
       bio: str(l.bio),
       status: str(l.status),
       statusEmoji: str(l.statusEmoji),
@@ -467,6 +477,8 @@ export function canReset(look, part) {
   if (part === 'pronouns') return Boolean(look.pronouns);
   if (part === 'name-style') return Boolean(look.nameColour || look.nameGradient || (look.nameFont && look.nameFont !== 'default'));
   if (part === 'pins') return look.pins.length > 0;
+  if (part === 'theme') return Boolean(look.theme && look.theme !== 'none');
+  if (part === 'effect') return Boolean(look.effect && look.effect !== 'none');
   if (part === 'all') return Boolean(look.banner || look.custom);
   return false;
 }
@@ -494,12 +506,14 @@ export function hiddenTag(flags) {
 
 export function lookRows(look) {
   const rows = [];
-  rows.push(['Banner', look.banner ? null : 'No banner picture']);
+  rows.push(['Banner', look.banner ? (look.bannerAnimated ? 'Moving banner' : null) : 'No banner picture']);
   rows.push(['About me', look.bio || 'Empty']);
   rows.push(['Status', [look.statusEmoji, look.status].filter(Boolean).join(' ') || 'Empty']);
   rows.push(['Pronouns', look.pronouns || 'Empty']);
   rows.push(['Name style', nameStyleText(look)]);
   rows.push(['Pinned badges', look.pins.length ? look.pins.map(pinLabel).join(', ') : 'None']);
+  rows.push(['Theme', look.theme && look.theme !== 'none' ? THEME_LABELS[look.theme] || look.theme : 'Default']);
+  rows.push(['Effect', look.effect && look.effect !== 'none' ? EFFECT_LABELS[look.effect] || look.effect : 'None']);
   return rows;
 }
 
@@ -509,7 +523,7 @@ export function staffProfileSection({ name, staff, onReset, onHide, onUnhide }) 
   const look = staff.look;
   const rows = lookRows(look);
   const box = h('div', { class: 'owner-look' },
-    look.banner ? h('img', { class: 'owner-look-banner', src: look.banner, alt: `${name}'s banner picture`, loading: 'lazy', decoding: 'async' }) : null,
+    look.banner ? h('img', { class: 'owner-look-banner', src: look.bannerStill || look.banner, alt: `${name}'s banner picture`, loading: 'lazy', decoding: 'async' }) : null,
     h('dl', { class: 'owner-look-text' }, ...rows.filter(([, v]) => v !== null).map(([k, v]) => [h('dt', { text: k }), h('dd', { class: [k === 'About me' ? 'owner-look-bio' : null], text: v })])));
   const resets = staff.canAct
     ? RESET_PARTS.filter((r) => canReset(look, r.part)).map((r) => button({ label: r.label, icon: r.icon, size: 'sm', variant: r.part === 'all' ? 'danger' : 'secondary', onClick: (e) => onReset(r, e.currentTarget) }))
