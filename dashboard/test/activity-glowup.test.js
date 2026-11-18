@@ -8,7 +8,7 @@ import { room } from './activity-kit.test.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const activity = path.join(here, '..', 'web', 'activity');
-const SHEETS = ['activity.css', 'party.css', 'juice.css', 'fullscreen.css'];
+const SHEETS = ['activity.css', 'party.css', 'juice.css'];
 
 function all(node, out = []) {
   for (const c of node.childNodes || []) {

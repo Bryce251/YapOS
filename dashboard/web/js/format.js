@@ -19,6 +19,12 @@ export function formatCompact(value) {
   return Math.abs(n) < 10000 ? numberFmt.format(n) : compactFmt.format(n);
 }
 
+export function formatShort(value) {
+  const n = toNumber(value);
+  if (n === null) return '–';
+  return Math.abs(n) < 100000 ? numberFmt.format(n) : compactFmt.format(n);
+}
+
 export function toMillis(ts) {
   if (ts === null || ts === undefined || ts === '') return null;
   if (typeof ts === 'number' && Number.isFinite(ts)) return ts < 1e12 ? ts * 1000 : ts;

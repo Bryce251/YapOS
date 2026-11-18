@@ -1,7 +1,7 @@
 import { h, replace } from '../dom.js';
 import { icon } from '../icons.js';
 import { avatar, badgeArt, button, copyButton, drawer, emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
-import { formatNumber, relativeTime } from '../format.js';
+import { formatNumber, formatShort, relativeTime } from '../format.js';
 import { ApiError, isAbort } from '../api.js';
 import { profilePath } from '../router.js';
 import { publicFrame } from '../public-frame.js';
@@ -174,16 +174,19 @@ export function levelRing(level, xp) {
       h('span', { class: 'level-ring-cap', text: 'Level' })));
 }
 
-function stat(label, value, iconName) {
-  return h('div', { class: 'profile-stat' },
+function stat(label, n, iconName) {
+  const exact = formatNumber(n);
+  const value = formatShort(n);
+  return h('div', { class: 'profile-stat', title: value === exact ? null : `${exact} ${label}` },
     h('span', { class: 'profile-stat-icon' }, icon(iconName, { size: 16 })),
     h('span', { class: 'profile-stat-value', text: value }),
     h('span', { class: 'profile-stat-label', text: label }));
 }
 
 function featureTile(f) {
-  const text = `${formatNumber(f.value)}${f.suffix || ''}`;
-  return h('div', { class: 'profile-feature', dataset: { featured: f.id }, attrs: { role: 'img', 'aria-label': `${f.label}: ${text}` } },
+  const text = `${formatShort(f.value)}${f.suffix || ''}`;
+  const exact = `${formatNumber(f.value)}${f.suffix || ''}`;
+  return h('div', { class: 'profile-feature', title: exact === text ? null : exact, dataset: { featured: f.id }, attrs: { role: 'img', 'aria-label': `${f.label}: ${exact}` } },
     h('span', { class: 'profile-feature-num', text }),
     h('span', { class: 'profile-feature-cap', text: f.label }));
 }
@@ -378,10 +381,10 @@ export function profileCard(p, opts = {}) {
 
   const featured = featuredValue(look.featured, p);
   const stats = [];
-  if (featured.id !== 'level') stats.push(stat('Level', formatNumber(p.level), 'star'));
-  if (featured.id !== 'games') stats.push(stat('Party games', formatNumber(p.games), 'sparkles'));
-  if (featured.id !== 'wins') stats.push(stat('Party wins', formatNumber(p.wins), 'trophy'));
-  if (p.shards !== null && featured.id !== 'shards') stats.push(stat('💎 Shards', formatNumber(p.shards), 'coins'));
+  if (featured.id !== 'level') stats.push(stat('Level', p.level, 'star'));
+  if (featured.id !== 'games') stats.push(stat('Party games', p.games, 'sparkles'));
+  if (featured.id !== 'wins') stats.push(stat('Party wins', p.wins, 'trophy'));
+  if (p.shards !== null && featured.id !== 'shards') stats.push(stat('💎 Shards', p.shards, 'coins'));
 
   const badgeItems = [...pins.filter((b) => b.kind !== 'achievement'), ...orderedBadges(p, hints).filter((b) => !pinKeys.has(b.key))];
   const achItems = [...pins.filter((b) => b.kind === 'achievement'), ...p.achievements.map((a) => ({ ...a, key: `${ACH_PREFIX}${a.id}` })).filter((a) => !pinKeys.has(a.key))];

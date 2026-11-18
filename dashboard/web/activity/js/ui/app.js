@@ -14,7 +14,6 @@ import { replayLog } from '../games/replaylog.js';
 import { predictModel, predictBox, predictWaitModel, predictWait } from './predict.js';
 import { hostBarModel, hostBar, REMOVED_TEXT, LATE_LOCKED_TEXT } from './hosttools.js';
 import { tourStatus } from './tournament.js';
-import { createFullscreen } from './fullscreen.js';
 import { createParty, createBoardLink } from './party.js';
 import { createProfileCard } from './profilecard.js';
 import { createSignin } from './signin.js';
@@ -131,7 +130,7 @@ export function soundCues(prev, next) {
 
 export const QUIT_ARM_MS = 3000;
 
-export function headerModel(snap, { alone = false, adminOpen = false, sound = true, screen = 'off', quitArmed = false } = {}) {
+export function headerModel(snap, { alone = false, adminOpen = false, sound = true, quitArmed = false } = {}) {
   const phase = snap.ready ? snap.room.phase : 'connecting';
   const game = snap.game;
   let status = alone ? 'Not in a call' : 'Connecting';
@@ -152,7 +151,6 @@ export function headerModel(snap, { alone = false, adminOpen = false, sound = tr
     admin: isAdminSnap(snap),
     adminOpen: Boolean(adminOpen) && isAdminSnap(snap),
     sound: Boolean(sound),
-    screen: screen === 'full' || screen === 'focus' ? screen : 'off',
   };
 }
 
@@ -273,7 +271,6 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     win.setTimeout(() => t.remove(), 3000);
   }
 
-  const fullscreen = createFullscreen({ root, win, doc: win.document || (typeof document !== 'undefined' ? document : null), toast, onChange: () => repaintHead() });
 
   const trolls = createTrolls({ shell, layer: fxLayer, marks: root, win, engine, fx, sfx: sound });
   const lobby = createLobby({ engine, toast, boardLink });
@@ -359,7 +356,6 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
         { class: 'top-actions' },
         m.signin ? signinButton() : null,
         soundButton(m.sound),
-        fullscreen.button(),
         m.fx ? fxButton(m.fx) : null,
         m.admin
           ? button('ADMIN', {
@@ -412,7 +408,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   function repaintHead() {
     if (destroyed) return;
-    paintHead(head, withSignin(headerModel(engine.snapshot(), { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode, quitArmed: quitArmed() })));
+    paintHead(head, withSignin(headerModel(engine.snapshot(), { alone, adminOpen, sound: soundOn(), quitArmed: quitArmed() })));
   }
 
   function stamp() {
@@ -735,7 +731,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
 
   function render(snap) {
     renders += 1;
-    const hm = headerModel(snap, { alone, adminOpen, sound: soundOn(), screen: fullscreen.mode, quitArmed: quitArmed() });
+    const hm = headerModel(snap, { alone, adminOpen, sound: soundOn(), quitArmed: quitArmed() });
     paintHead(head, withSignin(hm));
     root.dataset.phase = hm.phase;
     const tint = gameTint(snap, hm.phase);
@@ -930,7 +926,6 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     toast,
     panel,
     trolls,
-    fullscreen,
     profileCard,
     signin: gate,
     get renders() {
@@ -959,7 +954,6 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       juiceMod = null;
       panel.destroy();
       trolls.destroy();
-      fullscreen.destroy();
       if (gate) gate.destroy();
       if (warnings) warnings.destroy();
       if (typeof win.removeEventListener === 'function') win.removeEventListener(PROFILES_EVENT, onProfiles);

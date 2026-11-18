@@ -5,7 +5,7 @@ import { brand } from '../shell.js';
 import { themeToggle } from '../theme.js';
 import { boardPeople, medalFor, normalizeBoard } from '../public-data.js';
 import { openBoardPerson } from './board-person.js';
-import { formatNumber, relativeTime } from '../format.js';
+import { formatNumber, formatShort, relativeTime } from '../format.js';
 import { ApiError, isAbort } from '../api.js';
 import { publicPath } from '../router.js';
 
@@ -56,7 +56,7 @@ function boardView(rows, kind, onOpen = null) {
       h('span', { class: 'board-name', text: r.name }),
       r.secondary ? h('span', { class: 'board-sub', text: r.secondary }) : null),
     h('span', { class: 'board-score' },
-      h('span', { class: 'board-value', text: formatNumber(r.primary) }),
+      h('span', { class: 'board-value', text: formatShort(r.primary), title: formatShort(r.primary) === formatNumber(r.primary) ? null : formatNumber(r.primary) }),
       h('span', { class: 'board-unit', text: r.primaryLabel === 'level' ? 'Level' : `${CURRENCY_EMOJI} ${CURRENCY_NAME}` }))))));
   };
   filter.addEventListener('input', draw);

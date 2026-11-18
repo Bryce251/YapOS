@@ -1,7 +1,7 @@
 import { h, nextId, replace } from '../dom.js';
 import { avatar, badge, button, confirmDialog, drawer, linkButton, setBusy, toast } from '../ui.js';
 import { ApiError } from '../api.js';
-import { formatNumber } from '../format.js';
+import { formatNumber, formatShort } from '../format.js';
 import { ownerPath, profilePath } from '../router.js';
 import { OWNER_ACTIONS_PATH, OWNER_USERS_PATH, describeAction, parseWhole, readAction, readUser } from './owner.js';
 
@@ -95,7 +95,7 @@ export function openBoardPerson({ person, api, signal = null, owner = Promise.re
   }
 
   function drawStats() {
-    const shardText = (n) => (n === null || n === undefined ? 'Not on the board' : `${formatNumber(n)} ${BOARD_EMOJI}`);
+    const shardText = (n) => (n === null || n === undefined ? 'Not on the board' : `${formatShort(n)} ${BOARD_EMOJI}`);
     replace(stats,
       stat('Level', pending.level !== undefined ? formatNumber(pending.level) : (p.level === null || p.level === undefined ? 'Not on the board' : formatNumber(p.level)), { pending: pending.level !== undefined, key: 'level' }),
       stat('XP', pending.xp !== undefined ? formatNumber(pending.xp) : (p.xp === null || p.xp === undefined ? 'Not on the board' : formatNumber(p.xp)), { pending: pending.xp !== undefined, key: 'xp' }),

@@ -160,3 +160,14 @@ test('a clan whose tag and name are the same shows the name once on the profile'
   const diff = profileCard(normalizeProfile({ profile: { name: 'Juno', username: 'juno', clan: { name: 'Night Owls', tag: 'OWL' } } }));
   assert.equal(walk(diff).find((n) => n.className === 'clan-tag').textContent, '[OWL]Night Owls');
 });
+
+test('big numbers on profiles use letters and keep the exact number on hover', () => {
+  const card = profileCard(normalizeProfile({ profile: { name: 'Jolli', username: 'jolli', level: 11, shards: 999998912345, games: 70, wins: 33 } }));
+  const shardTile = walk(card).find((n) => n.className === 'profile-stat' && /Shards/.test(n.textContent));
+  assert.ok(shardTile);
+  const value = walk(shardTile).find((n) => n.className === 'profile-stat-value');
+  assert.equal(value.textContent, '1T');
+  assert.match(shardTile.title, /999,998,912,345/);
+  const level = walk(card).find((n) => n.className === 'profile-stat' && /Level/.test(n.textContent));
+  assert.ok(!level || !level.title);
+});
