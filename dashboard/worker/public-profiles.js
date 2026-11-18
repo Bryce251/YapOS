@@ -142,7 +142,7 @@ function favourites(byGame) {
     .slice(0, FAVOURITES);
 }
 
-function applySettings(row, settings) {
+export function applySettings(row, settings) {
   const fresh = settings && (!Number(settings.claimed) || Number(settings.updated) >= Number(row.updated || 0));
   if (!fresh) return { hidden: Boolean(Number(row.hidden)), showShards: row.shards !== null && row.shards !== undefined };
   return { hidden: Boolean(Number(settings.hidden)), showShards: Boolean(Number(settings.show_shards)) };

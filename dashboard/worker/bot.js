@@ -7,6 +7,7 @@ import { MAX_SNAPSHOTS, isSnapshot, cleanSnapshot, snapshotStatements, settingsP
 import { postSeason } from './seasons.js';
 import { postStats } from './server-stats.js';
 import { ownerPoll, postOwnerResults, postOwnerCatalog } from './owner.js';
+import { clanJoinPoll, postClanDirectory, postClanJoinResults } from './clans.js';
 import { botCustomBadges } from './custom-badges.js';
 import { withoutFounder } from './party-badges.js';
 import { isPartyOwner } from './party.js';
@@ -70,11 +71,12 @@ async function poll(env, t, url) {
   const jobs = await claimJobs(env.DB, t, 25);
   const wanted = await claimWanted(env.DB, t);
   const owner = await ownerPoll(env.DB, t);
-  const hot = wanted.length > 0 || owner.length > 0 || (await isHot(env.DB, t)) || (await hasWanted(env.DB, t));
+  const clanJoins = await clanJoinPoll(env.DB, t);
+  const hot = wanted.length > 0 || owner.length > 0 || clanJoins.length > 0 || (await isHot(env.DB, t)) || (await hasWanted(env.DB, t));
   const party = await partyPoll(env.DB);
   const profileSettings = await settingsPoll(env.DB, t);
   const customBadges = await botCustomBadges(env.DB, url.searchParams.has('badges') ? url.searchParams.get('badges') : null);
-  return json(customBadges ? { jobs, hot, wanted, party, profileSettings, owner, customBadges } : { jobs, hot, wanted, party, profileSettings, owner });
+  return json(customBadges ? { jobs, hot, wanted, party, profileSettings, owner, clanJoins, customBadges } : { jobs, hot, wanted, party, profileSettings, owner, clanJoins });
 }
 
 async function results(request, env, t) {
@@ -303,6 +305,14 @@ export async function handleBot(request, env, deps, url) {
   if (segs.length === 3 && segs[1] === 'owner' && (segs[2] === 'results' || segs[2] === 'catalog')) {
     if (method !== 'POST') return fail(405, 'method_not_allowed', 'That action is not allowed here.');
     return segs[2] === 'results' ? postOwnerResults(request, env, t) : postOwnerCatalog(request, env, t);
+  }
+  if (segs.length === 2 && segs[1] === 'clans') {
+    if (method === 'POST') return postClanDirectory(request, env, t);
+    return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+  }
+  if (segs.length === 3 && segs[1] === 'clans' && segs[2] === 'joins') {
+    if (method === 'POST') return postClanJoinResults(request, env, t);
+    return fail(405, 'method_not_allowed', 'That action is not allowed here.');
   }
   if (segs.length === 2 && segs[1] === 'seasons') {
     if (method === 'POST') return postSeason(request, env, t);

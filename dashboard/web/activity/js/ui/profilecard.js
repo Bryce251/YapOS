@@ -3,6 +3,7 @@ import { profileAvatar } from '../profiles.js';
 import { gameById } from '../games/index.js';
 import { copyText } from './copy.js';
 import { cleanPalette, readMotion, readCrop, cropBox, themeOf, paintTheme, gradientOf, motionOk, ensureSheet, createCardFx, pick, EFFECT_IDS, FEATURED_IDS } from './cardlook.js';
+import { createClanJoin, joinState, clanParts, clanTagOk } from '../clanjoin.js';
 
 export const PROFILE_CARD_ENDPOINT = '/api/activity/profile/';
 export const CARD_CACHE_MS = 3 * 60 * 1000;
@@ -16,7 +17,7 @@ export const COPIED_MS = 2400;
 export const PROFILE_SITE = 'https://yapos.dev';
 export const CARD_MAX_W = 360;
 export const BANNER_RATIO = 3;
-export const LAYOUT = Object.freeze({ banner: CARD_MAX_W / BANNER_RATIO, top: 26, name: 28, sub: 34, xp: 20, pad: 8, stat: 44, facts: 24, sectionHead: 24, fav: 44, badge: 44, gap: 8, foot: 56, sheet: 8 });
+export const LAYOUT = Object.freeze({ banner: CARD_MAX_W / BANNER_RATIO, top: 26, name: 28, pill: 20, pillGap: 3, sub: 66, xp: 20, pad: 8, stat: 44, sectionHead: 24, fav: 44, badge: 44, gap: 8, foot: 56, sheet: 8 });
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const HEX_RE = /^#[0-9a-f]{6}$/;
@@ -125,7 +126,7 @@ export function cleanCard(raw) {
   const party = raw.party && typeof raw.party === 'object' ? raw.party : {};
   const prog = raw.progress && typeof raw.progress === 'object' ? { into: Math.max(0, Number(raw.progress.into) || 0), need: Math.max(1, Number(raw.progress.need) || 1) } : null;
   const rank = raw.rank && typeof raw.rank === 'object' && Number(raw.rank.rank) > 0 ? { rank: Math.floor(Number(raw.rank.rank)), points: Math.max(0, Number(raw.rank.points) || 0) } : null;
-  const clan = raw.clan && typeof raw.clan === 'object' && text(raw.clan.name, 32) ? { name: text(raw.clan.name, 32), tag: text(raw.clan.tag, 6) } : null;
+  const clan = raw.clan && typeof raw.clan === 'object' && text(raw.clan.name, 32) ? { name: text(raw.clan.name, 32), tag: text(raw.clan.tag, 6), colour: hex(typeof raw.clan.colour === 'string' ? raw.clan.colour.toLowerCase() : null) } : null;
   return {
     hidden: false,
     name: text(raw.name),
@@ -189,7 +190,8 @@ export function cardModel(card) {
     })
     .filter(Boolean)
     .slice(0, FAVS_SHOWN);
-  return { stats, facts, favourites, row: all.slice(0, BADGES_SHOWN), all, total, unlisted: Math.max(0, total - all.length) };
+  const pinned = all.filter((b) => b.pinned).slice(0, PIN_MAX);
+  return { stats, facts, favourites, pinned, row: all.slice(0, BADGES_SHOWN), all, total, unlisted: Math.max(0, total - all.length) };
 }
 
 export function bannerHeight(width = CARD_MAX_W) {
@@ -200,7 +202,7 @@ export function bannerHeight(width = CARD_MAX_W) {
 export function cardHeight(status = 'ready', width = CARD_MAX_W) {
   const L = LAYOUT;
   const head = bannerHeight(width) + L.top + L.name + L.sub;
-  if (status === 'ready' || status === 'loading') return head + L.xp + L.pad + L.stat + L.facts + 2 * L.sectionHead + L.fav + L.badge + 3 * L.gap + L.foot + L.sheet;
+  if (status === 'ready' || status === 'loading') return head + L.xp + L.pad + L.stat + 2 * L.sectionHead + L.fav + L.badge + 2 * L.gap + L.foot + L.sheet;
   return head + L.pad + 96 + L.sheet;
 }
 
@@ -217,7 +219,11 @@ function resolve(value) {
   }
 }
 
-export function createProfileCard({ win, h = defaultH, engine = null, me = null, alone = false, now = () => Date.now() } = {}) {
+export function pillRows(L = LAYOUT) {
+  return Math.floor((L.sub + L.pillGap) / (L.pill + L.pillGap));
+}
+
+export function createProfileCard({ win, h = defaultH, engine = null, me = null, alone = false, signin = null, now = () => Date.now(), clanPollMs = undefined } = {}) {
   const cache = new Map();
   let state = null;
   let opener = null;
@@ -230,6 +236,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
   let copyTimer = null;
   let revealed = null;
   let fx = null;
+  let clanCtl = null;
 
   function effects() {
     if (!fx) fx = createCardFx({ win, doc: docOf() });
@@ -400,21 +407,59 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     return h('div', { class: 'pcard-tags' }, out);
   }
 
-  function head(who, card, name, handle, loading, theme) {
+  function pill(cls, kids, attrs = null) {
+    return h('span', { class: ['pcard-pill', cls].flat(), attrs }, kids);
+  }
+
+  function clanPill(clan) {
+    const parts = clanParts(clan);
+    if (!parts) return null;
+    const kids = [parts.code ? h('span', { class: 'pcard-clan-code', text: parts.code }) : null, parts.name ? h('span', { class: 'pcard-pill-text', text: parts.name }) : parts.code ? null : h('span', { class: 'pcard-pill-text', text: clan.name })];
+    const vars = clan.colour ? { '--pc-clan': clan.colour } : null;
+    if (!clanTagOk(clan.tag)) return h('span', { class: ['pcard-pill', 'pcard-clan'], vars, attrs: { title: parts.full } }, kids);
+    return h('button', { class: ['pcard-pill', 'pcard-clan', 'is-live'], type: 'button', vars, dataset: { key: 'clan-pill' }, attrs: { title: `${parts.full}: see the clan and join`, 'aria-label': `Clan ${parts.full}. Open clan` }, on: { click: () => showClan(clan) } }, kids);
+  }
+
+  function pinPill(b) {
+    const art = b.image ? h('img', { src: b.image, alt: '', attrs: { width: '14', height: '14', loading: 'lazy', decoding: 'async', draggable: 'false' } }) : h('span', { text: b.emoji || '🏅' });
+    return pill(['pcard-pin', b.rare ? 'is-special' : null], [h('span', { class: 'pcard-pin-art', attrs: { 'aria-hidden': 'true' } }, art), h('span', { class: 'pcard-pill-text', text: b.label })], { title: b.note ? `${b.label}: ${b.note}` : b.label });
+  }
+
+  function factPill(f) {
+    return pill(['pcard-fact', f.top ? `is-top-${f.top}` : null], [h('span', { text: f.icon, attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'pcard-pill-text', text: f.text })], { title: f.title });
+  }
+
+  function pills(card, handle, look, model) {
+    const out = [];
+    if (handle) out.push(h('span', { class: 'pcard-handle', text: `@${handle}`, attrs: { title: `@${handle}` } }));
+    if (card && card.clan) out.push(clanPill(card.clan));
+    if (look && look.pronouns) out.push(pill('pcard-pronouns', look.pronouns, { title: look.pronouns }));
+    if (look && look.status) {
+      const said = `${look.statusEmoji ? `${look.statusEmoji} ` : ''}${look.status}`;
+      out.push(pill('pcard-status', h('span', { class: 'pcard-pill-text', text: said }), { title: said }));
+    }
+    if (model) {
+      const rank = model.facts.find((f) => f.key === 'rank');
+      if (rank) out.push(factPill(rank));
+      for (const b of model.pinned) out.push(pinPill(b));
+      for (const f of model.facts) if (f.key !== 'rank') out.push(factPill(f));
+    }
+    return out.filter(Boolean);
+  }
+
+  function head(who, card, name, handle, loading, theme, model = null) {
     const look = card && card.look;
     const light = Boolean(theme && theme.light);
     const colour = look ? (light ? look.colourLight || look.colour : look.colour) : null;
     const grad = look && look.gradient ? gradientOf(look.gradient, light) : null;
     const nameEl = h('h2', { class: ['pcard-name', look && look.font ? `font-${look.font}` : null, colour ? 'has-colour' : null, grad ? 'has-grad' : null], text: name, attrs: { id: 'pcard-name', title: name }, vars: colour || grad ? { '--pc-name': colour, '--pc-grad': grad } : null });
-    const clan = card && card.clan ? (card.clan.tag ? `[${card.clan.tag}] ${card.clan.name}` : card.clan.name) : null;
-    const line = [handle ? `@${handle}` : null, look && look.pronouns, clan].filter(Boolean).join(' · ');
-    const status = look && look.status ? `${look.statusEmoji ? `${look.statusEmoji} ` : ''}${look.status}` : null;
+    const flow = pills(card, handle, look, model);
     return h(
       'div',
       { class: 'pcard-head' },
       h('div', { class: 'pcard-top' }, heroAvatar(who, card), tags(who, card, loading)),
       nameEl,
-      h('div', { class: 'pcard-sub' }, line ? h('p', { class: 'pcard-handle', text: line, attrs: { title: line } }) : loading ? bone('is-line') : null, status ? h('p', { class: 'pcard-status', text: status, attrs: { title: status } }) : null),
+      h('div', { class: ['pcard-sub', flow.length ? 'has-pills' : null] }, flow.length ? flow : loading ? [bone('is-line'), bone('is-pill')] : null),
     );
   }
 
@@ -462,13 +507,11 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     const fav = model.favourites.length
       ? h('ul', { class: 'pcard-favs' }, model.favourites.map((f) => h('li', { class: 'pcard-fav', attrs: { title: `${f.name}: ${num(f.played)} played` } }, h('span', { text: f.emoji, attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'pcard-fav-name', text: f.name }))))
       : h('p', { class: 'pcard-none', text: 'No favourites yet.' });
-    const facts = model.facts.length ? model.facts : [{ key: 'rank', icon: '🏆', text: 'Not ranked yet', title: 'Not on the Party leaderboard yet', top: 0 }];
     const all = model.all.length ? h('button', { class: 'pcard-more', type: 'button', dataset: { key: 'all-badges' }, attrs: { 'aria-label': `View all ${model.total} badges` }, on: { click: showAll } }, h('span', { text: `View all (${num(model.total)})` })) : null;
     return h(
       'div',
       { class: 'pcard-main' },
       h('ul', { class: 'pcard-stats', attrs: { 'aria-label': 'Party stats' } }, model.stats.map((s) => h('li', { class: ['pcard-stat', s.featured ? 'is-featured' : null], attrs: s.featured ? { title: `Featured: ${s.label}` } : null },h('span', { class: 'pcard-stat-value', text: s.value }), h('span', { class: 'pcard-stat-label', text: s.label })))),
-      h('div', { class: 'pcard-facts' }, facts.map((f) => h('span', { class: ['pcard-fact', f.top ? `is-top-${f.top}` : null, f.key === 'rank' && !card.rank ? 'is-muted' : null], attrs: { title: f.title } }, h('span', { text: f.icon, attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'pcard-fact-text', text: f.text })))),
       section('Favourite games', 'pcard-favs-title', null, fav),
       section('Badges', 'pcard-badges-title', all, badgeRow(model)),
     );
@@ -480,7 +523,6 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
       'div',
       { class: 'pcard-main', attrs: { 'aria-hidden': 'true' } },
       h('ul', { class: 'pcard-stats' }, tiles(3, 'is-stat')),
-      h('div', { class: 'pcard-facts' }, bone('is-fact'), bone('is-fact')),
       section('Favourite games', 'pcard-favs-title', null, h('ul', { class: 'pcard-favs' }, tiles(3, 'is-fav'))),
       section('Badges', 'pcard-badges-title', null, h('ul', { class: 'pcard-row' }, tiles(5, 'is-badge'))),
     );
@@ -547,6 +589,107 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     );
   }
 
+  function clanRequest(method, path) {
+    const fetcher = win && typeof win.fetch === 'function' ? win.fetch.bind(win) : null;
+    if (!fetcher) return Promise.resolve({ status: 0, data: null });
+    let bearer = null;
+    try {
+      const gate = resolve(signin);
+      const s = gate && typeof gate.state === 'function' ? gate.state() : null;
+      bearer = s && s.status === 'in' && typeof s.token === 'string' ? s.token : null;
+    } catch {
+      bearer = null;
+    }
+    const headers = { Accept: 'application/json' };
+    if (bearer) headers.Authorization = `Bearer ${bearer}`;
+    return fetcher(path, { method, headers, credentials: 'omit', cache: 'no-store' }).then(async (res) => {
+      let data = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      return { status: Number(res.status) || 0, data };
+    });
+  }
+
+  function stopClan() {
+    if (clanCtl) clanCtl.stop();
+    clanCtl = null;
+  }
+
+  function signInForClan() {
+    const gate = resolve(signin);
+    close();
+    if (gate && typeof gate.open === 'function') gate.open('clan');
+  }
+
+  function clanButton(cls, key, label, onClick, attrs = null) {
+    return h('button', { class: ['btn', cls, 'btn-sm', 'pcard-clan-join'], type: 'button', dataset: { key }, attrs, on: { click: onClick } }, h('span', { class: 'btn-label', text: label }));
+  }
+
+  function clanView(st) {
+    const s = joinState(st);
+    const c = st.clan;
+    const parts = c ? clanParts(c) : null;
+    const gate = resolve(signin);
+    const back = h('button', { class: 'pcard-back', type: 'button', dataset: { key: 'clan-back' }, attrs: { 'aria-label': 'Back to profile' }, on: { click: showMain } }, h('span', { text: '‹', attrs: { 'aria-hidden': 'true' } }), h('span', { text: 'Back' }));
+    const title = parts ? parts.full : `[${st.tag}]`;
+    let action = null;
+    if (s.action === 'join') action = clanButton('btn-primary', 'clan-join', s.label, () => clanCtl && clanCtl.join(), { 'aria-disabled': s.busy ? 'true' : null });
+    else if (s.action === 'signin' && gate) action = clanButton('btn-primary', 'clan-signin', s.label, signInForClan, { 'aria-haspopup': 'dialog' });
+    else if (s.action === 'retry') action = clanButton('btn-secondary', 'clan-retry', s.label, () => clanCtl && clanCtl.load());
+    const said = s.action === 'signin' && !gate ? 'Sign in to YapOS Party to join this clan.' : s.text;
+    const box = h('div', { class: 'pcard-clan-act' }, h('p', { class: ['pcard-clan-state', `is-${s.tone}`], text: said, attrs: { role: 'status', 'aria-live': 'polite' } }), action);
+    const kids = [h('div', { class: 'pcard-all-head' }, back, h('h2', { class: 'pcard-all-title', text: title, attrs: { id: 'pcard-clan-title', title } }))];
+    if (st.phase === 'ready' && c) {
+      const lead = c.leader ? c.leader.name : 'Hidden';
+      kids.push(h(
+        'div',
+        { class: 'pcard-clan-body' },
+        h('div', { class: 'pcard-clan-hero' }, h('span', { class: 'pcard-crest', text: c.tag, attrs: { 'aria-hidden': 'true' } }), h('div', { class: 'pcard-clan-who' }, h('p', { class: 'pcard-clan-name', text: c.name }), c.banner ? h('p', { class: 'pcard-clan-motto', text: c.banner }) : null)),
+        h('dl', { class: 'pcard-clan-facts' },
+          h('div', null, h('dt', { text: 'Members' }), h('dd', { text: num(c.members) })),
+          h('div', null, h('dt', { text: 'Leader' }), h('dd', { text: lead, attrs: { title: lead } })),
+          h('div', { class: c.join === 'invite' ? 'is-invite' : 'is-open' }, h('dt', { text: 'Joining' }), h('dd', { text: c.join === 'invite' ? 'Invite only' : 'Open' }))),
+        c.top.length ? h('ol', { class: 'pcard-clan-top', attrs: { 'aria-label': 'Top members' } }, c.top.map((m) => h('li', null, h('span', { class: 'pcard-pill-text', text: m.name }), m.leader ? h('span', { text: '👑', attrs: { role: 'img', 'aria-label': 'Leader', title: 'Leader' } }) : null, h('span', { class: 'pcard-clan-lv', text: `Lv ${num(m.level)}` })))) : null,
+        box,
+      ));
+    } else kids.push(h('div', { class: 'pcard-clan-body' }, box));
+    return h('div', { class: ['pcard-view', 'is-clan', st.phase === 'ready' ? null : `is-${st.phase}`], vars: c && c.colour ? { '--pc-clan': c.colour } : null }, kids);
+  }
+
+  function paintClan(st) {
+    if (!state || state.view !== 'clan') return;
+    const doc = docOf();
+    const active = doc ? doc.activeElement : null;
+    const key = active && body.contains(active) && active.dataset ? active.dataset.key : null;
+    panel.setAttribute('aria-labelledby', 'pcard-clan-title');
+    body.replaceChildren(clanView(st));
+    if (!key) return;
+    const again = body.querySelector(`[data-key="${key}"]`) || body.querySelector('.pcard-clan-join') || body.querySelector('.pcard-back');
+    if (again) again.focus();
+  }
+
+  function showClan(clan) {
+    if (!state || state.status !== 'ready' || !clan || !clanTagOk(clan.tag)) return;
+    stopClan();
+    state = { ...state, view: 'clan' };
+    clanCtl = createClanJoin({
+      tag: clan.tag,
+      request: clanRequest,
+      onChange: paintClan,
+      setTimer: win && typeof win.setTimeout === 'function' ? (fn, ms) => win.setTimeout(fn, ms) : null,
+      clearTimer: win && typeof win.clearTimeout === 'function' ? (t) => win.clearTimeout(t) : null,
+      pollMs: clanPollMs,
+    });
+    paint();
+    scroller.scrollTop = 0;
+    const back = body.querySelector('.pcard-back');
+    if (back) back.focus();
+    clanCtl.load();
+  }
+
   function showAll() {
     if (!state || state.status !== 'ready') return;
     state = { ...state, view: 'all' };
@@ -558,10 +701,12 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
 
   function showMain() {
     if (!state) return;
+    const from = state.view;
+    stopClan();
     state = { ...state, view: 'main' };
     paint();
     scroller.scrollTop = 0;
-    const more = body.querySelector('.pcard-more');
+    const more = body.querySelector(from === 'clan' ? '.pcard-clan.is-live' : '.pcard-more');
     if (more) more.focus();
     else closeBtn.focus();
   }
@@ -597,26 +742,33 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
       body.replaceChildren(allView(cardModel(card)));
       return;
     }
+    if (card && state.view === 'clan' && clanCtl) {
+      panel.setAttribute('aria-labelledby', 'pcard-clan-title');
+      body.replaceChildren(clanView(clanCtl.state));
+      return;
+    }
     panel.setAttribute('aria-labelledby', 'pcard-name');
     const name = (card && card.name) || who.name;
     const handle = (card && card.username) || who.username;
     const ac = look && look.accent && !theme ? look.accent : null;
     const reveal = Boolean(card) && revealed !== state.id;
     if (card) revealed = state.id;
+    const model = card ? cardModel(card) : null;
     const view = h(
       'div',
       { class: ['pcard-view', ac || theme ? 'has-accent' : null, reveal ? 'is-reveal' : null], vars: ac ? { '--pc-ac': ac.base, '--pc-ac-text': ac.text } : null },
       bannerEl(look),
-      head(who, card || (hiddenCard && hiddenCard.avatar ? hiddenCard : null), name, handle, loading, theme),
+      head(who, card || (hiddenCard && hiddenCard.avatar ? hiddenCard : null), name, handle, loading, theme, model),
     );
     if (loading) view.append(xpBar(null, true), skeletonMain(), foot(null, who, true));
-    else if (card) view.append(xpBar(card, false), mainView(who, card, cardModel(card)), foot(card, who, false));
+    else if (card) view.append(xpBar(card, false), mainView(who, card, model), foot(card, who, false));
     else view.append(message(state.status));
     body.replaceChildren(view);
   }
 
   function retry() {
     if (!state) return;
+    stopClan();
     state = { ...state, status: 'loading', view: 'main' };
     paint();
     fetchFor(state.id);
@@ -632,7 +784,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     if (e.key === 'Escape' || e.key === 'Esc') {
       e.preventDefault();
       if (typeof e.stopPropagation === 'function') e.stopPropagation();
-      if (state.view === 'all') showMain();
+      if (state.view === 'all' || state.view === 'clan') showMain();
       else close();
       return;
     }
@@ -666,6 +818,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     }
     ensureSheet(docOf());
     const hit = cached(id);
+    stopClan();
     state = { id, hint, view: 'main', card: hit || null, status: hit === undefined ? 'loading' : hit.none ? 'none' : hit.hidden ? 'hidden' : 'ready' };
     paint();
     el.hidden = false;
@@ -689,6 +842,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     if (!state) return false;
     const id = state.id;
     state = null;
+    stopClan();
     token += 1;
     revealed = null;
     stopTimers();

@@ -228,7 +228,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const fxTimers = new Set();
   root.replaceChildren(backdrop, shell, fxLayer, party.el, panel.el, boardHost, toastRoot);
   const offFxMode = fxMode.onChange(() => repaintHead());
-  const profileCard = createProfileCard({ win, engine, alone });
+  const profileCard = createProfileCard({ win, engine, alone, signin: () => gate });
   const offProfileCard = profileCard.bind(root);
   const gate = signin ? createSignin({ win, engine, toast, dev: Boolean(signin.dev), alone, host: root, onChange: () => repaintHead() }) : null;
   if (gate) root.append(gate.el);

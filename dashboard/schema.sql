@@ -628,3 +628,41 @@ CREATE TABLE IF NOT EXISTS profile_banner_stills (
   bytes INTEGER NOT NULL,
   updated INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS clan_directory (
+  id TEXT PRIMARY KEY,
+  tag TEXT NOT NULL,
+  tag_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  colour TEXT,
+  banner TEXT,
+  members INTEGER NOT NULL DEFAULT 0,
+  join_mode TEXT NOT NULL DEFAULT 'open',
+  leader_id TEXT,
+  created INTEGER,
+  updated INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS clan_directory_tag ON clan_directory (tag_key, updated);
+
+CREATE TABLE IF NOT EXISTS clan_members (
+  user_id TEXT PRIMARY KEY,
+  clan_id TEXT NOT NULL,
+  updated INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS clan_members_clan ON clan_members (clan_id);
+
+CREATE TABLE IF NOT EXISTS clan_joins (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  clan_id TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  via TEXT,
+  created INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  sent_at INTEGER,
+  code TEXT,
+  result TEXT,
+  updated INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS clan_joins_user ON clan_joins (user_id, status, created);
+CREATE INDEX IF NOT EXISTS clan_joins_status ON clan_joins (status, created);

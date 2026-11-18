@@ -4,6 +4,7 @@ import { customId } from '../engine/router.js';
 import { tokenize, didYouMean, clip, normalizeName, userId as idOf, ID_RE } from '../engine/parse.js';
 import { looksLikeFeatureOff } from '../engine/errors.js';
 import { GLOBAL_KEY, CURRENCY, globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, canGiveCurrency } from '../engine/global.js';
+import { profileSync } from '../engine/profiles-sync.js';
 
 const ID = 'clans';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -11,8 +12,12 @@ const cid = (action, ...args) => customId(ID, action, ...args);
 const NS = 'clans';
 const DAY = 86_400_000;
 const COLOR = 0x5b8def;
-export const CAPS = Object.freeze([10, 15, 20, 25]);
-export const CAP_PRICES = Object.freeze([1000, 2500, 5000]);
+export const OLD_CAP_PRICES = Object.freeze([1000, 2500, 5000]);
+export const JOIN_MODES = Object.freeze(['open', 'invite']);
+const LOG_MAX = 10;
+const RECENT_JOINS = 3;
+const REFUND_NOTE_MS = 30 * DAY;
+const WEB_USER_RE = /^[\w-]{1,64}$/;
 export const STYLE_PRICE = 1500;
 export const BOOST_PRICE = 5000;
 export const BOOST = 0.05;
@@ -60,11 +65,16 @@ function fix(d) {
   const doc = d && typeof d === 'object' ? d : blank();
   for (const k of ['clans', 'members', 'invites', 'outbox', 'inbox', 'declined']) if (!doc[k] || typeof doc[k] !== 'object' || Array.isArray(doc[k])) doc[k] = {};
   doc.seq = Number.isInteger(doc.seq) ? doc.seq : 0;
+  doc.rev = Number.isInteger(doc.rev) ? doc.rev : 0;
   return doc;
 }
 
 const read = (engine) => fix(globalDoc(engine, NS, null));
-const write = (engine, fn) => mutateGlobal(engine, NS, (d) => fn(fix(d)), blank());
+const write = (engine, fn) => mutateGlobal(engine, NS, (d) => {
+  const doc = fix(d);
+  doc.rev += 1;
+  return fn(doc);
+}, blank());
 const cfgOf = (engine) => globalConfig(engine, ID);
 
 export function createCost(engine) {
@@ -72,9 +82,55 @@ export function createCost(engine) {
   return Number.isInteger(n) && n >= 0 && n <= CREATE_COST_MAX ? n : CREATE_COST;
 }
 
-export function capOf(clan) {
-  const lvl = Math.max(0, Math.min(CAPS.length - 1, Math.floor(Number(clan?.cap) || 0)));
-  return CAPS[lvl];
+export function joinModeOf(clan) {
+  return clan?.join === 'invite' ? 'invite' : 'open';
+}
+
+export function refundOf(clan) {
+  const lvl = Math.max(0, Math.min(OLD_CAP_PRICES.length, Math.floor(Number(clan?.cap) || 0)));
+  return OLD_CAP_PRICES.slice(0, lvl).reduce((a, b) => a + b, 0);
+}
+
+export function migrateUnlimited(engine) {
+  if (read(engine).unlimited === true) return { refunded: 0, clans: 0 };
+  const t = nowOf(engine);
+  return write(engine, (d) => {
+    if (d.unlimited === true) return { refunded: 0, clans: 0 };
+    let refunded = 0;
+    let clans = 0;
+    for (const c of Object.values(d.clans)) {
+      if (!c || typeof c !== 'object') continue;
+      const back = refundOf(c);
+      delete c.cap;
+      if (back <= 0) continue;
+      c.bank = Math.min(Number.MAX_SAFE_INTEGER, (Number(c.bank) || 0) + back);
+      c.spent = Math.max(0, (Number(c.spent) || 0) - back);
+      c.capRefund = back;
+      c.capRefundAt = t;
+      refunded += back;
+      clans += 1;
+    }
+    d.unlimited = true;
+    return { refunded, clans };
+  });
+}
+
+function touched(engine, ids) {
+  try {
+    const sync = profileSync(engine);
+    for (const id of ids) sync.markDirty(id);
+  } catch (e) {
+    engine.log.debug('[clans] marking profiles failed', e?.message);
+  }
+}
+
+function addMember(d, c, uid, t, via) {
+  c.members.push(uid);
+  c.joined = c.joined && typeof c.joined === 'object' ? c.joined : {};
+  c.joined[uid] = t;
+  d.members[uid] = c.id;
+  delete d.invites[uid];
+  c.log = [...(Array.isArray(c.log) ? c.log : []), { at: t, user: uid, via }].slice(-LOG_MAX);
 }
 
 const STEMS = ['admin', 'moderator', 'staff', 'yapin', 'yapper', 'yapos', 'official', 'developer'];
@@ -123,6 +179,17 @@ export function parseColour(raw) {
   if (!m) return null;
   const hex = m[1].length === 3 ? [...m[1]].map((c) => c + c).join('') : m[1];
   return parseInt(hex, 16);
+}
+
+const LOOKALIKE = Object.freeze({ '0': 'O', '1': 'I', L: 'I', '5': 'S', '8': 'B' });
+
+export function tagSkeleton(tag) {
+  return [...String(tag ?? '').toUpperCase()].map((ch) => LOOKALIKE[ch] || ch).join('');
+}
+
+export function tagTaken(doc, tag, exceptId = null) {
+  const key = tagSkeleton(tag);
+  return Object.values(doc.clans).some((c) => c && c.id !== exceptId && typeof c.tag === 'string' && tagSkeleton(c.tag) === key);
 }
 
 const hexOf = (n) => `#${Number(n).toString(16).padStart(6, '0')}`;
@@ -202,15 +269,31 @@ export function clanBoard(engine, by = 'level') {
 
 function publicClan(engine, uid) {
   const c = clanOfUser(read(engine), uid);
-  return c ? { id: c.id, name: c.name, tag: c.tag, colour: Number.isInteger(c.colour) ? hexOf(c.colour) : null, banner: c.banner || null, leader: c.leader === uid, members: c.members.length } : null;
+  return c ? { id: c.id, name: c.name, tag: c.tag, colour: Number.isInteger(c.colour) ? hexOf(c.colour) : null, banner: c.banner || null, leader: c.leader === uid, members: c.members.length, join: joinModeOf(c) } : null;
+}
+
+export function clanDirectory(engine) {
+  return Object.values(read(engine).clans)
+    .filter((c) => c && typeof c.id === 'string' && Array.isArray(c.members) && c.members.length)
+    .map((c) => ({
+      id: c.id,
+      tag: c.tag,
+      name: c.name,
+      colour: Number.isInteger(c.colour) ? hexOf(c.colour) : null,
+      banner: c.banner || null,
+      join: joinModeOf(c),
+      leader: c.leader,
+      created: Number(c.created) || 0,
+      count: c.members.length,
+      members: [...c.members],
+    }));
 }
 
 const label = (c) => `**${c.name}** [${c.tag}]`;
 
 function upgradesText(c) {
-  const lvl = Math.floor(Number(c.cap) || 0);
   return [
-    `👥 Members ${capOf(c)}${lvl < CAP_PRICES.length ? ` · next ${CAPS[lvl + 1]} for ${shards(CAP_PRICES[lvl])}` : ' · max'}`,
+    '👥 Members · no limit',
     `🎨 Colour and banner ${c.style ? '· unlocked' : `· ${shards(STYLE_PRICE)}`}`,
     `⚡ +${Math.round(BOOST * 100)}% XP for every member ${c.boost ? '· unlocked' : `· ${shards(BOOST_PRICE)}`}`,
   ].join('\n');
@@ -226,19 +309,28 @@ function clanCard(engine, c, viewer) {
     .slice(0, 25)
     .map((uid) => `${uid === c.leader ? '👑' : '•'} <@${uid}> · level ${fmt(levels.get(uid)?.level || 0)}`);
   const fields = [
-    { name: 'Members', value: `${c.members.length}/${capOf(c)}`, inline: true },
+    { name: 'Members', value: fmt(c.members.length), inline: true },
+    { name: 'Joining', value: joinModeOf(c) === 'invite' ? '🔒 Invite only' : `🔓 Open · \`/clan join ${c.tag}\``, inline: true },
     { name: 'Total level', value: fmt(total), inline: true },
     { name: 'Clan rank', value: pos >= 0 ? `#${pos + 1} of ${fmt(board.length)}` : 'not ranked', inline: true },
     { name: 'Clan bank', value: `${shards(c.bank)}\n-# Only for upgrades. It can't be paid out.`, inline: true },
     { name: 'Upgrades', value: upgradesText(c), inline: false },
     { name: 'Roster', value: clip(memberLines.join('\n'), 1024) || 'Nobody', inline: false },
   ];
-  const body = [c.banner ? `*${c.banner}*` : null, `Founded ${new Date(c.created || 0).toISOString().slice(0, 10)} · one clan across every server`].filter(Boolean).join('\n');
+  const recent = (Array.isArray(c.log) ? c.log : []).filter((x) => x && c.members.includes(x.user)).slice(-RECENT_JOINS).reverse();
+  if (recent.length) fields.push({ name: 'Newest members', value: recent.map((x) => `• <@${x.user}>${x.via === 'web' ? ' · joined on the website' : x.via === 'party' ? ' · joined in YapOS Party' : ''}`).join('\n'), inline: false });
+  const t = nowOf(engine);
+  const refund = Number(c.capRefund) > 0 && t - (Number(c.capRefundAt) || 0) < REFUND_NOTE_MS
+    ? `-# Clans have no member limit now, so the ${shards(c.capRefund)} spent on member upgrades went back to the clan bank.`
+    : null;
+  const body = [c.banner ? `*${c.banner}*` : null, `Founded ${new Date(c.created || 0).toISOString().slice(0, 10)} · one clan across every server`, refund].filter(Boolean).join('\n');
   const mine = viewer && c.members.includes(viewer);
   const lead = viewer && c.leader === viewer;
   const btns = [];
   if (mine) btns.push(button('Deposit', cid('depform', viewer), 'success', CURRENCY.emoji));
   if (lead) btns.push(button('Invite', cid('invform', viewer), 'primary', '✉️'), button('Upgrades', cid('upview', viewer), 'secondary', '⬆️'));
+  if (lead) btns.push(joinModeOf(c) === 'invite' ? button('Let anyone join', cid('privacy', viewer, 'open'), 'secondary', '🔓') : button('Make invite only', cid('privacy', viewer, 'invite'), 'secondary', '🔒'));
+  if (viewer && !mine && joinModeOf(c) === 'open') btns.push(button(`Join [${c.tag}]`, cid('join', viewer, c.id), 'success', '✅'));
   btns.push(button('Clan top', cid('top', viewer || '-', 'level'), 'secondary', '🏆'));
   if (mine) btns.push(button('Leave', cid('leaveask', viewer), 'danger', '🚪'));
   return {
@@ -253,10 +345,10 @@ function introCard(engine, uid) {
   const invites = liveInvites(doc, uid, t);
   const cost = createCost(engine);
   const lines = [
-    `Team up with up to ${CAPS[0]} friends from any server. Clans have a tag, a shared bank and their own leaderboard.`,
+    'Team up with as many friends as you like from any server. Clans have a tag, a shared bank and their own leaderboard.',
     '',
     `• **Create one:** \`/clan create Night Owls OWL\` (costs ${shards(cost)})`,
-    '• **Join one:** ask a clan leader for an invite, then `/clan accept`',
+    '• **Join one:** `/clan join OWL` for open clans, or tap a clan tag on a profile. Invite-only clans need an invite from the leader, then `/clan accept`.',
     '• **Clan bank:** members put Shards in, the leader spends them on upgrades. Nobody can take them out.',
   ];
   if (invites.length) {
@@ -294,10 +386,8 @@ function topView(engine, uid, by = 'level') {
 function upgradesView(engine, uid) {
   const c = clanOfUser(read(engine), uid);
   if (!c) return null;
-  const lvl = Math.floor(Number(c.cap) || 0);
   const lead = c.leader === uid;
   const btns = [];
-  if (lead && lvl < CAP_PRICES.length) btns.push(button(`${CAPS[lvl + 1]} members · ${fmt(CAP_PRICES[lvl])}`, cid('buy', uid, 'members'), c.bank >= CAP_PRICES[lvl] ? 'success' : 'secondary', '👥'));
   if (lead && !c.style) btns.push(button(`Colour and banner · ${fmt(STYLE_PRICE)}`, cid('buy', uid, 'style'), c.bank >= STYLE_PRICE ? 'success' : 'secondary', '🎨'));
   if (lead && !c.boost) btns.push(button(`+${Math.round(BOOST * 100)}% XP · ${fmt(BOOST_PRICE)}`, cid('buy', uid, 'boost'), c.bank >= BOOST_PRICE ? 'success' : 'secondary', '⚡'));
   const body = `Clan bank: **${shards(c.bank)}**\n\n${upgradesText(c)}\n\n-# ${lead ? 'Upgrades are paid from the clan bank and last forever.' : 'Only the clan leader can buy upgrades. Help by depositing with `/clan deposit 100`.'}${c.style && lead ? '\n-# Set the look with `/clan colour #ff8800` and `/clan banner Night owls never sleep`.' : ''}`;
@@ -343,7 +433,7 @@ async function createClan(ctx, nameRaw, tagRaw) {
     const doc = read(engine);
     if (clanOfUser(doc, uid)) return { problem: ['You already have a clan', 'Leave your clan first with `/clan leave`. You can only be in one clan at a time.'] };
     if (Object.keys(doc.clans).length >= MAX_CLANS) return { problem: ['No room for new clans', 'There are as many clans as YapOS can hold right now. Join one instead!'] };
-    if (findClan(doc, tag.value) || Object.values(doc.clans).some((c) => c.tag === tag.value)) return { problem: ['That tag is taken', `Another clan already uses **[${tag.value}]**. Pick another tag.`] };
+    if (findClan(doc, tag.value) || tagTaken(doc, tag.value)) return { problem: ['That tag is taken', `Another clan already uses **[${tag.value}]** or a tag that looks just like it. Pick another tag.`] };
     if (Object.values(doc.clans).some((c) => normalizeName(c.name) === normalizeName(name.value))) return { problem: ['That name is taken', `There is already a clan called **${name.value}**. Pick another name.`] };
     const cost = createCost(engine);
     const eco = economy(engine);
@@ -356,10 +446,10 @@ async function createClan(ctx, nameRaw, tagRaw) {
     }
     const t = nowOf(engine);
     const made = write(engine, (d) => {
-      if (clanOfUser(d, uid) || Object.values(d.clans).some((c) => c.tag === tag.value || normalizeName(c.name) === normalizeName(name.value))) return null;
+      if (clanOfUser(d, uid) || tagTaken(d, tag.value) || Object.values(d.clans).some((c) => normalizeName(c.name) === normalizeName(name.value))) return null;
       d.seq += 1;
       const id = `c${d.seq}`;
-      d.clans[id] = { id, name: name.value, tag: tag.value, leader: uid, members: [uid], joined: { [uid]: t }, bank: 0, spent: 0, cap: 0, style: false, boost: false, colour: null, banner: null, created: t };
+      d.clans[id] = { id, name: name.value, tag: tag.value, leader: uid, members: [uid], joined: { [uid]: t }, bank: 0, spent: 0, style: false, boost: false, colour: null, banner: null, created: t };
       d.members[uid] = id;
       delete d.invites[uid];
       return d.clans[id];
@@ -413,7 +503,7 @@ function inviteMessage(c, from, to, note = '') {
   const lines = [
     `<@${from}> invited you to join ${label(c)}.`,
     c.banner ? `*${c.banner}*` : null,
-    `👥 ${c.members.length}/${capOf(c)} members · one clan across every server`,
+    `👥 ${fmt(c.members.length)} member${c.members.length === 1 ? '' : 's'} · one clan across every server`,
     '',
     `Press **Join** below, or type \`/clan accept ${c.tag}\` within 7 days.`,
     note ? `-# ${note}` : null,
@@ -473,7 +563,6 @@ async function inviteUser(ctx, query) {
   if (c.leader !== uid) return ctx.warn('Only the leader can invite', `Ask <@${c.leader}> to send the invite.`);
   const q = String(query ?? '').trim();
   if (!q) return ctx.warn('Invite who?', "Try `/clan invite @sam`, or use their Yapin' user id. The invite goes to their DMs.");
-  if (c.members.length >= capOf(c)) return ctx.warn('Your clan is full', `${label(c)} has ${c.members.length}/${capOf(c)} members. Buy more room with \`/clan upgrade members\`.`);
   const who = await resolveInvitee(ctx, q);
   if (who.problem === 'needId') return ctx.warn('Use their user id here', "I can't search names in DMs. Use their Yapin' user id or a mention, like `/clan invite 1a2b3c4d-...`. Names work when you run it in a server.");
   if (who.problem === 'nobody') return ctx.warn("I couldn't find them", `Nobody here matches **${clip(cleanText(q), 40) || 'that'}**. Try a mention like \`/clan invite @sam\`, or their Yapin' user id.`);
@@ -554,21 +643,120 @@ async function acceptInvite(ctx, which, how = 'reply') {
     const c = d.clans[pick.clan];
     if (!c) return { problem: 'gone' };
     if (!liveInvites(d, uid, t).some((x) => x.clan === c.id)) return { problem: 'expired', c };
-    if (c.members.length >= capOf(c)) return { problem: 'full', c };
-    c.members.push(uid);
-    c.joined = c.joined && typeof c.joined === 'object' ? c.joined : {};
-    c.joined[uid] = t;
-    d.members[uid] = c.id;
-    delete d.invites[uid];
+    addMember(d, c, uid, t, 'invite');
     return { c };
   });
   if (res.problem === 'inClan') return say('You already have a clan', 'Leave it first with `/clan leave`.');
   if (res.problem === 'gone') return say('That clan is gone', 'It was disbanded after the invite was sent.');
   if (res.problem === 'expired') return say('That invite ran out', `Ask <@${res.c.leader}> for a new one.`);
-  if (res.problem === 'full') return say('That clan is full', `${label(res.c)} has no room right now. Ask the leader to upgrade.`);
   await emit(engine, 'clan:joined', { user: uid, clan: res.c.id, server_id: null });
-  const embed = card({ title: `🛡️ Welcome to ${res.c.name} [${res.c.tag}]!`, body: `<@${uid}> joined the clan. ${res.c.members.length}/${capOf(res.c)} members now.`, color: Number.isInteger(res.c.colour) ? res.c.colour : COLOR, footer: false });
+  touched(engine, [uid]);
+  const embed = welcomeEmbed(res.c, uid);
   return how === 'update' ? ctx.update({ content: '', embeds: [embed], components: [] }) : ctx.reply({ embeds: [embed] });
+}
+
+function welcomeEmbed(c, uid) {
+  const n = c.members.length;
+  return card({ title: `🛡️ Welcome to ${c.name} [${c.tag}]!`, body: `<@${uid}> joined the clan. ${fmt(n)} member${n === 1 ? '' : 's'} now.`, color: Number.isInteger(c.colour) ? c.colour : COLOR, footer: false });
+}
+
+function joinDirect(engine, uid, clanId, via) {
+  const t = nowOf(engine);
+  return write(engine, (d) => {
+    const c = d.clans[clanId];
+    if (!c || !Array.isArray(c.members) || !c.members.length) return { problem: 'gone' };
+    const mine = clanOfUser(d, uid);
+    if (mine) return mine.id === c.id ? { problem: 'already', c: { ...c } } : { problem: 'inClan', c: { ...c }, other: { name: mine.name, tag: mine.tag } };
+    const invited = liveInvites(d, uid, t).some((x) => x.clan === c.id);
+    if (joinModeOf(c) === 'invite' && !invited) return { problem: 'invite', c: { ...c } };
+    addMember(d, c, uid, t, via);
+    return { c: { ...c, members: [...c.members] } };
+  });
+}
+
+function pickClan(doc, q) {
+  const text = String(q ?? '').trim();
+  if (/^c\d+$/.test(text) && doc.clans[text]) return doc.clans[text];
+  return findClan(doc, text);
+}
+
+async function joinOpen(ctx, query, how = 'reply') {
+  const { engine } = ctx;
+  const uid = ctx.userId;
+  const q = String(query ?? '').trim();
+  if (!q) return acceptInvite(ctx, '', how);
+  const doc = read(engine);
+  const c = pickClan(doc, q);
+  const say = (kind, title, body) => (how === 'update' ? ctx.update({ content: '', embeds: [dialog[kind](title, body)], components: [] }) : ctx[kind](title, body));
+  if (!c) {
+    const guess = didYouMean(q.replace(/^\[|\]$/g, ''), Object.values(doc.clans).map((x) => x.tag));
+    return say('warn', 'No clan by that name', `I couldn't find **${clip(cleanText(q), 30) || 'that'}**.${guess.length ? ` Did you mean ${guess.map((g) => `**[${g}]**`).join(', ')}?` : ''}`);
+  }
+  if (uid === engine.bot.me?.id) return say('warn', "Bots can't join clans", 'Clans are for people.');
+  const res = joinDirect(engine, uid, c.id, 'command');
+  if (res.problem === 'gone') return say('warn', 'That clan is gone', 'It was closed a moment ago.');
+  if (res.problem === 'already') return say('info', 'Already in', `You're already in ${label(res.c)}.`);
+  if (res.problem === 'inClan') return say('warn', 'You already have a clan', `You're in **${res.other.name}** [${res.other.tag}]. Leave it first with \`/clan leave\`. You can only be in one clan at a time.`);
+  if (res.problem === 'invite') return say('warn', 'This clan is invite only', `${label(res.c)} only takes people the leader invites. Ask <@${res.c.leader}> for an invite.`);
+  await emit(engine, 'clan:joined', { user: uid, clan: res.c.id, server_id: null });
+  touched(engine, [uid]);
+  const embed = welcomeEmbed(res.c, uid);
+  return how === 'update' ? ctx.update({ content: '', embeds: [embed], components: [] }) : ctx.reply({ embeds: [embed] });
+}
+
+export async function webJoin(engine, user, clanId, tag, via = 'web') {
+  const uid = typeof user === 'string' ? user.trim() : '';
+  if (!WEB_USER_RE.test(uid)) return { ok: false, code: 'failed', message: "That doesn't look like a real account." };
+  if (uid.toLowerCase() === String(engine.bot.me?.id ?? '').toLowerCase()) return { ok: false, code: 'bot', message: "Bots can't join clans." };
+  const doc = read(engine);
+  const lowered = uid.toLowerCase();
+  const who = doc.members[uid] ? uid : doc.members[lowered] ? lowered : Object.keys(doc.members).find((k) => k.toLowerCase() === lowered) || uid;
+  const byId = typeof clanId === 'string' && clanId ? doc.clans[clanId] || null : null;
+  const c = typeof clanId === 'string' && clanId ? byId : findClan(doc, tag);
+  if (!c) return { ok: false, code: 'gone', message: 'That clan is gone. It may have closed.' };
+  const res = joinDirect(engine, who, c.id, via === 'party' ? 'party' : 'web');
+  if (res.problem === 'gone') return { ok: false, code: 'gone', message: 'That clan is gone. It may have closed.' };
+  if (res.problem === 'already') return { ok: true, code: 'already', message: `You're already in [${res.c.tag}] ${res.c.name}.`, clan: { tag: res.c.tag, name: res.c.name } };
+  if (res.problem === 'inClan') return { ok: false, code: 'in_clan', message: `You're in [${res.other.tag}] ${res.other.name}. Leave it first with /clan leave.` };
+  if (res.problem === 'invite') return { ok: false, code: 'invite_only', message: `[${res.c.tag}] ${res.c.name} is invite only now. Ask the leader for an invite.` };
+  await emit(engine, 'clan:joined', { user: who, clan: res.c.id, server_id: null });
+  touched(engine, [who]);
+  return { ok: true, code: 'joined', message: `You joined [${res.c.tag}] ${res.c.name}!`, clan: { tag: res.c.tag, name: res.c.name } };
+}
+
+const PRIVACY_WORDS = Object.freeze({
+  open: 'open', public: 'open', unlock: 'open', unlocked: 'open', anyone: 'open', everyone: 'open', on: 'open',
+  invite: 'invite', 'invite-only': 'invite', inviteonly: 'invite', invites: 'invite', private: 'invite', lock: 'invite', locked: 'invite', closed: 'invite', off: 'invite',
+});
+
+async function setJoinMode(ctx, word, how = 'reply') {
+  const { engine } = ctx;
+  const uid = ctx.userId;
+  const c = clanOfUser(read(engine), uid);
+  const say = (kind, title, body) => (how === 'update' ? ctx.update({ embeds: [dialog[kind](title, body)], components: [] }) : ctx[kind](title, body));
+  if (!c) return say('warn', 'No clan yet', 'You are not in a clan.');
+  if (c.leader !== uid) return say('warn', 'Only the leader can do that', `<@${c.leader}> leads ${label(c)} and decides who can join.`);
+  const w = String(word ?? '').trim().toLowerCase();
+  if (!w) {
+    const now = joinModeOf(c);
+    return ctx.panel({
+      embeds: [dialog.info('Who can join?', now === 'invite' ? `${label(c)} is **invite only**. People need an invite from you to join.` : `${label(c)} is **open**. Anyone can join with \`/clan join ${c.tag}\` or by tapping your tag on a profile.`)],
+      components: [row(now === 'invite' ? button('Let anyone join', cid('privacy', uid, 'open'), 'primary', '🔓') : button('Make invite only', cid('privacy', uid, 'invite'), 'primary', '🔒'))],
+    });
+  }
+  const mode = PRIVACY_WORDS[w];
+  if (!mode) return say('warn', "I didn't get that", 'Use `/clan privacy open` to let anyone join, or `/clan privacy invite` for invite only.');
+  const ok = write(engine, (d) => {
+    const cur = d.clans[c.id];
+    if (!cur || cur.leader !== uid) return false;
+    if (mode === 'open') delete cur.join;
+    else cur.join = 'invite';
+    return true;
+  });
+  if (!ok) return say('warn', 'That changed', 'The clan changed a moment ago. Try again.');
+  return mode === 'open'
+    ? say('ok', 'Anyone can join now', `${label(c)} is open. People can join with \`/clan join ${c.tag}\` or by tapping your tag on a profile. Invites still work too.`)
+    : say('ok', 'Invite only now', `${label(c)} only takes people you invite with \`/clan invite @name\`. Invites you already sent still work.`);
 }
 
 async function declineInvite(ctx, which, how = 'reply') {
@@ -598,6 +786,7 @@ async function leaveClan(ctx, how = 'reply') {
     const info = { name: c.name, tag: c.tag, bank: c.bank };
     return { ...info, ...dropMember(d, c, uid) };
   });
+  if (res) touched(engine, [uid]);
   const out = (embed) => (how === 'update' ? ctx.update({ embeds: [embed], components: [] }) : ctx.ephemeral({ embeds: [embed] }));
   if (!res) return out(dialog.info('Not in a clan', 'You are not in a clan right now.'));
   if (res.disbanded) return out(dialog.ok('Clan closed', `You were the last one in **${res.name}** [${res.tag}], so it is closed now.${res.bank ? ` Its bank of ${shards(res.bank)} closed with it.` : ''}`));
@@ -630,6 +819,7 @@ async function leaderAction(ctx, query, kind) {
     return true;
   });
   if (!ok) return ctx.warn('That changed', 'The clan changed a moment ago. Try again.');
+  if (kind === 'kick') touched(engine, [target]);
   if (kind === 'kick') return ctx.ok('Removed', `<@${target}> is no longer in ${label(c)}.`);
   return ctx.ok('New leader', `<@${target}> leads ${label(c)} now. You stay in as a member.`);
 }
@@ -645,7 +835,7 @@ async function setLook(ctx, field, raw) {
   if (field === 'tag') {
     const tag = checkTag(raw, { owner: typeof engine.isBotOwner === 'function' && engine.isBotOwner(uid) });
     if (tag.error) return ctx.warn("That tag didn't work", tag.error);
-    if (Object.values(read(engine).clans).some((x) => x.id !== c.id && x.tag === tag.value)) return ctx.warn('That tag is taken', `Another clan already uses **[${tag.value}]**.`);
+    if (tagTaken(read(engine), tag.value, c.id)) return ctx.warn('That tag is taken', `Another clan already uses **[${tag.value}]** or a tag that looks just like it.`);
     patch = { tag: tag.value };
     done = `Your clan tag is **[${tag.value}]** now.`;
   } else {
@@ -670,7 +860,7 @@ async function setLook(ctx, field, raw) {
   const ok = write(engine, (d) => {
     const cur = d.clans[c.id];
     if (!cur || cur.leader !== uid) return false;
-    if (patch.tag && Object.values(d.clans).some((x) => x.id !== c.id && x.tag === patch.tag)) return false;
+    if (patch.tag && tagTaken(d, patch.tag, c.id)) return false;
     Object.assign(cur, patch);
     return true;
   });
@@ -729,16 +919,13 @@ async function buyUpgrade(ctx, word, how = 'reply') {
   const c = clanOfUser(read(engine), uid);
   if (!c) return ctx.warn('No clan yet', 'You are not in a clan.');
   if (!kind) return ctx.panel(upgradesView(engine, uid));
+  if (kind === 'members') return ctx.info('No member limit', `Clans can have as many members as they like now, so there's nothing to buy. ${label(c)} has room for everyone.`);
   if (c.leader !== uid) return ctx.warn('Only the leader can buy upgrades', `<@${c.leader}> leads ${label(c)}. Help by depositing with \`/clan deposit 100\`.`);
   const res = write(engine, (d) => {
     const cur = clanOfUser(d, uid);
     if (!cur || cur.leader !== uid) return { problem: 'changed' };
     let cost;
-    if (kind === 'members') {
-      const lvl = Math.floor(Number(cur.cap) || 0);
-      if (lvl >= CAP_PRICES.length) return { problem: 'max' };
-      cost = CAP_PRICES[lvl];
-    } else if (kind === 'style') {
+    if (kind === 'style') {
       if (cur.style) return { problem: 'owned' };
       cost = STYLE_PRICE;
     } else {
@@ -748,15 +935,13 @@ async function buyUpgrade(ctx, word, how = 'reply') {
     if ((Number(cur.bank) || 0) < cost) return { problem: 'short', cost, bank: Number(cur.bank) || 0 };
     cur.bank -= cost;
     cur.spent = (Number(cur.spent) || 0) + cost;
-    if (kind === 'members') cur.cap = Math.floor(Number(cur.cap) || 0) + 1;
-    else cur[kind] = true;
+    cur[kind] = true;
     return { cost, clan: { ...cur } };
   });
   if (res.problem === 'changed') return ctx.warn('That changed', 'The clan changed a moment ago. Try again.');
-  if (res.problem === 'max') return ctx.info('Already the biggest', `${label(c)} already holds ${CAPS[CAPS.length - 1]} members.`);
   if (res.problem === 'owned') return ctx.info('Already unlocked', 'Your clan already has that upgrade.');
   if (res.problem === 'short') return ctx.warn('Not enough in the bank', `That upgrade costs ${shards(res.cost)} and the clan bank has ${shards(res.bank)}. Members can add more with \`/clan deposit 100\`.`);
-  const what = kind === 'members' ? `room for **${capOf(res.clan)} members**` : kind === 'style' ? 'a **custom colour and banner** (`/clan colour`, `/clan banner`)' : `**+${Math.round(BOOST * 100)}% XP** for every member`;
+  const what = kind === 'style' ? 'a **custom colour and banner** (`/clan colour`, `/clan banner`)' : `**+${Math.round(BOOST * 100)}% XP** for every member`;
   const embed = card({ title: '⬆️ Upgrade bought!', body: `${label(res.clan)} now has ${what}.\nPaid ${shards(res.cost)} from the clan bank · ${shards(res.clan.bank)} left.`, color: Number.isInteger(res.clan.colour) ? res.clan.colour : COLOR, footer: false });
   return how === 'update' ? ctx.update({ embeds: [embed], components: [] }) : ctx.reply({ embeds: [embed] });
 }
@@ -777,12 +962,14 @@ async function disband(ctx, clanId) {
   const res = write(ctx.engine, (d) => {
     const c = d.clans[clanId];
     if (!c || c.leader !== uid) return null;
-    for (const m of [...c.members]) if (d.members[m] === c.id) delete d.members[m];
+    const gone = [...c.members];
+    for (const m of gone) if (d.members[m] === c.id) delete d.members[m];
     c.members = [];
     dropMember(d, c, uid);
     delete d.clans[clanId];
-    return { name: c.name, tag: c.tag };
+    return { name: c.name, tag: c.tag, gone };
   });
+  if (res) touched(ctx.engine, res.gone);
   if (!res) return ctx.update({ embeds: [dialog.info('Nothing changed', 'That clan is already gone or has a new leader.')], components: [] });
   return ctx.update({ embeds: [dialog.ok('Clan closed', `**${res.name}** [${res.tag}] is closed.`)], components: [] });
 }
@@ -812,7 +999,7 @@ function splitCreate(tokens) {
   return { name: list.slice(0, -1).join(' '), tag: last };
 }
 
-const SUBS = ['create', 'invite', 'accept', 'decline', 'leave', 'kick', 'leader', 'tag', 'colour', 'banner', 'deposit', 'upgrade', 'top', 'info', 'disband', 'cost'];
+const SUBS = ['create', 'invite', 'join', 'accept', 'decline', 'leave', 'kick', 'leader', 'tag', 'colour', 'banner', 'privacy', 'open', 'invite-only', 'deposit', 'upgrade', 'top', 'info', 'disband', 'cost'];
 
 async function runClan(ctx) {
   const tokens = ctx.argv.length ? ctx.argv : tokenize(ctx.args);
@@ -826,7 +1013,11 @@ async function runClan(ctx) {
     return createClan(ctx, name, tag);
   }
   if (sub === 'invite' || sub === 'add') return inviteUser(ctx, restText);
-  if (sub === 'accept' || sub === 'join') return acceptInvite(ctx, rest[0] || '');
+  if (sub === 'join') return joinOpen(ctx, restText);
+  if (sub === 'accept') return acceptInvite(ctx, rest[0] || '');
+  if (['privacy', 'joining', 'mode', 'access'].includes(sub)) return setJoinMode(ctx, rest.join('-'));
+  if (['open', 'unlock', 'public'].includes(sub)) return setJoinMode(ctx, 'open');
+  if (['invite-only', 'inviteonly', 'lock', 'private'].includes(sub)) return setJoinMode(ctx, 'invite');
   if (sub === 'decline' || sub === 'reject') return declineInvite(ctx, rest[0] || '');
   if (sub === 'leave' || sub === 'quit') return leaveClan(ctx);
   if (sub === 'kick' || sub === 'remove') return leaderAction(ctx, restText, 'kick');
@@ -861,7 +1052,7 @@ export const { setup, teardown, check } = defineApp({
   defaults: { createCost: CREATE_COST },
 
   commands: {
-    clan: { description: 'Your clan: /clan, create Night Owls OWL, invite @sam or a user id (sent by DM), accept, deposit, top', serverOnly: false, run: runClan },
+    clan: { description: 'Your clan: /clan, create Night Owls OWL, join OWL, invite @sam or a user id (by DM), privacy', serverOnly: false, run: runClan },
   },
 
   components: {
@@ -879,6 +1070,8 @@ export const { setup, teardown, check } = defineApp({
     }),
     buy: mine((ctx) => buyUpgrade(ctx, ctx.argv[1], 'update')),
     accept: mine((ctx) => acceptInvite(ctx, ctx.argv[1], 'update')),
+    join: mine((ctx) => joinOpen(ctx, ctx.argv[1], 'update')),
+    privacy: mine((ctx) => setJoinMode(ctx, ctx.argv[1], 'update')),
     decline: mine((ctx) => declineInvite(ctx, ctx.argv[1], 'update')),
     leaveask: mine((ctx) => {
       const c = clanOfUser(read(ctx.engine), ctx.userId);
@@ -918,6 +1111,9 @@ export const { setup, teardown, check } = defineApp({
     getClanOf: (uid) => publicClan(engine, uid),
     xpBoost: (uid) => (clanOfUser(read(engine), uid)?.boost ? BOOST : 0),
     board: (by) => clanBoard(engine, by),
+    directory: () => clanDirectory(engine),
+    rev: () => read(engine).rev,
+    webJoin: (user, clanId, tag, via) => webJoin(engine, user, clanId, tag, via),
     get: (id) => {
       const c = read(engine).clans[id];
       return c ? { ...c, members: [...c.members] } : null;
@@ -933,16 +1129,23 @@ export const { setup, teardown, check } = defineApp({
   },
 
   help: [
-    `Clans are small groups (${CAPS[0]} members, up to ${CAPS[CAPS.length - 1]} with upgrades) that follow you to every server. You can be in one clan at a time.`,
+    'Clans are groups with no member limit that follow you to every server. You can be in one clan at a time.',
+    'Clans are open by default: anyone can join with /clan join OWL or by tapping the clan tag on a profile on the website or in YapOS Party. Leaders can switch with /clan privacy invite (invite only) or /clan privacy open.',
     `Start one with /clan create Night Owls OWL (costs ${CREATE_COST} ${CURRENCY.name} by default). The leader invites with /clan invite @sam or /clan invite followed by a Yapin' user id (works in DMs with me too). The invite arrives in their DMs with a Join button, or they type /clan accept TAG.`,
     `Leaders can send ${INVITE_RATE} invites an hour. Inviting the same person again within a day refreshes their invite without another DM. Someone who says No thanks isn't asked by that clan again for a week, and nobody gets more than 3 invite DMs a day.`,
     `The clan bank only goes one way: members deposit with /clan deposit 100 and the leader spends it on upgrades (/clan upgrade). Nobody can take ${CURRENCY.name} out.`,
-    `Upgrades: more members, a custom colour and banner, and +${Math.round(BOOST * 100)}% XP for every member from chatting and voice.`,
-    'Leaders: /clan kick @sam · /clan leader @sam · /clan tag OWL · /clan colour #ff8800 · /clan banner Night owls never sleep · /clan disband',
+    `Upgrades: a custom colour and banner, and +${Math.round(BOOST * 100)}% XP for every member from chatting and voice.`,
+    'Leaders: /clan kick @sam · /clan leader @sam · /clan tag OWL · /clan privacy open or invite · /clan colour #ff8800 · /clan banner Night owls never sleep · /clan disband',
     'See how clans compare with /clan top (total levels) or /clan top season.',
   ],
 
   init: (engine) => {
+    try {
+      const out = migrateUnlimited(engine);
+      if (out.clans) engine.log.info(`[clans] clans have no member limit now; gave back ${fmt(out.refunded)} Shards to ${out.clans} clan bank${out.clans === 1 ? '' : 's'}`);
+    } catch (e) {
+      engine.log.warn(`[clans] couldn't refund member upgrades: ${e?.message}`);
+    }
     engine.clans = { getClanOf: (uid) => publicClan(engine, uid), xpBoost: (uid) => (clanOfUser(read(engine), uid)?.boost ? BOOST : 0) };
   },
 

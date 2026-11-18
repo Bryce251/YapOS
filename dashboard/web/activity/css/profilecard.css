@@ -339,7 +339,6 @@
 .pcard-handle,
 .pcard-status,
 .pcard-xp-text,
-.pcard-fact-text,
 .pcard-status-line,
 .pcard-all-title {
   min-width: 0;
@@ -378,9 +377,12 @@
 }
 
 .pcard-sub {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   align-content: start;
-  min-height: 34px;
+  gap: 3px 4px;
+  max-height: 66px;
+  overflow: hidden;
 }
 
 .pcard-handle,
@@ -388,7 +390,7 @@
   margin: 0;
   color: var(--text-3);
   font-size: var(--text-xs);
-  line-height: 17px;
+  line-height: 20px;
 }
 
 .pcard-status {
@@ -480,13 +482,6 @@
   white-space: nowrap;
 }
 
-.pcard-facts {
-  display: flex;
-  justify-content: center;
-  gap: var(--space-2);
-  height: 24px;
-}
-
 .pcard-fact {
   display: inline-flex;
   align-items: center;
@@ -497,10 +492,6 @@
   color: var(--text-2);
   font-size: 12px;
   font-weight: var(--weight-semibold);
-}
-
-.pcard-fact.is-muted {
-  color: var(--text-3);
 }
 
 .pcard-fact.is-top-1 {
@@ -824,11 +815,6 @@
 
 .pcard-bone.is-stat {
   height: var(--pc-stat);
-}
-
-.pcard-bone.is-fact {
-  width: 110px;
-  border-radius: var(--radius-full);
 }
 
 .pcard-bone.is-fav {

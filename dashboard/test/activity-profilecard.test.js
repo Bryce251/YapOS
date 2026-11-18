@@ -363,8 +363,13 @@ test('the layout model keeps every row to one line and the card fits a 320x560 c
   assert.equal(px(/--pc-badge: (\d+)px/), pc.LAYOUT.badge);
   assert.equal(px(/\.pcard-top \{[^}]*height: (\d+)px/), pc.LAYOUT.top);
   assert.equal(px(/\.pcard-foot \{[^}]*height: (\d+)px/) + 12, pc.LAYOUT.foot);
-  assert.equal(px(/\.pcard-sub \{[^}]*min-height: (\d+)px/), pc.LAYOUT.sub);
-  assert.equal(px(/\.pcard-facts \{[^}]*height: (\d+)px/), pc.LAYOUT.facts);
+  assert.equal(px(/\.pcard-sub \{[^}]*max-height: (\d+)px/), pc.LAYOUT.sub, 'the pill area is capped so the card never grows past the call');
+  assert.match(css, /\.pcard-sub \{[^}]*flex-wrap: wrap;[^}]*gap: 3px 4px;/, 'pills wrap across the full card width');
+  assert.equal(pc.pillRows(), 3, 'three full rows of pills fit under the name');
+  assert.equal(pc.LAYOUT.sub, 3 * pc.LAYOUT.pill + 2 * pc.LAYOUT.pillGap);
+  const look = readFileSync(path.join(activity, 'css', 'profilecard-look.css'), 'utf8');
+  assert.equal(Number((look.match(/\.pcard-pill \{[^}]*\n  height: (\d+)px/) || [])[1]), pc.LAYOUT.pill);
+  assert.equal(css.includes('.pcard-facts'), false, 'the old facts row is gone, rank and Shards are pills now');
   assert.equal(px(/\.pcard-sec \{[^}]*grid-template-rows: (\d+)px/) + 6, pc.LAYOUT.sectionHead);
   assert.match(css, /\.pcard-name,[\s\S]*?white-space: nowrap;/, 'the name stays on one line');
   assert.match(css, /\.pcard-row \{[^}]*repeat\(5, minmax\(0, 1fr\)\)/, 'pinned badges sit in one row of five');
@@ -387,7 +392,10 @@ test('the card shows the person look: banner picture, ring, name colour and font
   assert.ok(name.classList.contains('font-serif'));
   assert.equal(name.style.props['--pc-name'], '#e5487f');
   assert.equal(pc.el.querySelector('.pcard-view').style.props['--pc-ac'], '#e5487f');
-  assert.match(text(pc.el), /@alice · she\/her · \[OWL\] Night Owls/);
+  const sub = pc.el.querySelector('.pcard-sub');
+  assert.deepEqual([...sub.children].map((n) => n.className), ['pcard-handle', 'pcard-pill pcard-clan is-live', 'pcard-pill pcard-pronouns', 'pcard-pill pcard-status', 'pcard-pill pcard-fact is-top-1', 'pcard-pill pcard-pin', 'pcard-pill pcard-pin', 'pcard-pill pcard-fact']);
+  assert.match(text(sub), /@alice \[OWL\] Night Owls she\/her/);
+  assert.equal(sub.querySelector('.pcard-clan').localName, 'button');
   assert.match(text(pc.el), /🎮 Hosting game night/);
   assert.match(text(pc.el), /467K pts/);
   assert.equal(pc.el.querySelectorAll('.pcard-fav').length, 3);
@@ -405,7 +413,7 @@ test('while loading, the skeleton keeps the same rows so nothing jumps when data
   const gate = new Promise((r) => { release = r; });
   const { face, pc } = await setup({ respond: async () => { await gate; return new Response(JSON.stringify({ profile: richCard() }), { status: 200 }); } });
   tap(face);
-  const rows = () => ['.pcard-banner', '.pcard-top', '.pcard-name', '.pcard-sub', '.pcard-xp', '.pcard-stats', '.pcard-facts', '.pcard-favs', '.pcard-row', '.pcard-foot'].map((s) => Boolean(pc.el.querySelector(s)));
+  const rows = () => ['.pcard-banner', '.pcard-top', '.pcard-name', '.pcard-sub', '.pcard-xp', '.pcard-stats', '.pcard-favs', '.pcard-row', '.pcard-foot'].map((s) => Boolean(pc.el.querySelector(s)));
   assert.deepEqual(rows(), rows().map(() => true));
   assert.equal(pc.el.querySelector('.pcard-row').querySelectorAll('.pcard-bone').length, 5);
   assert.match(text(pc.el), /Loading profile/);

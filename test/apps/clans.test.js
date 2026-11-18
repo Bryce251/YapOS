@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHarness, IDS } from '../harness.js';
-import { checkName, checkTag, parseColour, capOf, CAPS, CAP_PRICES, STYLE_PRICE, BOOST_PRICE, BOOST } from '../../apps/clans.js';
+import { checkName, checkTag, tagSkeleton, tagTaken, parseColour, refundOf, migrateUnlimited, OLD_CAP_PRICES, STYLE_PRICE, BOOST_PRICE, BOOST } from '../../apps/clans.js';
 import { GLOBAL_KEY } from '../../engine/global.js';
 
 const S = IDS.server;
@@ -40,9 +40,12 @@ test('clan names and tags are checked and filtered', () => {
   assert.equal(parseColour('f80'), 0xff8800);
   assert.equal(parseColour('purple'), 0x9b59b6);
   assert.equal(parseColour('rainbow'), null);
-  assert.deepEqual(CAPS, [10, 15, 20, 25]);
-  assert.equal(capOf({ cap: 0 }), 10);
-  assert.equal(capOf({ cap: 9 }), 25);
+  assert.deepEqual(OLD_CAP_PRICES, [1000, 2500, 5000]);
+  assert.equal(refundOf({ cap: 0 }), 0);
+  assert.equal(refundOf({}), 0);
+  assert.equal(refundOf({ cap: 1 }), 1000);
+  assert.equal(refundOf({ cap: 2 }), 3500);
+  assert.equal(refundOf({ cap: 9 }), 8500);
 });
 
 test('creating a clan costs 500 Shards, and you can only be in one', async () => {
@@ -73,7 +76,7 @@ test('creating a clan costs 500 Shards, and you can only be in one', async () =>
   assert.match(lastText(h, bad), /isn't allowed/);
 });
 
-test('leaders invite, people accept, and the cap holds', async () => {
+test('leaders invite, people accept, and there is no member cap', async () => {
   const h = await make();
   await founded(h);
   const notLeader = await h.slash('clan', 'invite @alex', { user: IDS.member2 });
@@ -98,11 +101,16 @@ test('leaders invite, people accept, and the cap holds', async () => {
 
   const c = Object.values(doc(h).clans)[0];
   h.engine.store.update('clans', GLOBAL_KEY, (d) => {
-    for (let i = 0; i < 8; i++) d.clans[c.id].members.push(`fake-${i}`);
+    for (let i = 0; i < 40; i++) d.clans[c.id].members.push(`fake-${i}`);
     return d;
   }, {});
-  const full = await h.slash('clan', 'invite @alex', { user: IDS.member });
-  assert.match(lastText(h, full), /clan is full/);
+  const big = await h.slash('clan', 'invite @alex', { user: IDS.member });
+  assert.doesNotMatch(lastText(h, big), /full/i);
+  assert.match(lastText(h, big), /invite/i);
+  const yes = await h.slash('clan', 'accept OWL', { user: IDS.admin });
+  assert.match(lastText(h, yes), /Welcome to Night Owls \[OWL\]/);
+  assert.match(lastText(h, yes), /43 members now/);
+  assert.equal(clans(h).of(IDS.admin).members, 43);
 });
 
 test('typed accept works, and a leader leaving hands the clan on', async () => {
@@ -147,19 +155,22 @@ test('the bank only takes deposits and upgrades are bought from it', async () =>
   assert.equal(c().bank, 2500);
   assert.equal(eco(h).balance(S, IDS.member), 100);
 
-  const memberBuy = await h.slash('clan', 'upgrade members', { user: IDS.member2 });
+  const memberBuy = await h.slash('clan', 'upgrade style', { user: IDS.member2 });
   assert.match(lastText(h, memberBuy), /Only the leader/);
 
   const cap = await h.slash('clan', 'upgrade members', { user: IDS.member });
-  assert.match(lastText(h, cap), /room for \*\*15 members\*\*/);
-  assert.equal(c().bank, 2500 - CAP_PRICES[0]);
-  assert.equal(capOf(c()), 15);
+  assert.match(lastText(h, cap), /No member limit/);
+  assert.equal(c().bank, 2500, 'nothing is charged for members');
+  assert.equal(c().cap, undefined);
+  const view = await h.slash('clan', 'upgrade', { user: IDS.member });
+  assert.match(lastText(h, view), /Members · no limit/);
+  assert.ok(!h.allButtons(view).some((b) => /members/i.test(b.label || '')));
 
   const noStyle = await h.slash('clan', 'colour #ff8800', { user: IDS.member });
   assert.match(lastText(h, noStyle), /Unlock it first/);
   const style = await h.slash('clan', 'upgrade style', { user: IDS.member });
   assert.match(lastText(h, style), /colour and banner/);
-  assert.equal(c().bank, 2500 - CAP_PRICES[0] - STYLE_PRICE);
+  assert.equal(c().bank, 2500 - STYLE_PRICE);
   const colour = await h.slash('clan', 'colour #ff8800', { user: IDS.member });
   assert.match(lastText(h, colour), /#ff8800/);
   assert.equal(clans(h).of(IDS.member).colour, '#ff8800');
@@ -284,7 +295,7 @@ test('/clan invite takes a user id from DMs and the invite lands in their DMs wi
   const text = h.textOf(box[0]);
   assert.match(text, /Clan invite/);
   assert.match(text, new RegExp(`<@${IDS.member}> invited you to join \\*\\*Night Owls\\*\\* \\[OWL\\]`));
-  assert.match(text, /1\/10 members/);
+  assert.match(text, /1 member · one clan/);
   assert.match(text, /\/clan accept OWL/);
   assert.ok(h.findButton('No thanks', box));
   const join = h.findButton('Join [OWL]', box);
@@ -357,17 +368,18 @@ test('No thanks in the DM declines, and old or closed clan invites say so', asyn
   assert.match(lastText(h, gone), /That clan is gone/);
 });
 
-test('a full clan refuses the DM button', async () => {
+test('a big clan still takes the DM Join button', async () => {
   const h = await make();
   await founded(h);
   await h.slash('clan', 'invite @riley', { user: IDS.member });
   const join = h.findButton('Join [OWL]', h.sent(dmOf(IDS.member2)));
   h.engine.store.update('clans', GLOBAL_KEY, (d) => {
-    for (let i = 0; i < 9; i++) Object.values(d.clans)[0].members.push(`fake-${i}`);
+    for (let i = 0; i < 60; i++) Object.values(d.clans)[0].members.push(`fake-${i}`);
     return d;
   }, {});
-  const full = await h.click(join.custom_id, { ...DM(IDS.member2), messageId: join.messageId });
-  assert.match(lastText(h, full), /That clan is full/);
+  const ok = await h.click(join.custom_id, { ...DM(IDS.member2), messageId: join.messageId });
+  assert.match(lastText(h, ok), /Welcome to Night Owls/);
+  assert.equal(clans(h).of(IDS.member2).members, 62);
 });
 
 test('when DMs fail the invite falls back to the channel in a server, or is saved from DMs', async () => {
@@ -492,4 +504,167 @@ test('a DM Join button cannot be used after the invite is gone from the store', 
   const late = await h.click(join.custom_id, { ...DM(IDS.member2), messageId: join.messageId });
   assert.match(lastText(h, late), /That invite ran out/);
   assert.equal(clans(h).of(IDS.member2), null);
+});
+
+test('member upgrades bought before are refunded to the clan bank once', async () => {
+  const h = await make();
+  await founded(h);
+  const id = Object.keys(doc(h).clans)[0];
+  h.engine.store.update('clans', GLOBAL_KEY, (d) => {
+    d.clans[id].cap = 2;
+    d.clans[id].bank = 100;
+    d.clans[id].spent = 3500;
+    delete d.unlimited;
+    return d;
+  }, {});
+  const first = migrateUnlimited(h.engine);
+  assert.deepEqual(first, { refunded: 3500, clans: 1 });
+  assert.equal(clans(h).get(id).bank, 3600);
+  assert.equal(clans(h).get(id).spent, 0);
+  assert.equal(clans(h).get(id).cap, undefined);
+  const again = migrateUnlimited(h.engine);
+  assert.deepEqual(again, { refunded: 0, clans: 0 });
+  assert.equal(clans(h).get(id).bank, 3600, 'the refund only happens once');
+  const info = await h.slash('clan', 'info OWL', { user: IDS.member });
+  assert.match(lastText(h, info), /no member limit now, so the 3,500 .* went back to the clan bank/);
+  await h.advance(31 * 86_400_000);
+  const later = await h.slash('clan', 'info OWL', { user: IDS.member });
+  assert.doesNotMatch(lastText(h, later), /went back to the clan bank/);
+});
+
+test('clans are open by default and only the leader can make them invite only', async () => {
+  const h = await make();
+  await founded(h);
+  assert.equal(clans(h).of(IDS.member).join, 'open');
+  const join = await h.slash('clan', 'join OWL', { user: IDS.member2 });
+  assert.match(lastText(h, join), /Welcome to Night Owls \[OWL\]/);
+  assert.equal(clans(h).of(IDS.member2).tag, 'OWL');
+
+  const notLeader = await h.slash('clan', 'privacy invite', { user: IDS.member2 });
+  assert.match(lastText(h, notLeader), /Only the leader/);
+  assert.equal(clans(h).of(IDS.member).join, 'open');
+  const outsider = await h.slash('clan', 'lock', { user: IDS.admin });
+  assert.match(lastText(h, outsider), /No clan yet/);
+
+  const locked = await h.slash('clan', 'invite-only', { user: IDS.member });
+  assert.match(lastText(h, locked), /Invite only now/);
+  assert.equal(clans(h).of(IDS.member).join, 'invite');
+  const refused = await h.slash('clan', 'join owl', { user: IDS.admin });
+  assert.match(lastText(h, refused), /invite only/i);
+  assert.match(lastText(h, refused), new RegExp(`<@${IDS.member}>`));
+  assert.equal(clans(h).of(IDS.admin), null);
+
+  await h.slash('clan', `invite ${IDS.admin}`, { user: IDS.member });
+  const invited = await h.slash('clan', 'join OWL', { user: IDS.admin });
+  assert.match(lastText(h, invited), /Welcome to Night Owls/, 'a pending invite still works on an invite-only clan');
+
+  for (const [word, mode] of [['unlock', 'open'], ['privacy invite', 'invite'], ['open', 'open'], ['privacy private', 'invite'], ['public', 'open']]) {
+    await h.slash('clan', word, { user: IDS.member });
+    assert.equal(clans(h).of(IDS.member).join, mode, word);
+  }
+  const bad = await h.slash('clan', 'privacy sideways', { user: IDS.member });
+  assert.match(lastText(h, bad), /didn't get that/);
+});
+
+test('/clan join handles unknown tags, your own clan and a second clan', async () => {
+  const h = await make();
+  await founded(h);
+  fund(h, IDS.member2, 600);
+  await h.slash('clan', 'create Day Larks LARK', { user: IDS.member2 });
+  const nope = await h.slash('clan', 'join OWX', { user: IDS.admin });
+  assert.match(lastText(h, nope), /No clan by that name/);
+  assert.match(lastText(h, nope), /\[OWL\]/);
+  const mineAlready = await h.slash('clan', 'join OWL', { user: IDS.member });
+  assert.match(lastText(h, mineAlready), /already in/);
+  const second = await h.slash('clan', 'join LARK', { user: IDS.member });
+  assert.match(lastText(h, second), /already have a clan/);
+  assert.equal(clans(h).of(IDS.member).tag, 'OWL');
+  const none = await h.slash('clan', 'join', { user: IDS.admin });
+  assert.match(lastText(h, none), /No invites/);
+});
+
+test('the clan card shows the join mode, a leader toggle and a Join button for others', async () => {
+  const h = await make();
+  await founded(h);
+  const own = await h.slash('clan', '', { user: IDS.member });
+  assert.match(lastText(h, own), /Open · `\/clan join OWL`/);
+  const toggle = h.findButton('Make invite only', own);
+  assert.ok(toggle);
+  const stranger = await h.click(toggle.custom_id, { user: IDS.admin, messageId: toggle.messageId });
+  assert.doesNotMatch(lastText(h, stranger), /Invite only now/);
+  assert.equal(clans(h).of(IDS.member).join, 'open');
+  const done = await h.click(toggle.custom_id, { user: IDS.member, messageId: toggle.messageId });
+  assert.match(lastText(h, done), /Invite only now/);
+  const locked = await h.slash('clan', 'info OWL', { user: IDS.admin });
+  assert.match(lastText(h, locked), /Invite only/);
+  assert.equal(h.findButton('Join [OWL]', locked), null);
+  await h.slash('clan', 'open', { user: IDS.member });
+  const open = await h.slash('clan', 'info OWL', { user: IDS.admin });
+  const btn = h.findButton('Join [OWL]', open);
+  assert.ok(btn);
+  const joined = await h.click(btn.custom_id, { user: IDS.admin, messageId: btn.messageId });
+  assert.match(lastText(h, joined), /Welcome to Night Owls/);
+  const card = await h.slash('clan', 'info OWL', { user: IDS.member });
+  assert.match(lastText(h, card), /Newest members/);
+  assert.match(lastText(h, card), new RegExp(`<@${IDS.admin}>`));
+});
+
+test('website and Party joins are applied with fresh checks', async () => {
+  const h = await make();
+  await founded(h);
+  const svc = clans(h);
+  const id = Object.keys(doc(h).clans)[0];
+  const rev = svc.rev();
+  const ok = await svc.webJoin(IDS.member2, id, 'OWL', 'web');
+  assert.deepEqual(ok, { ok: true, code: 'joined', message: 'You joined [OWL] Night Owls!', clan: { tag: 'OWL', name: 'Night Owls' } });
+  assert.ok(svc.rev() > rev);
+  assert.equal(svc.of(IDS.member2).tag, 'OWL');
+  const again = await svc.webJoin(IDS.member2.toUpperCase(), id, 'OWL', 'web');
+  assert.equal(again.ok, true);
+  assert.equal(again.code, 'already');
+  assert.equal(svc.get(id).members.length, 2, 'the same person is never added twice');
+  fund(h, IDS.admin, 600);
+  await h.slash('clan', 'create Day Larks LARK', { user: IDS.admin });
+  const other = await svc.webJoin(IDS.admin, id, 'OWL', 'party');
+  assert.equal(other.code, 'in_clan');
+  assert.match(other.message, /\[LARK\] Day Larks/);
+  await h.slash('clan', 'privacy invite', { user: IDS.member });
+  const locked = await svc.webJoin(IDS.admin2, id, 'OWL', 'web');
+  assert.deepEqual([locked.ok, locked.code], [false, 'invite_only']);
+  await h.slash('clan', 'privacy open', { user: IDS.member });
+  const stale = await svc.webJoin(IDS.admin2, 'c999', 'owl', 'party');
+  assert.deepEqual([stale.ok, stale.code], [false, 'gone'], 'a closed clan never falls back to another clan with the same tag');
+  assert.equal(svc.of(IDS.admin2), null);
+  const byTag = await svc.webJoin(IDS.admin2, null, 'owl', 'party');
+  assert.equal(byTag.code, 'joined', 'with no id the tag is used');
+  assert.equal(svc.get(id).log.at(-1).via, 'party');
+  const gone = await svc.webJoin(IDS.mod, 'c999', 'NOPE', 'web');
+  assert.equal(gone.code, 'gone');
+  const bot = await svc.webJoin(IDS.bot, id, 'OWL', 'web');
+  assert.equal(bot.code, 'bot');
+  const junk = await svc.webJoin('not an id!', id, 'OWL', 'web');
+  assert.equal(junk.code, 'failed');
+  const dir = svc.directory();
+  const owl = dir.find((c) => c.tag === 'OWL');
+  assert.equal(owl.join, 'open');
+  assert.equal(owl.count, 3);
+  assert.deepEqual(owl.members.sort(), [IDS.member, IDS.member2, IDS.admin2].sort());
+  assert.equal(owl.leader, IDS.member);
+});
+
+test('look-alike tags are taken too, on create and on a tag change', async () => {
+  assert.equal(tagSkeleton('0WL'), tagSkeleton('owl'));
+  assert.equal(tagSkeleton('B1L5'), tagSkeleton('8ILS'));
+  assert.notEqual(tagSkeleton('OWL'), tagSkeleton('OWN'));
+  const h = await make();
+  await founded(h);
+  assert.equal(tagTaken(doc(h), '0WL'), true);
+  fund(h, IDS.admin, 600);
+  const copy = await h.slash('clan', 'create Fake Owls 0WL', { user: IDS.admin });
+  assert.match(lastText(h, copy), /tag is taken/);
+  assert.equal(clans(h).of(IDS.admin), null);
+  await h.slash('clan', 'create Day Larks LARK', { user: IDS.admin });
+  const swap = await h.slash('clan', 'tag OW1', { user: IDS.admin });
+  assert.match(lastText(h, swap), /tag is taken/);
+  assert.equal(clans(h).of(IDS.admin).tag, 'LARK');
 });

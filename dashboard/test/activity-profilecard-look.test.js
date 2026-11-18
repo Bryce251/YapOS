@@ -347,7 +347,8 @@ test('the featured stat leads the stats row with a glow and the card still fits 
   assert.ok(tiles[0].classList.contains('is-featured'));
   assert.equal(tiles[0].getAttribute('title'), 'Featured: Wins');
   assert.ok(pc.el.querySelector('.pcard-avatar').classList.contains('ring-gold'));
-  assert.match(text(pc.el), /@jolli · he\/him · \[YAP\] Yapin'/);
+  assert.match(text(pc.el.querySelector('.pcard-sub')), /@jolli \[YAP\] Yapin' he\/him Developing YapOS!/);
+  assert.ok(pc.el.querySelector('.pcard-sub .pcard-clan.is-live'), 'the clan is a pill you can tap, not plain text');
   assert.match(text(pc.el), /Developing YapOS!/);
   const pinned = pc.el.querySelectorAll('.pcard-badge')[0];
   assert.ok(pinned.classList.contains('is-pinned'));

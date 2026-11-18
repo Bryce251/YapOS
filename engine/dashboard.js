@@ -78,6 +78,12 @@ const PARTY_APPLIED_KEEP = 1000;
 const PARTY_STATS_IDS = 25;
 const PARTY_STATS_MS = 60_000;
 const PARTY_STATS_CACHE = 2000;
+export const CLANS_PER_POST = 100;
+export const CLAN_IDS_PER_POST = 5000;
+const CLAN_JOINS_MAX = 50;
+const CLAN_RESULTS_KEEP = 500;
+const CLAN_RETRY_MS = 60_000;
+const CLAN_CODES = new Set(['joined', 'already', 'invite_only', 'in_clan', 'gone', 'bot', 'failed']);
 const PARTY_BADGES_MAX = 40;
 const PARTY_REASON = 'YapOS Party';
 const PARTY_NS = 'party';
@@ -298,6 +304,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity, profileRun: null,
     reportsOpen: 0, partyStats: new Map(), partyAcks: [], shardAcks: [], ratesDirty: true, ratesRun: null,
     catalogDirty: true, catalogRun: null, catalogMonth: null, people: new Map(), peopleRun: null,
+    clanRev: null, clanSent: new Map(), clanFull: false, clanRetryAt: -Infinity, clanResults: new Map(),
   };
 
   async function request(method, path, body) {
@@ -1467,6 +1474,115 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     return { applied: results.length, posted: r.ok ? results.length : 0 };
   }
 
+  function clansService() {
+    const svc = engine.service?.('clans');
+    return svc && typeof svc.directory === 'function' && typeof svc.webJoin === 'function' ? svc : null;
+  }
+
+  async function syncClans() {
+    const svc = clansService();
+    if (!svc || !enabled) return { sent: 0, removed: 0 };
+    if (now() < state.clanRetryAt) return { sent: 0, removed: 0 };
+    const rev = typeof svc.rev === 'function' ? svc.rev() : null;
+    if (state.clanFull && rev !== null && rev === state.clanRev) return { sent: 0, removed: 0 };
+    const list = svc.directory();
+    const first = !state.clanFull;
+    if (first && !list.length && !state.clanSent.size) {
+      state.clanFull = true;
+      state.clanRev = rev;
+      return { sent: 0, removed: 0 };
+    }
+    const sigs = new Map(list.map((c) => [c.id, JSON.stringify(c)]));
+    const changed = list.filter((c) => state.clanSent.get(c.id) !== sigs.get(c.id));
+    const removed = [...state.clanSent.keys()].filter((id) => !sigs.has(id));
+    if (!first && !changed.length && !removed.length) {
+      state.clanRev = rev;
+      return { sent: 0, removed: 0 };
+    }
+    const parts = [];
+    for (const c of changed) {
+      const total = c.members.length;
+      if (total <= CLAN_IDS_PER_POST) {
+        parts.push({ entry: c, last: true });
+        continue;
+      }
+      for (let at = 0; at < total; at += CLAN_IDS_PER_POST) {
+        const entry = { ...c, members: c.members.slice(at, at + CLAN_IDS_PER_POST) };
+        if (at > 0) entry.append = true;
+        parts.push({ entry, last: at + CLAN_IDS_PER_POST >= total });
+      }
+    }
+    const chunks = [];
+    let cur = [];
+    let ids = 0;
+    for (const p of parts) {
+      if (cur.length && (cur.length >= CLANS_PER_POST || ids + p.entry.members.length > CLAN_IDS_PER_POST)) {
+        chunks.push(cur);
+        cur = [];
+        ids = 0;
+      }
+      cur.push(p);
+      ids += p.entry.members.length;
+    }
+    if (cur.length || !chunks.length) chunks.push(cur);
+    let sent = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const body = { clans: chunks[i].map((p) => p.entry) };
+      if (i === 0) {
+        body.removed = removed;
+        if (first) {
+          body.full = true;
+          body.known = list.map((c) => c.id);
+        }
+      }
+      const r = await request('POST', '/bot/clans', body).catch((e) => ({ ok: false, status: 0, error: e }));
+      if (!r.ok) {
+        state.clanRetryAt = now() + CLAN_RETRY_MS;
+        log.debug('[dashboard] clan directory push failed', r.status);
+        return { sent, removed: 0, failed: true };
+      }
+      for (const p of chunks[i]) {
+        if (!p.last) continue;
+        state.clanSent.set(p.entry.id, sigs.get(p.entry.id));
+        sent += 1;
+      }
+      if (i === 0) {
+        for (const id of removed) state.clanSent.delete(id);
+        if (first) state.clanFull = true;
+      }
+    }
+    state.clanRev = rev;
+    return { sent, removed: removed.length };
+  }
+
+  async function applyClanJoins(rows) {
+    const list = Array.isArray(rows) ? rows.slice(0, CLAN_JOINS_MAX) : [];
+    const svc = clansService();
+    let applied = 0;
+    for (const raw of list) {
+      if (!plainObject(raw) || typeof raw.id !== 'string' || !SAFE_ID.test(raw.id) || state.clanResults.has(raw.id)) continue;
+      let out;
+      if (!svc) out = { ok: false, code: 'failed', message: "Clans aren't running on YapOS right now. Try again later." };
+      else {
+        try {
+          out = await svc.webJoin(typeof raw.user === 'string' ? raw.user : '', typeof raw.clan === 'string' ? raw.clan : null, typeof raw.tag === 'string' ? raw.tag : null, raw.via === 'party' ? 'party' : 'web');
+        } catch (e) {
+          log.debug('[dashboard] applying a clan join failed', e?.message);
+          out = { ok: false, code: 'failed', message: 'Something went wrong while adding you, so nothing changed. Try again.' };
+        }
+      }
+      state.clanResults.set(raw.id, { id: raw.id, ok: out?.ok === true, code: CLAN_CODES.has(out?.code) ? out.code : out?.ok ? 'joined' : 'failed', message: typeof out?.message === 'string' ? out.message.slice(0, 300) : '' });
+      applied += 1;
+      while (state.clanResults.size > CLAN_RESULTS_KEEP) state.clanResults.delete(state.clanResults.keys().next().value);
+    }
+    if (!state.clanResults.size) return { applied, posted: 0 };
+    const results = [...state.clanResults.values()].slice(0, RESULTS_PER_POST);
+    const r = await request('POST', '/bot/clans/joins', { results }).catch((e) => ({ ok: false, status: 0, error: e }));
+    if (r.ok) for (const x of results) state.clanResults.delete(x.id);
+    else log.debug('[dashboard] clan join results post failed', r.status);
+    return { applied, posted: r.ok ? results.length : 0 };
+  }
+
   async function tick() {
     if (!enabled) return null;
     if (state.busy) return state.delay;
@@ -1487,6 +1603,8 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
         try { applyCustomBadges(r.data.customBadges); } catch (e) { log.debug('[dashboard] custom badge sync failed', e?.message); }
       }
       await syncOwner(r.data?.owner).catch((e) => log.debug('[dashboard] owner sync failed', e?.message));
+      if ((Array.isArray(r.data?.clanJoins) && r.data.clanJoins.length) || state.clanResults.size) await applyClanJoins(r.data?.clanJoins).catch((e) => log.debug('[dashboard] clan joins failed', e?.message));
+      await syncClans().catch((e) => log.debug('[dashboard] clan directory push failed', e?.message));
       if (state.catalogMonth && state.catalogMonth !== owner.catalogMonth()) state.catalogDirty = true;
       if (state.catalogDirty && !state.catalogRun) state.catalogRun = sendCatalog().catch((e) => log.debug('[dashboard] owner catalog push failed', e?.message)).finally(() => { state.catalogRun = null; });
       if (state.ratesDirty && !state.ratesRun) state.ratesRun = sendPartyRates().catch((e) => log.debug('[dashboard] Party rates push failed', e?.message)).finally(() => { state.ratesRun = null; });
@@ -1549,6 +1667,8 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     get ratesWork() { return state.ratesRun; },
     get catalogWork() { return state.catalogRun; },
     syncOwner,
+    syncClans,
+    applyClanJoins,
     ownerCatalog: () => owner.catalog(),
     tick,
     runJob,

@@ -2665,8 +2665,16 @@
 
 .profile-hero {
   display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.profile-hero-top {
+  display: flex;
   align-items: center;
   gap: 16px;
+  min-width: 0;
 }
 
 .profile-avatar-wrap {
@@ -3356,7 +3364,7 @@ a.season-name:hover {
     padding: 16px;
   }
 
-  .profile-hero {
+  .profile-hero-top {
     flex-wrap: wrap;
   }
 

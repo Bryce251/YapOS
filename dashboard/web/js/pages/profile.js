@@ -10,6 +10,8 @@ import { medalFor } from '../public-data.js';
 import { ACH_PREFIX, EFFECTS, SPECIAL_KINDS, THEME_KEYS, badgeKindOf, cropBox, defaultLook, featuredValue, readLook, specialFirst, themeColours, themePalette } from '../profile-look.js';
 import { effectsAllowed, prefersReducedMotion, setEffectsAllowed, startEffect } from '../profile-fx.js';
 import { openProfileEditor } from './profile-editor.js';
+import { openClanSheet } from './clan-sheet.js';
+import { clanParts, clanTagOk } from '../../activity/js/clanjoin.js';
 
 export const THEME_VARS = Object.freeze(THEME_KEYS.map((k) => k.replace(/[A-Z0-9]/g, (c) => `-${c.toLowerCase()}`)));
 const THEME_CLASSES = Object.freeze(['has-ptheme', 'pt-mode-auto', 'pt-mode-dark', 'pt-mode-light', 'pt-pat-glow', 'pt-pat-dots', 'pt-pat-grid', 'pt-pat-waves', 'pt-pat-stars', 'pt-pat-plain']);
@@ -186,11 +188,18 @@ function featureTile(f) {
     h('span', { class: 'profile-feature-cap', text: f.label }));
 }
 
-function clanTag(clan) {
+export function clanTag(clan, onOpen = null) {
   if (!clan) return null;
-  const el = h('span', { class: 'clan-tag', title: clan.name },
-    clan.tag ? h('span', { class: 'clan-tag-code', text: `[${clan.tag}]` }) : null,
-    clan.tag && String(clan.tag).trim().toLowerCase() === String(clan.name || '').trim().toLowerCase() ? null : h('span', { class: 'clan-tag-name', text: clan.name }));
+  const parts = clanParts(clan);
+  if (!parts) return null;
+  const kids = [
+    parts.code ? h('span', { class: 'clan-tag-code', text: parts.code }) : null,
+    parts.name ? h('span', { class: 'clan-tag-name', text: parts.name }) : parts.code ? null : h('span', { class: 'clan-tag-name', text: clan.name }),
+  ];
+  const live = typeof onOpen === 'function' && clanTagOk(clan.tag);
+  const el = live
+    ? h('button', { type: 'button', class: 'clan-tag', title: `${parts.full}: see the clan and join`, dataset: { clan: clan.tag.toUpperCase() }, attrs: { 'aria-haspopup': 'dialog', 'aria-label': `Clan ${parts.full}. Open clan` }, on: { click: () => onOpen(clan.tag) } }, ...kids)
+    : h('span', { class: 'clan-tag', title: clan.name }, ...kids);
   if (clan.colour) el.style.setProperty('--clan', clan.colour);
   return el;
 }
@@ -304,12 +313,19 @@ function bannerEl(look, image, motion) {
   return h('div', { class: ['profile-banner', `banner-${look.banner}`], attrs: { 'aria-hidden': 'true' } });
 }
 
-function pinRow(items) {
-  if (!items.length) return null;
-  return h('ul', { class: 'profile-pins', attrs: { 'aria-label': 'Pinned badges' } },
+function pinRow(items, clan = null) {
+  if (!items.length && !clan) return null;
+  const label = clan && items.length ? 'Clan and pinned badges' : clan ? 'Clan' : 'Pinned badges';
+  return h('ul', { class: ['profile-pins', clan ? 'has-clan' : ''], attrs: { 'aria-label': label } },
+    clan ? h('li', { class: 'profile-pins-clan' }, clan) : null,
     ...items.map((b, i) => h('li', { class: ['profile-pin', isSpecial(b) ? 'is-special' : ''], title: b.about ? `${b.label}: ${b.about}` : b.label, style: { '--i': String(i) } },
       h('span', { class: 'profile-pin-art' }, badgeArt(b, 'profile-pin-emoji', 'profile-pin-img')),
       h('span', { class: 'profile-pin-label', text: b.label }))));
+}
+
+export function heroBand(status, chips) {
+  if (!status && !chips) return null;
+  return h('div', { class: ['profile-band', status ? 'has-status' : '', chips ? 'has-chips' : ''] }, status, chips);
 }
 
 export const TILT_MAX = 10;
@@ -351,7 +367,7 @@ export function addTilt(card, win = globalThis.window) {
 }
 
 export function profileCard(p, opts = {}) {
-  const { own = false, look: given = null, bannerImage = null, bannerMotion = null, hints = {}, onCustomize = null, editing = false, fx = null } = opts;
+  const { own = false, look: given = null, bannerImage = null, bannerMotion = null, hints = {}, onCustomize = null, editing = false, fx = null, onClan = null } = opts;
   const look = given || defaultLook();
   const share = `${window.location.origin}${profilePath(p.username || p.sharePath || p.name)}`;
   const hidden = new Set(look.hidden);
@@ -410,21 +426,20 @@ export function profileCard(p, opts = {}) {
   const card = h('article', { class: ['profile-card', `look-${look.density}`, banner ? 'has-banner' : '', look.accent ? 'has-accent' : '', themed ? 'is-themed' : '', editing ? 'is-preview' : 'is-enter', look.ring !== 'none' ? 'has-ring' : ''] },
     banner,
     h('div', { class: 'profile-hero' },
-      h('div', { class: ['profile-avatar-wrap', look.ring !== 'none' ? `ring-${look.ring}` : ''] }, avatar({ name: p.name, url: p.avatar, id: p.id || p.username, size: 'xl' })),
-      h('div', { class: 'profile-who' },
-        nameHeading(p.name, look),
-        h('div', { class: 'profile-sub' },
-          p.username ? h('span', { class: 'profile-handle', text: `@${p.username}` }) : p.usernameHidden ? h('span', { class: 'profile-handle', text: `@${HIDDEN_HANDLE}` }) : null,
-          look.pronouns ? h('span', { class: 'profile-pronouns', text: look.pronouns }) : null,
-          clanTag(p.clan)),
-        status,
-        pinRow(pins),
-        p.updatedAt ? h('p', { class: 'public-meta' }, icon('clock', { size: 14 }), h('span', { text: `Updated ${relativeTime(p.updatedAt)}` })) : null),
-      editing ? null : h('div', { class: 'profile-actions' },
-        copyButton({ getText: () => share, label: 'Copy link', size: 'sm' }),
-        own && onCustomize ? button({ label: 'Customize profile', icon: 'palette', size: 'sm', variant: 'primary', className: 'profile-customize', onClick: onCustomize }) : null,
-        own ? linkButton({ label: 'Privacy', href: '/account', icon: 'lock', size: 'sm' }) : null,
-        fxBtn)),
+      h('div', { class: 'profile-hero-top' },
+        h('div', { class: ['profile-avatar-wrap', look.ring !== 'none' ? `ring-${look.ring}` : ''] }, avatar({ name: p.name, url: p.avatar, id: p.id || p.username, size: 'xl' })),
+        h('div', { class: 'profile-who' },
+          nameHeading(p.name, look),
+          h('div', { class: 'profile-sub' },
+            p.username ? h('span', { class: 'profile-handle', text: `@${p.username}` }) : p.usernameHidden ? h('span', { class: 'profile-handle', text: `@${HIDDEN_HANDLE}` }) : null,
+            look.pronouns ? h('span', { class: 'profile-pronouns', text: look.pronouns }) : null)),
+        editing ? null : h('div', { class: 'profile-actions' },
+          copyButton({ getText: () => share, label: 'Copy link', size: 'sm' }),
+          own && onCustomize ? button({ label: 'Customize profile', icon: 'palette', size: 'sm', variant: 'primary', className: 'profile-customize', onClick: onCustomize }) : null,
+          own ? linkButton({ label: 'Privacy', href: '/account', icon: 'lock', size: 'sm' }) : null,
+          fxBtn)),
+      heroBand(status, pinRow(pins, clanTag(p.clan, editing ? null : onClan))),
+      p.updatedAt ? h('p', { class: 'public-meta' }, icon('clock', { size: 14 }), h('span', { text: `Updated ${relativeTime(p.updatedAt)}` })) : null),
     h('div', { class: 'profile-sections' }, ...blocks));
   if (look.accent) {
     const c = themeColours(look.accent);
@@ -479,7 +494,7 @@ export function renderProfile(root, ctx) {
     shown = v;
     ctx.setTitle(v.profile.name);
     const own = isOwn(v);
-    const card = profileCard(v.profile, { own, look: v.look, bannerImage: v.bannerImage, bannerMotion: v.bannerMotion, hints: v.hints, fx, onCustomize: own ? () => edit(v) : null });
+    const card = profileCard(v.profile, { own, look: v.look, bannerImage: v.bannerImage, bannerMotion: v.bannerMotion, hints: v.hints, fx, onCustomize: own ? () => edit(v) : null, onClan: (tag) => openClanSheet(tag, { api, signal, clan: v.profile.clan }) });
     applyTheme(frame.site, v.look);
     fx.set(v.look.effect);
     replace(content, own ? noticeBox(notices) : null, card);

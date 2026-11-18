@@ -9,6 +9,7 @@ import { profileCleanupStatements } from './public-profiles.js';
 import { packReportsCleanupStatements } from './pack-browse.js';
 import { statsCleanupStatements } from './server-stats.js';
 import { ownerCleanupStatements } from './owner.js';
+import { clanCleanupStatements } from './clans.js';
 import { linkCleanupStatements } from './activity-auth.js';
 import { awardMonth, monthCleanup } from './party-leaderboard.js';
 import { banCleanupStatements, BAN_CLEANUP_NAMES } from './party-mod.js';
@@ -48,6 +49,8 @@ export async function cleanup(db, t) {
   modResults.forEach((r, i) => {
     removed[BAN_CLEANUP_NAMES[i]] = Number((r && r.meta && r.meta.changes) || 0);
   });
+  const clanResults = await db.batch(clanCleanupStatements(db, t));
+  removed.clanJoins = clanResults.reduce((n, r) => n + Number((r && r.meta && r.meta.changes) || 0), 0);
   const season = await awardMonth(db, t).catch(() => ({ awarded: 0 }));
   removed.partySeasonAwards = season.awarded;
   removed.partyPointsMonth = await monthCleanup(db, t).catch(() => 0);

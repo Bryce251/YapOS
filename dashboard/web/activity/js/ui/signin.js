@@ -421,7 +421,7 @@ export function createSignin({ win, engine = null, toast = () => {}, dev = false
     const callName = meName || 'you';
     const head = [
       crest(),
-      h('h2', { class: 'signin-title', attrs: { id: 'signin-title' }, text: reason === 'join' ? 'Sign in to join the game' : 'Sign in to play' }),
+      h('h2', { class: 'signin-title', attrs: { id: 'signin-title' }, text: reason === 'join' ? 'Sign in to join the game' : reason === 'clan' ? 'Sign in to join a clan' : 'Sign in to play' }),
       h('p', { class: 'signin-text', attrs: { id: 'signin-text' }, text: `This links your Yapin' account, ${callName}, to YapOS Party so your wins, Party XP, Shards and leaderboard spot count for you. You can still watch without signing in.` }),
     ];
     const l = link || { state: 'loading' };

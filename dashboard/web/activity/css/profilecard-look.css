@@ -258,3 +258,248 @@
     display: none;
   }
 }
+
+.pcard-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.pcard-pill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcard-sub > .pcard-handle {
+  margin-right: 2px;
+}
+
+.pcard-pill.pcard-status {
+  color: var(--text);
+}
+
+.pcard-clan {
+  --pc-clan: var(--pc-ac-mix);
+  border-color: color-mix(in srgb, var(--pc-clan) 55%, var(--border));
+  background: color-mix(in srgb, var(--pc-clan) 16%, var(--surface));
+  color: var(--text);
+}
+
+.pcard-clan-code {
+  flex: none;
+  color: color-mix(in srgb, var(--pc-clan) 70%, var(--text));
+  font-family: var(--mono);
+}
+
+.pcard-clan.is-live {
+  cursor: pointer;
+}
+
+.pcard-clan.is-live::after {
+  content: "\203A";
+  flex: none;
+  opacity: 0.7;
+}
+
+.pcard-clan.is-live:focus-visible,
+.pcard-clan-join:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: -2px;
+}
+
+.pcard-clan.is-live:active {
+  transform: scale(var(--press-scale));
+}
+
+@media (hover: hover) {
+  .pcard-clan.is-live:hover {
+    background: color-mix(in srgb, var(--pc-clan) 28%, var(--surface));
+  }
+}
+
+.pcard-pin.is-special {
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
+}
+
+.pcard-pin-art {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  font-size: 12px;
+}
+
+.pcard-pin-art img {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+}
+
+.pcard-bone.is-line + .pcard-bone.is-pill {
+  width: 52px;
+  height: 20px;
+}
+
+.pcard-view.is-clan {
+  --pc-clan: var(--pc-ac-mix);
+  padding-bottom: var(--space-4);
+}
+
+.pcard-clan-body {
+  display: grid;
+  gap: 10px;
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+.pcard-clan-hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--pc-clan) 45%, var(--border));
+  border-radius: var(--radius);
+  background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--pc-clan) 26%, transparent), transparent 70%), var(--surface-2);
+}
+
+.pcard-crest {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--pc-clan) 60%, #0b0b10);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: var(--weight-bold);
+}
+
+.pcard-clan-who {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pcard-clan-name,
+.pcard-clan-motto,
+.pcard-clan-state {
+  margin: 0;
+}
+
+.pcard-clan-name {
+  font-size: var(--text-base);
+  font-weight: var(--weight-bold);
+}
+
+.pcard-clan-motto {
+  color: var(--text-2);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.pcard-clan-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.pcard-clan-facts > div {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.pcard-clan-facts dt {
+  color: var(--text-3);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.pcard-clan-facts dd {
+  margin: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: var(--weight-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcard-clan-facts .is-open dd {
+  color: var(--success);
+}
+
+.pcard-clan-top {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pcard-clan-top li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.pcard-clan-lv {
+  margin-left: auto;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.pcard-clan-act {
+  display: grid;
+  gap: 8px;
+}
+
+.pcard-clan-state {
+  color: var(--text-2);
+  font-size: 12px;
+  text-align: center;
+}
+
+.pcard-clan-state.is-good {
+  color: var(--success);
+}
+
+.pcard-clan-state.is-warn {
+  color: var(--warning);
+}
+
+.pcard-clan-state.is-bad {
+  color: var(--danger);
+}
+
+.pcard-clan-join {
+  min-height: 36px;
+}
+
+.pcard-clan-join[aria-disabled="true"] {
+  opacity: 0.65;
+  cursor: default;
+}
