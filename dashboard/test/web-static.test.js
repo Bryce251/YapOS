@@ -193,14 +193,19 @@ test('no external resources and no forbidden wording', () => {
   for (const f of files) {
     if (BINARY.test(f)) continue;
     const src = readFileSync(f, 'utf8');
-    const urls = rel(f) === '_headers' || rel(f) === 'activity/data/words-credits.txt' ? [] : src.match(/https?:\/\/[^\s'"`)]+/g) || [];
+    const urls = rel(f) === '_headers' || rel(f) === 'activity/data/words-credits.txt' || rel(f).startsWith('fonts/LICENSES/') ? [] : src.match(/https?:\/\/[^\s'"`)]+/g) || [];
     for (const u of urls) {
       const bridgeOrigin = rel(f) === 'activity/js/bridge.js' && ACTIVITY_PARENT_ORIGINS.includes(u);
       const ownSite = rel(f) === 'activity/js/ui/profilecard.js' && u === 'https://yapos.dev';
       assert.ok(bridgeOrigin || ownSite || u.startsWith('http://www.w3.org/2000/svg') || (rel(f) === 'js/links.js' && u.startsWith('https://www.yapin.gg/bot/')), `${rel(f)} references ${u}`);
     }
-    assert.equal(/url\(/.test(src) && f.endsWith('.css'), false, `${rel(f)} loads a url()`);
+    const fontFaces = f.endsWith('.css') ? src.replace(/url\("\/fonts\/[a-z0-9]+\.woff2"\) format\("woff2"\)/g, '') : src;
+    assert.equal(/url\(/.test(fontFaces) && f.endsWith('.css'), false, `${rel(f)} loads a url()`);
     if (rel(f) === 'activity/data/words.txt') continue;
+    if (rel(f).startsWith('fonts/LICENSES/')) {
+      assert.equal(/(claude|anthropic)/i.test(src), false, rel(f));
+      continue;
+    }
     assert.equal(/\b(claude|anthropic)\b/i.test(src), false, rel(f));
     assert.equal(/\bAI\b/.test(src), false, rel(f));
     assert.equal(/\bgenerated\b/i.test(src), false, rel(f));

@@ -56,5 +56,5 @@ export function explain(err, ctx = {}) {
 export function looksLikeFeatureOff(err) {
   const s = err?.status;
   const raw = String(err?.message || '');
-  return (s === 400 || s === 403 || s === 404) && /test|flag|not (yet )?(available|enabled|supported)|unknown (component )?type|feature/i.test(raw);
+  return (s === 400 || s === 403 || s === 404) && /test|flag|not (yet )?(available|enabled|supported)|unknown (component )?type|feature|isn['’]t on|is not on|not on for this server/i.test(raw);
 }

@@ -3,7 +3,7 @@ import { joinButton } from './lobby.js';
 import { board, standings, fmt } from './board.js';
 import { burstFrom } from './juice.js';
 import { createDailyBox, finishDaily } from './daily.js';
-import { partyXp, PARTY_XP_DAY, partyShards, PARTY_SHARDS_PREDICTION } from '../admin.js';
+import { partyXp, PARTY_XP_DAY, partyShards, placeShards, PARTY_SHARDS_PLAY, PARTY_SHARDS_WIN, PARTY_SHARDS_PREDICTION, PARTY_PLACE_MIN, PARTY_STREAK_STEP, PARTY_STREAK_MAX } from '../admin.js';
 import { tourModel, tourCard } from './tournament.js';
 import { predictResultsModel, predictResults } from './predict.js';
 import { createReplayStrip, REPLAY_GAMES } from './replay.js';
@@ -36,12 +36,35 @@ export function xpText(n) {
   return n > 0 ? `+${n} Party XP` : '';
 }
 
-export const SHARDS_TITLE = 'Shards go to your YapOS wallet. There is no daily limit, so every game with 2 or more players pays.';
+export const SHARDS_TITLE = `Shards go to your YapOS wallet with no daily limit: ${PARTY_SHARDS_PLAY} a game, ${PARTY_SHARDS_WIN} more for a win, ${placeShards(2)} for 2nd and ${placeShards(3)} for 3rd in scored games with ${PARTY_PLACE_MIN}+ players, and +${Math.round(PARTY_STREAK_STEP * 100)}% of a win for each win in a row, up to +${Math.round(PARTY_STREAK_MAX * 100)}%.`;
+
+const PLACE_WORDS = Object.freeze({ 2: '2nd', 3: '3rd' });
+
+function myPay(last, players) {
+  const me = (players || []).find((p) => p.isMe);
+  const sp = last && last.sp && typeof last.sp === 'object' ? last.sp : null;
+  if (!me || !sp || !Number.isInteger(me.slot)) return null;
+  const pay = sp[me.slot];
+  return pay && typeof pay === 'object' && Number.isInteger(pay.t) && pay.t > 0 ? pay : null;
+}
+
+export function shardsBreakdown(last, players) {
+  const pay = myPay(last, players);
+  if (!pay) return '';
+  const bits = [];
+  if (pay.w > 0) bits.push(`+${fmt(pay.w)} win`);
+  if (pay.p > 0 && PLACE_WORDS[pay.r]) bits.push(`+${fmt(pay.p)} ${PLACE_WORDS[pay.r]} place`);
+  if (pay.s > 0 && pay.n > 1) bits.push(`+${fmt(pay.s)} streak x${pay.n}`);
+  if (pay.c > 0) bits.push(`+${fmt(pay.c)} tournament`);
+  return bits.join(' · ');
+}
 
 export function shardsEarned(last, players, predict = null) {
   if (!last || !Array.isArray(last.ps) || last.ps.length < 2) return 0;
   const me = (players || []).find((p) => p.isMe);
   if (!me) return 0;
+  const pay = myPay(last, players);
+  if (pay) return pay.t;
   if (Number.isInteger(me.slot) && last.ps.includes(me.slot)) {
     return partyShards(Array.isArray(last.winners) && last.winners.includes(me.slot), Number.isInteger(last.champ) && last.champ === me.slot);
   }
@@ -75,6 +98,7 @@ export function resultsModel(snap, games) {
     totals: standings(snap.players, 'total').map(keep),
     xp: xpEarned(last, snap.players),
     shards: shardsEarned(last, snap.players, snap.predict),
+    shardWhy: shardsBreakdown(last, snap.players),
     tour: tourModel(snap, games),
     picks: predictResultsModel(snap),
     note: last && typeof last.note === 'string' && last.note ? last.note : null,
@@ -211,7 +235,8 @@ export function createResults({ engine, fx, replays = null, win = globalThis, to
               'div',
               { class: 'earn-row', attrs: { role: 'group', 'aria-label': 'What you earned' } },
               m.xp ? h('span', { class: 'xp-chip', text: xpText(m.xp), attrs: { title: XP_TITLE } }) : null,
-              m.shards ? h('span', { class: 'shard-chip', text: shardsText(m.shards), attrs: { title: SHARDS_TITLE } }) : null,
+              m.shards ? h('span', { class: 'shard-chip', text: shardsText(m.shards), attrs: { title: m.shardWhy ? `${m.shardWhy}. ${SHARDS_TITLE}` : SHARDS_TITLE } }) : null,
+              m.shards && m.shardWhy ? h('span', { class: 'earn-why muted', text: m.shardWhy }) : null,
             )
           : null,
         actions,

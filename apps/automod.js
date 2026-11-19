@@ -577,6 +577,7 @@ function clickedMessageId(ctx) {
 }
 
 function onOwnPanel(ctx) {
+  if (ctx.onEphemeral && ctx.kind === 'button') return true;
   const messageId = clickedMessageId(ctx);
   return !!messageId && ctx.engine.router.panelOwner(messageId) === ctx.userId;
 }

@@ -1140,7 +1140,7 @@ async function setAnnounceChannel(ctx, tokens) {
   if (t === 'dm' || t === 'dms') { ctx.patchConfig({ announce: 'dm' }); return ctx.ok('Level-ups saved', "I'll DM people when they level up. DMs from bots are still in testing on Yapin', so if they don't work here I post in the same channel instead."); }
   if (t === 'off' || t === 'none' || parseBool(t) === false) { ctx.patchConfig({ announce: 'off' }); return ctx.ok('Level-ups saved', "I won't announce level-ups. People can still check **/rank**."); }
   const ch = await ctx.findChannel(tokens.join(' '));
-  if (!ch) return ctx.warn("I couldn't find that channel", `No text channel matches **${clip(tokens.join(' '), 40)}**.`);
+  if (!ch) return ctx.warn("I couldn't find that channel", await ctx.channelMissing(tokens.join(' '), '/levels channel #level-ups'));
   ctx.patchConfig({ announce: 'channel', channelId: ch.id });
   return ctx.ok('Level-ups saved', `Level-up messages go to <#${ch.id}>.`);
 }

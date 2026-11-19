@@ -640,3 +640,73 @@ test('panel: admins see counts and shortcuts, members see the tag list', async (
   assert.match(last(h, memberPanel), /Tags \(1\)/);
   assert.doesNotMatch(last(h, memberPanel), /drafts/i);
 });
+
+const statsDoc = (h) => doc(h).stats || null;
+const chan = (h, id) => h.fake.channelById(id);
+
+test('/schedule stats on makes live Members and Online counters that rename themselves every 10 minutes', async () => {
+  const h = await make();
+  const ans = await h.slash('schedule', 'stats on', { user: IDS.admin });
+  assert.match(last(h, ans), /Live counters are on/);
+  const st = statsDoc(h);
+  assert.equal(st.on, true);
+  assert.equal(chan(h, st.members).name, '👥 Members: 6');
+  assert.equal(chan(h, st.online).name, '🟢 Online: 3');
+  assert.equal(chan(h, st.members).type, 'voice');
+  const job = h.engine.scheduler.list({ kind: 'tools.stats', serverId: S });
+  assert.equal(job.length, 1);
+  assert.deepEqual(job[0].repeat, { everyMs: 600_000 });
+  assert.equal(h.engine.caps.state(S, 'member_counts'), true);
+
+  h.fake.state.members[S].push({ id: 'a0000000-0000-4000-8000-000000000777', username: 'newbie', display_name: 'Newbie', nickname: null, roles: [], joined_at: '2026-02-01T00:00:00Z' });
+  const renamesBefore = h.fake.callsTo('PATCH', new RegExp(`/channels/${st.members}$`)).length;
+  await h.advance(600_000 + 1000);
+  assert.equal(chan(h, st.members).name, '👥 Members: 7');
+  assert.equal(h.fake.callsTo('PATCH', new RegExp(`/channels/${st.members}$`)).length, renamesBefore + 1);
+  assert.equal(h.fake.callsTo('PATCH', new RegExp(`/channels/${st.online}$`)).length, 0, 'unchanged counts are not renamed');
+
+  const again = await h.slash('schedule', 'stats on', { user: IDS.admin });
+  assert.match(last(h, again), /Counters updated/);
+  assert.equal(h.fake.state.channels[S].filter((c) => /Members:/.test(c.name)).length, 1, 'no second counter');
+
+  const off = await h.slash('schedule', 'stats off', { user: IDS.admin });
+  assert.match(last(h, off), /Counters removed/);
+  assert.equal(chan(h, st.members), null);
+  assert.equal(chan(h, st.online), null);
+  assert.equal(h.engine.scheduler.list({ kind: 'tools.stats', serverId: S }).length, 0);
+  assert.equal(statsDoc(h), null);
+});
+
+test('when live counts are off, counters fall back to counting members and leave Online out', async () => {
+  const h = await make();
+  h.fake.fail('GET', /\/counts$/, { status: 403, error: "This isn't on for this server yet" });
+  const ans = await h.slash('schedule', 'stats on', { user: IDS.admin });
+  assert.match(last(h, ans), /Live counters are on/);
+  assert.match(last(h, ans), /live counts aren't switched on/);
+  const st = statsDoc(h);
+  assert.equal(chan(h, st.members).name, '👥 Members: 6');
+  assert.equal(st.online, null);
+  assert.equal(h.engine.caps.state(S, 'member_counts'), false);
+  const info = await h.slash('schedule', 'stats', { user: IDS.admin });
+  assert.match(last(h, info), /leave out Online/);
+});
+
+test('a counter channel deleted by hand is forgotten, and stats on makes it again', async () => {
+  const h = await make();
+  await h.slash('schedule', 'stats on', { user: IDS.admin });
+  const first = statsDoc(h).members;
+  h.fake.state.channels[S] = h.fake.state.channels[S].filter((c) => c.id !== first);
+  h.fake.state.members[S].pop();
+  await h.advance(600_000 + 1000);
+  assert.equal(statsDoc(h).members, null);
+  await h.slash('schedule', 'stats on', { user: IDS.admin });
+  assert.ok(statsDoc(h).members && statsDoc(h).members !== first);
+  assert.equal(chan(h, statsDoc(h).members).name, '👥 Members: 5');
+});
+
+test('only admins can turn counters on', async () => {
+  const h = await make();
+  const ans = await h.slash('schedule', 'stats on', { user: IDS.member });
+  assert.equal(statsDoc(h), null);
+  assert.doesNotMatch(last(h, ans), /Live counters are on/);
+});

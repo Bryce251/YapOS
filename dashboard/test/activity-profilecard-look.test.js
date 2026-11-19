@@ -385,3 +385,25 @@ test('the lazy card sheet is plain, cheap and follows the activity rules', () =>
   const html = readFileSync(path.join(activity, 'index.html'), 'utf8');
   assert.equal(html.includes('profilecard-look.css'), false, 'not part of the first load');
 });
+
+test('a downloaded name font loads the lazy font sheet once, a device font never does', async () => {
+  setLevel('full');
+  const first = await setup(profile({ nameFont: 'serif' }));
+  first.face.click();
+  await flush();
+  assert.equal(first.document.querySelectorAll('link[data-pcard-fonts]').length, 0);
+  first.pc.close();
+  const { document, face, pc } = await setup(profile({ nameFont: 'pacifico' }));
+  face.click();
+  await flush();
+  const name = pc.el.querySelector('.pcard-name');
+  assert.ok(name.classList.contains('font-pacifico'));
+  const links = document.querySelectorAll('link[data-pcard-fonts]');
+  assert.equal(links.length, 1);
+  assert.equal(links[0].getAttribute('href'), '/activity/css/profilecard-fonts.css');
+  pc.close();
+  pc.open(ID);
+  await flush();
+  assert.equal(document.querySelectorAll('link[data-pcard-fonts]').length, 1);
+  pc.close();
+});

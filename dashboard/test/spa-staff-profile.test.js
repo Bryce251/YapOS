@@ -51,7 +51,7 @@ test('staff profile data is read safely and only offers resets that would change
   assert.deepEqual(s.look.pins, ['vip']);
   const full = readStaffProfile(staffData());
   assert.deepEqual(RESET_PARTS.filter((r) => canReset(full.look, r.part)).map((r) => r.part), ['banner', 'bio', 'status', 'name-style', 'pins', 'all']);
-  assert.equal(nameStyleText(full.look), 'colour #ff3366, serif font');
+  assert.equal(nameStyleText(full.look), 'colour #ff3366, Serif font');
   assert.equal(nameStyleText({ nameFont: 'default' }), 'Default');
   assert.equal(staffProfileUrl(REX, 'look', 'name-style'), `/api/party/profile/${REX}/look/name-style`);
   assert.equal(readStaffProfile(null).canAct, false);

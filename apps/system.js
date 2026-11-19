@@ -350,5 +350,5 @@ export const { setup, teardown, check } = defineApp({
 
   dashboard: DASHBOARD,
 
-  help: ['/menu shows a tile for every app you can use. Tiles open right on the home screen, and **⬅️ Home** brings you back.', '/status shows the connection, message budget and which testing features work on this server.'],
+  help: ['/menu shows a tile for every app you can use. Tiles open right on the home screen, and **⬅️ Home** brings you back.', '/status shows the connection, message budget and which testing features work on this server.', 'Commands also take named values in any order, like `/ban user=@sam length=7d reason="spam and ads"`. Typing them in order still works.'],
 });

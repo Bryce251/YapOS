@@ -263,6 +263,13 @@ CREATE TABLE IF NOT EXISTS party_daily_streaks (
   updated INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS party_win_streaks (
+  user_id TEXT PRIMARY KEY,
+  streak INTEGER NOT NULL DEFAULT 0,
+  best INTEGER NOT NULL DEFAULT 0,
+  updated INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS party_packs (
   code TEXT PRIMARY KEY,
   owner_id TEXT NOT NULL,

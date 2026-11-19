@@ -421,10 +421,16 @@ export const RESULT_TEAM_MAX = 24;
 export const PARTY_XP_PLAY = 10;
 export const PARTY_XP_WIN = 15;
 export const PARTY_XP_DAY = 200;
-export const PARTY_SHARDS_PLAY = 10;
-export const PARTY_SHARDS_WIN = 25;
-export const PARTY_SHARDS_TOURNAMENT = 100;
-export const PARTY_SHARDS_PREDICTION = 15;
+export const PARTY_SHARDS_PLAY = 25;
+export const PARTY_SHARDS_WIN = 100;
+export const PARTY_SHARDS_TOURNAMENT = 500;
+export const PARTY_SHARDS_PREDICTION = 50;
+export const PARTY_PLACE_MIN = 4;
+export const PARTY_PLACE_SHARE = Object.freeze({ 2: 0.5, 3: 0.25 });
+export const PARTY_STREAK_STEP = 0.1;
+export const PARTY_STREAK_MAX = 1;
+export const PARTY_PAY_REASONS = Object.freeze(['play', 'win', 'place', 'winstreak', 'tournament', 'prediction']);
+export const PARTY_PAY_MAX = 10000;
 export const PREDICTIONS_MAX = 16;
 export const DAILY_ENDPOINT = '/api/activity/daily';
 export const DAILY_TOP_ENDPOINT = '/api/activity/daily/top';
@@ -523,6 +529,16 @@ export function partyShards(won, champ = false) {
   return PARTY_SHARDS_PLAY + (won ? PARTY_SHARDS_WIN : 0) + (champ ? PARTY_SHARDS_TOURNAMENT : 0);
 }
 
+export function placeShards(place, win = PARTY_SHARDS_WIN) {
+  const share = PARTY_PLACE_SHARE[place];
+  return share ? Math.round(win * share) : 0;
+}
+
+export function streakShards(streak, win = PARTY_SHARDS_WIN) {
+  const n = Math.floor(Number(streak) || 0);
+  return n < 2 ? 0 : Math.round(win * Math.min(PARTY_STREAK_MAX, (n - 1) * PARTY_STREAK_STEP));
+}
+
 function cleanPredictions(list, players) {
   const out = [];
   const seen = new Set();
@@ -595,10 +611,37 @@ export function resultsBody(input) {
   return out;
 }
 
-export async function sendResults(input) {
+export async function sendResults(input, { reply = false } = {}) {
   const body = resultsBody(input);
   if (!body) return false;
-  return (await postJson(RESULTS_ENDPOINT, body)) !== null;
+  const out = await postJson(RESULTS_ENDPOINT, body);
+  if (reply) return out;
+  return out !== null;
+}
+
+export function shardPay(rows, players) {
+  const slots = new Map((Array.isArray(players) ? players : []).filter((p) => p && typeof p.id === 'string' && Number.isInteger(p.slot)).map((p) => [p.id.toLowerCase(), p.slot]));
+  const out = {};
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (!r || typeof r !== 'object') continue;
+    const slot = typeof r.id === 'string' ? slots.get(r.id.toLowerCase()) : undefined;
+    const n = Number(r.shards);
+    if (slot === undefined || !Number.isInteger(n) || n < 1 || n > PARTY_PAY_MAX || !PARTY_PAY_REASONS.includes(r.reason)) continue;
+    const pay = out[slot] || { t: 0 };
+    pay.t = Math.min(PARTY_PAY_MAX * PARTY_PAY_REASONS.length, pay.t + n);
+    if (r.reason === 'win') pay.w = n;
+    if (r.reason === 'place' && PARTY_PLACE_SHARE[r.place]) {
+      pay.p = n;
+      pay.r = r.place;
+    }
+    if (r.reason === 'winstreak' && Number.isInteger(r.streak) && r.streak > 1) {
+      pay.s = n;
+      pay.n = Math.min(r.streak, 9999);
+    }
+    if (r.reason === 'tournament') pay.c = n;
+    out[slot] = pay;
+  }
+  return out;
 }
 
 export function utcDay(ms) {

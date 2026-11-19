@@ -2,7 +2,7 @@ import { h as defaultH } from './dom.js';
 import { profileAvatar } from '../profiles.js';
 import { gameById } from '../games/index.js';
 import { copyText } from './copy.js';
-import { cleanPalette, readMotion, readCrop, cropBox, themeOf, paintTheme, gradientOf, motionOk, ensureSheet, createCardFx, pick, EFFECT_IDS, FEATURED_IDS } from './cardlook.js';
+import { cleanPalette, readMotion, readCrop, cropBox, themeOf, paintTheme, gradientOf, readCustomGradient, customGradientOf, motionOk, ensureSheet, ensureFontSheet, createCardFx, pick, EFFECT_IDS, FEATURED_IDS } from './cardlook.js';
 import { createClanJoin, joinState, clanParts, clanTagOk } from '../clanjoin.js';
 
 export const PROFILE_CARD_ENDPOINT = '/api/activity/profile/';
@@ -26,7 +26,16 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const GRADIENT_COLOURS = Object.freeze({ sunset: '#ff8a6b', ocean: '#6bc4ff', aurora: '#8ab4ff', candy: '#ff8fd1', forest: '#6fdc8c', gold: '#ffd66b' });
 export const BANNERS = Object.freeze(['accent', 'sunset', 'ocean', 'aurora', 'forest', 'candy', 'midnight', 'dots', 'grid', 'stripes']);
 export const RINGS = Object.freeze(['accent', 'rainbow', 'gold', 'glow']);
-export const FONTS = Object.freeze(['rounded', 'serif', 'mono', 'caps']);
+export const FONTS = Object.freeze([
+  'rounded', 'caps', 'poppins', 'nunito', 'quicksand', 'comfortaa', 'lexend',
+  'serif', 'playfair', 'lora', 'cinzel', 'cormorant', 'dmserif', 'lobster',
+  'bebas', 'anton', 'righteous', 'bungee', 'archivo', 'blackops', 'russo',
+  'pacifico', 'caveat', 'dancing', 'satisfy', 'greatvibes', 'marker', 'shadows', 'kalam',
+  'fredoka', 'baloo', 'luckiest', 'bangers', 'chewy', 'sniglet',
+  'pressstart', 'vt323', 'silkscreen', 'orbitron', 'audiowide', 'monoton',
+  'creepster', 'fraktur', 'nosifer', 'metalmania',
+  'mono', 'jetbrains', 'spacemono',
+]);
 export const PIN_MAX = 5;
 export const BADGE_IMAGE_RE = /^\/badge-img\/c-[a-z0-9]{8}-[0-9a-f]{16}\.(png|webp|jpg)$/;
 export const BANNER_IMAGE_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg|gif)$/;
@@ -64,7 +73,8 @@ export function cleanLook(raw) {
     if (typeof p === 'string' && PIN_RE.test(p) && !pins.includes(p)) pins.push(p);
     if (pins.length >= PIN_MAX) break;
   }
-  const gradient = typeof raw.nameGradient === 'string' && Object.prototype.hasOwnProperty.call(GRADIENT_COLOURS, raw.nameGradient) ? GRADIENT_COLOURS[raw.nameGradient] : null;
+  const customGrad = readCustomGradient(raw.nameGradientCustom);
+  const gradient = !customGrad && typeof raw.nameGradient === 'string' && Object.prototype.hasOwnProperty.call(GRADIENT_COLOURS, raw.nameGradient) ? GRADIENT_COLOURS[raw.nameGradient] : null;
   const named = raw.nameColour && typeof raw.nameColour === 'object' ? raw.nameColour : null;
   const ac = raw.accent && typeof raw.accent === 'object' ? raw.accent : null;
   const accent = ac && hex(ac.base) ? { base: ac.base, text: hex(ac.dark) || ac.base, light: hex(ac.light) || ac.base } : null;
@@ -78,9 +88,10 @@ export function cleanLook(raw) {
   const featured = pick(FEATURED_IDS, raw.featured, 'level');
   const look = {
     pins,
-    colour: gradient || (named && hex(named.dark)),
-    colourLight: gradientId ? null : named && hex(named.light),
+    colour: customGrad ? customGrad.dark[0] : gradient || (named && hex(named.dark)),
+    colourLight: customGrad ? customGrad.light[0] : gradientId ? null : named && hex(named.light),
     gradient: gradientId,
+    customGrad,
     accent,
     banner,
     bannerImage: banner === 'image' ? bannerImage : null,
@@ -451,7 +462,8 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
     const look = card && card.look;
     const light = Boolean(theme && theme.light);
     const colour = look ? (light ? look.colourLight || look.colour : look.colour) : null;
-    const grad = look && look.gradient ? gradientOf(look.gradient, light) : null;
+    const grad = look && look.customGrad ? customGradientOf(look.customGrad, light) : look && look.gradient ? gradientOf(look.gradient, light) : null;
+    if (look && look.font) ensureFontSheet(docOf(), look.font);
     const nameEl = h('h2', { class: ['pcard-name', look && look.font ? `font-${look.font}` : null, colour ? 'has-colour' : null, grad ? 'has-grad' : null], text: name, attrs: { id: 'pcard-name', title: name }, vars: colour || grad ? { '--pc-name': colour, '--pc-grad': grad } : null });
     const flow = pills(card, handle, look, model);
     return h(

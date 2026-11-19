@@ -39,8 +39,11 @@ const CASINO_WIN = /^(?:Coinflip|Dice|Slots|Blackjack|Roulette|Crash|Casino) win
 const SEASON_REASON = /^(?:Trivia win|Daily quest\b.*|YapOS Party\b.*|Chatting|Voice time|Weekly bonus|Level \d+ reward)$/i;
 const QUEST_REASON = /^Daily quest\b/i;
 const PARTY_KEYS = Object.freeze(['play', 'win', 'tournament', 'prediction']);
-export const PARTY_DEFAULTS = Object.freeze({ play: 10, win: 25, tournament: 100, prediction: 15 });
-const PARTY_BOUNDS = Object.freeze({ play: 100, win: 250, tournament: 1000, prediction: 100 });
+export const PARTY_DEFAULTS = Object.freeze({ play: 25, win: 100, tournament: 500, prediction: 50 });
+export const PARTY_OLD_DEFAULTS = Object.freeze({ play: 10, win: 25, tournament: 100, prediction: 15 });
+export const PARTY_BOUNDS = Object.freeze({ play: 250, win: 1000, tournament: 5000, prediction: 250 });
+export const PARTY_PLACE = Object.freeze({ min: 4, second: 50, third: 25 });
+export const PARTY_WIN_STREAK = Object.freeze({ step: 10, max: 100 });
 const PARTY_LABELS = Object.freeze({ play: 'a game played', win: 'a win', tournament: 'a tournament win', prediction: 'a right prediction' });
 export const PARTY_DAILY_PUZZLE = 25;
 export const PARTY_DAILY_STREAK = Object.freeze({ step: 5, max: 50 });
@@ -171,7 +174,8 @@ const clampInt = (v, lo, hi, fallback) => {
 };
 
 export function partyRates(cfg = {}) {
-  const raw = cfg && cfg.partyRates && typeof cfg.partyRates === 'object' ? cfg.partyRates : {};
+  const stored = cfg && cfg.partyRates && typeof cfg.partyRates === 'object' ? cfg.partyRates : {};
+  const raw = PARTY_KEYS.every((k) => Number(stored[k]) === PARTY_OLD_DEFAULTS[k]) ? {} : stored;
   const out = {};
   for (const k of PARTY_KEYS) out[k] = clampInt(raw[k], 0, PARTY_BOUNDS[k], PARTY_DEFAULTS[k]);
   return out;
@@ -1406,7 +1410,7 @@ async function settingsView(ctx) {
     { name: 'Server events', value: limitsText(eventLimits(cfg)), inline: false },
   ];
   const body = `Wallets are shared across every server. Earn rates are set once for the whole bot, so only the bot owner can change them. Your shop stays yours.
-Typed settings: \`/economy give @sam 100\` · \`/economy take @sam 50\` · \`/economy reset @sam\` · \`/economy daily 150\` · \`/economy work 20 80\` · \`/economy allow @sam\` · \`/economy party 10 25 100 15\` · \`/economy earn 3 1 10 500\` · \`/economy streak 50 100 200\` · \`/economy events 2 48 30\``;
+Typed settings: \`/economy give @sam 100\` · \`/economy take @sam 50\` · \`/economy reset @sam\` · \`/economy daily 150\` · \`/economy work 20 80\` · \`/economy allow @sam\` · \`/economy party 25 100 500 50\` · \`/economy earn 3 1 10 500\` · \`/economy streak 50 100 200\` · \`/economy events 2 48 30\``;
   const rate = [
     button('Daily amount', cid('dailyform'), 'secondary', '📅'),
     button(work ? 'Work: on' : 'Work: off', cid('twork'), work ? 'success' : 'secondary', '💼'),
@@ -1574,13 +1578,15 @@ async function changeGiver(ctx, query, on) {
   return ctx.ok('Taken back', `**${name}** can't hand out ${CURRENCY.name} anymore.`);
 }
 
-const PARTY_HELP = `Try \`/economy party 10 25 100 15\` (a game, a win, a tournament win, a right prediction) or \`/economy party win 30\`. There is no daily limit.`;
+const PARTY_HELP = `Try \`/economy party 25 100 500 50\` (a game, a win, a tournament win, a right prediction) or \`/economy party win 150\`. 2nd and 3rd place and win streaks follow the win rate. There is no daily limit.`;
 const PAY_HELP = `Try \`/economy earn 3 1 10 500\` (chatting, a voice minute, per level, the weekly bonus) or \`/economy earn chat 5\`. 0 turns one off.`;
 const STREAK_HELP = 'Try `/economy streak 50 100 200` (bonus % at day 7, 30 and 100) or `/economy streak 30 150`.';
 const LIMITS_HELP = 'Try `/economy events 2 48 30` (highest boost, longest hours, days between events). A highest boost of 1 turns server events off.';
 
 function partyText(r) {
-  return `${fmt(r.play)} a game · ${fmt(r.win)} a win · ${fmt(r.tournament)} a tournament win · ${fmt(r.prediction)} a right pick · no daily limit`;
+  const second = Math.round((r.win * PARTY_PLACE.second) / 100);
+  const third = Math.round((r.win * PARTY_PLACE.third) / 100);
+  return `${fmt(r.play)} a game · ${fmt(r.win)} a win · ${fmt(second)} for 2nd and ${fmt(third)} for 3rd with ${PARTY_PLACE.min}+ players · win streaks +${PARTY_WIN_STREAK.step}% a win, up to +${PARTY_WIN_STREAK.max}% · ${fmt(r.tournament)} a tournament win · ${fmt(r.prediction)} a right pick · no daily limit`;
 }
 
 function payText(r) {
@@ -1630,7 +1636,7 @@ async function saveParty(ctx, tokens) {
   }
   patchCfg(ctx, { partyRates: next });
   pushRates(ctx.engine);
-  return ctx.ok('Party rates saved', `YapOS Party now pays ${partyText(next)} ${cur.emoji}, for games with 2 or more players.`);
+  return ctx.ok('Party rates saved', `YapOS Party now pays ${partyText(partyRates({ partyRates: next }))} ${cur.emoji}, for games with 2 or more players.`);
 }
 
 async function saveActivityPay(ctx, tokens) {
@@ -2102,9 +2108,9 @@ export const { setup, teardown, check } = defineApp({
     `Only the bot owner hands out ${CURRENCY.name} or changes earn rates: /economy give @sam 100 · /economy daily 150 · /economy allow @sam lets someone else help.`,
     'Streak rewards: reaching a 7, 30 or 100-day streak (and every 100 after) pays a one-time bonus on top of that day\'s /daily (by default +50%, +100% and +200% of the daily amount).',
     `Server events: admins start a Double XP or Double ${CURRENCY.name} event with /event xp 48h or /event shards 24h. It only counts in that server, ends on its own and, by default, can run once every 30 days (the bot owner sets the limits).`,
-    `YapOS Party pays ${CURRENCY.name} with no daily limit: ${PARTY_DEFAULTS.play} for every game with 2 or more signed-in players, ${PARTY_DEFAULTS.win} more for a win, ${PARTY_DEFAULTS.tournament} for a tournament win, ${PARTY_DEFAULTS.prediction} for a right prediction and ${PARTY_DAILY_PUZZLE} for each daily puzzle, plus a puzzle streak bonus (by default). Games played back to back faster than 30 seconds pay nothing extra, and banned players earn nothing.`,
+    `YapOS Party pays ${CURRENCY.name} with no daily limit: ${PARTY_DEFAULTS.play} for every game with 2 or more signed-in players, ${PARTY_DEFAULTS.win} more for a win, ${Math.round((PARTY_DEFAULTS.win * PARTY_PLACE.second) / 100)} for 2nd and ${Math.round((PARTY_DEFAULTS.win * PARTY_PLACE.third) / 100)} for 3rd in scored games with ${PARTY_PLACE.min} or more players, a win streak bonus of +${PARTY_WIN_STREAK.step}% of a win for each win in a row after the first (up to +${PARTY_WIN_STREAK.max}%), ${PARTY_DEFAULTS.tournament} for a tournament win, ${PARTY_DEFAULTS.prediction} for a right prediction and ${PARTY_DAILY_PUZZLE} for each daily puzzle, plus a puzzle streak bonus (by default). Games played back to back faster than 30 seconds pay nothing extra, and banned players earn nothing.`,
     `More ways to earn: chatting pays ${PAY_DEFAULTS.chat} at most once a minute, voice with friends ${PAY_DEFAULTS.voice} a minute, each new level ${PAY_DEFAULTS.levelup} × the level, and /daily weekly ${PAY_DEFAULTS.weekly} every 7 days (by default). Clan members get +${Math.round(CLAN_PAY_BONUS * 100)}% on chat and voice pay. See it all with /balance earn or /daily earn.`,
-    'Bot owner: /economy earn 3 1 10 500 sets chat, voice, level-up and weekly pay, /economy earn chat 5 changes one, and /economy party 10 25 100 15 sets Party pay.',
+    'Bot owner: /economy earn 3 1 10 500 sets chat, voice, level-up and weekly pay, /economy earn chat 5 changes one, and /economy party 25 100 500 50 sets Party pay.',
   ],
 
   init: (engine) => {

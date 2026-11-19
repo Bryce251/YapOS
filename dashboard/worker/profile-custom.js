@@ -7,7 +7,7 @@ import { blockedIn } from './party-blocked.js';
 import { logModAction, personName } from './party-mod.js';
 import { clearPartyProfileCache } from './party-profile.js';
 import { isBannerImagePath } from './security.js';
-import { cleanLook, defaultLook, isDefaultLook, lookTexts, readCrop, themeColours, themePalette, LookError, LOOK_VERSION, LOOK_BODY_MAX, ACH_PREFIX, PIN_MAX, BIO_MAX, PRONOUNS_MAX, STATUS_MAX, THEME_IDS, EFFECT_IDS } from '../web/js/profile-look.js';
+import { cleanLook, defaultLook, isDefaultLook, lookTexts, readCrop, readGradientCustom, gradientStops, themeColours, themePalette, LookError, LOOK_VERSION, LOOK_BODY_MAX, ACH_PREFIX, PIN_MAX, BIO_MAX, PRONOUNS_MAX, STATUS_MAX, THEME_IDS, EFFECT_IDS } from '../web/js/profile-look.js';
 import { AnimError, readAnimated, checkAnimSize, isGif, isWebp, webpAnimated, pngAnimated, ANIM_MAX_BYTES, ANIM_MAX_FRAMES, ANIM_MIN_W, ANIM_MAX_W, ANIM_MIN_H, ANIM_MAX_H } from '../web/js/banner-anim.js';
 
 export const BANNER_MAX = 800 * 1024;
@@ -133,6 +133,7 @@ export function publicLook(look, banner, owned, still = null) {
     hidden: [...l.hidden],
     nameColour: l.nameColour,
     nameGradient: l.nameGradient,
+    nameGradientCustom: readGradientCustom(l.nameGradientCustom),
     nameFont: l.nameFont,
     accent: l.accent,
     banner: l.banner === 'image' && !bannerImage ? 'none' : l.banner,
@@ -403,6 +404,7 @@ export async function staffLookView(db, userId) {
     statusEmoji: look.statusEmoji,
     nameColour: look.nameColour,
     nameGradient: look.nameGradient,
+    nameGradientCustom: readGradientCustom(look.nameGradientCustom),
     nameFont: look.nameFont,
     pins: [...look.pins],
     custom: !isDefaultLook(look),
@@ -410,7 +412,7 @@ export async function staffLookView(db, userId) {
 }
 
 function hasNameStyle(look) {
-  return Boolean(look.nameColour || look.nameGradient || (look.nameFont && look.nameFont !== 'default'));
+  return Boolean(look.nameColour || look.nameGradient || look.nameGradientCustom || (look.nameFont && look.nameFont !== 'default'));
 }
 
 function textFields(look, part) {
@@ -441,7 +443,7 @@ export function resetPlan(db, id, part, current, name, t) {
   }
   if (part === 'name-style') {
     if (!hasNameStyle(look)) return null;
-    return { action: 'profile_name_style_reset', stmts: [store({ ...look, nameColour: null, nameGradient: null, nameFont: 'default' })], detail: { part, summary: `Reset ${who} name colour and style` } };
+    return { action: 'profile_name_style_reset', stmts: [store({ ...look, nameColour: null, nameGradient: null, nameGradientCustom: null, nameFont: 'default' })], detail: { part, summary: `Reset ${who} name colour and style` } };
   }
   if (part === 'pins') {
     if (!look.pins.length) return null;
@@ -524,7 +526,8 @@ export async function serveBannerImage(request, env, url, isHidden) {
 
 export function cardLook(look, owned, banner = null, still = null) {
   const l = look || defaultLook();
-  const name = l.nameColour ? themeColours(l.nameColour) : null;
+  const grad = readGradientCustom(l.nameGradientCustom);
+  const name = l.nameColour && !grad ? themeColours(l.nameColour) : null;
   const accent = l.accent ? themeColours(l.accent) : null;
   const bannerImage = l.banner === 'image' ? bannerUrl(banner) : null;
   const motion = bannerImage ? bannerMotion(banner, still) : null;
@@ -537,7 +540,8 @@ export function cardLook(look, owned, banner = null, still = null) {
     bannerCrop: motion ? { ...(l.bannerCrop || DEFAULT_CROP) } : null,
     featured: l.featured,
     pins: owned ? l.pins.filter((p) => owned.has(p)) : [...l.pins],
-    nameGradient: l.nameGradient,
+    nameGradient: grad ? null : l.nameGradient,
+    nameGradientCustom: grad ? { angle: grad.angle, light: gradientStops(grad, 'light'), dark: gradientStops(grad, 'dark') } : null,
     nameColour: name ? { light: name.light, dark: name.dark } : null,
     nameFont: l.nameFont,
     accent: accent ? { base: accent.base, light: accent.light, dark: accent.dark } : null,

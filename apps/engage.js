@@ -3,7 +3,7 @@ import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
 import { tokenize, parseDuration, formatDuration, clip, didYouMean } from '../engine/parse.js';
-import { friendly } from '../engine/errors.js';
+import { friendly, explain, looksLikeFeatureOff } from '../engine/errors.js';
 import { accept, reject } from '../engine/dashboard.js';
 
 const ID = 'engage';
@@ -38,7 +38,8 @@ const BAR_WIDTH = 10;
 const BAR_FILL = '🟦';
 const BAR_WIN = '🟩';
 const BAR_EMPTY = '⬜';
-const FLAG_WORDS = { multi: 'multi', anon: 'anon', anonymous: 'anon' };
+const FLAG_WORDS = { multi: 'multi', anon: 'anon', anonymous: 'anon', discuss: 'thread', discussion: 'thread' };
+const THREAD_CAP = 'threads';
 const GIVEAWAY_SUBS = ['list', 'end', 'reroll', 'help'];
 const TYPE_NAMES = { poll: 'poll', giveaway: 'giveaway' };
 
@@ -313,6 +314,7 @@ function pollView(engine, p) {
   } else {
     status = `👥 ${plural(t.voters, 'voter')} · ⏳ Ends in **${timeLeft(p.endsAt - nowOf(engine))}** (${whenText(engine, p.serverId, p.endsAt)})\n-# ${how}${p.anon ? ' · 🕶️ anonymous, nobody sees who voted' : ''}`;
   }
+  if (p.threadId) status += `\n💬 Talk about it in <#${p.threadId}>`;
   const body = `${head ? `${head}\n\n` : ''}${lines.join('\n')}\n\n${status}`;
   const embed = card({ title: `📊 ${p.question}`, body, color: p.ended ? 'ok' : 'engage', footer: `Poll #${p.id} · started by ${p.creatorName || 'someone'}` });
   embed.timestamp = new Date(p.ended ? p.endedAt || p.endsAt : p.endsAt).toISOString();
@@ -485,12 +487,19 @@ async function createPoll(ctx, raw) {
     const msg = await ctx.send(ctx.channelId, pollView(engine, poll), { priority: 'high' });
     if (!msg?.id) throw friendly("Yapin' didn't give me the poll message back, so I took the poll down again. Try once more.", { title: "The poll didn't post" });
     changeItem(engine, sid, 'poll', id, (x) => { x.messageId = msg.id; });
+    poll.messageId = msg.id;
   } catch (e) {
     forget(engine, sid, 'poll', id);
     return ctx.fail(e, { action: 'post the poll in this channel', perm: 'send_messages' });
   }
+  const talk = spec.thread ? await openDiscussion(engine, sid, ctx.channelId, poll.messageId, `Poll: ${spec.question}`, `💬 Talk about poll #${id} here: **${clip(spec.question, 200)}**`) : null;
+  if (talk?.id) {
+    changeItem(engine, sid, 'poll', id, (x) => { x.threadId = talk.id; });
+    refreshSoon(engine, sid, 'poll', id);
+  }
   if (ctx.kind === 'message') return null;
-  return ctx.ok(`Poll #${id} is live`, `It ends in **${timeLeft(durationMs)}**. The bars update on the card every few seconds.\nEnd it early with **🏁 End now** or \`/poll end ${id}\`.`);
+  const talkNote = !spec.thread ? '' : talk?.id ? `\nPeople can talk about it in <#${talk.id}>.` : `\n-# ${talk?.note || 'I could not open a discussion thread, so people can talk in this channel.'}`;
+  return ctx.ok(`Poll #${id} is live`, `It ends in **${timeLeft(durationMs)}**. The bars update on the card every few seconds.\nEnd it early with **🏁 End now** or \`/poll end ${id}\`.${talkNote}`);
 }
 
 async function vote(ctx) {
@@ -621,9 +630,9 @@ function pollForm(ctx) {
 async function submitPollForm(ctx) {
   const v = ctx.values || {};
   const extras = parseExtras(v.extras);
-  if (extras.unknown.length) return ctx.warn("I didn't get the extras", `I don't know **${clip(extras.unknown.join(' '), 40)}**. Use a length like \`2h\` or \`3d\`, plus \`multi\` and/or \`anon\`.`);
+  if (extras.unknown.length) return ctx.warn("I didn't get the extras", `I don't know **${clip(extras.unknown.join(' '), 40)}**. Use a length like \`2h\` or \`3d\`, plus \`multi\`, \`anon\` and/or \`discuss\`.`);
   const options = String(v.options ?? '').split(/\r?\n|\|/).map((s) => s.trim()).filter(Boolean);
-  return createPoll(ctx, { question: String(v.question ?? '').replace(/\|/g, '/').trim(), options, multi: extras.multi, anon: extras.anon, durationMs: extras.durationMs });
+  return createPoll(ctx, { question: String(v.question ?? '').replace(/\|/g, '/').trim(), options, multi: extras.multi, anon: extras.anon, thread: !!extras.thread, durationMs: extras.durationMs });
 }
 
 async function runPoll(ctx) {
@@ -646,7 +655,7 @@ async function runPoll(ctx) {
 const pollHelpText = () => [
   '`/poll Best snack? | Chips | Pretzels | Fruit 2h`',
   'Split the question and 2 to 10 options with `|`. Add a length at the end (default 24h, up to 7 days).',
-  'Add `multi` to let people pick several, `anon` to hide who voted.',
+  'Add `multi` to let people pick several, `anon` to hide who voted, `discuss` to open a discussion thread under the poll.',
   '`/poll Pizza tonight?` makes a quick yes/no poll. `/poll list` · `/poll end 4`',
 ].join('\n');
 
@@ -1168,7 +1177,7 @@ export const { setup, teardown, check } = defineApp({
   panel: async (ctx) => ctx.ephemeral(await panelView(ctx)),
 
   help: [
-    'Polls: `/poll Best snack? | Chips | Pretzels | Fruit 2h`. Add `multi` to allow several picks and `anon` to hide who voted. Default 24h, up to 7 days.',
+    'Polls: `/poll Best snack? | Chips | Pretzels | Fruit 2h`. Add `multi` to allow several picks, `anon` to hide who voted, and `discuss` to open a discussion thread under it. Default 24h, up to 7 days.',
     '`/poll Pizza tonight?` makes a quick yes/no poll. Votes can be changed; the bars update on the card. `/poll end 4` ends one early (whoever started it, or mods).',
     'Giveaways: `/giveaway 1d 2 Prize` with `role @VIP`, `level 5` or `host @sam`. Press 🎉 Enter to join; press it again to check you are in or to leave.',
     '`/giveaway list` · `/giveaway end 3` · `/giveaway reroll 3`. Winners are drawn at random; people who left or no longer qualify are skipped.',
@@ -1181,3 +1190,27 @@ export const { setup, teardown, check } = defineApp({
   },
 });
 
+
+async function openDiscussion(engine, sid, channelId, messageId, rawName, rawContent) {
+  const name = String(rawName ?? '').replace(/[@<>#\r\n]/g, '').trim() || 'Poll';
+  const content = safe(rawContent);
+  const offNote = "Threads aren't switched on for me on this server yet, so there's no discussion thread. People can talk in this channel.";
+  if (engine.caps.state(sid, THREAD_CAP) === false) return { note: offNote };
+  const res = typeof engine.yapin?.createThread === 'function'
+    ? await engine.yapin.createThread(channelId, { name: clip(name, 90), content: clip(content, 1900), messageId, serverId: sid })
+    : await engine.bot.api('POST', `/channels/${channelId}/threads`, { name: clip(name, 90), content: clip(content, 1900), message_id: messageId || undefined })
+      .then((out) => ({ ok: true, thread: out?.thread || out?.channel || null }))
+      .catch((e) => {
+        const off = looksLikeFeatureOff(e) || e?.status === 404;
+        if (off) engine.caps.mark(sid, THREAD_CAP, false, e?.message);
+        return { ok: false, reason: off ? 'off' : e?.status === 429 ? 'limited' : 'failed', body: explain(e, { action: 'open a discussion thread', perm: 'create_threads' }).body };
+      });
+  if (res.ok && res.thread?.id) return { id: res.thread.id };
+  if (res.ok) return { note: "Yapin' didn't give me the thread back, so people can talk in this channel." };
+  if (res.reason === 'off') {
+    engine.caps.mark(sid, THREAD_CAP, false, res.error || 'threads are off');
+    return { note: offNote };
+  }
+  if (res.reason === 'limited') return { note: "Yapin' only allows a few new threads every 10 minutes, so I skipped the discussion thread this time." };
+  return { note: `No discussion thread: ${res.body || 'Yapin said no.'}` };
+}

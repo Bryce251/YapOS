@@ -92,8 +92,8 @@ const PARTY_REASON = 'YapOS Party';
 const PARTY_NS = 'party';
 const PARTY_GAME_RE = /^[a-z0-9_-]{1,32}$/;
 const PARTY_BADGE_RE = /^[A-Za-z0-9_.:-]{1,48}$/;
-const PARTY_SHARDS_MAX = 1000;
-const PARTY_SHARD_REASONS = new Set(['play', 'win', 'tournament', 'prediction', 'daily', 'streak']);
+const PARTY_SHARDS_MAX = 10000;
+const PARTY_SHARD_REASONS = new Set(['play', 'win', 'place', 'winstreak', 'tournament', 'prediction', 'daily', 'streak']);
 const PARTY_RATE_KEYS = Object.freeze(['play', 'win', 'tournament', 'prediction']);
 
 export const SLUG_RE = /^[a-z0-9-]{3,32}$/;

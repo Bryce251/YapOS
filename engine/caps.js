@@ -12,6 +12,14 @@ export const CAPS = {
   events: 'Scheduled events',
   v2: 'Components V2 cards',
   activities: 'Activities',
+  ephemeral_buttons: 'Buttons on private replies',
+  nonce: 'Duplicate-safe sending',
+  private_create: 'Private channels from the start',
+  channel_users: 'Channel member lists',
+  threads: 'Threads',
+  reaction_clear: 'Clearing reactions',
+  member_counts: 'Live member counts',
+  permissions: 'Permission checks',
 };
 
 export function createCaps({ settings, log, retryMs = 6 * 3600_000, now = () => Date.now() }) {
@@ -40,7 +48,7 @@ export function createCaps({ settings, log, retryMs = 6 * 3600_000, now = () => 
       if (state(sid, cap) !== true) mark(sid, cap, true);
       return out;
     } catch (e) {
-      if (fallbackFn && (looksLikeFeatureOff(e) || e?.status === 400) && !/ephemeral/i.test(String(e?.message))) {
+      if (fallbackFn && (looksLikeFeatureOff(e) || e?.status === 400) && (cap === 'ephemeral_buttons' || !/ephemeral/i.test(String(e?.message)))) {
         mark(sid, cap, false, e?.message);
         return fallbackFn({ reason: 'failed', error: e });
       }

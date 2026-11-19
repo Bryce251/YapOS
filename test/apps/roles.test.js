@@ -422,7 +422,7 @@ test('panel shows the editor to admins and a note to members', async () => {
   assert.equal(h.allButtons(mod).length, 0);
 });
 
-const staffButtons = (mid) => ['home', 'clear', 'new', 'created', `open:${mid}`, `tab:${mid}:style`, `add:${mid}:0`, 'addpg:zz:0', 'addsel:zz', 'addbtn:zz:0', `items:${mid}:0`, `item:${mid}:0`, `itemsel:${mid}`, `itemform:${mid}:0`, 'itemsave', `itemstyle:${mid}:0:danger`, `itemmove:${mid}:0:down`, `unitem:${mid}:0`, `text:${mid}`, 'textsave', `imgform:${mid}`, 'imgsave', `imgkind:${mid}:none`, `footform:${mid}`, 'footsave', `showlist:${mid}:off`, `accform:${mid}`, 'accsave', `defstyle:${mid}:danger`, `allstyle:${mid}`, `type:${mid}:reactions`, `mode:${mid}:add`, `maxform:${mid}`, 'maxsave', `needform:${mid}`, 'needsave', `needclear:${mid}`, `preview:${mid}`, `post:${mid}`, `postsel:${mid}`, 'postch:zz:0', `del:${mid}`];
+const staffButtons = (mid) => ['home', 'clear', 'new', 'created', `open:${mid}`, `tab:${mid}:style`, `add:${mid}:0`, 'addpg:zz:0', 'addsel:zz', 'addbtn:zz:0', `items:${mid}:0`, `item:${mid}:0`, `itemsel:${mid}`, `itemform:${mid}:0`, 'itemsave', `itemstyle:${mid}:0:danger`, `itemmove:${mid}:0:down`, `unitem:${mid}:0`, `text:${mid}`, 'textsave', `imgform:${mid}`, 'imgsave', `imgkind:${mid}:none`, `footform:${mid}`, 'footsave', `showlist:${mid}:off`, `accform:${mid}`, 'accsave', `defstyle:${mid}:danger`, `allstyle:${mid}`, `type:${mid}:reactions`, `mode:${mid}:add`, `maxform:${mid}`, 'maxsave', `needform:${mid}`, 'needsave', `needclear:${mid}`, `preview:${mid}`, `post:${mid}`, `postsel:${mid}`, 'postch:zz:0', `del:${mid}`, `rxtidy:${mid}`, `rxreset:${mid}`];
 const FORM_SAVES = [['created', { title: 'Sneaky' }], ['textsave', { title: 'Sneaky' }], ['itemsave', { emoji: '🎮', label: 'Sneaky' }], ['imgsave', { url: 'https://i.imgur.com/x.png' }], ['footsave', { footer: 'Sneaky' }], ['accsave', { color: 'red' }], ['maxsave', { max: '1' }], ['needsave', { role: '@VIP' }]];
 
 test('every editor button is locked to the admin who opened the panel and refused by role when forged', async () => {
@@ -1500,4 +1500,79 @@ test('undoing a removal never puts the same role on the menu twice', async () =>
   const ans = await h.click(undo.custom_id, { user: IDS.admin, messageId: last(removed).id });
   assert.match(h.textOf(last(ans)), /already on/);
   assert.equal(menus(h)[mid].items.filter((i) => i && i.roleId === R.gamer).length, 1);
+});
+
+async function postedReactionMenu(features = {}) {
+  const h = await createHarness({ apps: ['roles'], features });
+  const mid = await newMenu(h, 'Pings');
+  await h.slash('roles', `add ${mid} @Gamer 🎮`, admin);
+  await h.slash('roles', `add ${mid} @VIP ⭐`, admin);
+  await h.slash('roles', `type ${mid} reactions`, admin);
+  await h.slash('roles', `post ${mid} #get-roles`, admin);
+  return { h, mid, msg: await postedMessage(h, mid) };
+}
+
+const reactionsOn = (h, msgId) => h.fake.state.reactions.filter((r) => r.message_id === msgId);
+
+test('stray reactions on a reaction menu are taken off as people add them, and Tidy clears the rest', async () => {
+  const { h, mid, msg } = await postedReactionMenu({ reactionClear: true });
+  await h.react(msg.id, '🍕', { user: IDS.member, channel: CH.roles });
+  assert.ok(!reactionsOn(h, msg.id).some((r) => r.emoji === '🍕'), 'the stray reaction was removed');
+  const call = h.fake.callsTo('DELETE', /reactions\/.+\?user_id=/).pop();
+  assert.ok(call, 'only that person was cleared');
+  await h.react(msg.id, '🎮', { user: IDS.member, channel: CH.roles });
+  assert.ok(memberRoles(h).includes(R.gamer));
+
+  h.fake.state.reactions.push({ channel_id: CH.roles, message_id: msg.id, emoji: '🌮', user_id: IDS.member2 });
+  const view = await h.click(`yo:roles:tab:${mid}:settings`, admin);
+  assert.ok(h.findButton('Tidy reactions', view), 'the settings tab offers Tidy reactions');
+  const tidied = await h.click(`yo:roles:rxtidy:${mid}`, admin);
+  assert.match(h.textOf(last(tidied)), /Removed stray reactions: 🌮/);
+  assert.deepEqual(reactionsOn(h, msg.id).map((r) => r.emoji).sort(), ['⭐', '🎮', '🎮'].sort());
+  assert.ok(memberRoles(h).includes(R.gamer), 'roles are kept');
+});
+
+test('Reset reactions clears everything and adds the menu emojis back', async () => {
+  const { h, mid, msg } = await postedReactionMenu({ reactionClear: true });
+  await h.react(msg.id, '🎮', { user: IDS.member, channel: CH.roles });
+  const res = await h.slash('roles', `reset ${mid}`, admin);
+  assert.match(h.textOf(last(res)), /Cleared every reaction and added mine back/);
+  assert.deepEqual(reactionsOn(h, msg.id).map((r) => `${r.emoji}${r.user_id === IDS.bot ? 'b' : 'u'}`), ['🎮b', '⭐b']);
+  assert.ok(memberRoles(h).includes(R.gamer));
+});
+
+test('when Yapin will not clear reactions, Tidy says so and stray reactions are left alone', async () => {
+  const { h, mid, msg } = await postedReactionMenu();
+  await h.react(msg.id, '🍕', { user: IDS.member, channel: CH.roles });
+  assert.ok(reactionsOn(h, msg.id).some((r) => r.emoji === '🍕'));
+  assert.equal(h.engine.caps.state(IDS.server, 'reaction_clear'), false);
+  const tidied = await h.click(`yo:roles:rxtidy:${mid}`, admin);
+  assert.match(h.textOf(last(tidied)), /isn't switched on for me/);
+  const tries = h.fake.callsTo('DELETE', /reactions/).length;
+  await h.react(msg.id, '🌯', { user: IDS.member, channel: CH.roles });
+  assert.equal(h.fake.callsTo('DELETE', /reactions/).length, tries, 'no more tries while it is known to be off');
+});
+
+test("Yapin's refusal on its own features is explained, not treated as switched off", async () => {
+  const { h, mid } = await postedReactionMenu({ reactionClear: true });
+  h.fake.fail('DELETE', /reactions$/, { status: 403, error: 'Reactions on messages with reaction roles, a giveaway or a suggestion vote cannot be cleared' });
+  const res = await h.slash('roles', `reset ${mid}`, admin);
+  assert.match(h.textOf(last(res)), /Yapin's own features/);
+  assert.notEqual(h.engine.caps.state(IDS.server, 'reaction_clear'), false);
+});
+
+test('only admins can tidy or reset reactions', async () => {
+  const { h, mid } = await postedReactionMenu({ reactionClear: true });
+  const before = h.fake.callsTo('DELETE', /reactions/).length;
+  await h.click(`yo:roles:rxreset:${mid}`, { user: IDS.member });
+  await h.click(`yo:roles:rxtidy:${mid}`, { user: IDS.member });
+  assert.equal(h.fake.callsTo('DELETE', /reactions/).length, before);
+});
+
+test('a menu message that is gone does not switch reaction clearing off for the server', async () => {
+  const { h, mid } = await postedReactionMenu({ reactionClear: true });
+  h.fake.fail('DELETE', /reactions$/, { status: 404, error: 'Unknown message', times: 1 });
+  const res = await h.slash('roles', `reset ${mid}`, admin);
+  assert.doesNotMatch(h.textOf(last(res)), /isn't switched on/);
+  assert.notEqual(h.engine.caps.state(IDS.server, 'reaction_clear'), false);
 });

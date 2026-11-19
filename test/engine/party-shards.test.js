@@ -91,7 +91,7 @@ test('bad Shards rows are acked and dropped without paying anyone', async () => 
   const { h, w, dash } = await setup();
   w.shards = [
     { id: 'b1', user: IDS.member, shards: 0, reason: 'win', game: 'trivia' },
-    { id: 'b2', user: IDS.member, shards: 5000, reason: 'win', game: 'trivia' },
+    { id: 'b2', user: IDS.member, shards: 10001, reason: 'win', game: 'trivia' },
     { id: 'b3', user: '../etc', shards: 5, reason: 'win', game: 'trivia' },
     { id: 'b4', user: IDS.member, shards: 5, reason: 'gift', game: 'trivia' },
     { id: 'b5', user: IDS.member, shards: 2.5, reason: 'play', game: 'trivia' },
@@ -136,7 +136,7 @@ test('the owner Party rates go to the Worker on the first poll and again when th
   const { h, w, dash } = await setup();
   await dash.tick();
   await dash.ratesWork;
-  assert.deepEqual(w.rates, [{ play: 10, win: 25, tournament: 100, prediction: 15 }]);
+  assert.deepEqual(w.rates, [{ play: 25, win: 100, tournament: 500, prediction: 50 }]);
   await dash.tick();
   await dash.ratesWork;
   assert.equal(w.rates.length, 1, 'sent once, not every poll');
@@ -178,4 +178,25 @@ test('rates are not pushed when the Economy app is not loaded', async () => {
   await dash.tick();
   await dash.ratesWork;
   assert.equal(w.rates.length, 0);
+});
+
+test('the bot pays 2nd place, win streak and big tournament rows at the new rates', async () => {
+  const { h, w, dash } = await setup();
+  w.shards = [
+    { id: 'p1', user: IDS.member, shards: 50, reason: 'place', game: 'trivia' },
+    { id: 'p2', user: IDS.member, shards: 100, reason: 'winstreak', game: 'trivia' },
+    { id: 'p3', user: IDS.member, shards: 5000, reason: 'tournament', game: 'tournament' },
+    { id: 'p4', user: IDS.member, shards: 1000, reason: 'win', game: 'trivia' },
+  ];
+  await dash.tick();
+  assert.equal(balOf(h, IDS.member), 50 + 100 + 5000 + 1000);
+  assert.deepEqual(w.acks[0].shardIds.sort(), ['p1', 'p2', 'p3', 'p4']);
+});
+
+test('the bot pushes the new defaults when its saved rates are still the old defaults', async () => {
+  const { h, w, dash } = await setup();
+  await h.slash('economy', 'party 10 25 100 15', { user: IDS.owner });
+  await dash.tick();
+  await dash.ratesWork;
+  assert.deepEqual(w.rates.at(-1), { play: 25, win: 100, tournament: 500, prediction: 50 });
 });

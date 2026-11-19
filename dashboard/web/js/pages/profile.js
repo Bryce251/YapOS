@@ -7,7 +7,7 @@ import { profilePath } from '../router.js';
 import { publicFrame } from '../public-frame.js';
 import { levelProgress, normalizeProfile, SEASON_KINDS } from '../community-data.js';
 import { medalFor } from '../public-data.js';
-import { ACH_PREFIX, EFFECTS, SPECIAL_KINDS, THEME_KEYS, badgeKindOf, cropBox, defaultLook, featuredValue, readLook, specialFirst, themeColours, themePalette } from '../profile-look.js';
+import { ACH_PREFIX, EFFECTS, SPECIAL_KINDS, THEME_KEYS, badgeKindOf, cropBox, defaultLook, featuredValue, gradientCss, readLook, specialFirst, themeColours, themePalette } from '../profile-look.js';
 import { effectsAllowed, prefersReducedMotion, setEffectsAllowed, startEffect } from '../profile-fx.js';
 import { openProfileEditor } from './profile-editor.js';
 import { openClanSheet } from './clan-sheet.js';
@@ -286,12 +286,32 @@ export function openAllBadges(p, { pins = [], hints = {}, name = '' } = {}) {
   return d;
 }
 
+export function paintNameGradient(el, look) {
+  const light = look && look.nameGradientCustom ? gradientCss(look.nameGradientCustom, 'light') : null;
+  const dark = light ? gradientCss(look.nameGradientCustom, 'dark') : null;
+  if (light && dark) {
+    el.style.setProperty('--ngc-light', light);
+    el.style.setProperty('--ngc-dark', dark);
+    return true;
+  }
+  el.style.removeProperty('--ngc-light');
+  el.style.removeProperty('--ngc-dark');
+  return false;
+}
+
+export function nameGradientClass(look) {
+  if (look.nameGradientCustom && gradientCss(look.nameGradientCustom, 'light')) return 'name-grad-custom';
+  return look.nameGradient ? `name-grad-${look.nameGradient}` : '';
+}
+
 function nameHeading(name, look) {
+  const grad = nameGradientClass(look);
   const el = h('h1', {
-    class: ['profile-name', look.nameGradient ? `name-grad-${look.nameGradient}` : '', look.nameColour && !look.nameGradient ? 'has-name-colour' : '', look.nameFont !== 'default' ? `name-font-${look.nameFont}` : ''],
+    class: ['profile-name', grad, look.nameColour && !grad ? 'has-name-colour' : '', look.nameFont !== 'default' ? `name-font-${look.nameFont}` : ''],
     text: name,
   });
-  const c = !look.nameGradient && look.nameColour ? themeColours(look.nameColour) : null;
+  paintNameGradient(el, look);
+  const c = !grad && look.nameColour ? themeColours(look.nameColour) : null;
   if (c) {
     el.style.setProperty('--nc-light', c.light);
     el.style.setProperty('--nc-dark', c.dark);

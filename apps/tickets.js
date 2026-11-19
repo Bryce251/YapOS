@@ -2,7 +2,7 @@ import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row, rows, select, freeze, ICONS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
 import { tokenize, clip, normalizeName, didYouMean, parseBool, fuzzyFind, formatDuration, ID_RE } from '../engine/parse.js';
-import { explain, looksLikeFeatureOff } from '../engine/errors.js';
+import { explain, friendly, looksLikeFeatureOff } from '../engine/errors.js';
 import { accept, reject, isBlank, boolField, idList, safeId, plainObject, channelById, roleById } from '../engine/dashboard.js';
 import { sinkRole } from '../engine/roles.js';
 
@@ -25,8 +25,8 @@ const MAX_PENDING = 500;
 const MAX_LIMIT = 10;
 const TRANSCRIPT_COOLDOWN_MS = 60_000;
 const STAFF_PERMS = ['administrator', 'manage_server', 'kick_members', 'ban_members', 'timeout_members', 'manage_messages'];
-const CAP_CHECKS = ['roles', 'files', 'dms', 'selects', 'modals'];
-const CAP_LABELS = { roles: 'Role management', files: 'Sending files', dms: 'Direct messages', selects: 'Select menus', modals: 'Pop-up forms' };
+const CAP_CHECKS = ['private_create', 'channel_users', 'roles', 'files', 'dms', 'selects', 'modals'];
+const CAP_LABELS = { private_create: 'Private channels from the start', channel_users: 'Channel people lists', roles: 'Role management', files: 'Sending files', dms: 'Direct messages', selects: 'Select menus', modals: 'Pop-up forms' };
 const MAX_TYPE_STAFF = 10;
 const HOUR = 3_600_000;
 const MAX_AUTOCLOSE_HOURS = 720;
@@ -494,6 +494,52 @@ async function cleanupMade(engine, sid, made) {
 
 const MEMBER_CAP = 'member_access';
 const MEMBER_ALLOW = ['view_channel', 'send_messages'];
+const LIST_CAP = 'channel_users';
+const CREATE_CAP = 'private_create';
+const MAX_LIST = 50;
+
+const featureRefused = (e) => looksLikeFeatureOff(e) || e?.status === 400 || e?.status === 404 || /isn'?t on|is not on|feature_off/i.test(String(e?.message || ''));
+const listUsersOf = (t) => uniq([t.openerId, ...Object.entries(t.access || {}).filter(([, how]) => how === 'list').map(([u]) => u)]);
+const hasEveryone = (list, ids) => Array.isArray(list) && ids.every((u) => list.includes(u));
+
+async function openPrivateChannel(engine, sid, { name, categoryId, roleIds, userIds }) {
+  if (engine.caps.state(sid, CREATE_CAP) === false) return null;
+  let out;
+  try {
+    out = await engine.bot.api('POST', `/servers/${sid}/channels`, { name, kind: 'text', category_id: categoryId || undefined, private: true, role_ids: roleIds, user_ids: userIds });
+  } catch (e) {
+    if (!featureRefused(e)) throw e;
+    engine.caps.mark(sid, CREATE_CAP, false, e?.message);
+    return null;
+  }
+  const ch = out?.channel || null;
+  if (!ch?.id) return null;
+  if (ch.private === true && hasEveryone(ch.user_ids, userIds)) {
+    engine.caps.mark(sid, CREATE_CAP, true);
+    return { channel: ch, listed: true };
+  }
+  engine.caps.mark(sid, CREATE_CAP, false, 'the new channel came back without its people list');
+  return { channel: ch, listed: false };
+}
+
+async function setChannelUsers(engine, sid, channelId, userIds) {
+  if (engine.caps.state(sid, LIST_CAP) === false || userIds.length > MAX_LIST) return false;
+  let out;
+  try {
+    out = await engine.bot.api('PATCH', `/channels/${channelId}`, { user_ids: userIds });
+  } catch (e) {
+    if (!featureRefused(e) || /no such channel|not found/i.test(String(e?.message || ''))) throw e;
+    engine.caps.mark(sid, LIST_CAP, false, e?.message);
+    return false;
+  }
+  const list = out?.channel?.user_ids;
+  if (!hasEveryone(list, userIds)) {
+    engine.caps.mark(sid, LIST_CAP, false, 'the channel did not keep its people list');
+    return false;
+  }
+  engine.caps.mark(sid, LIST_CAP, true);
+  return true;
+}
 
 async function grantDirect(engine, sid, channelId, uid) {
   if (engine.caps.state(sid, MEMBER_CAP) === false || typeof engine.bot.setOverride !== 'function') return false;
@@ -567,6 +613,10 @@ export async function sinkOpenTicketRoles(engine) {
 }
 
 async function grantAccess(engine, sid, space, uid) {
+  if (Array.isArray(space.listUsers)) {
+    const next = uniq([...space.listUsers, uid]);
+    if (await withStep('let them into the ticket', 'manage_channels', () => setChannelUsers(engine, sid, space.channelId, next))) return 'list';
+  }
   if (await grantDirect(engine, sid, space.channelId, uid)) return 'direct';
   const roleId = await ensureTicketRole(engine, sid, space);
   if (!roleId) return null;
@@ -580,7 +630,10 @@ function accessOf(t, uid) {
 
 async function revokeAccess(engine, sid, t, uid) {
   const how = accessOf(t, uid);
-  if (how === 'direct') await engine.bot.deleteOverride(t.channelId, uid);
+  if (how === 'list') {
+    const ok = await setChannelUsers(engine, sid, t.channelId, listUsersOf(t).filter((u) => u !== uid));
+    if (!ok) throw friendly("Yapin' isn't letting me change who can see this channel right now, so they can still see it. Try again later, or remove them in the channel settings.", { title: "Couldn't remove them" });
+  } else if (how === 'direct') await engine.bot.deleteOverride(t.channelId, uid);
   else if (how === 'role' && t.roleId) await engine.bot.removeRole(sid, uid, t.roleId);
 }
 
@@ -597,11 +650,20 @@ async function makeSpace(ctx, { number, cfg, type }) {
   const made = { roleId: null, channelId: null, mode: 'role', rolesError: null, number, access: {} };
   try {
     const name = ticketChannelName(number, await usernameOf(engine, sid, uid, ctx.username));
-    const ch = await withStep('make the ticket channel', 'manage_channels', () => bot.createChannel(sid, name, { kind: 'text', categoryId: cfg.categoryId || undefined }));
-    made.channelId = ch.id;
-    made.name = ch.name || name;
     const [staff, botRole] = await Promise.all([staffRoleIds(engine, sid, type?.id), botTopRoleId(engine, sid)]);
     made.roleIds = uniq([...staff, botRole]);
+    const opened = await withStep('make the ticket channel', 'manage_channels', () => openPrivateChannel(engine, sid, { name, categoryId: cfg.categoryId, roleIds: made.roleIds, userIds: [uid] }));
+    if (opened?.channel) made.channelId = opened.channel.id;
+    if (opened?.listed) {
+      made.name = opened.channel.name || name;
+      made.mode = 'list';
+      made.access[uid] = 'list';
+      engine.cache.invalidate(sid);
+      return made;
+    }
+    const ch = opened?.channel || await withStep('make the ticket channel', 'manage_channels', () => bot.createChannel(sid, name, { kind: 'text', categoryId: cfg.categoryId || undefined }));
+    made.channelId = ch.id;
+    made.name = ch.name || name;
     await withStep('make the ticket channel private', 'manage_channels', () => bot.editChannel(ch.id, { private: true, roleIds: made.roleIds }));
     const how = await grantAccess(engine, sid, made, uid);
     if (how) {
@@ -1348,7 +1410,7 @@ async function addPerson(ctx, t, token) {
   if (user.id === t.openerId || (t.members || []).includes(user.id)) return ctx.info('Already in', `<@${user.id}> can already see this ticket.`);
   let how;
   try {
-    const space = { channelId: t.channelId, number: t.number, roleId: t.roleId || null, roleIds: t.roleId ? null : await ticketRoleIds(ctx.engine, ctx.serverId, t) };
+    const space = { channelId: t.channelId, number: t.number, roleId: t.roleId || null, roleIds: t.roleId ? null : await ticketRoleIds(ctx.engine, ctx.serverId, t), listUsers: t.mode === 'list' ? listUsersOf(t) : null };
     how = await grantAccess(ctx.engine, ctx.serverId, space, user.id);
     if (space.roleId && space.roleId !== t.roleId) patchTicket(ctx.engine, ctx.serverId, t.number, { roleId: space.roleId });
   } catch (e) {
@@ -1370,7 +1432,7 @@ async function removePerson(ctx, t, token) {
   try {
     await revokeAccess(ctx.engine, ctx.serverId, t, user.id);
   } catch (e) {
-    return ctx.fail(e, { action: 'remove them from the ticket', perm: accessOf(t, user.id) === 'direct' ? 'manage_channels' : 'manage_roles' });
+    return ctx.fail(e, { action: 'remove them from the ticket', perm: accessOf(t, user.id) === 'role' ? 'manage_roles' : 'manage_channels' });
   }
   patchTicket(ctx.engine, ctx.serverId, t.number, (x) => { const access = { ...(x.access || {}) }; delete access[user.id]; return { members: (x.members || []).filter((m) => m !== user.id), access }; });
   return ctx.reply({ embeds: [dialog.ok('Removed from the ticket', `<@${user.id}> can't see this ticket anymore. Removed by <@${ctx.userId}>.`, { color: 'tickets' })], components: [row(button('Undo: add them back', cid('readd', t.number, user.id), 'secondary', ICONS.undo))] });
@@ -1526,7 +1588,7 @@ async function setupView(ctx) {
   const logCh = logChannelOf(engine, sid);
   const botPerms = await engine.perms.botCan(sid, 'manage_channels', 'manage_roles').catch(() => ({ ok: true, missing: [] }));
   const warnings = [];
-  if (engine.caps.state(sid, 'roles') === false) warnings.push(`${ICONS.warn} **Role management is off for me on this server.** New tickets are staff-only: members can't see their own ticket, and staff are told to contact them. Private tickets work once Yapin' switches role management on for this bot.`);
+  if (engine.caps.state(sid, 'roles') === false && engine.caps.state(sid, CREATE_CAP) !== true) warnings.push(`${ICONS.warn} **Role management is off for me on this server.** New tickets are staff-only: members can't see their own ticket, and staff are told to contact them. Private tickets work once Yapin' switches role management on for this bot.`);
   if (!botPerms.ok) warnings.push(`${ICONS.warn} My role is missing **${botPerms.missing.map((p) => (p === 'manage_roles' ? 'Manage Roles' : 'Manage Channels')).join('** and **')}**. Tickets need both.`);
   if (!logCh) warnings.push(`${ICONS.warn} No log channel yet, so closed tickets have nowhere to save their transcript.`);
   const fields = [
@@ -1541,7 +1603,7 @@ async function setupView(ctx) {
     { name: 'Open tickets and ratings', value: `${open} open · ${ratingSummary(engine, sid)}`, inline: true },
     { name: 'Features on this server', value: CAP_CHECKS.map((c) => capLine(engine, sid, c)).join('\n'), inline: false },
   ];
-  const body = `${warnings.length ? `${warnings.join('\n')}\n\n` : ''}Members open a private channel with the staff. Only the member, people they add, and staff can see it. People are added straight to the ticket; while Yapin' can't do that yet, I use a ticket role that is deleted when the ticket closes.\n-# Typed: \`/tickets panel #channel\`, \`/tickets staff @role\`, \`/tickets log #channel\`, \`/tickets limit 1\`, \`/tickets category name\`, \`/tickets type report staff @role\`, \`/tickets autoclose 48\`.`;
+  const body = `${warnings.length ? `${warnings.join('\n')}\n\n` : ''}Members open a private channel with the staff. Only the member, people they add, and staff can see it. New tickets are private from the moment they're made, with the member and staff on the channel's people list (up to 50 people). If Yapin' refuses that here, I add people straight to the ticket or use a ticket role that is deleted when the ticket closes.\nTickets stay channels, not threads: threads on Yapin' can't be made private yet, so anyone who can see the parent channel could read them.\n-# Typed: \`/tickets panel #channel\`, \`/tickets staff @role\`, \`/tickets log #channel\`, \`/tickets limit 1\`, \`/tickets category name\`, \`/tickets type report staff @role\`, \`/tickets autoclose 48\`.`;
   return {
     embeds: [card({ title: `${ICONS.tickets} Ticket setup`, body, fields, color: 'tickets' })],
     components: [
@@ -1646,7 +1708,7 @@ async function setLog(ctx, text) {
     return ctx.ok('Ticket log reset', core ? `Transcripts go to the server log, <#${core}>.` : 'No log channel now, so transcripts are not saved.');
   }
   const ch = await ctx.findChannel(text);
-  if (!ch) return ctx.warn("I couldn't find that channel", 'Mention it, like `/tickets log #ticket-logs`.');
+  if (!ch) return ctx.warn("I couldn't find that channel", await ctx.channelMissing(text, '/tickets log #ticket-logs'));
   ctx.patchConfig({ logChannelId: ch.id });
   return ctx.ok('Ticket log set', `Transcripts and ticket notes go to <#${ch.id}>.`);
 }
@@ -1838,7 +1900,7 @@ async function runTickets(ctx, tokensIn) {
       if (!rest.length) return await askPanelChannel(ctx);
       const here = /^here$/i.test(rest[0]);
       const ch = here ? await channelHere(ctx) : await ctx.findChannel(rest.join(' '));
-      if (!ch) return here ? await notHere(ctx) : await ctx.warn("I couldn't find that channel", 'Mention it, like `/tickets panel #support`.');
+      if (!ch) return here ? await notHere(ctx) : await ctx.warn("I couldn't find that channel", await ctx.channelMissing(rest.join(' '), '/tickets panel #support'));
       return await postPanel(ctx, ch);
     }
     if (sub === 'category') return await setCategory(ctx, rest.join(' '));
@@ -2322,7 +2384,8 @@ export const { setup, teardown, check } = defineApp({
   },
 
   help: [
-    "Each ticket is a private channel: the member, people they add, and staff see it. People are added straight to the ticket, with a temporary ticket role only while Yapin' needs one.",
+    "Each ticket is a private channel from the moment it's made: the member, people they add (up to 50), and staff see it. If Yapin' refuses the people list on a server, I add people straight to the ticket or use a temporary ticket role.",
+    "Tickets don't use threads, because threads on Yapin' can't be private yet.",
     'Closing saves a transcript to the log channel and DMs a copy to the member when DMs work.',
     'Staff can close a ticket from anywhere with /ticket close 12, even if its channel was deleted by hand.',
     'After closing, the member gets a DM asking for a 1 to 5 star rating (and an optional comment); it shows up in the ticket log.',

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHarness, IDS } from '../harness.js';
-import { activityPay, levelUpPay, clanPay, earnSource, partyRates, PAY_DEFAULTS, PARTY_DEFAULTS, CHAT_PAY_COOLDOWN_MS, WEEK_MS } from '../../apps/economy.js';
+import { activityPay, levelUpPay, clanPay, earnSource, partyRates, PAY_DEFAULTS, PARTY_DEFAULTS, PARTY_OLD_DEFAULTS, PARTY_BOUNDS, CHAT_PAY_COOLDOWN_MS, WEEK_MS } from '../../apps/economy.js';
 import { GLOBAL_KEY } from '../../engine/global.js';
 
 const S = IDS.server;
@@ -15,7 +15,8 @@ const xp = (h, ev) => h.bot.emit('xp:gained', { user: IDS.member, server_id: nul
 test('pay rates have sane defaults and clamp junk', () => {
   assert.deepEqual(activityPay({}), PAY_DEFAULTS);
   assert.deepEqual(activityPay({ activityPay: { chat: 999, voice: -3, levelup: 'x', weekly: 1e9 } }), { chat: 50, voice: 0, levelup: PAY_DEFAULTS.levelup, weekly: 10000 });
-  assert.deepEqual(PARTY_DEFAULTS, { play: 10, win: 25, tournament: 100, prediction: 15 });
+  assert.deepEqual(PARTY_DEFAULTS, { play: 25, win: 100, tournament: 500, prediction: 50 });
+  assert.deepEqual(PARTY_BOUNDS, { play: 250, win: 1000, tournament: 5000, prediction: 250 });
   assert.equal('cap' in partyRates({ partyRates: { cap: 150 } }), false, 'the old daily cap is gone');
   assert.equal(levelUpPay(10, 4, 5), 50);
   assert.equal(levelUpPay(10, 4, 7), 50 + 60 + 70);
@@ -25,6 +26,28 @@ test('pay rates have sane defaults and clamp junk', () => {
   assert.equal(clanPay(3, true), 4);
   assert.equal(clanPay(10, true, 0.25), 14);
   for (const [r, src] of [['Chatting', 'chat'], ['Voice time', 'voice'], ['Weekly bonus', 'weekly'], ['Level 12 reward', 'levelup'], ['YapOS Party', 'party']]) assert.equal(earnSource(r), src);
+});
+
+test('Party rates still on the old defaults move to the new defaults, and custom rates are kept', () => {
+  assert.deepEqual(partyRates({ partyRates: { ...PARTY_OLD_DEFAULTS } }), PARTY_DEFAULTS);
+  assert.deepEqual(partyRates({ partyRates: { play: 10, win: 25, tournament: 100, prediction: 16 } }), { play: 10, win: 25, tournament: 100, prediction: 16 });
+  assert.deepEqual(partyRates({ partyRates: { play: 4, win: 20, tournament: 30, prediction: 6 } }), { play: 4, win: 20, tournament: 30, prediction: 6 });
+  assert.deepEqual(partyRates({ partyRates: { play: 9999, win: 9999, tournament: 9999, prediction: 9999 } }), PARTY_BOUNDS);
+});
+
+test('the owner can set the new higher Party rates and /balance earn explains places and streaks', async () => {
+  const h = await make();
+  const ok = await h.slash('economy', 'party 250 1000 5000 250', { user: IDS.owner });
+  assert.match(lastText(h, ok), /Party rates saved/);
+  assert.deepEqual(eco(h).partyRates(), { play: 250, win: 1000, tournament: 5000, prediction: 250 });
+  const bad = await h.slash('economy', 'party tournament 5001', { user: IDS.owner });
+  assert.match(lastText(h, bad), /can be 0 to 5,000/);
+  await h.slash('economy', 'party 25 100 500 50', { user: IDS.owner });
+  const ans = await h.slash('balance', 'earn', { user: IDS.member });
+  const text = lastText(h, ans);
+  assert.match(text, /100 a win/);
+  assert.match(text, /50 for 2nd and 25 for 3rd with 4\+ players/);
+  assert.match(text, /win streaks \+10% a win, up to \+100%/);
 });
 
 test('chatting pays at most once a minute, silently', async () => {

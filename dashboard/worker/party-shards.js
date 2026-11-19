@@ -1,21 +1,29 @@
 import { DAY, SECOND, MINUTE, HttpError, json, readJson, randomToken } from './util.js';
 
-export const SHARD_REASONS = Object.freeze(['play', 'win', 'tournament', 'prediction', 'daily', 'streak']);
-export const DEFAULT_RATES = Object.freeze({ play: 10, win: 25, tournament: 100, prediction: 15 });
-export const RATE_BOUNDS = Object.freeze({ play: [0, 100], win: [0, 250], tournament: [0, 1000], prediction: [0, 100] });
+export const SHARD_REASONS = Object.freeze(['play', 'win', 'place', 'winstreak', 'tournament', 'prediction', 'daily', 'streak']);
+export const DEFAULT_RATES = Object.freeze({ play: 25, win: 100, tournament: 500, prediction: 50 });
+export const OLD_DEFAULT_RATES = Object.freeze({ play: 10, win: 25, tournament: 100, prediction: 15 });
+export const RATE_BOUNDS = Object.freeze({ play: [0, 250], win: [0, 1000], tournament: [0, 5000], prediction: [0, 250] });
 export const RATE_KEYS = Object.freeze(Object.keys(DEFAULT_RATES));
 export const OLD_RATE_KEYS = Object.freeze(['cap']);
 export const SHARD_BATCH = 100;
 export const MAX_PREDICTIONS = 16;
 export const SHARDS_KEEP_CLAIMED = 2 * DAY;
 export const SHARDS_KEEP_UNCLAIMED = 30 * DAY;
-export const PAY_GAP_MS = Object.freeze({ play: 30 * SECOND, win: 30 * SECOND, tournament: 10 * MINUTE, prediction: 60 * SECOND });
+export const PAY_GAP_MS = Object.freeze({ play: 30 * SECOND, win: 30 * SECOND, place: 30 * SECOND, winstreak: 30 * SECOND, tournament: 10 * MINUTE, prediction: 60 * SECOND });
 export const DAILY_PUZZLE_SHARDS = 25;
 export const DAILY_STREAK_STEP = 5;
 export const DAILY_STREAK_MAX = 50;
 export const DAILY_STREAK_GAME = 'daily';
 
-export const SHARDS_ALERT_DAY = 4000;
+export const PLACE_MIN_PLAYERS = 4;
+export const PLACE_SHARE = Object.freeze({ 2: 0.5, 3: 0.25 });
+export const UNRANKED_GAMES = Object.freeze(['chain', 'higherlower', 'reflex', 'memory', 'telephone']);
+export const WIN_STREAK_STEP = 0.1;
+export const WIN_STREAK_MAX = 1;
+export const WIN_STREAK_TOP = 1 + Math.round(WIN_STREAK_MAX / WIN_STREAK_STEP);
+
+export const SHARDS_ALERT_DAY = 20000;
 export const HOLD_KINDS = Object.freeze(['shards_day', 'farm', 'fast', 'same_name', 'reported', 'game_cap']);
 
 const RATES_ID = 'party';
@@ -34,11 +42,16 @@ export function clampRates(raw, base = DEFAULT_RATES) {
   return out;
 }
 
+export function isOldDefault(rates) {
+  return Boolean(rates) && RATE_KEYS.every((key) => Number(rates[key]) === OLD_DEFAULT_RATES[key]);
+}
+
 export async function loadRates(db) {
   const row = await db.prepare('SELECT play, win, tournament, prediction FROM party_rates WHERE id = ?').bind(RATES_ID).first();
   if (!row) return { ...DEFAULT_RATES };
   const nums = {};
   for (const key of RATE_KEYS) nums[key] = Number(row[key]);
+  if (isOldDefault(nums)) return { ...DEFAULT_RATES };
   return clampRates(nums);
 }
 
@@ -63,15 +76,43 @@ export async function getRates(env) {
   return json({ rates: await loadRates(env.DB), defaults: DEFAULT_RATES, bounds: RATE_BOUNDS, daily: { puzzle: DAILY_PUZZLE_SHARDS, streakStep: DAILY_STREAK_STEP, streakMax: DAILY_STREAK_MAX } });
 }
 
+export function isDecided(result) {
+  const winners = result.players.filter((p) => p.won).length;
+  return winners > 0 && winners < result.players.length;
+}
+
+export function shardPlaces(result, banned = new Set()) {
+  const out = new Map();
+  const players = result.players;
+  if (UNRANKED_GAMES.includes(result.game) || !isDecided(result)) return out;
+  if (players.some((p) => p.team)) return out;
+  if (players.filter((p) => !banned.has(p.id)).length < PLACE_MIN_PLAYERS) return out;
+  for (const p of players) {
+    if (p.won || !(p.score > 0)) continue;
+    const place = 1 + players.filter((q) => q.won || q.score > p.score).length;
+    if (PLACE_SHARE[place]) out.set(p.id, place);
+  }
+  return out;
+}
+
+export function placeShards(win, place) {
+  const share = PLACE_SHARE[place];
+  return share && win > 0 ? Math.round(win * share) : 0;
+}
+
 export function shardWants(result, rates, banned) {
   const wants = [];
   const winners = new Set(result.players.filter((p) => p.won).map((p) => p.id));
-  const decided = winners.size > 0 && winners.size < result.players.length;
+  const decided = isDecided(result);
   const players = new Set(result.players.map((p) => p.id));
+  const places = shardPlaces(result, banned);
   for (const p of result.players) {
     if (banned.has(p.id)) continue;
     if (rates.play > 0) wants.push({ id: p.id, reason: 'play', shards: rates.play });
     if (decided && p.won && rates.win > 0) wants.push({ id: p.id, reason: 'win', shards: rates.win });
+    const place = places.get(p.id);
+    const placePay = place ? placeShards(rates.win, place) : 0;
+    if (placePay > 0) wants.push({ id: p.id, reason: 'place', shards: placePay, place });
     if (result.tournament && result.tournament === p.id && rates.tournament > 0) wants.push({ id: p.id, reason: 'tournament', shards: rates.tournament });
   }
   if (decided && rates.prediction > 0) {
@@ -85,11 +126,46 @@ export function shardWants(result, rates, banned) {
   return wants;
 }
 
+export function winStreakShards(win, streak) {
+  const n = Math.floor(Number(streak) || 0);
+  if (n < 2 || !(win > 0)) return 0;
+  return Math.round(win * Math.min(WIN_STREAK_MAX, (n - 1) * WIN_STREAK_STEP));
+}
+
+export async function loadWinStreaks(db, ids) {
+  if (!ids.length) return new Map();
+  const res = await db.prepare(`SELECT user_id, streak FROM party_win_streaks WHERE user_id IN (${ids.map(() => '?').join(', ')})`).bind(...ids).all();
+  return new Map(((res && res.results) || []).map((r) => [String(r.user_id), Math.max(0, Number(r.streak) || 0)]));
+}
+
+export function nextWinStreaks(result, banned, paidWins, streaks) {
+  const out = new Map();
+  if (!isDecided(result)) return out;
+  for (const p of result.players) {
+    if (banned.has(p.id)) continue;
+    const was = streaks.get(p.id) || 0;
+    if (!p.won) {
+      if (was > 0) out.set(p.id, 0);
+    } else if (paidWins.has(p.id)) out.set(p.id, was + 1);
+  }
+  return out;
+}
+
+export function winStreakStatement(db, id, streak, t) {
+  const n = Math.max(0, Math.floor(Number(streak) || 0));
+  const upsert = 'ON CONFLICT (user_id) DO UPDATE SET streak = excluded.streak, best = MAX(party_win_streaks.best, excluded.streak), updated = excluded.updated';
+  if (!n) return db.prepare(`INSERT INTO party_win_streaks (user_id, streak, best, updated) VALUES (?, 0, 0, ?) ${upsert}`).bind(id, t);
+  return db
+    .prepare(`INSERT INTO party_win_streaks (user_id, streak, best, updated) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM party_shards WHERE user_id = ? AND reason = 'win' AND at = ?) ${upsert}`)
+    .bind(id, n, n, t, id, t);
+}
+
 export function shardStatement(db, want, game, day, t) {
   const gap = PAY_GAP_MS[want.reason] || 0;
-  return db
-    .prepare('INSERT INTO party_shards (id, user_id, shards, reason, game, at, day, claimed) SELECT ?, ?, ?, ?, ?, ?, ?, 0 WHERE NOT EXISTS (SELECT 1 FROM party_shards WHERE user_id = ? AND reason = ? AND at > ?)')
-    .bind(randomToken(12), want.id, want.shards, want.reason, game, t, day, want.id, want.reason, t - gap);
+  const sql = 'INSERT INTO party_shards (id, user_id, shards, reason, game, at, day, claimed) SELECT ?, ?, ?, ?, ?, ?, ?, 0 WHERE NOT EXISTS (SELECT 1 FROM party_shards WHERE user_id = ? AND reason = ? AND at > ?)';
+  const args = [randomToken(12), want.id, want.shards, want.reason, game, t, day, want.id, want.reason, t - gap];
+  if (want.reason !== 'winstreak') return db.prepare(sql).bind(...args);
+  return db.prepare(`${sql} AND EXISTS (SELECT 1 FROM party_shards WHERE user_id = ? AND reason = 'win' AND at = ?)`).bind(...args, want.id, t);
 }
 
 export async function recentShards(db, ids, t) {
@@ -107,15 +183,18 @@ export async function recentShards(db, ids, t) {
 }
 
 export async function shardHolds(db, ids, day) {
-  if (!ids.length) return { held: new Set(), today: new Map() };
+  if (!ids.length) return { held: new Set(), today: new Map(), alerted: new Set() };
   const marks = ids.map(() => '?').join(', ');
-  const [alertRes, sumRes] = await Promise.all([
+  const dayStart = Date.parse(`${day}T00:00:00Z`);
+  const [alertRes, sumRes, dayRes] = await Promise.all([
     db.prepare(`SELECT DISTINCT user_id FROM party_cheat_alerts WHERE status = 'open' AND kind IN (${HOLD_KINDS.map(() => '?').join(', ')}) AND user_id IN (${marks})`).bind(...HOLD_KINDS, ...ids).all(),
     db.prepare(`SELECT user_id, SUM(shards) AS total FROM party_shards WHERE day = ? AND user_id IN (${marks}) GROUP BY user_id`).bind(day, ...ids).all(),
+    db.prepare(`SELECT DISTINCT user_id FROM party_cheat_alerts WHERE kind = 'shards_day' AND last_at >= ? AND user_id IN (${marks})`).bind(dayStart, ...ids).all(),
   ]);
   const held = new Set(((alertRes && alertRes.results) || []).map((r) => String(r.user_id)));
   const today = new Map(((sumRes && sumRes.results) || []).map((r) => [String(r.user_id), Number(r.total) || 0]));
-  return { held, today };
+  const alerted = new Set(((dayRes && dayRes.results) || []).map((r) => String(r.user_id)));
+  return { held, today, alerted };
 }
 
 export function tooSoon(recent, want, t) {

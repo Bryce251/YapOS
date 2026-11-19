@@ -27,7 +27,7 @@ const STYLE_WORDS = { blue: 'primary', blurple: 'primary', primary: 'primary', g
 const ACCENTS = { red: 0xed4245, orange: 0xe67e22, yellow: 0xfee75c, gold: 0xf1c40f, green: 0x57f287, teal: 0x1abc9c, cyan: 0x00bcd4, blue: 0x3498db, blurple: 0x5865f2, purple: 0x9b59b6, pink: 0xeb459e, grey: 0x95a5a6, gray: 0x95a5a6, black: 0x23272a, white: 0xffffff };
 const PICTURE_HOSTS = ['files.yapper.website', 'www.yapin.gg', 'yapin.gg', 'i.imgur.com', 'media.tenor.com', 'media.giphy.com', 'i.giphy.com', 'upload.wikimedia.org', 'raw.githubusercontent.com', 'avatars.githubusercontent.com', 'user-images.githubusercontent.com', 'i.ytimg.com', 'cdn.discordapp.com', 'media.discordapp.net', 'pbs.twimg.com', 'i.redd.it', 'static-cdn.jtvnw.net', 'i.scdn.co', 's4.anilist.co', 'cdn.myanimelist.net', 'nekos.best', 'cdn.weeb.sh'];
 const PICTURE_DOMAINS = ['klipy.com', 'rbxcdn.com'];
-const SUBS = { new: 'new', create: 'new', make: 'new', list: 'list', menus: 'list', all: 'list', add: 'add', remove: 'remove', rm: 'remove', take: 'remove', post: 'post', send: 'post', publish: 'post', update: 'post', type: 'type', style: 'type', mode: 'mode', preview: 'preview', show: 'open', open: 'open', edit: 'open', delete: 'delete', del: 'delete', help: 'help', item: 'item', button: 'item', set: 'set', settings: 'set' };
+const SUBS = { new: 'new', create: 'new', make: 'new', list: 'list', menus: 'list', all: 'list', add: 'add', remove: 'remove', rm: 'remove', take: 'remove', post: 'post', send: 'post', publish: 'post', update: 'post', type: 'type', style: 'type', mode: 'mode', preview: 'preview', tidy: 'tidy', reset: 'reset', show: 'open', open: 'open', edit: 'open', delete: 'delete', del: 'delete', help: 'help', item: 'item', button: 'item', set: 'set', settings: 'set' };
 const EMOJI_RE = /^(?:<a?:\w+:[\w-]+>|(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|[0-9#*]️?⃣)[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}️‍⃣]*)$/u;
 
 const blank = () => ({ menus: {}, seq: 0, notices: [] });
@@ -642,8 +642,12 @@ function settingsTab(mid, menu, roleMap) {
         button(menu.needRole ? `Needs @${need?.name || 'deleted role'}` : 'Needs a role: no', cid('needform', mid), 'secondary', '🔐'),
         menu.needRole ? button('Let anyone use it', cid('needclear', mid), 'secondary', '🔓') : null,
       ),
-    ],
-    tip: `Typed: /roles set ${mid} max 2 · /roles set ${mid} needs @Verified`,
+      menu.postedAs === 'reactions' && menu.messageId ? row(
+        button('Tidy reactions', cid('rxtidy', mid), 'secondary', '🧹'),
+        button('Reset reactions', cid('rxreset', mid), 'danger', '♻️'),
+      ) : null,
+    ].filter(Boolean),
+    tip: `Typed: /roles set ${mid} max 2 · /roles set ${mid} needs @Verified${menu.postedAs === 'reactions' ? ` · /roles tidy ${mid}` : ''}`,
   };
 }
 
@@ -1072,6 +1076,7 @@ const usage = [
   '`/roles mode m1 toggle|unique|add`',
   '`/roles post m1 #get-roles` posts or updates it',
   '`/roles preview m1` · `/roles delete m1` · `/roles list`',
+  '`/roles tidy m1` removes reactions that are not one of the menu emojis · `/roles reset m1` clears every reaction and adds mine back',
 ].join('\n');
 
 async function needMenu(ctx, token) {
@@ -1156,6 +1161,7 @@ async function runTyped(ctx) {
   const args = rest.slice(1);
   if (sub === 'open') return show(ctx, await editorView(engine, sid, mid, null, { tab: String(args[0] || '').toLowerCase() }));
   if (sub === 'preview') return previewMenu(ctx, mid);
+  if (sub === 'tidy' || sub === 'reset') return show(ctx, await editorView(engine, sid, mid, await fixReactions(engine, sid, mid, sub), { tab: 'settings' }));
   if (sub === 'delete') return deleteMenu(ctx, mid);
   if (sub === 'item') return runItem(ctx, mid, args);
   if (sub === 'set') return runSet(ctx, mid, args);
@@ -1275,6 +1281,8 @@ export const { setup, teardown, check } = defineApp({
       return show(ctx, await editorView(ctx.engine, ctx.serverId, mid, `${ICONS.ok} Made **${clip(title, MAX_TITLE)}**. Add some roles next.`));
     }),
     open: admin(async (ctx) => show(ctx, await editorView(ctx.engine, ctx.serverId, ctx.argv[0], null, { tab: ctx.argv[1] }))),
+    rxtidy: admin(async (ctx) => show(ctx, await editorView(ctx.engine, ctx.serverId, ctx.argv[0], await fixReactions(ctx.engine, ctx.serverId, ctx.argv[0], 'tidy'), { tab: 'settings' }))),
+    rxreset: admin(async (ctx) => show(ctx, await editorView(ctx.engine, ctx.serverId, ctx.argv[0], await fixReactions(ctx.engine, ctx.serverId, ctx.argv[0], 'reset'), { tab: 'settings' }))),
     tab: admin(async (ctx) => show(ctx, await editorView(ctx.engine, ctx.serverId, ctx.argv[0], null, { tab: ctx.argv[1], page: ctx.argv[2] }))),
     items: admin(async (ctx) => show(ctx, await editorView(ctx.engine, ctx.serverId, ctx.argv[0], null, { tab: 'roles', page: ctx.argv[1] }))),
     add: admin(async (ctx) => {
@@ -1534,6 +1542,7 @@ export const { setup, teardown, check } = defineApp({
     'Role menus come in three types: buttons (up to 25), a dropdown, or reactions.',
     'Each button can have its own text, emoji, colour and short description. The posted menu lists what every button gives.',
     'Modes: toggle (click again to remove), unique (one role from the menu at a time), add only. You can also cap how many roles one person takes, or only let people with a certain role use the menu.',
+    "Reaction menus: **Tidy reactions** (in the menu settings) removes reactions that aren't one of the menu's emojis, and **Reset reactions** clears them all and adds mine back. People keep the roles they already have. Stray reactions are also taken off as people add them, when Yapin' lets me.",
     'I can only hand out roles below my own role. Drag my role higher in Server settings → Roles if a role is missing.',
     'Typed shortcuts: /roles add m1 @Gamer 🎮 Gamers · /roles item m1 1 color green · /roles set m1 accent blue · /roles post m1 #get-roles',
   ],
@@ -1550,10 +1559,112 @@ async function onReaction(ctx, ev, added) {
   const posted = menu.postedEmojis && typeof menu.postedEmojis === 'object' ? Object.entries(menu.postedEmojis) : null;
   const hit = posted ? posted.find(([, e]) => sameEmoji(e, ev.emoji)) : null;
   const idx = posted ? (hit ? Number(hit[0]) : -1) : menu.items.findIndex((i) => i && sameEmoji(i.emoji, ev.emoji));
-  if (!Number.isInteger(idx) || idx < 0 || !menu.items[idx]) return;
+  if (!Number.isInteger(idx) || idx < 0 || !menu.items[idx]) {
+    if (added) await removeStray(engine, sid, ev);
+    return;
+  }
   if (!added && menu.mode === 'add') return;
   const blocked = await gateProblem(engine, sid, ev.user_id, menu);
   if (blocked) { engine.log.debug(`[roles] reaction by ${ev.user_id} on ${mid}: ${blocked}`); return; }
   const res = await changeRole(engine, sid, ev.user_id, mid, idx, added ? 'add' : 'remove');
   if (res.problem) engine.log.debug(`[roles] reaction by ${ev.user_id} on ${mid}: ${res.problem}`);
+}
+
+const RX_CAP = 'reaction_clear';
+const RX_MAX_CALLS = 8;
+const STRAY_PER_MIN = 5;
+const strayTimes = new WeakMap();
+
+const rxOff = (e) => looksLikeFeatureOff(e) || (e?.status === 404 && !/message|channel/i.test(String(e?.message || ''))) ||/isn'?t on|is not on|feature_off/i.test(String(e?.message || ''));
+const rxYapinOwn = (e) => /reaction role|giveaway|suggestion/i.test(String(e?.message || ''));
+
+async function clearReactionsOn(engine, sid, channelId, messageId, { emoji = null, userId = null } = {}) {
+  if (engine.caps.state(sid, RX_CAP) === false) return { ok: false, off: true };
+  if (typeof engine.yapin?.clearReactions === 'function') {
+    const res = await engine.yapin.clearReactions(channelId, messageId, { emoji: emoji || undefined, userId: userId || undefined, serverId: sid, maxRounds: 3, maxWaitMs: 0 });
+    if (res.ok) return { ok: true };
+    if (res.reason === 'limited') return { ok: false, limited: true };
+    if (res.reason === 'protected' || rxYapinOwn({ message: res.error })) return { ok: false, own: true, error: Object.assign(new Error(res.error || ''), { status: res.status }) };
+    if (res.reason === 'off' || res.reason === 'refused' || (res.reason === 'missing' && !/message|channel/i.test(String(res.error || '')))) {
+      engine.caps.mark(sid, RX_CAP, false, res.error || res.reason);
+      return { ok: false, off: true };
+    }
+    return { ok: false, error: Object.assign(new Error(res.error || ''), { status: res.status }) };
+  }
+  const base = `/channels/${channelId}/messages/${messageId}/reactions`;
+  const path = emoji ? `${base}/${encodeURIComponent(emoji)}?${userId ? `user_id=${encodeURIComponent(userId)}` : 'all=true'}` : base;
+  try {
+    for (let i = 0; i < 3; i++) {
+      const out = await engine.bot.api('DELETE', path);
+      if (!out?.more) break;
+    }
+    engine.caps.mark(sid, RX_CAP, true);
+    return { ok: true };
+  } catch (e) {
+    if (rxYapinOwn(e)) return { ok: false, own: true, error: e };
+    if (rxOff(e) || e?.status === 400) {
+      engine.caps.mark(sid, RX_CAP, false, e?.message);
+      return { ok: false, off: true, error: e };
+    }
+    return { ok: false, error: e };
+  }
+}
+
+function rxProblem(res) {
+  if (res.limited) return `${ICONS.warn} Yapin' only lets me clear reactions 10 times a minute. Press it again in a minute.`;
+  if (res.off) return `${ICONS.warn} Clearing reactions isn't switched on for me on this server yet, so I left them. You can remove them by hand, or try again later.`;
+  if (res.own) return `${ICONS.warn} Yapin' won't clear reactions on that message because it has one of Yapin's own features on it (reaction roles, a giveaway or a suggestion vote).`;
+  const { body } = explain(res.error, { action: 'clear reactions on the menu', perm: 'manage_messages' });
+  return `${ICONS.warn} ${body}`;
+}
+
+async function fixReactions(engine, sid, mid, how) {
+  const menu = getMenu(engine, sid, mid);
+  if (!menu) return `${ICONS.warn} I couldn't find menu **${clip(String(mid ?? ''), 20)}**.`;
+  if (menu.postedAs !== 'reactions' || !menu.messageId) return `${ICONS.warn} This menu isn't posted as reactions, so there's nothing to tidy.`;
+  const wanted = Object.values(menu.postedEmojis || {}).filter(Boolean);
+  if (how === 'reset') {
+    const res = await clearReactionsOn(engine, sid, menu.channelId, menu.messageId);
+    if (!res.ok) return rxProblem(res);
+    const back = [];
+    for (const emoji of wanted) {
+      try { await engine.bot.react(menu.channelId, menu.messageId, emoji); back.push(emoji); } catch { }
+    }
+    saveMenu(engine, sid, mid, Object.assign(menu, { reacted: back }));
+    return `${ICONS.ok} Cleared every reaction and added mine back${back.length ? ` (${back.join(' ')})` : ''}. People keep the roles they already have.`;
+  }
+  let list;
+  try {
+    list = await engine.bot.reactions(menu.channelId, menu.messageId);
+  } catch (e) {
+    const { body } = explain(e, { action: 'read the reactions on the menu', perm: 'read_history' });
+    return `${ICONS.warn} ${body}`;
+  }
+  const strays = [];
+  for (const r of Array.isArray(list) ? list : []) {
+    if (!r?.emoji || wanted.some((w) => sameEmoji(w, r.emoji)) || strays.some((x) => sameEmoji(x, r.emoji))) continue;
+    strays.push(r.emoji);
+  }
+  if (!strays.length) return `${ICONS.ok} No stray reactions. Every reaction on the menu is one of its emojis.`;
+  const removed = [];
+  for (const emoji of strays.slice(0, RX_MAX_CALLS)) {
+    const res = await clearReactionsOn(engine, sid, menu.channelId, menu.messageId, { emoji });
+    if (!res.ok) return removed.length ? `${ICONS.ok} Removed ${removed.join(' ')}.\n${rxProblem(res)}` : rxProblem(res);
+    removed.push(emoji);
+  }
+  const left = strays.length - removed.length;
+  return `${ICONS.ok} Removed stray reactions: ${removed.join(' ')}.${left ? ` ${plural(left, 'more emoji')} left; press Tidy again in a minute.` : ''}`;
+}
+
+async function removeStray(engine, sid, ev) {
+  if (!ev.channel_id || !ev.emoji || engine.caps.state(sid, RX_CAP) === false) return;
+  let times = strayTimes.get(engine);
+  if (!times) { times = new Map(); strayTimes.set(engine, times); }
+  const now = Date.now();
+  const recent = (times.get(sid) || []).filter((t) => now - t < 60_000);
+  if (recent.length >= STRAY_PER_MIN) { times.set(sid, recent); return; }
+  recent.push(now);
+  times.set(sid, recent);
+  const res = await clearReactionsOn(engine, sid, ev.channel_id, ev.message_id, { emoji: ev.emoji, userId: ev.user_id });
+  if (!res.ok) engine.log.debug(`[roles] could not take a stray reaction off menu message ${ev.message_id}: ${res.error?.message || 'off'}`);
 }

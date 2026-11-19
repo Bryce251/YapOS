@@ -45,13 +45,75 @@ export const NAME_GRADIENTS = Object.freeze([
   Object.freeze({ id: 'gold', label: 'Gold' }),
 ]);
 
-export const NAME_FONTS = Object.freeze([
-  Object.freeze({ id: 'default', label: 'Default' }),
-  Object.freeze({ id: 'rounded', label: 'Rounded' }),
-  Object.freeze({ id: 'serif', label: 'Serif' }),
-  Object.freeze({ id: 'mono', label: 'Mono' }),
-  Object.freeze({ id: 'caps', label: 'Small caps' }),
+export const FONT_CATEGORIES = Object.freeze([
+  Object.freeze({ id: 'clean', label: 'Clean' }),
+  Object.freeze({ id: 'serif', label: 'Elegant' }),
+  Object.freeze({ id: 'display', label: 'Bold' }),
+  Object.freeze({ id: 'script', label: 'Handwriting' }),
+  Object.freeze({ id: 'fun', label: 'Fun' }),
+  Object.freeze({ id: 'retro', label: 'Retro' }),
+  Object.freeze({ id: 'spooky', label: 'Spooky' }),
+  Object.freeze({ id: 'mono', label: 'Code' }),
 ]);
+
+const font = (id, label, category, system = false) => Object.freeze({ id, label, category, system });
+
+export const NAME_FONTS = Object.freeze([
+  font('default', 'Default', 'clean', true),
+  font('rounded', 'Rounded', 'clean', true),
+  font('caps', 'Small caps', 'clean', true),
+  font('poppins', 'Poppins', 'clean'),
+  font('nunito', 'Nunito', 'clean'),
+  font('quicksand', 'Quicksand', 'clean'),
+  font('comfortaa', 'Comfortaa', 'clean'),
+  font('lexend', 'Lexend', 'clean'),
+  font('serif', 'Serif', 'serif', true),
+  font('playfair', 'Playfair', 'serif'),
+  font('lora', 'Lora', 'serif'),
+  font('cinzel', 'Cinzel', 'serif'),
+  font('cormorant', 'Cormorant', 'serif'),
+  font('dmserif', 'DM Serif', 'serif'),
+  font('lobster', 'Lobster', 'serif'),
+  font('bebas', 'Bebas Neue', 'display'),
+  font('anton', 'Anton', 'display'),
+  font('righteous', 'Righteous', 'display'),
+  font('bungee', 'Bungee', 'display'),
+  font('archivo', 'Archivo Black', 'display'),
+  font('blackops', 'Black Ops', 'display'),
+  font('russo', 'Russo One', 'display'),
+  font('pacifico', 'Pacifico', 'script'),
+  font('caveat', 'Caveat', 'script'),
+  font('dancing', 'Dancing Script', 'script'),
+  font('satisfy', 'Satisfy', 'script'),
+  font('greatvibes', 'Great Vibes', 'script'),
+  font('marker', 'Marker', 'script'),
+  font('shadows', 'Shadows', 'script'),
+  font('kalam', 'Kalam', 'script'),
+  font('fredoka', 'Fredoka', 'fun'),
+  font('baloo', 'Baloo', 'fun'),
+  font('luckiest', 'Luckiest Guy', 'fun'),
+  font('bangers', 'Bangers', 'fun'),
+  font('chewy', 'Chewy', 'fun'),
+  font('sniglet', 'Sniglet', 'fun'),
+  font('pressstart', 'Press Start', 'retro'),
+  font('vt323', 'Terminal', 'retro'),
+  font('silkscreen', 'Silkscreen', 'retro'),
+  font('orbitron', 'Orbitron', 'retro'),
+  font('audiowide', 'Audiowide', 'retro'),
+  font('monoton', 'Monoton', 'retro'),
+  font('creepster', 'Creepster', 'spooky'),
+  font('fraktur', 'Blackletter', 'spooky'),
+  font('nosifer', 'Nosifer', 'spooky'),
+  font('metalmania', 'Metal Mania', 'spooky'),
+  font('mono', 'Mono', 'mono', true),
+  font('jetbrains', 'JetBrains Mono', 'mono'),
+  font('spacemono', 'Space Mono', 'mono'),
+]);
+export const FONT_FILES = Object.freeze(NAME_FONTS.filter((f) => !f.system).map((f) => f.id));
+
+export function fontById(id) {
+  return NAME_FONTS.find((f) => f.id === id) || NAME_FONTS[0];
+}
 
 export const BANNERS = Object.freeze([
   Object.freeze({ id: 'none', label: 'None' }),
@@ -154,9 +216,19 @@ const THEME_SET = new Set(THEME_IDS);
 const MODE_IDS = ids(THEME_MODES);
 const PATTERN_IDS = ids(THEME_PATTERNS);
 const EFFECT_SET = new Set(EFFECT_IDS);
-const FIELDS = new Set(['v', 'pins', 'order', 'hidden', 'nameColour', 'nameGradient', 'nameFont', 'accent', 'banner', 'bio', 'pronouns', 'status', 'statusEmoji', 'ring', 'density', 'featured', 'theme', 'themeCustom', 'themeMode', 'themePattern', 'effect', 'bannerCrop']);
+const FIELDS = new Set(['v', 'pins', 'order', 'hidden', 'nameColour', 'nameGradient', 'nameGradientCustom', 'nameFont', 'accent', 'banner', 'bio', 'pronouns', 'status', 'statusEmoji', 'ring', 'density', 'featured', 'theme', 'themeCustom', 'themeMode', 'themePattern', 'effect', 'bannerCrop']);
 const CUSTOM_KEYS = Object.freeze(['base', 'alt', 'accent']);
 const CROP_KEYS = Object.freeze(['zoom', 'x', 'y']);
+const GRAD_KEYS = Object.freeze(['a', 'b', 'c', 'angle']);
+export const GRADIENT_ANGLES = Object.freeze([
+  Object.freeze({ angle: 90, label: 'Left to right' }),
+  Object.freeze({ angle: 135, label: 'Diagonal' }),
+  Object.freeze({ angle: 180, label: 'Top to bottom' }),
+  Object.freeze({ angle: 45, label: 'Rising diagonal' }),
+]);
+export const GRADIENT_MIN_CONTRAST = 3;
+export const NAME_HINT_CONTRAST = 3;
+export const CUSTOM_GRADIENT_START = Object.freeze({ a: '#f2613f', b: '#7c5cff', angle: 90 });
 
 export const HEX_RE = /^#[0-9a-f]{6}$/;
 export const PIN_RE = /^(ach:)?[a-z0-9][a-z0-9_-]{0,39}$/;
@@ -171,6 +243,7 @@ export const DEFAULT_LOOK = Object.freeze({
   hidden: Object.freeze([]),
   nameColour: null,
   nameGradient: null,
+  nameGradientCustom: null,
   nameFont: 'default',
   accent: null,
   banner: 'none',
@@ -210,7 +283,12 @@ export function sameLook(a, b) {
 
 function lookKey(look) {
   const l = look || DEFAULT_LOOK;
-  return Object.keys(DEFAULT_LOOK).map((k) => [k, l[k] === undefined ? DEFAULT_LOOK[k] : l[k]]);
+  return Object.keys(DEFAULT_LOOK).map((k) => {
+    const v = l[k] === undefined ? DEFAULT_LOOK[k] : l[k];
+    if (k !== 'nameGradientCustom' || !v) return [k, v];
+    const g = readGradientCustom(v);
+    return [k, g ? [g.a, g.c || null, g.b, g.angle] : v];
+  });
 }
 
 function rgb(hex) {
@@ -419,7 +497,9 @@ export function cleanLook(raw, { owned = null, strict = false } = {}) {
   look.hidden = readHidden(src.hidden, strict);
   look.nameColour = readColour(src.nameColour, strict, 'bad_colour', 'Pick a name colour like #f2613f.');
   look.nameGradient = src.nameGradient === null || src.nameGradient === '' ? null : pick(GRADIENT_IDS, src.nameGradient, null, strict, 'bad_gradient', "That name gradient doesn't exist.");
-  if (look.nameGradient) look.nameColour = null;
+  look.nameGradientCustom = readGradientCustom(src.nameGradientCustom, strict);
+  if (look.nameGradientCustom) look.nameGradient = null;
+  if (look.nameGradient || look.nameGradientCustom) look.nameColour = null;
   look.nameFont = pick(FONT_IDS, src.nameFont, 'default', strict, 'bad_font', "That name style doesn't exist.");
   look.accent = readColour(src.accent, strict, 'bad_accent', 'Pick an accent colour like #7c5cff.');
   look.banner = pick(BANNER_IDS, src.banner, 'none', strict, 'bad_banner', "That banner doesn't exist.");
@@ -448,6 +528,67 @@ export function cleanLook(raw, { owned = null, strict = false } = {}) {
   look.effect = pick(EFFECT_SET, src.effect, 'none', strict, 'bad_effect', "That profile effect doesn't exist.");
   look.bannerCrop = readCrop(src.bannerCrop, strict);
   return look;
+}
+
+export function readGradientCustom(value, strict = false) {
+  if (value === undefined || value === null) return null;
+  const bad = (message) => {
+    fail(strict, 'bad_gradient', message);
+    return null;
+  };
+  if (typeof value !== 'object' || Array.isArray(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) return bad('Pick two colours for your custom gradient, like #7c5cff.');
+  const keys = Object.keys(value);
+  if (keys.some((k) => !GRAD_KEYS.includes(k))) return bad('Your custom gradient has a setting that does not exist.');
+  const hexOk = (v) => typeof v === 'string' && HEX_RE.test(v);
+  if (!hexOk(value.a) || !hexOk(value.b)) return bad('Gradient colours must look like #7c5cff.');
+  const hasMiddle = value.c !== undefined && value.c !== null;
+  if (hasMiddle && !hexOk(value.c)) return bad('The middle gradient colour must look like #7c5cff.');
+  const angle = value.angle;
+  if (typeof angle !== 'number' || !Number.isInteger(angle) || angle < 0 || angle > 360) return bad('The gradient angle must be a whole number from 0 to 360.');
+  return hasMiddle ? { a: value.a, b: value.b, c: value.c, angle } : { a: value.a, b: value.b, angle };
+}
+
+export function gradientStops(g, mode) {
+  const c = readGradientCustom(g);
+  if (!c) return null;
+  const surface = mode === 'light' ? LIGHT_SURFACE : DARK_SURFACE;
+  return (c.c ? [c.a, c.c, c.b] : [c.a, c.b]).map((x) => readableOn(x, surface, GRADIENT_MIN_CONTRAST));
+}
+
+export function gradientCss(g, mode) {
+  const c = readGradientCustom(g);
+  const stops = c ? gradientStops(c, mode) : null;
+  if (!stops || !stops.every((x) => HEX_RE.test(x))) return null;
+  return `linear-gradient(${c.angle}deg, ${stops.join(', ')})`;
+}
+
+export function rawGradientCss(g) {
+  const c = readGradientCustom(g);
+  if (!c) return null;
+  return `linear-gradient(${c.angle}deg, ${(c.c ? [c.a, c.c, c.b] : [c.a, c.b]).join(', ')})`;
+}
+
+export function nameSurfaces(look) {
+  const pal = look ? themePalette(look) : null;
+  const modes = !pal || pal.mode === 'auto' ? ['light', 'dark'] : [pal.mode];
+  return modes.map((mode) => ({ mode, surface: pal ? pal[mode].surface : mode === 'light' ? LIGHT_SURFACE : DARK_SURFACE }));
+}
+
+export function nameContrast(look) {
+  if (!look || typeof look !== 'object') return [];
+  const out = [];
+  for (const { mode, surface } of nameSurfaces(look)) {
+    let colours = [];
+    if (look.nameGradientCustom) colours = gradientStops(look.nameGradientCustom, mode) || [];
+    else if (look.nameColour && !look.nameGradient) {
+      const c = themeColours(look.nameColour);
+      colours = c ? [c[mode]] : [];
+    }
+    if (!colours.length) continue;
+    const ratio = Math.min(...colours.map((x) => contrast(x, surface)));
+    if (ratio < NAME_HINT_CONTRAST) out.push({ mode, ratio: Math.round(ratio * 100) / 100 });
+  }
+  return out;
 }
 
 function readThemeCustom(value, strict) {

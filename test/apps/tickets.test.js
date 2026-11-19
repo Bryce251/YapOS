@@ -1624,3 +1624,94 @@ test('ticket roles from before the fix are moved to the bottom after a restart',
   const lowest = Math.min(...h.fake.state.roles[S].filter((r) => r.id !== role.id).map((r) => r.position));
   assert.ok(role.position <= lowest, `role at ${role.position}, lowest other ${lowest}`);
 });
+
+test('with people lists on, a ticket is private from the start with no role and no follow-up edit', async () => {
+  const h = await make({ features: { channelUsers: true } });
+  const rolesBefore = h.fake.state.roles[S].length;
+  const { ans, t } = await openTicketFor(h, IDS.member, 'help');
+  assert.match(lastText(h, ans), /Your ticket is open/);
+  assert.equal(t.mode, 'list');
+  assert.equal(t.roleId, null);
+  assert.equal(t.access[IDS.member], 'list');
+  const ch = channel(h, t.channelId);
+  assert.equal(ch.private, true);
+  assert.deepEqual(ch.user_ids, [IDS.member]);
+  assert.ok(ch.role_ids.includes(R.bot));
+  const create = h.fake.callsTo('POST', /\/servers\/[^/]+\/channels$/);
+  assert.equal(create.length, 1);
+  assert.equal(create[0].body.private, true);
+  assert.equal(h.fake.callsTo('PATCH', new RegExp(`/channels/${t.channelId}$`)).length, 0, 'never public, so no edit to hide it');
+  assert.equal(h.fake.state.roles[S].length, rolesBefore);
+  assert.equal(h.engine.caps.state(S, 'private_create'), true);
+
+  const added = await h.slash('ticket', `add <@${IDS.member2}>`, { user: IDS.member, channel: t.channelId });
+  assert.match(lastText(h, added), /Added to the ticket/);
+  assert.deepEqual(channel(h, t.channelId).user_ids.sort(), [IDS.member, IDS.member2].sort());
+  assert.equal(ticketOf(h, IDS.member).access[IDS.member2], 'list');
+  assert.equal(h.fake.state.roles[S].length, rolesBefore, 'still no role');
+
+  const removed = await h.slash('ticket', 'remove riley', { user: IDS.mod, channel: t.channelId });
+  assert.match(lastText(h, removed), /Removed from the ticket/);
+  assert.deepEqual(channel(h, t.channelId).user_ids, [IDS.member]);
+  assert.deepEqual(ticketOf(h, IDS.member).members, []);
+});
+
+test('when Yapin ignores the people list on a new channel, tickets fall back to the old flow', async () => {
+  const h = await make();
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  assert.equal(t.mode, 'role');
+  assert.ok(hasRole(h, IDS.member, t.roleId));
+  assert.equal(channel(h, t.channelId).private, true);
+  assert.equal(h.fake.callsTo('POST', /\/servers\/[^/]+\/channels$/).length, 1, 'the first channel was reused, not a second one made');
+  assert.equal(h.engine.caps.state(S, 'private_create'), false);
+  await openTicketFor(h, IDS.member2, 'second');
+  const creates = h.fake.callsTo('POST', /\/servers\/[^/]+\/channels$/);
+  assert.equal(creates[1].body.private, undefined, 'the known-off answer is remembered');
+});
+
+test('a refused private create falls back to making the channel the old way', async () => {
+  const h = await make();
+  h.fake.fail('POST', /\/servers\/[^/]+\/channels$/, { status: 403, error: "This isn't on for this server yet", times: 1 });
+  const { ans, t } = await openTicketFor(h, IDS.member, 'help');
+  assert.match(lastText(h, ans), /Your ticket is open/);
+  assert.equal(t.mode, 'role');
+  assert.equal(channel(h, t.channelId).private, true);
+  assert.equal(h.engine.caps.state(S, 'private_create'), false);
+});
+
+test('a list ticket whose people list gets refused later adds people another way', async () => {
+  const h = await make({ features: { channelUsers: true } });
+  const { t } = await openTicketFor(h, IDS.member, 'help');
+  h.fake.fail('PATCH', new RegExp(`/channels/${t.channelId}$`), { status: 403, error: "This isn't on for this server yet", times: 1 });
+  const added = await h.slash('ticket', `add <@${IDS.member2}>`, { user: IDS.member, channel: t.channelId });
+  assert.match(lastText(h, added), /Added to the ticket/);
+  const now = ticketOf(h, IDS.member);
+  assert.equal(now.access[IDS.member2], 'role');
+  assert.ok(hasRole(h, IDS.member2, now.roleId));
+  assert.equal(h.engine.caps.state(S, 'channel_users'), false);
+});
+
+test('the ticket setup panel explains people lists and why tickets are not threads', async () => {
+  const h = await make({ features: { channelUsers: true } });
+  await openTicketFor(h, IDS.member, 'help');
+  const setup = await h.slash('tickets', '', { user: IDS.admin });
+  const text = lastText(h, setup);
+  assert.match(text, /private from the moment/);
+  assert.match(text, /threads on Yapin' can't be made private/);
+  assert.match(text, /Private channels from the start: works/);
+});
+
+test('a log channel the bot cannot see explains how to let YapOS in instead of asking for a mention', async () => {
+  const h = await make({ config: null });
+  const list = h.fake.state.channels[S];
+  list.push({ id: 'c0000000-0000-4000-8000-0000000000aa', name: 'logs', type: 'text', kind: 'text', server_id: S, position: 9, category: null, category_id: null, private: false, read_only: false, slowmode: 0 });
+  await h.slash('tickets', 'log #logs', { user: IDS.admin });
+  assert.equal(h.engine.settings.appConfig(S, 'tickets').logChannelId, 'c0000000-0000-4000-8000-0000000000aa');
+  const hidden = await h.slash('tickets', 'log #staff-logs', { user: IDS.admin });
+  const text = lastText(h, hidden);
+  assert.match(text, /can't see a channel called \*\*#staff-logs\*\*/);
+  assert.match(text, /let the \*\*YapOS\*\* role in/);
+  assert.match(text, /Did you mean \*\*#logs\*\*/);
+  const byMention = await h.slash('tickets', 'log <#c0000000-0000-4000-8000-0000000000ff>', { user: IDS.admin });
+  assert.match(lastText(h, byMention), /can't see that channel/);
+});

@@ -1,6 +1,8 @@
 import { fxLevel, sharedLoop } from './fxmode.js';
 
 export const CARD_SHEET = '/activity/css/profilecard-look.css';
+export const FONT_SHEET = '/activity/css/profilecard-fonts.css';
+export const SYSTEM_FONTS = Object.freeze(['rounded', 'serif', 'mono', 'caps']);
 export const FX_MODULE = '../../../js/profile-fx.js';
 export const THEME_KEYS = Object.freeze(['bg', 'bg2', 'glow', 'surface', 'surface2', 'surface3', 'border', 'borderStrong', 'text', 'text2', 'text3', 'accent', 'accentHover', 'onAccent', 'accentText', 'accentSoft']);
 export const THEME_IDS = Object.freeze(['midnight', 'sakura', 'ocean', 'forest', 'sunset', 'candy', 'mono', 'neon', 'aurora', 'ember', 'frost', 'royal', 'custom']);
@@ -136,6 +138,27 @@ export function gradientOf(id, light = false) {
   return `linear-gradient(90deg, ${stops.join(', ')})`;
 }
 
+function hexStops(list) {
+  if (!Array.isArray(list) || list.length < 2 || list.length > 3) return null;
+  return list.every((x) => typeof x === 'string' && HEX_RE.test(x)) ? [...list] : null;
+}
+
+export function readCustomGradient(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const angle = raw.angle;
+  if (typeof angle !== 'number' || !Number.isInteger(angle) || angle < 0 || angle > 360) return null;
+  const light = hexStops(raw.light);
+  const dark = hexStops(raw.dark);
+  if (!light || !dark || light.length !== dark.length) return null;
+  return { angle, light, dark };
+}
+
+export function customGradientOf(raw, light = false) {
+  const g = readCustomGradient(raw);
+  if (!g) return null;
+  return `linear-gradient(${g.angle}deg, ${(light ? g.light : g.dark).join(', ')})`;
+}
+
 function reducedOf(win) {
   try {
     return Boolean(win && typeof win.matchMedia === 'function' && win.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -148,18 +171,31 @@ export function motionOk(win) {
   return fxLevel() === 'full' && !reducedOf(win);
 }
 
-export function ensureSheet(doc) {
+function addSheet(doc, href, mark) {
   if (!doc || typeof doc.createElement !== 'function') return false;
-  const found = typeof doc.querySelector === 'function' ? doc.querySelector('link[data-pcard-look]') : null;
+  const found = typeof doc.querySelector === 'function' ? doc.querySelector(`link[${mark}]`) : null;
   if (found) return true;
   const host = doc.head || doc.body;
   if (!host) return false;
   const link = doc.createElement('link');
   link.setAttribute('rel', 'stylesheet');
-  link.setAttribute('href', CARD_SHEET);
-  link.setAttribute('data-pcard-look', '');
+  link.setAttribute('href', href);
+  link.setAttribute(mark, '');
   host.append(link);
   return true;
+}
+
+export function ensureSheet(doc) {
+  return addSheet(doc, CARD_SHEET, 'data-pcard-look');
+}
+
+export function needsFontSheet(font) {
+  return typeof font === 'string' && font !== '' && !SYSTEM_FONTS.includes(font);
+}
+
+export function ensureFontSheet(doc, font) {
+  if (!needsFontSheet(font)) return false;
+  return addSheet(doc, FONT_SHEET, 'data-pcard-fonts');
 }
 
 function loopWin(win) {

@@ -4,7 +4,7 @@ import { cleanText } from './profiles.js';
 import { reportIpHash } from './reports.js';
 import { activeBanIds } from './party-mod.js';
 import { PARTY_BADGES, COUNTER_GAMES, COUNTER_KEYS, badgesFor, applySkills, SKILL_KEYS, SKILL_GAMES, SKILL_GAME_CAPS, PERFECT_MIN_QUESTIONS, PERFECT_MAX_QUESTIONS } from './party-badges.js';
-import { MAX_PREDICTIONS, loadRates, shardWants, shardStatement, recentShards, tooSoon, shardHolds, SHARDS_ALERT_DAY, shardsPoll, ackShards, shardsCleanupStatements } from './party-shards.js';
+import { MAX_PREDICTIONS, loadRates, shardWants, shardStatement, recentShards, tooSoon, shardHolds, SHARDS_ALERT_DAY, shardsPoll, ackShards, shardsCleanupStatements, loadWinStreaks, nextWinStreaks, winStreakShards, winStreakStatement } from './party-shards.js';
 import { ackSettings } from './public-profiles.js';
 import { pointsStatements, pointsCleanupStatements } from './party-leaderboard.js';
 import { detectCheats, shardsDayAlert, cheatsCleanupStatements } from './party-cheats.js';
@@ -198,13 +198,14 @@ export async function postResults(request, env, t) {
   const everyone = [...new Set([...ids, ...result.predictions.map((w) => w.id)])];
   const marks = ids.map(() => '?').join(', ');
   const day = utcDay(t);
-  const [statRes, xpRes, banned, rates, recent, holds] = await Promise.all([
+  const [statRes, xpRes, banned, rates, recent, holds, streaks] = await Promise.all([
     db.prepare(`SELECT user_id, games, wins, by_game, counters FROM party_stats WHERE user_id IN (${marks})`).bind(...ids).all(),
     db.prepare(`SELECT user_id, SUM(xp) AS total FROM party_xp WHERE day = ? AND user_id IN (${marks}) GROUP BY user_id`).bind(day, ...ids).all(),
     activeBanIds(db, everyone, t),
     loadRates(db),
     recentShards(db, everyone, t),
     shardHolds(db, everyone, day),
+    loadWinStreaks(db, ids),
   ]);
   const stats = new Map(((statRes && statRes.results) || []).map((r) => [String(r.user_id), readStats(r)]));
   const earned = new Map(((xpRes && xpRes.results) || []).map((r) => [String(r.user_id), Number(r.total) || 0]));
@@ -239,19 +240,32 @@ export async function postResults(request, env, t) {
   const shards = [];
   const held = [];
   const crossed = new Map();
-  for (const want of shardWants(result, rates, banned)) {
-    if (want.shards <= 0 || tooSoon(recent, want, t)) continue;
+  const paidWins = new Set();
+  const pay = (want) => {
+    if (want.shards <= 0 || tooSoon(recent, want, t)) return false;
     if (holds.held.has(want.id)) {
       if (!held.includes(want.id)) held.push(want.id);
-      continue;
+      return false;
     }
     recent.set(`${want.id}|${want.reason}`, t);
     const before = holds.today.get(want.id) || 0;
     const after = before + want.shards;
     holds.today.set(want.id, after);
-    if (before < SHARDS_ALERT_DAY && after >= SHARDS_ALERT_DAY) crossed.set(want.id, after);
-    shards.push({ id: want.id, shards: want.shards, reason: want.reason });
+    if (after >= SHARDS_ALERT_DAY && !holds.alerted.has(want.id)) crossed.set(want.id, after);
+    const row = { id: want.id, shards: want.shards, reason: want.reason };
+    if (want.place) row.place = want.place;
+    if (want.streak) row.streak = want.streak;
+    shards.push(row);
     stmts.push(shardStatement(db, want, result.game, day, t));
+    return true;
+  };
+  for (const want of shardWants(result, rates, banned)) {
+    if (pay(want) && want.reason === 'win') paidWins.add(want.id);
+  }
+  for (const [id, streak] of nextWinStreaks(result, banned, paidWins, streaks)) {
+    stmts.push(winStreakStatement(db, id, streak, t));
+    const bonus = winStreakShards(rates.win, streak);
+    if (bonus > 0) pay({ id, reason: 'winstreak', shards: bonus, streak });
   }
   const names = new Map([...result.players, ...result.predictions].map((p) => [p.id, p.name]));
   for (const [id, total] of crossed) stmts.push(shardsDayAlert(db, { id, name: names.get(id) || null, total, limit: SHARDS_ALERT_DAY }, t));

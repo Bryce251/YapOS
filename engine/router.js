@@ -154,6 +154,11 @@ export function createRouter({ bot, engine, log, bootMarker = newBootMarker() })
     if (!parsed) return;
     const i = guardInteraction(raw, { log });
     try {
+      const replyOwner = raw.reply_id ? engine.ephemeralReplies?.ownerOf?.(raw.reply_id) : null;
+      if (replyOwner && replyOwner !== String(raw.user_id)) {
+        await i.ephemeral('', { embeds: [notYourPanel(replyOwner)] });
+        return;
+      }
       const owner = panelOwner(raw.message_id);
       const panelServer = panelOwners.get(raw.message_id)?.serverId || raw.server_id;
       if (owner && owner !== raw.user_id && owner !== engine.bot.me?.id && !(await engine.perms.isOwner(panelServer, raw.user_id))) {

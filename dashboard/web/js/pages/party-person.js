@@ -4,7 +4,7 @@ import { ApiError } from '../api.js';
 import { formatDate, relativeTime } from '../format.js';
 import { badgeInfo } from '../community-data.js';
 import { state } from '../state.js';
-import { EFFECTS, THEMES } from '../profile-look.js';
+import { EFFECTS, THEMES, fontById, readGradientCustom } from '../profile-look.js';
 
 export const PERSON_PATH = '/api/party/reports/person/';
 export const PERSON_BANS_PATH = '/api/party/bans';
@@ -459,6 +459,7 @@ export function readStaffProfile(data) {
       pronouns: str(l.pronouns),
       nameColour: str(l.nameColour),
       nameGradient: str(l.nameGradient),
+      nameGradientCustom: readGradientCustom(l.nameGradientCustom),
       nameFont: str(l.nameFont) || 'default',
       pins: (Array.isArray(l.pins) ? l.pins : []).filter((p) => typeof p === 'string'),
       custom: l.custom === true,
@@ -475,7 +476,7 @@ export function canReset(look, part) {
   if (part === 'bio') return Boolean(look.bio);
   if (part === 'status') return Boolean(look.status || look.statusEmoji);
   if (part === 'pronouns') return Boolean(look.pronouns);
-  if (part === 'name-style') return Boolean(look.nameColour || look.nameGradient || (look.nameFont && look.nameFont !== 'default'));
+  if (part === 'name-style') return Boolean(look.nameColour || look.nameGradient || look.nameGradientCustom || (look.nameFont && look.nameFont !== 'default'));
   if (part === 'pins') return look.pins.length > 0;
   if (part === 'theme') return Boolean(look.theme && look.theme !== 'none');
   if (part === 'effect') return Boolean(look.effect && look.effect !== 'none');
@@ -487,7 +488,11 @@ export function nameStyleText(look) {
   const parts = [];
   if (look.nameColour) parts.push(`colour ${look.nameColour}`);
   if (look.nameGradient) parts.push(`${look.nameGradient} gradient`);
-  if (look.nameFont && look.nameFont !== 'default') parts.push(`${look.nameFont} font`);
+  if (look.nameGradientCustom) {
+    const g = look.nameGradientCustom;
+    parts.push(`custom gradient ${[g.a, g.c, g.b].filter(Boolean).join(' to ')} at ${g.angle} degrees`);
+  }
+  if (look.nameFont && look.nameFont !== 'default') parts.push(`${fontById(look.nameFont).id === look.nameFont ? fontById(look.nameFont).label : look.nameFont} font`);
   return parts.length ? parts.join(', ') : 'Default';
 }
 

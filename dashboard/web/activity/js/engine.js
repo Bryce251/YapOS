@@ -1,7 +1,7 @@
 import { OpBudget, OPS_WINDOW_MS, MAX_VALUE_BYTES, checkSet, jsonBytes, validKey } from './limits.js';
 import { idOf, people, person, cleanName, initials, hueOf } from './players.js';
 import { censor } from './filter.js';
-import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins, sendTextReport, sendResults, allowResultGames } from './admin.js';
+import { isAdmin as cachedAdmin, knows as cachedKnows, ownerId as cachedOwner, isBanned as cachedBanned, refreshAdmins, onAdmins, sendTextReport, sendResults, allowResultGames, shardPay } from './admin.js';
 import { cleanShared } from './text.js';
 import { shownName } from './hidden.js';
 import { reasonOf } from './admin.js';
@@ -398,7 +398,7 @@ export function createEngine(opts) {
   const admins = { ...DEFAULT_ADMINS, ...(opts.admins || {}) };
   const fxSeen = new Map();
   const postText = typeof opts.reportText === 'function' ? opts.reportText : sendTextReport;
-  const postResults = typeof opts.postResults === 'function' ? opts.postResults : sendResults;
+  const postResults = typeof opts.postResults === 'function' ? opts.postResults : (b) => sendResults(b, { reply: true });
   const textSeen = new Set();
   const textTimes = new Map();
   const myReports = new Set();
@@ -1085,9 +1085,17 @@ export function createEngine(opts) {
     }
     if (picks.length) body.predictions = picks;
     try {
-      Promise.resolve(postResults(body)).catch(() => false);
+      Promise.resolve(postResults(body)).then((reply) => notePay(at, players, reply)).catch(() => false);
     } catch {}
     return true;
+  }
+
+  function notePay(at, players, reply) {
+    if (!reply || typeof reply !== 'object' || !Array.isArray(reply.shards) || !isHost()) return;
+    const room = read(ROOM);
+    if (!room || !room.last || room.last.at !== at) return;
+    const sp = shardPay(reply.shards, players);
+    if (Object.keys(sp).length) patchRoom({ last: { ...room.last, sp } });
   }
 
   function tourStep(room, game, players) {

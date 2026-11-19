@@ -614,7 +614,7 @@ async function postSettings(ctx, rest) {
     return ctx.ok('Monthly post is off', 'I won\'t post the server Wrapped anymore. Anyone can still run `/wrapped server`.');
   }
   const ch = await ctx.findChannel(arg);
-  if (!ch) return ctx.warn("I couldn't find that channel", 'Mention it like `/wrapped post #general`, or type its name.');
+  if (!ch) return ctx.warn("I couldn't find that channel", await ctx.channelMissing(arg, '/wrapped post #general'));
   const can = await engine.perms.botCan(sid, 'send_messages', 'embed_links').catch(() => ({ ok: true }));
   let job = null;
   try {

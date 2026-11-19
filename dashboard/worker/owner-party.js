@@ -260,11 +260,12 @@ export async function partyActionPlan(db, a, ownerId, t) {
       stmts.push(
         db.prepare("UPDATE party_stats SET games = 0, wins = 0, by_game = '{}', counters = '{}', updated = ? WHERE user_id = ?").bind(t, user),
         db.prepare('DELETE FROM party_daily_streaks WHERE user_id = ?').bind(user),
+        db.prepare('DELETE FROM party_win_streaks WHERE user_id = ?').bind(user),
       );
     }
     const before = was ? `${nice(num(was.points))} points from ${nice(num(was.games))} ${num(was.games) === 1 ? 'game' : 'games'}` : 'nothing on the boards';
     return {
-      result: `Reset their Party leaderboard stats: all-time, every game, monthly and today's limits (was ${before}). ${v.badges ? 'Badge stats, counters and the daily streak were reset too.' : 'Badge stats, counters and the daily streak were kept.'}`,
+      result: `Reset their Party leaderboard stats: all-time, every game, monthly and today's limits (was ${before}). ${v.badges ? 'Badge stats, counters, the daily streak and the win streak were reset too.' : 'Badge stats, counters, the daily streak and the win streak were kept.'}`,
       stmts,
     };
   }

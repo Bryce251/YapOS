@@ -5,6 +5,9 @@ import { customId } from '../engine/router.js';
 import { tokenize, parseDuration, takeDuration, formatDuration, didYouMean, fuzzyFind, normalizeName, userId, clip } from '../engine/parse.js';
 import { friendly, permName, explain, looksLikeFeatureOff } from '../engine/errors.js';
 import { accept, reject, isBlank, channelById } from '../engine/dashboard.js';
+import { parseBool } from '../engine/parse.js';
+import { messageLink } from '../engine/links.js';
+import { createMessageCache, authorOf } from '../engine/message-cache.js';
 
 const ID = 'mod';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -1745,18 +1748,284 @@ function checkDecayDays(raw) {
 
 const roleList = (ids) => (ids || []).length ? ids.map((r) => `<@&${r}>`).join(' ') : 'None';
 
+const MSG_WINDOW_MS = 5000;
+const MSG_MAX_PENDING = 200;
+const MSG_MIN_GAP_MS = 20_000;
+const MSG_DETAIL_MAX = 3;
+const MSG_LINES_MAX = 15;
+const MSG_TEXT_MAX = 800;
+const MSG_KINDS = { edits: 'edits', edit: 'edits', edited: 'edits', deletes: 'deletes', delete: 'deletes', deleted: 'deletes', messages: 'both', message: 'both', msgs: 'both', msg: 'both' };
+const MSG_NOT_SEEN = "*Not seen since the bot started, so I can't show the old text.*";
+const MSG_NOT_KEPT = "*The message wasn't in memory, so I can't show what it said.*";
+const MSG_NO_EVENTS = "Yapin' hasn't sent any edit or delete events yet, so nothing has been logged. They may not be on for this server yet.";
+
+const msgStates = new WeakMap();
+
+function msgState(engine) {
+  let s = msgStates.get(engine);
+  if (!s) {
+    s = { cache: createMessageCache(), pending: new Map(), windowMs: MSG_WINDOW_MS, live: new Set(), lastFlush: new Map() };
+    msgStates.set(engine, s);
+  }
+  return s;
+}
+
+function msgConfig(engine, sid) {
+  const cfg = engine.settings.appConfig(sid, ID);
+  return { edits: cfg.logEdits === true, deletes: cfg.logDeletes === true, channel: engine.settings.core(sid).logChannel || null };
+}
+
+const noPing = (text) => String(text ?? '').replace(/@/g, '@\u200b');
+
+const quoteText = (text, n = MSG_TEXT_MAX) => {
+  const t = noPing(text).trim();
+  return t ? clip(t, n) : '*No text*';
+};
+
+const whoText = (id, name) => (id ? `<@${id}>${name ? ` (${clip(noPing(name), 40)})` : ''}` : name ? clip(noPing(name), 40) : 'Someone');
+
+function msgOnMessage(ctx, ev) {
+  const sid = ev?.server_id;
+  if (!sid) return;
+  const s = msgState(ctx.engine);
+  const cfg = msgConfig(ctx.engine, sid);
+  if (ev.author_bot || ev.webhook_id) {
+    if (cfg.channel && (cfg.edits || cfg.deletes)) s.cache.remember(ev);
+    return;
+  }
+  if (!cfg.channel || (!cfg.edits && !cfg.deletes)) {
+    if (s.live.delete(sid)) s.cache.clearServer(sid);
+    return;
+  }
+  if (ev.channel_id === cfg.channel) return;
+  if (authorOf(ev).id === ctx.engine.bot.me?.id) return;
+  s.live.add(sid);
+  s.cache.remember(ev);
+}
+
+function msgQueue(engine, sid, item) {
+  const s = msgState(engine);
+  let p = s.pending.get(sid);
+  if (!p) s.pending.set(sid, (p = { items: [], dropped: 0, timer: null }));
+  if (p.items.length >= MSG_MAX_PENDING) p.dropped++;
+  else p.items.push(item);
+  if (!p.timer) {
+    const wait = Math.max(s.windowMs, (s.lastFlush.get(sid) ?? 0) + MSG_MIN_GAP_MS - Date.now());
+    p.timer = setTimeout(() => { flushMessageLogs(engine, sid).catch((e) => engine.log.debug('message log flush failed', e?.message)); }, wait);
+    p.timer.unref?.();
+  }
+}
+
+async function skipAuthor(engine, s, sid, id, bot) {
+  if (bot) return true;
+  if (!id) return false;
+  if (id === engine.bot.me?.id || s.cache.isBot(id)) return true;
+  const members = await engine.cache.members(sid).catch(() => []);
+  const m = (members || []).find((x) => x.id === id);
+  if (m && (m.bot === true || m.is_bot === true || m.author_bot === true)) {
+    s.cache.noteBot(id);
+    return true;
+  }
+  return false;
+}
+
+async function msgOnUpdate(ctx, ev) {
+  const sid = ev?.server_id;
+  const s = msgState(ctx.engine);
+  s.cache.markEvent('edit');
+  if (!sid || !ev.id) return;
+  if (ev.author_bot || ev.webhook_id) s.cache.noteBot(ev.author_id);
+  const before = s.cache.update(ev.id, ev.content);
+  const cfg = msgConfig(ctx.engine, sid);
+  if (!cfg.edits || !cfg.channel || ev.channel_id === cfg.channel) return;
+  const authorId = ev.author_id ?? before?.authorId ?? null;
+  if (await skipAuthor(ctx.engine, s, sid, authorId, ev.author_bot || ev.webhook_id)) return;
+  if (before && before.content === String(ev.content ?? '').slice(0, s.cache.limits.maxText)) return;
+  msgQueue(ctx.engine, sid, {
+    kind: 'edit', messageId: ev.id, channelId: ev.channel_id, authorId, authorName: before?.authorName ?? null,
+    before: before ? before.content : null, after: String(ev.content ?? '').slice(0, s.cache.limits.maxText), at: ev.edited_at ?? null,
+  });
+}
+
+async function msgOnDelete(ctx, ev) {
+  const sid = ev?.server_id;
+  const s = msgState(ctx.engine);
+  s.cache.markEvent('delete');
+  if (!sid || !ev.id) return;
+  const kept = s.cache.take(ev.id);
+  const cfg = msgConfig(ctx.engine, sid);
+  if (!cfg.deletes || !cfg.channel || ev.channel_id === cfg.channel) return;
+  const authorId = ev.author_id ?? kept?.authorId ?? null;
+  if (await skipAuthor(ctx.engine, s, sid, authorId, false)) return;
+  msgQueue(ctx.engine, sid, { kind: 'delete', messageId: ev.id, channelId: ev.channel_id, authorId, authorName: kept?.authorName ?? null, kept });
+}
+
+async function msgOnBulk(ctx, ev) {
+  const sid = ev?.server_id;
+  const s = msgState(ctx.engine);
+  s.cache.markEvent('delete');
+  const ids = Array.isArray(ev?.ids) ? ev.ids.slice(0, 100) : [];
+  if (!sid || !ids.length) return;
+  const kept = s.cache.takeMany(ids);
+  const cfg = msgConfig(ctx.engine, sid);
+  if (!cfg.deletes || !cfg.channel || ev.channel_id === cfg.channel) return;
+  const shown = kept.filter((k) => !s.cache.isBot(k.authorId) && k.authorId !== ctx.engine.bot.me?.id);
+  msgQueue(ctx.engine, sid, { kind: 'bulk', channelId: ev.channel_id, count: ids.length, kept: shown });
+}
+
+function msgOnServerGone(ctx, ev) {
+  const sid = ev?.server_id;
+  if (!sid) return;
+  const s = msgState(ctx.engine);
+  s.cache.clearServer(sid);
+  s.live.delete(sid);
+  s.lastFlush.delete(sid);
+  const p = s.pending.get(sid);
+  if (p?.timer) clearTimeout(p.timer);
+  s.pending.delete(sid);
+}
+
+function keptLine(k) {
+  const files = k.files?.length ? ` 📎 ${k.files.join(', ')}` : '';
+  return `**${clip(noPing(k.authorName || 'someone'), 32)}**: ${clip(noPing(k.content || '').replace(/\s+/g, ' ').trim() || '*no text*', 120)}${noPing(files)}`;
+}
+
+function msgEmbed(sid, item) {
+  if (item.kind === 'edit') {
+    const link = messageLink(sid, item.channelId, item.messageId);
+    return card({
+      title: '✏️ Message edited',
+      body: link ? `[Jump to message](${link})` : undefined,
+      fields: [
+        { name: 'Author', value: whoText(item.authorId, item.authorName), inline: true },
+        { name: 'Channel', value: `<#${item.channelId}>`, inline: true },
+        { name: 'Before', value: item.before === null ? MSG_NOT_SEEN : quoteText(item.before), inline: false },
+        { name: 'After', value: quoteText(item.after), inline: false },
+      ],
+      color: 'info',
+    });
+  }
+  if (item.kind === 'delete') {
+    const k = item.kept;
+    const fields = [
+      { name: 'Author', value: whoText(item.authorId, item.authorName), inline: true },
+      { name: 'Channel', value: `<#${item.channelId}>`, inline: true },
+      { name: 'Text', value: k ? quoteText(k.content) : MSG_NOT_KEPT, inline: false },
+    ];
+    if (k?.files?.length) fields.push({ name: 'Files', value: clip(noPing(k.files.join(', ')), 300), inline: false });
+    return card({ title: '🗑️ Message deleted', fields, color: 'warn' });
+  }
+  const lines = item.kept.slice(0, MSG_LINES_MAX).map(keptLine);
+  const missing = item.count - item.kept.length;
+  if (item.kept.length > MSG_LINES_MAX) lines.push(`…and ${item.kept.length - MSG_LINES_MAX} more I remember.`);
+  if (missing > 0) lines.push(`-# ${missing} ${missing === 1 ? "wasn't" : "weren't"} in memory, so I can't show ${missing === 1 ? 'it' : 'them'}.`);
+  return card({
+    title: `🧹 ${item.count} message${item.count === 1 ? '' : 's'} deleted at once`,
+    body: clip(lines.join('\n'), 3000),
+    fields: [{ name: 'Channel', value: `<#${item.channelId}>`, inline: true }],
+    color: 'warn',
+  });
+}
+
+function msgSummaryLine(item) {
+  const one = (t) => clip(noPing(t).replace(/\s+/g, ' ').trim() || 'no text', 80);
+  if (item.kind === 'edit') return `✏️ ${whoText(item.authorId, item.authorName)} in <#${item.channelId}>: ${item.before === null ? '*old text unknown*' : `"${one(item.before)}"`} → "${one(item.after)}"`;
+  if (item.kind === 'delete') return `🗑️ ${whoText(item.authorId, item.authorName)} in <#${item.channelId}>: ${item.kept ? `"${one(item.kept.content)}"` : '*not in memory*'}`;
+  return `🧹 ${item.count} deleted at once in <#${item.channelId}>`;
+}
+
+function msgEmbeds(sid, items, dropped) {
+  if (items.length <= MSG_DETAIL_MAX && !dropped) return items.map((it) => msgEmbed(sid, it));
+  const lines = items.slice(0, MSG_LINES_MAX).map(msgSummaryLine);
+  const more = items.length - MSG_LINES_MAX + dropped;
+  if (more > 0) lines.push(`…and ${more} more.`);
+  const edits = items.filter((i) => i.kind === 'edit').length;
+  const deletes = items.reduce((n, i) => n + (i.kind === 'bulk' ? i.count : i.kind === 'delete' ? 1 : 0), 0);
+  return [card({
+    title: `📝 Message log: ${edits} edit${edits === 1 ? '' : 's'}, ${deletes} delete${deletes === 1 ? '' : 's'}`,
+    body: clip(lines.join('\n'), 3800),
+    color: 'muted',
+  })];
+}
+
+async function flushMessageLogs(engine, sid) {
+  const s = msgState(engine);
+  const p = s.pending.get(sid);
+  if (!p) return null;
+  if (p.timer) clearTimeout(p.timer);
+  s.pending.delete(sid);
+  if (!p.items.length) return null;
+  const channelId = engine.settings.core(sid).logChannel;
+  if (!channelId || !engine.settings.isEnabled(sid, ID)) return null;
+  const embeds = msgEmbeds(sid, p.items, p.dropped);
+  s.lastFlush.set(sid, Date.now());
+  return engine.budget.send({ serverId: sid, channelId, opts: { embeds }, priority: 'low' }).catch((e) => {
+    engine.log.debug('message log failed', e?.message);
+    return null;
+  });
+}
+
+function msgStatusText(engine, sid) {
+  const cfg = msgConfig(engine, sid);
+  const s = msgState(engine);
+  const onOff = (v) => (v ? '🟢 On' : '⚪ Off');
+  const lines = [`Edits: ${onOff(cfg.edits)} · Deletes: ${onOff(cfg.deletes)}`];
+  if (cfg.edits || cfg.deletes) {
+    if (!cfg.channel) lines.push('Pick a log channel first with `/mod log #mod-log`.');
+    else {
+      const last = Math.max(cfg.edits ? s.cache.lastEvent('edit') ?? 0 : 0, cfg.deletes ? s.cache.lastEvent('delete') ?? 0 : 0);
+      lines.push(last ? `Last edit or delete event: ${ago(last)}.` : MSG_NO_EVENTS);
+    }
+  }
+  return lines.join('\n');
+}
+
+function msgToggleText(cfg) {
+  const parts = [];
+  if (cfg.logEdits) parts.push('edits');
+  if (cfg.logDeletes) parts.push('deletes');
+  return parts.length ? `Message ${parts.join(' and ')} are logged.` : 'Message edits and deletes are not logged.';
+}
+
+function setMessageLogs(engine, sid, patch) {
+  const cfg = engine.settings.patchApp(sid, ID, patch);
+  if (!cfg.logEdits && !cfg.logDeletes) {
+    msgState(engine).cache.clearServer(sid);
+    msgState(engine).live.delete(sid);
+  }
+  return cfg;
+}
+
+async function runMessageLogs(ctx, kind, value) {
+  const cfg = ctx.config();
+  if (value === undefined || value === null) {
+    return ctx.info('Message logs', `${msgStatusText(ctx.engine, ctx.serverId)}\n\nTurn them on with \`/mod log edits on\`, \`/mod log deletes on\` or \`/mod log messages on\` for both.\nDeleted text only shows for messages sent while YapOS was running, and is never saved to disk.`);
+  }
+  const patch = {};
+  if (kind === 'edits' || kind === 'both') patch.logEdits = value;
+  if (kind === 'deletes' || kind === 'both') patch.logDeletes = value;
+  const next = setMessageLogs(ctx.engine, ctx.serverId, { ...{ logEdits: cfg.logEdits, logDeletes: cfg.logDeletes }, ...patch });
+  const where = ctx.core().logChannel;
+  const tail = value && !where ? '\nThere is no log channel yet. Pick one with `/mod log #mod-log`.' : value && where ? `\nThey go to <#${where}>.` : '';
+  return ctx.ok(value ? 'Message logs on' : 'Message logs off', `${msgToggleText(next)}${tail}`);
+}
+
 async function runLogChannel(ctx, tokens) {
   const first = (tokens[0] || '').toLowerCase();
   const current = ctx.core().logChannel;
   if (!first) {
-    return ctx.info('Mod log channel', `${current ? `Mod actions are logged in <#${current}>.` : 'No log channel yet.'}\nSet one with \`/mod log #mod-log\`, or turn it off with \`/mod log off\`.`);
+    return ctx.info('Mod log channel', `${current ? `Mod actions are logged in <#${current}>.` : 'No log channel yet.'}\nSet one with \`/mod log #mod-log\`, or turn it off with \`/mod log off\`.\n\n**Message logs**\n${msgStatusText(ctx.engine, ctx.serverId)}\nTurn them on with \`/mod log messages on\` (or \`edits on\`, \`deletes on\`).`);
+  }
+  if (MSG_KINDS[first] && (tokens.length === 1 || parseBool(tokens[1]) !== null)) {
+    return runMessageLogs(ctx, MSG_KINDS[first], tokens.length === 1 ? null : parseBool(tokens[1]));
   }
   if (LOG_OFF.test(first)) {
     ctx.engine.settings.patchCore(ctx.serverId, { logChannel: null });
+    msgState(ctx.engine).cache.clearServer(ctx.serverId);
     return ctx.ok('Log channel cleared', 'Mod actions are no longer logged anywhere.');
   }
   const ch = await ctx.findChannel(tokens.join(' '), 'text');
-  if (!ch || ch.server_id && ch.server_id !== ctx.serverId) return ctx.warn("I couldn't find that channel", LOG_MISSING);
+  if (!ch || ch.server_id && ch.server_id !== ctx.serverId) return ctx.warn("I couldn't find that channel", await ctx.channelMissing(tokens.join(' '), '/mod log #mod-log'));
   ctx.engine.settings.patchCore(ctx.serverId, { logChannel: ch.id });
   return ctx.ok('Log channel saved', `Mod actions, Automod alerts and warnings from other apps now go to <#${ch.id}>.`);
 }
@@ -1806,16 +2075,23 @@ function settingsView(ctx) {
     { name: 'Warnings count for', value: days ? `${days} day${days === 1 ? '' : 's'}` : 'Forever', inline: true },
     { name: 'Automatic steps', value: formatSteps(cfg.escalation) || 'None', inline: true },
     { name: 'Log channel', value: log ? `<#${log}>` : 'Not set. Type `/mod log #mod-log` to pick one.', inline: false },
+    { name: 'Message logs', value: `${msgStatusText(ctx.engine, ctx.serverId)}\n-# \`/mod log messages on\``, inline: false },
     { name: 'Extra mod roles', value: `${roleList(core.modRoles)}\n-# \`/mod modrole add @role\``, inline: true },
     { name: 'Extra admin roles', value: `${roleList(core.adminRoles)}\n-# \`/mod adminrole add @role\` (owner)`, inline: true },
   ];
   return {
     embeds: [card({ title: `${ICONS.mod} Mod settings`, body: 'How moderation works on this server.', fields, color: 'mod' })],
-    components: [row(
-      button(cfg.dmOnAction ? 'Turn DMs off' : 'Turn DMs on', cid('dm'), 'secondary', '✉️'),
-      button('Edit warning rules', cid('rules'), 'primary', '⚠️'),
-      button('Mod panel', cid('home'), 'secondary', ICONS.mod),
-    )],
+    components: [
+      row(
+        button(cfg.dmOnAction ? 'Turn DMs off' : 'Turn DMs on', cid('dm'), 'secondary', '✉️'),
+        button('Edit warning rules', cid('rules'), 'primary', '⚠️'),
+        button('Mod panel', cid('home'), 'secondary', ICONS.mod),
+      ),
+      row(
+        button(cfg.logEdits ? 'Stop logging edits' : 'Log message edits', cid('msgedits'), 'secondary', '✏️'),
+        button(cfg.logDeletes ? 'Stop logging deletes' : 'Log message deletes', cid('msgdeletes'), 'secondary', '🗑️'),
+      ),
+    ],
   };
 }
 
@@ -1953,6 +2229,16 @@ const DASHBOARD = [
       return ch ? accept(ch.id) : reject(LOG_MISSING);
     },
   },
+  {
+    key: 'logEdits', label: 'Log edited messages', type: 'boolean', web: true,
+    help: 'Posts the old and new text to the log channel when someone edits a message.',
+    validate: (ctx, v) => (typeof v === 'boolean' ? accept(v) : reject('Use on or off.')),
+  },
+  {
+    key: 'logDeletes', label: 'Log deleted messages', type: 'boolean', web: true,
+    help: 'Posts deleted messages to the log channel. Text only shows for messages sent while YapOS was running.',
+    validate: (ctx, v) => (typeof v === 'boolean' ? accept(v) : reject('Use on or off.')),
+  },
   { key: 'core.modRoles', label: 'Extra mod roles', type: 'roles', web: false, max: 10, help: 'People with these roles count as YapOS moderators.', note: 'Change these in the server with /mod modrole add @role.' },
   { key: 'core.adminRoles', label: 'Extra admin roles', type: 'roles', web: false, max: 10, help: 'People with these roles count as YapOS admins.', note: 'Only the server owner can change these, with /mod adminrole add @role.' },
 ];
@@ -1971,6 +2257,16 @@ export const { setup, teardown, check } = defineApp({
     dmOnAction: true,
     warnDecayDays: 30,
     escalation: DEFAULT_ESCALATION,
+    logEdits: false,
+    logDeletes: false,
+  },
+
+  events: {
+    message: msgOnMessage,
+    message_update: msgOnUpdate,
+    message_delete: msgOnDelete,
+    message_delete_bulk: msgOnBulk,
+    server_remove: msgOnServerGone,
   },
 
   commands: {
@@ -2009,6 +2305,20 @@ export const { setup, teardown, check } = defineApp({
       perm: 'admin',
       run: staff('admin', (ctx) => {
         ctx.patchConfig({ dmOnAction: !ctx.config().dmOnAction });
+        return ctx.update(settingsView(ctx));
+      }),
+    },
+    msgedits: {
+      perm: 'admin',
+      run: staff('admin', (ctx) => {
+        setMessageLogs(ctx.engine, ctx.serverId, { logEdits: !ctx.config().logEdits });
+        return ctx.update(settingsView(ctx));
+      }),
+    },
+    msgdeletes: {
+      perm: 'admin',
+      run: staff('admin', (ctx) => {
+        setMessageLogs(ctx.engine, ctx.serverId, { logDeletes: !ctx.config().logDeletes });
         return ctx.update(settingsView(ctx));
       }),
     },
@@ -2052,6 +2362,19 @@ export const { setup, teardown, check } = defineApp({
     }
   },
 
+  onUninstall: (engine, serverId) => {
+    msgOnServerGone({ engine }, { server_id: serverId });
+  },
+
+  dispose: (engine) => {
+    const s = msgStates.get(engine);
+    if (!s) return;
+    for (const p of s.pending.values()) if (p.timer) clearTimeout(p.timer);
+    s.pending.clear();
+    s.cache.clear();
+    msgStates.delete(engine);
+  },
+
   yap: [{
     words: YAP_WORDS,
     run: async (ctx) => {
@@ -2064,7 +2387,17 @@ export const { setup, teardown, check } = defineApp({
 
   dashboard: DASHBOARD,
 
-  services: (engine) => ({ ...createService(engine), activeWarns: (sid, uid) => activeWarns(engine, sid, uid) }),
+  services: (engine) => ({
+    ...createService(engine),
+    activeWarns: (sid, uid) => activeWarns(engine, sid, uid),
+    messageLogs: {
+      cache: () => msgState(engine).cache,
+      flush: (sid) => flushMessageLogs(engine, sid),
+      pending: (sid) => msgState(engine).pending.get(sid)?.items.length ?? 0,
+      setWindow: (ms) => { msgState(engine).windowMs = Math.max(0, Number(ms) || 0); },
+      status: (sid) => msgStatusText(engine, sid),
+    },
+  }),
 
   presets: {
     gaming: { enabled: true, config: {} },
@@ -2099,6 +2432,7 @@ export const { setup, teardown, check } = defineApp({
     'Private notes: `/mod note @sam text` (no warning, no DM), `/mod notes @sam` to read them, `/mod note remove 4` to delete one.',
     'Bans, timeouts, warnings, locks and slowmode changes come with an Undo button for 10 minutes.',
     'Admins: `/mod log #mod-log` picks where actions are logged. `/mod modrole add @Helpers` makes a role count as mods.',
+    'Message logs (off at first): `/mod log messages on` logs edited and deleted messages to the log channel (`edits on` or `deletes on` for just one). Deleted text only shows for messages sent while YapOS was running; it stays in memory for up to a day and is never saved.',
     'Server owner: `/mod adminrole add @Managers` makes a role count as YapOS admins.',
   ],
 });

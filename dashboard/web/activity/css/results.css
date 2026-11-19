@@ -358,6 +358,12 @@
   box-shadow: 0 0 20px -8px var(--info-line);
 }
 
+.earn-row .earn-why {
+  flex-basis: 100%;
+  text-align: center;
+  font-size: var(--text-xs);
+}
+
 .winner-card .start-row {
   display: flex;
   flex-wrap: wrap;

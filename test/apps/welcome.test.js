@@ -461,7 +461,7 @@ test('members reach only the preview through /yap and the home screen', async ()
     const source = {
       id: uuid(3), type: 'button', custom_id: 'yo:sys:open:welcome', server_id: IDS.server, channel_id: G, user_id: user, username: 'tap',
       reply: async (content, o = {}) => { const message = { id: uuid(9) }; answers.push({ type: 'reply', content, ...o, message }); return { message }; },
-      ephemeral: async (content, o = {}) => { answers.push({ type: 'ephemeral', content, ...o }); },
+      ephemeral: async (content, o = {}) => { if (o.components?.length) throw Object.assign(new Error("Ephemeral replies can't have buttons (yet)"), { status: 400 }); answers.push({ type: 'ephemeral', content, ...o }); },
       update: async () => {}, ack: async () => {},
     };
     return { answers, ctx: h.engine.contextFor(source, { app: 'welcome', args: '' }) };

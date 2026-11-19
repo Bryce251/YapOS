@@ -1,8 +1,20 @@
 import { dialog } from './ui.js';
+import { commandOptionsFor, optionsProblem } from './commands.js';
+import { normalizeCommandArgs } from './parse.js';
 
 const NAME_RE = /^[a-z0-9_-]{1,32}$/;
 const FIELD_KEY_RE = /^[A-Za-z][\w.]{0,63}$/;
 const FIELD_TYPES = new Set(['boolean', 'number', 'string', 'text', 'channel', 'voice_channel', 'category', 'role', 'roles', 'channels', 'emoji', 'select', 'duration', 'color', 'words', 'complex']);
+
+function normalizeArgs(msg, options) {
+  if (!msg || typeof msg !== 'object') return;
+  let out = null;
+  try { out = normalizeCommandArgs(msg, options); } catch { out = null; }
+  if (!out) return;
+  msg.args = out.args;
+  msg.argv = out.args ? out.args.split(/\s+/) : [];
+  msg.namedArgs = out.values;
+}
 
 function checkDashboard(appId, fields) {
   if (!Array.isArray(fields)) throw new Error(`App ${appId}: dashboard must be a list of fields`);
@@ -36,6 +48,8 @@ export function defineApp(def) {
   for (const [name, c] of Object.entries(def.commands || {})) {
     if (!NAME_RE.test(name)) throw new Error(`App ${meta.id}: bad command name "${name}"`);
     if (String(c.description || '').length > 100) throw new Error(`App ${meta.id}: /${name} description is over 100 characters`);
+    const bad = optionsProblem(c.options);
+    if (bad) throw new Error(`App ${meta.id}: /${name} ${bad}`);
   }
   for (const hook of ['onInstall', 'onUninstall']) {
     if (def[hook] !== undefined && typeof def[hook] !== 'function') throw new Error(`App ${meta.id}: ${hook} must be a function`);
@@ -63,8 +77,11 @@ export function defineApp(def) {
     if (!engine) throw new Error(`App ${meta.id} needs the YapOS engine (bot.yapos) before it loads`);
     engine.apps.register(meta, def);
 
+    const hints = commandOptionsFor(engine);
     for (const [name, c] of Object.entries(def.commands || {})) {
+      hints.declare(name, c.options);
       bot.command(name, c.description || '', async (msg) => {
+        normalizeArgs(msg, hints.optionsFor(name));
         const ctx = engine.contextFor(msg, { app: meta.id });
         try {
           if (c.perm && ctx.serverId) await ctx.require(c.perm);
@@ -110,6 +127,7 @@ export function defineApp(def) {
       for (let i = engine.dmRoutes.length - 1; i >= 0; i--) if (engine.dmRoutes[i].app === meta.id) engine.dmRoutes.splice(i, 1);
       engine.services.delete(meta.id);
       for (const [name, fn] of Object.entries(def.jobs || {})) engine.scheduler?.unregister(`${meta.id}.${name}`, fn);
+      for (const name of Object.keys(def.commands || {})) engine.commandOptions?.forget(name);
       engine.apps.unregister(meta.id);
     }
   }

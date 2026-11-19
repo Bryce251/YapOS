@@ -383,7 +383,7 @@ async function runRecap(ctx) {
   const ch = await ctx.findChannel(chanToks.join(' '));
   if (!ch) {
     const hint = didYouMean(words[0], ['off', 'preview', 'day']);
-    return ctx.warn("I couldn't find that channel", `Mention it like \`/recap #general friday\`.${hint?.length ? `\nDid you mean **${hint[0]}**?` : ''}`);
+    return ctx.warn("I couldn't find that channel", hint?.length ? `Did you mean **${hint[0]}**?\n-# Or mention a channel, like \`/recap #general friday\`.` : await ctx.channelMissing(chanToks.join(' '), '/recap #general friday'));
   }
   return turnOn(ctx, ch.id, day);
 }

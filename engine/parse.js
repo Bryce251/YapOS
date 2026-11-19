@@ -11,6 +11,116 @@ export function tokenize(text) {
   return out;
 }
 
+const NAMED_KEY_RE = /^([A-Za-z_][\w-]{0,31})=/;
+
+function readQuoted(text, start) {
+  let out = '';
+  let i = start + 1;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '\\' && (text[i + 1] === '"' || text[i + 1] === '\\')) { out += text[i + 1]; i += 2; continue; }
+    if (ch === '"') return { value: out, end: i + 1 };
+    out += ch;
+    i++;
+  }
+  return { value: out, end: i };
+}
+
+function readBare(text, start) {
+  let i = start;
+  while (i < text.length && !/\s/.test(text[i])) i++;
+  return { value: text.slice(start, i), end: i };
+}
+
+function readRaw(text, start) {
+  if (text[start] === '"') {
+    const q = readQuoted(text, start);
+    return { raw: text.slice(start, q.end), end: q.end };
+  }
+  const b = readBare(text, start);
+  return { raw: b.value, end: b.end };
+}
+
+export function parseNamedArgs(text, names) {
+  const s = String(text ?? '');
+  const known = new Map([...(names || [])].map((n) => [String(n).toLowerCase(), String(n)]));
+  const lead = s.trimStart();
+  const first = NAMED_KEY_RE.exec(lead);
+  if (!first || !known.has(first[1].toLowerCase())) return null;
+  const values = {};
+  const extra = [];
+  let i = 0;
+  while (i < s.length) {
+    while (i < s.length && /\s/.test(s[i])) i++;
+    if (i >= s.length) break;
+    const key = NAMED_KEY_RE.exec(s.slice(i, i + 40));
+    if (!key) {
+      const r = readRaw(s, i);
+      extra.push(r.raw);
+      i = r.end;
+      continue;
+    }
+    const at = i;
+    const vStart = i + key[0].length;
+    const v = s[vStart] === '"' ? readQuoted(s, vStart) : readBare(s, vStart);
+    i = v.end;
+    const name = known.get(key[1].toLowerCase());
+    if (!name) { extra.push(s.slice(at, v.end)); continue; }
+    const value = v.value.trim();
+    if (value) values[name] = value;
+    else delete values[name];
+  }
+  return { values, extra };
+}
+
+function quoteArg(v) {
+  if (!/\s/.test(v) && !/^["'“]/.test(v)) return v;
+  if (!v.includes('"')) return `"${v}"`;
+  if (!v.includes("'")) return `'${v}'`;
+  if (!v.includes('”')) return `“${v}”`;
+  return v;
+}
+
+function optionValue(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'object') return String(v.value ?? v.id ?? '');
+  return String(v);
+}
+
+export function namedToArgs(values, options, extra = []) {
+  const list = options || [];
+  const parts = [];
+  list.forEach((o, i) => {
+    const v = optionValue(values?.[o.name]).trim();
+    if (v) parts.push({ v, rest: i === list.length - 1 && o.type === 'string' });
+  });
+  const tail = (extra || []).map(String).filter(Boolean);
+  return [...parts.map((p) => (p.rest && !tail.length ? p.v : quoteArg(p.v))), ...tail].join(' ');
+}
+
+export function optionsToValues(options) {
+  if (!options) return null;
+  if (Array.isArray(options)) {
+    const out = {};
+    for (const o of options) if (o && typeof o === 'object' && o.name) out[o.name] = o.value;
+    return out;
+  }
+  return typeof options === 'object' ? options : null;
+}
+
+export function normalizeCommandArgs({ args, options: given }, options) {
+  const list = Array.isArray(options) ? options : [];
+  const text = typeof args === 'string' ? args : '';
+  const fromSdk = optionsToValues(given);
+  if (!text.trim() && fromSdk && Object.keys(fromSdk).length && list.length) {
+    return { args: namedToArgs(fromSdk, list), values: fromSdk };
+  }
+  if (!list.length) return null;
+  const named = parseNamedArgs(text, list.map((o) => o.name));
+  if (!named) return null;
+  return { args: namedToArgs(named.values, list, named.extra), values: named.values };
+}
+
 const UNITS = { s: 1e3, sec: 1e3, secs: 1e3, second: 1e3, seconds: 1e3, m: 6e4, min: 6e4, mins: 6e4, minute: 6e4, minutes: 6e4, h: 36e5, hr: 36e5, hrs: 36e5, hour: 36e5, hours: 36e5, d: 864e5, day: 864e5, days: 864e5, w: 6048e5, wk: 6048e5, week: 6048e5, weeks: 6048e5 };
 
 export function parseDuration(text, { bareUnit = 'm' } = {}) {

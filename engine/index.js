@@ -8,7 +8,8 @@ import { createCaps } from './caps.js';
 import { createBudget } from './budget.js';
 import { createRouter } from './router.js';
 import { createPrompts } from './prompts.js';
-import { createContext } from './context.js';
+import { createContext, createEphemeralTracker } from './context.js';
+import { createYapinApi } from './yapin-api.js';
 import { createFreshness } from './freshness.js';
 import { createScheduler } from './scheduler.js';
 import { createAppRegistry, createYap } from './apps.js';
@@ -55,11 +56,12 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
   };
   const perms = createPerms({ bot, settings, isBotOwner });
   const caps = createCaps({ settings, log });
-  const budget = createBudget({ bot, verified: !!config.verified, log });
+  const budget = createBudget({ bot, verified: !!config.verified, log, caps });
   const prompts = createPrompts();
   const yap = createYap();
   const services = new Map();
   const startedAt = Date.now();
+  const hooks = new Map();
   const stats = { events: 0, commands: 0, interactions: 0, errors: 0, lastLatencyMs: null };
 
   const listCache = new Map();
@@ -90,7 +92,20 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
 
   const engine = {
     bot, config, store, log, apps, settings, perms, caps, budget, prompts, yap, services, cache, stats, startedAt, VERSION,
+    yapin: createYapinApi({ bot, caps, cache, log }),
+    ephemeralReplies: createEphemeralTracker(),
+    servers: { seen: new Map(), gone: new Map() },
     router: null,
+    on(name, fn) {
+      if (!hooks.has(name)) hooks.set(name, []);
+      hooks.get(name).push(fn);
+      return () => { const list = hooks.get(name) || []; const i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); };
+    },
+    async emit(name, payload) {
+      for (const fn of [...(hooks.get(name) || [])]) {
+        try { await fn(payload); } catch (e) { log.error(`[engine ${name}]`, e); }
+      }
+    },
     freshness: null,
     scheduler: null,
     dmRoutes: [],
@@ -189,13 +204,33 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
   bot.on('command', () => { stats.commands++; });
   bot.on('interaction', () => { stats.interactions++; });
   bot.on('member_join', (ev) => cache.invalidate(ev.server_id));
+  const SERVER_GONE_DEDUPE_MS = 60_000;
+  const leftServer = (sid, via) => {
+    if (!sid) return;
+    cache.invalidate(sid);
+    const last = engine.servers.gone.get(sid);
+    if (last && Date.now() - last < SERVER_GONE_DEDUPE_MS) return;
+    engine.servers.gone.set(sid, Date.now());
+    engine.servers.seen.delete(sid);
+    engine.dashboard?.serverGone?.(sid)?.catch?.((e) => log.debug('[dashboard] unpublishing after leaving a server failed', e?.message));
+    void engine.emit('server_remove', { server_id: sid, via });
+  };
   bot.on('member_leave', (ev) => {
     cache.invalidate(ev.server_id);
     const me = bot.me?.id;
-    if (me && ev?.server_id && (ev.user_id ?? ev.member?.id ?? ev.id) === me) {
-      engine.dashboard?.serverGone?.(ev.server_id)?.catch?.((e) => log.debug('[dashboard] unpublishing after leaving a server failed', e?.message));
-    }
+    if (me && ev?.server_id && (ev.user_id ?? ev.member?.id ?? ev.id) === me) leftServer(ev.server_id, 'member_leave');
   });
+  bot.on('server_add', (ev) => {
+    const sid = ev?.server_id ?? null;
+    if (!sid) return;
+    cache.invalidate(sid);
+    engine.servers.gone.delete(sid);
+    const fresh = !engine.servers.seen.has(sid);
+    engine.servers.seen.set(sid, { name: ev.name ?? null, member_count: ev.member_count ?? null, at: Date.now() });
+    if (engine.servers.seen.size > 5000) engine.servers.seen.delete(engine.servers.seen.keys().next().value);
+    void engine.emit('server_add', { server_id: sid, name: ev.name ?? null, member_count: ev.member_count ?? null, fresh, late: !!ev.yaposLate });
+  });
+  bot.on('server_remove', (ev) => leftServer(ev?.server_id ?? null, 'server_remove'));
   bot.on('error', (e) => {
     stats.errors++;
     log.error(e?.cog ? `[${e.cog}${e.where ? ` ${e.where}` : ''}]` : '[sdk]', e);

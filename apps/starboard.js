@@ -240,7 +240,7 @@ function infoView(ctx) {
 
 async function setChannel(ctx, token) {
   const ch = await ctx.findChannel(token);
-  if (!ch) return ctx.warn("I couldn't find that channel", CHANNEL_HELP);
+  if (!ch) return ctx.warn("I couldn't find that channel", await ctx.channelMissing(token, '/starboard #starboard'));
   const can = await ctx.engine.perms.botCan(ctx.serverId, 'send_messages', 'embed_links').catch(() => ({ ok: true }));
   ctx.patchConfig({ channelId: ch.id });
   const warn = can.ok === false ? `\n-# I may be missing **Send Messages** or **Embed Links**. Check my role can post in <#${ch.id}>.` : '';

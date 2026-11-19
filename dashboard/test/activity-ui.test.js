@@ -67,7 +67,11 @@ test('the activity page works under the strict activity CSP', () => {
   assert.match(html, /href="\/activity\/css\/activity\.css"/);
   for (const f of walk(activity)) {
     const src = readFileSync(f, 'utf8');
-    if (f.endsWith('.css')) {
+    if (f.endsWith('profilecard-fonts.css')) {
+      const rest = src.replace(/url\("\/fonts\/[a-z0-9]+\.woff2"\) format\("woff2"\)/g, '');
+      assert.equal(/url\(|@import/.test(rest), false, f);
+      assert.equal(/animation|transition/.test(src), false, f);
+    } else if (f.endsWith('.css')) {
       assert.equal(/url\(|@import|@font-face/.test(src), false, f);
       assert.match(src, /prefers-reduced-motion/);
     }

@@ -5,12 +5,13 @@ import { tabBar } from '../kit.js';
 import { ApiError } from '../api.js';
 import { formatNumber } from '../format.js';
 import {
-  BANNERS, BIO_MAX, DENSITIES, EFFECTS, FEATURED, NAME_FONTS, NAME_GRADIENTS, NAME_PALETTE, PIN_MAX, PRONOUNS_MAX, RINGS, SECTIONS, STATUS_EMOJI_MAX, STATUS_MAX, THEMES, THEME_MODES, THEME_PATTERNS,
-  cleanStatusEmoji, defaultLook, lookBody, moveItem, normalHex, readCrop, readLook, readMotion, sameLook, textLength, themeById, themeColours, themeShades,
+  BANNERS, BIO_MAX, CUSTOM_GRADIENT_START, DENSITIES, EFFECTS, FEATURED, FONT_CATEGORIES, NAME_FONTS, NAME_GRADIENTS, NAME_PALETTE, PIN_MAX, PRONOUNS_MAX, RINGS, SECTIONS, STATUS_EMOJI_MAX, STATUS_MAX, GRADIENT_ANGLES, THEMES, THEME_MODES, THEME_PATTERNS,
+  cleanStatusEmoji, defaultLook, fontById, lookBody, mixHex, moveItem, nameContrast, rawGradientCss, readCrop, readLook, readMotion, sameLook, textLength, themeById, themeColours, themeShades,
 } from '../profile-look.js';
 import { ANIM_MAX_BYTES, AnimError, animatedFrames, checkAnimSize, readAnimated, webpAnimated } from '../banner-anim.js';
 import { effectThumb } from '../profile-fx.js';
-import { allBadges, cropVars, isSpecial, openAllBadges } from './profile.js';
+import { allBadges, cropVars, isSpecial, nameGradientClass, openAllBadges, paintNameGradient } from './profile.js';
+import { colourRow, createColourPicker, parseColour } from '../colour-picker.js';
 import { dataUrlBytes, loadPicture, sniffFile } from './owner-badges.js';
 
 export const LOOK_API = '/api/me/profile-look';
@@ -567,6 +568,100 @@ function choiceGroup({ label, options, value, onPick, className = '' }) {
   return { el: group, set, get value() { return current; } };
 }
 
+export function fontPicker({ fonts = NAME_FONTS, categories = FONT_CATEGORIES, value, sample = '', onPick }) {
+  let current = fontById(value).id;
+  let shown = fontById(current).category;
+  const buttons = new Map();
+  const chips = new Map();
+  const samples = [];
+  const cats = categories.filter((c) => fonts.some((f) => f.category === c.id));
+  const chipRow = h('div', { class: 'pe-font-cats', attrs: { role: 'group', 'aria-label': 'Font groups' } });
+  const grid = h('div', { class: 'pe-font-grid', attrs: { role: 'radiogroup', 'aria-label': 'Name font' } });
+  const note = h('p', { class: 'field-help pe-font-current', attrs: { 'aria-live': 'polite' } });
+  const visible = () => fonts.filter((f) => f.category === shown).map((f) => f.id);
+  const roving = () => {
+    const ids = visible();
+    const focusId = ids.includes(current) ? current : ids[0];
+    for (const [id, b] of buttons) b.tabIndex = id === focusId ? 0 : -1;
+  };
+  const paint = () => {
+    for (const [id, b] of buttons) {
+      const on = id === current;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.classList.toggle('is-on', on);
+      b.hidden = fontById(id).category !== shown;
+    }
+    const pickedCat = fontById(current).category;
+    for (const [id, c] of chips) {
+      c.setAttribute('aria-pressed', id === shown ? 'true' : 'false');
+      c.classList.toggle('is-on', id === shown);
+      c.classList.toggle('has-pick', id === pickedCat);
+    }
+    note.textContent = `Font: ${fontById(current).label}`;
+    roving();
+  };
+  const show = (cat) => {
+    if (!cats.some((c) => c.id === cat)) return;
+    shown = cat;
+    paint();
+  };
+  const choose = (id, focus = false) => {
+    current = id;
+    paint();
+    if (focus) buttons.get(id)?.focus();
+    onPick(id);
+  };
+  for (const c of cats) {
+    const chip = h('button', { type: 'button', class: 'pe-font-cat', text: c.label, attrs: { 'data-font-cat': c.id, 'aria-pressed': 'false' } });
+    chip.addEventListener('click', () => show(c.id));
+    chips.set(c.id, chip);
+    chipRow.appendChild(chip);
+  }
+  for (const f of fonts) {
+    const text = h('span', { class: ['pe-font-sample', f.id !== 'default' ? `name-font-${f.id}` : ''], text: sample || f.label });
+    samples.push([text, f.label]);
+    const b = h('button', {
+      type: 'button',
+      class: 'pe-font',
+      title: f.label,
+      attrs: { 'data-choice': f.id, 'data-font-cat': f.category, role: 'radio', 'aria-label': f.label, 'aria-checked': 'false' },
+    }, text, h('span', { class: 'pe-font-label', text: f.label, attrs: { 'aria-hidden': 'true' } }));
+    b.addEventListener('click', () => choose(f.id));
+    b.addEventListener('keydown', (e) => {
+      const ids = visible();
+      const i = ids.indexOf(f.id);
+      let next = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = ids[(i + 1) % ids.length];
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = ids[(i - 1 + ids.length) % ids.length];
+      else if (e.key === 'Home') next = ids[0];
+      else if (e.key === 'End') next = ids[ids.length - 1];
+      if (next === null || next === undefined) return;
+      e.preventDefault();
+      choose(next, true);
+    });
+    buttons.set(f.id, b);
+    grid.appendChild(b);
+  }
+  paint();
+  return {
+    el: h('div', { class: 'pe-font-picker' }, chipRow, grid, note),
+    set(id) {
+      current = fontById(id).id;
+      paint();
+    },
+    show,
+    setSample(value) {
+      for (const [el, label] of samples) el.textContent = value || label;
+    },
+    get value() {
+      return current;
+    },
+    get category() {
+      return shown;
+    },
+  };
+}
+
 function sortable({ label, items, keyOf, nameOf, row, onMove, className = '' }) {
   let dragFrom = -1;
   const list = h('ol', { class: ['pe-sort', className], attrs: { 'aria-label': label } });
@@ -619,6 +714,38 @@ function field({ label, control, help = '', counter = null, id }) {
     help ? h('p', { class: 'field-help', text: help }) : null);
 }
 
+function colourField({ id, label, placeholder, errorEl, errorText, onSet }) {
+  const hexEl = h('input', { type: 'text', id, class: 'input input-mono pe-hex', maxLength: 24, placeholder, autocomplete: 'off', spellcheck: false });
+  const apply = (raw) => {
+    const hex = parseColour(raw);
+    if (!hex) {
+      errorEl.textContent = errorText;
+      hexEl.classList.add('is-invalid');
+      return;
+    }
+    errorEl.textContent = '';
+    hexEl.classList.remove('is-invalid');
+    onSet(hex);
+  };
+  const picker = createColourPicker({ value: placeholder, label, onInput: apply });
+  hexEl.addEventListener('change', () => apply(hexEl.value));
+  hexEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      apply(hexEl.value);
+    }
+  });
+  return {
+    row: colourRow(picker, hexEl),
+    hexEl,
+    picker,
+    sync(hex, shown = hex) {
+      if (document.activeElement !== hexEl) hexEl.value = shown || '';
+      picker.set(hex || placeholder);
+    },
+  };
+}
+
 function heading(text, extra = null) {
   return h('div', { class: 'pe-head' }, h('h3', { class: 'pe-title', text }), extra);
 }
@@ -656,6 +783,18 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   const resetBtn = button({ label: 'Reset to default', icon: 'refresh', variant: 'ghost', size: 'sm', className: 'pe-reset' });
   const panels = {};
   const syncers = [];
+  const pickers = [];
+  const trackColour = (opts) => {
+    const f = colourField(opts);
+    pickers.push(f.picker);
+    return f;
+  };
+  const closePickers = (destroy = false) => {
+    for (const p of pickers) {
+      if (destroy) p.destroy();
+      else p.close({ focus: false });
+    }
+  };
 
   const isDirty = () => !sameLook(draft, saved);
 
@@ -774,64 +913,139 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     drawPicks();
   });
 
+  let gradMemo = draft.nameGradientCustom ? { ...draft.nameGradientCustom } : { ...CUSTOM_GRADIENT_START };
   const nameOptions = [
     { id: 'default', label: 'Default', className: 'pe-swatch is-default', body: h('span', { class: 'pe-swatch-text', text: 'Aa' }) },
     ...NAME_PALETTE.map((c) => ({ id: c.hex, label: c.label, className: 'pe-swatch', body: null, vars: { '--sw': c.hex } })),
     ...NAME_GRADIENTS.map((g) => ({ id: `g:${g.id}`, label: `${g.label} gradient`, className: `pe-swatch is-gradient swatch-grad-${g.id}`, body: null })),
+    { id: 'g:custom', label: 'Custom gradient', className: 'pe-swatch is-gradient swatch-grad-custom', body: h('span', { class: 'pe-swatch-plus', text: '+', attrs: { 'aria-hidden': 'true' } }) },
   ];
-  const nameValue = () => (draft.nameGradient ? `g:${draft.nameGradient}` : draft.nameColour && NAME_PALETTE.some((c) => c.hex === draft.nameColour) ? draft.nameColour : draft.nameColour ? 'custom' : 'default');
+  const nameValue = () => (draft.nameGradientCustom ? 'g:custom' : draft.nameGradient ? `g:${draft.nameGradient}` : draft.nameColour && NAME_PALETTE.some((c) => c.hex === draft.nameColour) ? draft.nameColour : draft.nameColour ? 'custom' : 'default');
   const nameColourId = nextId('pe-name-hex');
-  const namePicker = h('input', { type: 'color', class: 'pe-colour', attrs: { 'aria-label': 'Pick any name colour' } });
-  const nameHex = h('input', { type: 'text', id: nameColourId, class: 'input input-mono pe-hex', maxLength: 7, placeholder: '#7c5cff', autocomplete: 'off', spellcheck: false });
   const nameHexError = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
   const contrastNote = h('p', { class: 'field-help pe-contrast-note' });
+  const contrastWarn = h('p', { class: 'pe-contrast-warn', attrs: { role: 'status' }, hidden: true });
   const demoLight = h('span', { class: 'pe-demo-name' });
   const demoDark = h('span', { class: 'pe-demo-name' });
+  const useGradient = (g) => {
+    gradMemo = { ...g };
+    update({ nameColour: null, nameGradient: null, nameGradientCustom: { ...g } });
+    syncName();
+  };
   const nameGroup = choiceGroup({
     label: 'Name colour',
     options: nameOptions,
     value: nameValue(),
     className: 'pe-swatches',
     onPick: (id) => {
-      if (id === 'default') update({ nameColour: null, nameGradient: null });
-      else if (id.startsWith('g:')) update({ nameColour: null, nameGradient: id.slice(2) });
-      else update({ nameColour: id, nameGradient: null });
+      if (id === 'default') update({ nameColour: null, nameGradient: null, nameGradientCustom: null });
+      else if (id === 'g:custom') update({ nameColour: null, nameGradient: null, nameGradientCustom: { ...gradMemo } });
+      else if (id.startsWith('g:')) update({ nameColour: null, nameGradient: id.slice(2), nameGradientCustom: null });
+      else update({ nameColour: id, nameGradient: null, nameGradientCustom: null });
       syncName();
     },
   });
-  const setCustomName = (raw) => {
-    const hex = normalHex(raw);
-    if (!hex) {
-      nameHexError.textContent = 'Use a colour like #7c5cff.';
-      nameHex.classList.add('is-invalid');
-      return;
-    }
-    nameHexError.textContent = '';
-    nameHex.classList.remove('is-invalid');
-    update({ nameColour: hex, nameGradient: null });
-    syncName();
-  };
-  namePicker.addEventListener('input', () => setCustomName(namePicker.value));
-  nameHex.addEventListener('change', () => setCustomName(nameHex.value));
-  nameHex.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      setCustomName(nameHex.value);
-    }
+  const customSwatch = [...nameGroup.el.querySelectorAll('.pe-choice')].find((b) => b.getAttribute('data-choice') === 'g:custom') || null;
+  const nameField = trackColour({
+    id: nameColourId,
+    label: 'Name colour',
+    placeholder: '#7c5cff',
+    errorEl: nameHexError,
+    errorText: 'Use a colour like #7c5cff.',
+    onSet: (hex) => {
+      update({ nameColour: hex, nameGradient: null, nameGradientCustom: null });
+      syncName();
+    },
   });
 
+  const gradError = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
+  const gradStop = (k, label) => {
+    const id = nextId(`pe-grad-${k}`);
+    const f = trackColour({
+      id,
+      label,
+      placeholder: k === 'c' ? '#e5487f' : CUSTOM_GRADIENT_START[k],
+      errorEl: gradError,
+      errorText: 'Use a colour like #7c5cff.',
+      onSet: (hex) => useGradient({ ...gradMemo, [k]: hex }),
+    });
+    f.hexEl.classList.add('pe-grad-hex');
+    return { k, f, el: h('div', { class: 'pe-custom pe-grad-stop', attrs: { 'data-stop': k } }, h('label', { class: 'field-label', htmlFor: id, text: label }), f.row) };
+  };
+  const gradA = gradStop('a', 'Start colour');
+  const gradB = gradStop('b', 'End colour');
+  const gradC = gradStop('c', 'Middle colour');
+  const middleId = nextId('pe-grad-mid');
+  const middleSwitch = h('input', { type: 'checkbox', id: middleId, class: 'pe-grad-mid' });
+  middleSwitch.addEventListener('change', () => {
+    const next = { a: gradMemo.a, b: gradMemo.b, angle: gradMemo.angle };
+    if (middleSwitch.checked) next.c = gradMemo.c || lastMiddle || mixHex(gradMemo.a, gradMemo.b, 0.5);
+    useGradient(next);
+  });
+  let lastMiddle = gradMemo.c || null;
+  const angleId = nextId('pe-grad-angle');
+  const angleInput = h('input', { type: 'range', id: angleId, class: 'pe-angle', min: '0', max: '360', step: '1' });
+  const angleOut = h('span', { class: 'pe-angle-out', attrs: { 'aria-hidden': 'true' } });
+  const angleSet = (raw) => {
+    const n = Math.round(Number(raw));
+    if (!Number.isFinite(n)) return;
+    useGradient({ ...gradMemo, angle: clamp(n, 0, 360) });
+  };
+  angleInput.addEventListener('input', () => angleSet(angleInput.value));
+  angleInput.addEventListener('change', () => angleSet(angleInput.value));
+  const angleChips = GRADIENT_ANGLES.map((a) => {
+    const b = h('button', { type: 'button', class: 'pe-choice pe-chip pe-angle-chip', text: a.label, attrs: { 'data-angle': String(a.angle), 'aria-pressed': 'false' } });
+    b.addEventListener('click', () => angleSet(a.angle));
+    return b;
+  });
+  const gradBox = h('div', { class: 'pe-grad-custom' },
+    h('div', { class: 'pe-grad-stops' }, gradA.el, gradB.el),
+    h('label', { class: 'pe-grad-toggle', htmlFor: middleId }, middleSwitch, h('span', { text: 'Add a middle colour' })),
+    gradC.el,
+    gradError,
+    h('div', { class: 'pe-custom' },
+      h('div', { class: 'pe-field-head' }, h('label', { class: 'field-label', htmlFor: angleId, text: 'Direction' }), angleOut),
+      angleInput,
+      h('div', { class: 'pe-angle-chips', attrs: { role: 'group', 'aria-label': 'Direction ideas' } }, ...angleChips)));
+
   function paintDemo(el) {
-    el.className = ['pe-demo-name', draft.nameGradient ? `name-grad-${draft.nameGradient}` : '', draft.nameFont !== 'default' ? `name-font-${draft.nameFont}` : ''].filter(Boolean).join(' ');
+    const grad = nameGradientClass(draft);
+    el.className = ['pe-demo-name', grad, draft.nameFont !== 'default' ? `name-font-${draft.nameFont}` : ''].filter(Boolean).join(' ');
+    paintNameGradient(el, draft);
     el.textContent = profile.name;
+  }
+
+  function contrastText(list) {
+    if (!list.length) return '';
+    const where = list.length > 1 ? 'in light and dark mode' : `in ${list[0].mode} mode`;
+    const on = draft.theme !== 'none' ? 'your profile theme' : 'the page';
+    return `Heads up: your name may be hard to read on ${on} ${where}. You can still keep it, or try a ${list[0].mode === 'dark' ? 'lighter' : 'darker'} colour.`;
   }
 
   function syncName() {
     nameGroup.set(nameValue());
-    if (document.activeElement !== nameHex) nameHex.value = draft.nameColour || '';
-    namePicker.value = draft.nameColour || '#7c5cff';
+    nameField.sync(draft.nameColour || '#7c5cff', draft.nameColour || '');
+    const g = draft.nameGradientCustom || gradMemo;
+    if (g.c) lastMiddle = g.c;
+    gradBox.hidden = !draft.nameGradientCustom;
+    gradA.f.sync(g.a);
+    gradB.f.sync(g.b);
+    gradC.f.sync(g.c || lastMiddle || mixHex(g.a, g.b, 0.5));
+    gradC.el.hidden = !g.c;
+    middleSwitch.checked = Boolean(g.c);
+    if (document.activeElement !== angleInput) angleInput.value = String(g.angle);
+    angleInput.setAttribute('aria-valuetext', `${g.angle} degrees`);
+    angleOut.textContent = `${g.angle} degrees`;
+    for (const b of angleChips) {
+      const on = Number(b.getAttribute('data-angle')) === g.angle;
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.classList.toggle('is-on', on);
+    }
+    const raw = rawGradientCss(g);
+    if (customSwatch && raw) customSwatch.style.setProperty('--sw-grad', raw);
     paintDemo(demoLight);
     paintDemo(demoDark);
-    const c = draft.nameColour && !draft.nameGradient ? themeColours(draft.nameColour) : null;
+    const c = draft.nameColour && !draft.nameGradient && !draft.nameGradientCustom ? themeColours(draft.nameColour) : null;
     for (const [el, k] of [[demoLight, 'light'], [demoDark, 'dark']]) {
       if (c) el.style.setProperty('--demo', c[k]);
       else el.style.removeProperty('--demo');
@@ -839,14 +1053,17 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     }
     contrastNote.textContent = c && c.adjusted
       ? `Your colour is tweaked a little where it would be hard to read${c.light !== c.base && c.dark !== c.base ? ' in both themes' : c.light !== c.base ? ' on light mode' : ' on dark mode'}, so your name always stays clear.`
+      : draft.nameGradientCustom ? 'Custom gradients use a slightly lighter or darker shade where a colour would be hard to read.'
       : draft.nameGradient ? 'Gradients use lighter shades in dark mode so they stay easy to read.' : 'Your name is shown like this in light and dark mode.';
+    const warn = contrastText(nameContrast(draft));
+    contrastWarn.textContent = warn;
+    contrastWarn.hidden = !warn;
     fontGroup.set(draft.nameFont);
   }
 
-  const fontGroup = choiceGroup({
-    label: 'Name style',
-    options: NAME_FONTS.map((f) => ({ id: f.id, label: f.label, className: 'pe-font', body: h('span', { class: ['pe-font-sample', f.id !== 'default' ? `name-font-${f.id}` : ''], text: f.label }) })),
+  const fontGroup = fontPicker({
     value: draft.nameFont,
+    sample: profile.name,
     onPick: (id) => {
       update({ nameFont: id });
       syncName();
@@ -858,15 +1075,17 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     nameGroup.el,
     h('div', { class: 'pe-custom' },
       h('label', { class: 'field-label', htmlFor: nameColourId, text: 'Custom colour' }),
-      h('div', { class: 'pe-custom-row' }, namePicker, nameHex)),
+      nameField.row),
     nameHexError,
+    gradBox,
     h('div', { class: 'pe-demo' },
       h('div', { class: 'pe-demo-box is-light' }, h('span', { class: 'pe-demo-cap', text: 'Light mode' }), demoLight),
       h('div', { class: 'pe-demo-box is-dark' }, h('span', { class: 'pe-demo-cap', text: 'Dark mode' }), demoDark)),
     contrastNote,
+    contrastWarn,
     heading('Name style'),
     fontGroup.el,
-    h('p', { class: 'field-help', text: 'Styles use fonts already on your device, so they look a little different on each one.' }));
+    h('p', { class: 'field-help', text: 'Pick a group, then a font. Letters a font does not have, like emoji, use your device font.' }));
   syncers.push(syncName);
 
   const bannerOptions = () => BANNERS.filter((b) => b.id !== 'image' || banner).map((b) => ({
@@ -962,8 +1181,6 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   }
 
   const accentId = nextId('pe-accent-hex');
-  const accentPicker = h('input', { type: 'color', class: 'pe-colour', attrs: { 'aria-label': 'Pick any accent colour' } });
-  const accentHex = h('input', { type: 'text', id: accentId, class: 'input input-mono pe-hex', maxLength: 7, placeholder: '#f2613f', autocomplete: 'off', spellcheck: false });
   const accentError = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
   const accentValue = () => (!draft.accent ? 'default' : NAME_PALETTE.some((c) => c.hex === draft.accent) ? draft.accent : 'custom');
   const accentGroup = choiceGroup({
@@ -979,24 +1196,20 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
       syncAccent();
     },
   });
-  const setCustomAccent = (raw) => {
-    const hex = normalHex(raw);
-    if (!hex) {
-      accentError.textContent = 'Use a colour like #f2613f.';
-      accentHex.classList.add('is-invalid');
-      return;
-    }
-    accentError.textContent = '';
-    accentHex.classList.remove('is-invalid');
-    update({ accent: hex });
-    syncAccent();
-  };
-  accentPicker.addEventListener('input', () => setCustomAccent(accentPicker.value));
-  accentHex.addEventListener('change', () => setCustomAccent(accentHex.value));
+  const accentField = trackColour({
+    id: accentId,
+    label: 'Accent colour',
+    placeholder: '#f2613f',
+    errorEl: accentError,
+    errorText: 'Use a colour like #f2613f.',
+    onSet: (hex) => {
+      update({ accent: hex });
+      syncAccent();
+    },
+  });
   function syncAccent() {
     accentGroup.set(accentValue());
-    if (document.activeElement !== accentHex) accentHex.value = draft.accent || '';
-    accentPicker.value = draft.accent || '#f2613f';
+    accentField.sync(draft.accent || '#f2613f', draft.accent || '');
   }
 
   const ringGroup = choiceGroup({ label: 'Avatar ring', options: RINGS.map((r) => ({ id: r.id, label: r.label, className: `pe-chip pe-ring-${r.id}` })), value: draft.ring, onPick: (id) => update({ ring: id }) });
@@ -1017,7 +1230,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     accentGroup.el,
     h('div', { class: 'pe-custom' },
       h('label', { class: 'field-label', htmlFor: accentId, text: 'Custom accent' }),
-      h('div', { class: 'pe-custom-row' }, accentPicker, accentHex)),
+      accentField.row),
     accentError,
     h('p', { class: 'field-help', text: 'Colours the level ring, icons and highlights on your card. It is tweaked where needed so it stays readable.' }),
     heading('Avatar ring'),
@@ -1059,35 +1272,24 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     if (t) return { base: t.base, alt: t.alt, accent: t.accent };
     return { ...CUSTOM_THEME_START, accent: draft.accent || CUSTOM_THEME_START.accent };
   }
+  const themeError = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
   const customFields = ['base', 'alt', 'accent'].map((k) => {
     const id = nextId(`pe-theme-${k}`);
     const label = { base: 'Main colour', alt: 'Second colour', accent: 'Highlight' }[k];
-    const pickerEl = h('input', { type: 'color', class: 'pe-colour', attrs: { 'aria-label': `Pick the ${label.toLowerCase()}` } });
-    const hexEl = h('input', { type: 'text', id, class: 'input input-mono pe-hex', maxLength: 7, placeholder: CUSTOM_THEME_START[k], autocomplete: 'off', spellcheck: false });
-    const set = (raw) => {
-      const hex = normalHex(raw);
-      if (!hex) {
-        themeError.textContent = 'Use a colour like #7c5cff.';
-        hexEl.classList.add('is-invalid');
-        return;
-      }
-      themeError.textContent = '';
-      hexEl.classList.remove('is-invalid');
-      update({ theme: 'custom', themeCustom: { ...(draft.themeCustom || customStart()), [k]: hex } });
-      syncTheme();
-    };
-    pickerEl.addEventListener('input', () => set(pickerEl.value));
-    hexEl.addEventListener('change', () => set(hexEl.value));
-    hexEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        set(hexEl.value);
-      }
+    const f = trackColour({
+      id,
+      label: `Theme ${label.toLowerCase()}`,
+      placeholder: CUSTOM_THEME_START[k],
+      errorEl: themeError,
+      errorText: 'Use a colour like #7c5cff.',
+      onSet: (hex) => {
+        update({ theme: 'custom', themeCustom: { ...(draft.themeCustom || customStart()), [k]: hex } });
+        syncTheme();
+      },
     });
-    const el = h('div', { class: 'pe-custom pe-theme-colour' }, h('label', { class: 'field-label', htmlFor: id, text: label }), h('div', { class: 'pe-custom-row' }, pickerEl, hexEl));
-    return { k, el, pickerEl, hexEl };
+    const el = h('div', { class: 'pe-custom pe-theme-colour' }, h('label', { class: 'field-label', htmlFor: id, text: label }), f.row);
+    return { k, el, f, hexEl: f.hexEl };
   });
-  const themeError = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
   const customBox = h('div', { class: 'pe-theme-custom' }, ...customFields.map((f) => f.el));
   const modeGroup = choiceGroup({ label: 'Light or dark', options: THEME_MODES.map((m) => ({ id: m.id, label: m.label, className: 'pe-chip' })), value: draft.themeMode, onPick: (id) => update({ themeMode: id }) });
   const patternGroup = choiceGroup({
@@ -1115,8 +1317,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     themeOptions.hidden = draft.theme === 'none';
     for (const f of customFields) {
       const v = draft.themeCustom ? draft.themeCustom[f.k] : CUSTOM_THEME_START[f.k];
-      if (document.activeElement !== f.hexEl) f.hexEl.value = draft.themeCustom ? v : '';
-      f.pickerEl.value = v;
+      f.f.sync(v, draft.themeCustom ? v : '');
     }
     modeGroup.set(draft.themeMode);
     patternGroup.set(draft.themePattern);
@@ -1218,6 +1419,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   const panelBox = h('div', { class: 'pe-body' });
   const tabs = tabBar({ items: TABS, value: 'badges', label: 'Profile settings', idPrefix: 'pe-tab', onChange: (id) => showTab(id) });
   function showTab(id) {
+    closePickers();
     replace(panelBox, panels[id]);
     panels[id].setAttribute('role', 'tabpanel');
     panels[id].setAttribute('aria-labelledby', `pe-tab-${id}`);
@@ -1257,6 +1459,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   function finish(result) {
     if (closed) return;
     closed = true;
+    closePickers(true);
     onDone?.(result);
   }
 
@@ -1304,6 +1507,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   replace(mount, layout);
   signal?.addEventListener?.('abort', () => {
     closed = true;
+    closePickers(true);
   });
   return {
     el: layout,
@@ -1313,5 +1517,6 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     cancel,
     reset,
     showTab: (id) => tabs.set(id),
+    destroy: () => closePickers(true),
   };
 }

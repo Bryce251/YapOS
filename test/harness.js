@@ -173,6 +173,12 @@ export function createFakeYapin() {
       return { members: all.slice(start, start + Number(q.get('limit') || 200)) };
     }],
     ['GET', /^\/servers\/([^/]+)\/members\/([^/]+)$/, ([sid, uid]) => { const m = memberOf(sid, uid); if (!m) throw httpError(404, 'Not a member'); return { member: { ...m, timeout: state.timeouts[`${sid}:${uid}`] || null } }; }],
+    ['GET', /^\/servers\/([^/]+)\/members\/([^/]+)\/permissions$/, ([sid, uid]) => {
+      if (!features.permissions) throw httpError(404, 'Not found');
+      const m = memberOf(sid, uid); if (!m) throw httpError(404, 'Not a member');
+      const admin = m.roles.includes(IDS.roles.admin);
+      return { permissions: { object: 'permissions', owner: uid === IDS.owner, administrator: admin, permissions: { manage_messages: admin, send_messages: true } } };
+    }],
     ['PATCH', /^\/servers\/([^/]+)\/members\/([^/]+)$/, ([sid, uid], b) => { const m = memberOf(sid, uid); if (!m) throw httpError(404, 'Not a member'); m.nickname = b.nickname || null; return { ok: true }; }],
     ['PUT', /^\/servers\/([^/]+)\/members\/([^/]+)\/roles\/([^/]+)$/, ([sid, uid, rid]) => {
       const m = memberOf(sid, uid); if (!m) throw httpError(404, 'Not a member');
@@ -197,11 +203,13 @@ export function createFakeYapin() {
       return { channels: state.channels[sid].filter((c) => !t || c.type === t), categories: [] };
     }],
     ['GET', /^\/channels(\?.*)?$/, (m, b, q) => ({ channels: Object.values(state.channels).flat().filter((c) => !q.get('type') || c.type === q.get('type')) })],
-    ['POST', /^\/servers\/([^/]+)\/channels$/, ([sid], b) => { const c = { id: uuid(5), name: b.name, type: b.kind || 'text', kind: b.kind || 'text', server_id: sid, position: 99, category: null, category_id: b.category_id || null, private: false, read_only: false, slowmode: 0 }; state.channels[sid].push(c); return { channel: c }; }],
+    ['POST', /^\/servers\/([^/]+)\/channels$/, ([sid], b) => { const c = { id: uuid(5), name: b.name, type: b.kind || 'text', kind: b.kind || 'text', server_id: sid, position: 99, category: null, category_id: b.category_id || null, private: false, read_only: false, slowmode: 0 }; if (features.channelUsers) { if ((b.user_ids || []).length > 50) throw httpError(400, 'Up to 50 user_ids'); Object.assign(c, { private: !!b.private, role_ids: b.role_ids || [], user_ids: b.user_ids || [] }); } state.channels[sid].push(c); return { channel: c }; }],
     ['GET', /^\/channels\/([^/]+)$/, ([cid]) => { const c = channelById(cid); if (!c) throw httpError(404, 'No such channel'); return { channel: c }; }],
     ['PATCH', /^\/channels\/([^/]+)$/, ([cid], b) => {
       const c = channelById(cid); if (!c) throw httpError(404, 'No such channel');
       if (b.slowmode !== undefined && (b.slowmode < 0 || b.slowmode > 21600)) throw httpError(400, 'slowmode is 0 to 21600 seconds');
+      if (b.user_ids !== undefined && !features.channelUsers) throw httpError(400, 'Unknown field user_ids');
+      if ((b.user_ids || []).length > 50) throw httpError(400, 'Up to 50 user_ids');
       for (const [k, v] of Object.entries(b)) if (v !== undefined) c[k] = v;
       return { channel: c };
     }],
@@ -242,6 +250,15 @@ export function createFakeYapin() {
     }],
     ['POST', /^\/channels\/([^/]+)\/messages$/, ([cid], b) => {
       if (!channelById(cid) && !state.dms[cid]) throw httpError(404, 'No such channel');
+      if (b.nonce !== undefined) {
+        if (features.nonce === false) throw httpError(400, 'Unknown field nonce');
+        if (!/^[A-Za-z0-9_-]{8,64}$/.test(String(b.nonce))) throw httpError(400, 'nonce must be 8-64 letters, digits, _ or -');
+        const seen = nonces.get(`${cid}:${b.nonce}`);
+        if (seen && clock.t - seen.at < 10 * 60_000) return { message: seen.message, duplicate: true };
+        const message = createMessage(cid, b);
+        nonces.set(`${cid}:${b.nonce}`, { message, at: clock.t });
+        return { message };
+      }
       return { message: createMessage(cid, b) };
     }],
     ['POST', /^\/channels\/([^/]+)\/messages\/bulk-delete$/, ([cid], b) => {
@@ -263,7 +280,30 @@ export function createFakeYapin() {
     ['PUT', /^\/channels\/([^/]+)\/messages\/([^/]+)\/pin$/, ([cid, mid]) => { state.pins.add(mid); return { ok: true }; }],
     ['DELETE', /^\/channels\/([^/]+)\/messages\/([^/]+)\/pin$/, ([cid, mid]) => { state.pins.delete(mid); return { ok: true }; }],
     ['PUT', /^\/channels\/([^/]+)\/messages\/([^/]+)\/reactions\/(.+)$/, ([cid, mid, emoji]) => { state.reactions.push({ channel_id: cid, message_id: mid, emoji: decodeURIComponent(emoji), user_id: IDS.bot }); return { ok: true }; }],
-    ['DELETE', /^\/channels\/([^/]+)\/messages\/([^/]+)\/reactions\/(.+)$/, ([cid, mid, emoji]) => { state.reactions = state.reactions.filter((r) => !(r.message_id === mid && r.emoji === decodeURIComponent(emoji) && r.user_id === IDS.bot)); return { ok: true }; }],
+    ['DELETE', /^\/channels\/([^/]+)\/messages\/([^/]+)\/reactions$/, ([cid, mid]) => {
+      if (!features.reactionClear) throw httpError(404, 'Not found');
+      state.reactions = state.reactions.filter((r) => r.message_id !== mid);
+      return { removed: true, more: false };
+    }],
+    ['DELETE', /^\/channels\/([^/]+)\/messages\/([^/]+)\/reactions\/(.+)$/, ([cid, mid, emoji], b, q) => {
+      const e = decodeURIComponent(emoji);
+      const who = q.get('all') === 'true' ? null : q.get('user_id') || IDS.bot;
+      if (who !== IDS.bot && !features.reactionClear) throw httpError(404, 'Not found');
+      state.reactions = state.reactions.filter((r) => !(r.message_id === mid && r.emoji === e && (who === null || r.user_id === who)));
+      return { ok: true, more: false };
+    }],
+    ['POST', /^\/channels\/([^/]+)\/threads$/, ([cid], b) => {
+      if (!features.threads) throw httpError(403, "This isn't on for this server yet");
+      const parent = channelById(cid); if (!parent) throw httpError(404, 'No such channel');
+      if (!b.name || !b.content) throw httpError(400, 'name and content are required');
+      const t = { id: uuid(6), name: b.name, type: 'thread', kind: 'thread', parent_id: cid, server_id: parent.server_id, message_id: b.message_id || null, locked: false, archived: false, position: 99, category: null, category_id: null, private: false, read_only: false, slowmode: 0 };
+      state.channels[parent.server_id].push(t);
+      createMessage(t.id, { content: b.content });
+      return { thread: t };
+    }],
+    ['GET', /^\/channels\/([^/]+)\/threads$/, ([cid]) => ({ threads: Object.values(state.channels).flat().filter((c) => c.type === 'thread' && c.parent_id === cid) })],
+    ['PATCH', /^\/threads\/([^/]+)$/, ([tid], b) => { const t = channelById(tid); if (!t || t.type !== 'thread') throw httpError(404, 'No such thread'); for (const k of ['name', 'locked', 'archived']) if (b[k] !== undefined) t[k] = b[k]; return { thread: t }; }],
+    ['DELETE', /^\/threads\/([^/]+)$/, ([tid]) => { for (const sid of Object.keys(state.channels)) state.channels[sid] = state.channels[sid].filter((c) => c.id !== tid); return { ok: true }; }],
     ['GET', /^\/channels\/([^/]+)\/messages\/([^/]+)\/reactions$/, ([cid, mid]) => ({ reactions: state.reactions.filter((r) => r.message_id === mid).map((r, i) => ({ id: `r${i}`, user_id: r.user_id, emoji: r.emoji, created_at: new Date().toISOString() })) })],
     ['POST', /^\/users\/([^/]+)\/dm$/, ([uid]) => { if (!features.dms) throw httpError(403, 'DMs are in testing'); const cid = `d${uid.slice(1)}`; state.dms[cid] = uid; return { channel_id: cid }; }],
     ['GET', /^\/users\/([^/]+)$/, ([uid]) => { const m = Object.values(state.members).flat().find((x) => x.id === uid); if (!m) throw httpError(404, 'No such user'); return { user: { id: m.id, username: m.username, display_name: m.display_name, avatar_path: null, badges: [] } }; }],
@@ -275,11 +315,28 @@ export function createFakeYapin() {
         if (prior.length) throw httpError(400, 'A modal has to be the first answer');
       }
       if (b.type === 'ephemeral' && b.flags === 32768) throw httpError(400, "Ephemeral replies can't be Components V2 yet");
-      if (b.type === 'ephemeral' && Array.isArray(b.components) && b.components.length) throw httpError(400, "Ephemeral replies can't have buttons (yet)");
+      if (b.type === 'ephemeral' && Array.isArray(b.components) && b.components.length && !features.ephemeralButtons) throw httpError(400, "Ephemeral replies can't have buttons (yet)");
+      if (b.type === 'ephemeral' && Array.isArray(b.components) && b.components.some((r) => !(r?.type === 'row' || r?.type === 1) || (r.components || []).some((c) => !(c?.type === 'button' || c?.type === 2)))) throw httpError(400, 'Ephemeral replies can only carry rows of buttons');
       checkComponents(b.components, b.flags);
       const a = { interactionId: iid, token, ...b, at: clock.t };
+      const clicked = pendingInteractions.get(iid);
+      if (b.type === 'update' && clicked?.reply_id && ephemeralReplies.has(clicked.reply_id) && clock.t - ephemeralReplies.get(clicked.reply_id).written > 15 * 60_000) throw httpError(404, 'That reply expired');
       answers.push(a);
       let message = null;
+      let replyId = null;
+      if (b.type === 'ephemeral' && features.ephemeralButtons) {
+        replyId = uuid(6);
+        a.replyId = replyId;
+        a.channel_id = clicked?.channel_id || C.general;
+        ephemeralReplies.set(replyId, { id: replyId, interactionId: iid, user_id: clicked?.user_id ?? null, channel_id: a.channel_id, content: b.content ?? '', embeds: b.embeds || null, components: b.components || null, written: clock.t });
+      }
+      if (b.type === 'update' && clicked?.reply_id && ephemeralReplies.has(clicked.reply_id)) {
+        const r = ephemeralReplies.get(clicked.reply_id);
+        a.replyId = r.id;
+        a.channel_id = r.channel_id;
+        for (const k of ['content', 'embeds', 'components']) if (b[k] !== undefined) r[k] = b[k];
+        r.written = clock.t;
+      }
       if (b.type === 'reply') {
         const ev = pendingInteractions.get(iid);
         message = createMessage(ev?.channel_id || C.general, { content: b.content ?? '', embeds: b.embeds, components: b.components, flags: b.flags });
@@ -290,7 +347,7 @@ export function createFakeYapin() {
         const m = ev?.message_id && (state.messages[ev.channel_id] || []).find((x) => x.id === ev.message_id);
         if (m) for (const k of ['content', 'embeds', 'components']) if (b[k] !== undefined) m[k] = b[k];
       }
-      return { ok: true, message };
+      return { ok: true, message, ...(replyId ? { reply_id: replyId } : {}) };
     }],
     ['GET', /^\/servers\/([^/]+)\/voice$/, ([sid]) => ({ voice: state.channels[sid].filter((c) => c.type === 'voice').map((c) => ({ channel_id: c.id, user_ids: [...(state.voice[c.id] || [])] })) })],
     ['GET', /^\/servers\/([^/]+)\/invites$/, () => ({ invites: [] })],
@@ -301,6 +358,8 @@ export function createFakeYapin() {
   ];
 
   const pendingInteractions = new Map();
+  const ephemeralReplies = new Map();
+  const nonces = new Map();
 
   async function readForm(form) {
     if (!features.files) throw httpError(400, 'Sending files is in testing (flag bot_uploads)');
@@ -349,7 +408,7 @@ export function createFakeYapin() {
   }
 
   return {
-    api, state, calls, answers, features, clock, pendingInteractions,
+    api, state, calls, answers, features, clock, pendingInteractions, ephemeralReplies, nonces,
     fail(method, pathRe, { status = 403, error = 'Missing permission', times = -1, retryAfter } = {}) { failures.push({ method, path: pathRe, status, error, times, retryAfter }); },
     clearFailures() { failures.length = 0; },
     userIds, memberOf, channelById, serverOfChannel,
@@ -463,8 +522,8 @@ export async function createHarness({ verified = false, store = createMemoryStor
       return h.answersFor(data.id);
     },
 
-    async click(customId, { user = IDS.member, channel = IDS.channels.general, server = S, messageId = null, type = 'button', values, createdAt = null, lateBy = 0 } = {}) {
-      const data = { id: uuid(3), token: `tok${evId}`, type, custom_id: customId, values: values ?? (type === 'button' ? undefined : []), message_id: messageId, channel_id: channel, server_id: server, user_id: user, username: nameOf(user), expires_at: null };
+    async click(customId, { user = IDS.member, channel = IDS.channels.general, server = S, messageId = null, replyId = null, type = 'button', values, createdAt = null, lateBy = 0 } = {}) {
+      const data = { id: uuid(3), token: `tok${evId}`, type, custom_id: customId, values: values ?? (type === 'button' ? undefined : []), message_id: messageId, channel_id: channel, server_id: server, user_id: user, username: nameOf(user), expires_at: null, ...(replyId ? { reply_id: replyId } : {}) };
       fake.pendingInteractions.set(data.id, data);
       await bot.handle({ id: ++evId, type: 'interaction', data, created_at: eventStamp({ createdAt, lateBy }) });
       await settle();
@@ -476,7 +535,7 @@ export async function createHarness({ verified = false, store = createMemoryStor
     async clickButton(label, opts = {}) {
       const found = h.findButton(label, opts.in);
       if (!found) throw new Error(`No button "${label}" found. Buttons: ${h.allButtons(opts.in).map((b) => b.label).join(', ')}`);
-      return h.click(found.custom_id, { messageId: found.messageId, channel: found.channelId ?? opts.channel ?? IDS.channels.general, ...opts });
+      return h.click(found.custom_id, { messageId: found.replyId ? null : found.messageId, replyId: found.replyId ?? null, channel: found.channelId ?? opts.channel ?? IDS.channels.general, ...opts });
     },
 
     async join(userId, { username = 'newbie', server = S, invite_code = null, createdAt = null, lateBy = 0 } = {}) {
@@ -522,6 +581,11 @@ export async function createHarness({ verified = false, store = createMemoryStor
       await settle();
     },
 
+    async event(type, data = {}, { createdAt = null, lateBy = 0 } = {}) {
+      await bot.handle({ id: ++evId, type, data, created_at: eventStamp({ createdAt, lateBy }) });
+      await settle();
+    },
+
     answersFor: (iid) => fake.answers.filter((a) => a.interactionId === iid),
     lastAnswer: () => fake.answers[fake.answers.length - 1] || null,
     sent: (cid) => (cid ? fake.messagesIn(cid) : Object.values(fake.state.messages).flat().filter((m) => !m.deleted)).filter((m) => m.author_id === IDS.bot),
@@ -543,7 +607,7 @@ export async function createHarness({ verified = false, store = createMemoryStor
       for (const s of sources) {
         const walk = (c) => {
           if (!c) return;
-          if ((c.type === 'button' || c.type === 2) && c.custom_id) out.push({ ...c, messageId: s.message?.id || s.id, channelId: s.channel_id || s.message?.channel_id });
+          if ((c.type === 'button' || c.type === 2) && c.custom_id) out.push({ ...c, messageId: s.message?.id || s.id, channelId: s.channel_id || s.message?.channel_id, ...(s.replyId ? { replyId: s.replyId } : {}) });
           if (c.type === 'select' || c.type === 3) out.push({ ...c, label: c.placeholder || c.custom_id, isSelect: true, messageId: s.id, channelId: s.channel_id });
           (c.components || []).forEach(walk);
           if (c.accessory) walk(c.accessory);

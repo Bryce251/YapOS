@@ -95,12 +95,12 @@ test('the Party pay settings are owner-only, clamped and pushed to the dashboard
   const pushed = [];
   h.engine.dashboard = { ...h.engine.dashboard, pushPartyRates: async () => { pushed.push(true); return true; } };
   const eco = h.engine.service('economy');
-  assert.deepEqual(eco.partyRates(), { play: 10, win: 25, tournament: 100, prediction: 15 });
+  assert.deepEqual(eco.partyRates(), { play: 25, win: 100, tournament: 500, prediction: 50 });
   const no = await h.slash('economy', 'party 50 50 50 50', { user: IDS.admin });
   assert.match(lastText(h, no), /Only the bot owner/);
   assert.equal(pushed.length, 0);
-  const tooMuch = await h.slash('economy', 'party win 999', { user: IDS.owner });
-  assert.match(lastText(h, tooMuch), /0 to 250/);
+  const tooMuch = await h.slash('economy', 'party win 1001', { user: IDS.owner });
+  assert.match(lastText(h, tooMuch), /0 to 1,000/);
   const ok = await h.slash('economy', 'party 4 20 30 6 120', { user: IDS.owner });
   assert.match(lastText(h, ok), /no daily limit/);
   assert.match(lastText(h, ok), /Party rates saved/);

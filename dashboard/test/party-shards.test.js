@@ -293,3 +293,211 @@ test('farming one opponent puts Party Shards on hold', async () => {
   assert.ok(body.held.includes(uid(1)));
   assert.ok(!body.shards.some((s) => s.id === uid(1)));
 });
+
+test('Party pays a lot more by default, and owners can go higher', async () => {
+  const { OLD_DEFAULT_RATES, SHARDS_ALERT_DAY, SHARD_REASONS } = await import('../worker/party-shards.js');
+  assert.deepEqual(DEFAULT_RATES, { play: 25, win: 100, tournament: 500, prediction: 50 });
+  assert.deepEqual(OLD_DEFAULT_RATES, { play: 10, win: 25, tournament: 100, prediction: 15 });
+  assert.deepEqual(RATE_BOUNDS, { play: [0, 250], win: [0, 1000], tournament: [0, 5000], prediction: [0, 250] });
+  assert.equal(SHARDS_ALERT_DAY, 20000);
+  for (const r of ['place', 'winstreak']) assert.ok(SHARD_REASONS.includes(r), r);
+  assert.equal(PAY_GAP_MS.place, PAY_GAP_MS.win);
+  assert.equal(PAY_GAP_MS.winstreak, PAY_GAP_MS.win);
+  const h = party();
+  const set = await (await h.bot('POST', '/bot/party/rates', { play: 250, win: 1000, tournament: 5000, prediction: 250 })).json();
+  assert.deepEqual(set.rates, { play: 250, win: 1000, tournament: 5000, prediction: 250 });
+});
+
+test('rates still saved at the old defaults read as the new defaults, and custom rates are kept', async () => {
+  const h = party();
+  const save = (r) => h.db.raw.prepare('INSERT INTO party_rates (id, play, win, tournament, prediction, cap, updated) VALUES (?, ?, ?, ?, ?, 0, 0) ON CONFLICT (id) DO UPDATE SET play = excluded.play, win = excluded.win, tournament = excluded.tournament, prediction = excluded.prediction').run('party', r.play, r.win, r.tournament, r.prediction);
+  save({ play: 10, win: 25, tournament: 100, prediction: 15 });
+  assert.deepEqual((await (await h.bot('GET', '/bot/party/rates')).json()).rates, DEFAULT_RATES);
+  const body = await (await send(h, result(h))).json();
+  assert.equal(body.shards.find((s) => s.reason === 'win').shards, 100);
+  save({ play: 10, win: 25, tournament: 100, prediction: 16 });
+  assert.deepEqual((await (await h.bot('GET', '/bot/party/rates')).json()).rates, { play: 10, win: 25, tournament: 100, prediction: 16 });
+  save({ play: 40, win: 300, tournament: 0, prediction: 5 });
+  assert.deepEqual((await (await h.bot('GET', '/bot/party/rates')).json()).rates, { play: 40, win: 300, tournament: 0, prediction: 5 });
+});
+
+function crowd(h, scores, over = {}) {
+  return result(h, {
+    players: scores.map((score, i) => ({ id: uid(300 + i), name: `P${i}`, username: null, score, won: i === 0, team: null })),
+    ...over,
+  });
+}
+
+test('2nd and 3rd place earn half and a quarter of a win in scored games with 4 or more players', async () => {
+  const { shardPlaces } = await import('../worker/party-shards.js');
+  const h = party();
+  const body = await (await send(h, crowd(h, [900, 500, 300, 100]))).json();
+  const place = body.shards.filter((s) => s.reason === 'place');
+  assert.deepEqual(place, [
+    { id: uid(301), shards: 50, reason: 'place', place: 2 },
+    { id: uid(302), shards: 25, reason: 'place', place: 3 },
+  ]);
+  assert.equal(total(h, uid(301)), DEFAULT_RATES.play + 50);
+  assert.equal(total(h, uid(302)), DEFAULT_RATES.play + 25);
+  assert.equal(total(h, uid(303)), DEFAULT_RATES.play);
+  const ranked = (g) => [...shardPlaces(g, new Set()).entries()];
+  const game = (scores, over = {}) => ({ game: 'trivia', players: scores.map((score, i) => ({ id: uid(400 + i), score, won: i === 0, team: null })), ...over });
+  assert.deepEqual(ranked(game([900, 500, 300])), [], 'three players pay no places');
+  assert.deepEqual(ranked(game([900, 500, 500, 300])), [[uid(401), 2], [uid(402), 2]], 'a tie for 2nd pays both and skips 3rd');
+  assert.deepEqual(ranked(game([900, 500, 0, 0])), [[uid(401), 2]], 'no points, no place');
+  assert.deepEqual(ranked(game([900, 500, 300, 100], { game: 'reflex' })), [], 'knockout games do not rank by score');
+  assert.deepEqual(ranked(game([900, 500, 300, 100], { game: 'chain' })), []);
+  const teams = game([900, 500, 300, 100]);
+  teams.players = teams.players.map((p, i) => ({ ...p, team: i % 2 ? 'Red' : 'Blue' }));
+  assert.deepEqual(ranked(teams), [], 'team games pay no places');
+  const everyone = game([900, 500, 300, 100]);
+  everyone.players = everyone.players.map((p) => ({ ...p, won: true }));
+  assert.deepEqual(ranked(everyone), []);
+  assert.deepEqual([...shardPlaces(game([900, 500, 300, 100]), new Set([uid(403)])).entries()], [], 'banned players do not count toward the 4');
+  advance(h, 3 * MIN);
+  const ko = await (await send(h, crowd(h, [901, 500, 300, 100], { game: 'reflex', at: h.clock.t }))).json();
+  assert.equal(ko.shards.some((s) => s.reason === 'place'), false);
+});
+
+test('a win streak adds 10% of a win per win in a row from the 2nd, up to +100%, and a loss resets it', async () => {
+  const h = party();
+  const streak = () => h.db.raw.prepare('SELECT streak FROM party_win_streaks WHERE user_id = ?').get(uid(1))?.streak ?? 0;
+  const play = async (won, i) => {
+    advance(h, 3 * MIN);
+    const players = [
+      { id: uid(1), name: 'Pip', username: null, score: won ? 900 + i : 100 + i, won, team: null },
+      { id: uid(2), name: 'Juno', username: null, score: won ? 100 : 900 + i, won: !won, team: null },
+      { id: uid(3 + (i % 5)), name: 'Kit', username: null, score: 50, won: false, team: null },
+    ];
+    return (await send(h, { game: 'trivia', at: h.clock.t, players, extra: {} })).json();
+  };
+  const bonuses = [];
+  for (let i = 0; i < 13; i += 1) {
+    const body = await play(true, i);
+    const row = body.shards.find((s) => s.id === uid(1) && s.reason === 'winstreak');
+    bonuses.push(row ? [row.shards, row.streak] : 0);
+  }
+  assert.deepEqual(bonuses, [0, [10, 2], [20, 3], [30, 4], [40, 5], [50, 6], [60, 7], [70, 8], [80, 9], [90, 10], [100, 11], [100, 12], [100, 13]]);
+  assert.equal(streak(), 13);
+  advance(h, 2 * DAY);
+  const later = await play(true, 20);
+  assert.equal(later.shards.find((s) => s.reason === 'winstreak').streak, 14, 'a streak survives across days');
+  await play(false, 21);
+  assert.equal(streak(), 0, 'a loss resets the streak');
+  const fresh = await play(true, 22);
+  assert.equal(fresh.shards.some((s) => s.reason === 'winstreak'), false);
+  assert.equal(streak(), 1);
+  assert.equal(h.db.raw.prepare('SELECT best FROM party_win_streaks WHERE user_id = ?').get(uid(1)).best, 14, 'the best streak is kept');
+});
+
+test('a draw keeps the streak and a held player streak does not grow', async () => {
+  const h = party();
+  const streak = (id) => h.db.raw.prepare('SELECT streak FROM party_win_streaks WHERE user_id = ?').get(id)?.streak ?? 0;
+  const game = (i, wins) => ({
+    game: 'trivia',
+    at: h.clock.t,
+    players: [
+      { id: uid(1), name: 'Pip', username: null, score: 900 + i, won: wins[0], team: null },
+      { id: uid(2), name: 'Juno', username: null, score: 100 + i, won: wins[1], team: null },
+      { id: uid(3), name: 'Kit', username: null, score: 50 + i, won: wins[2], team: null },
+    ],
+    extra: {},
+  });
+  for (let i = 0; i < 3; i += 1) {
+    advance(h, 3 * MIN);
+    await send(h, game(i, [true, false, false]));
+  }
+  assert.equal(streak(uid(1)), 3);
+  advance(h, 3 * MIN);
+  await send(h, game(10, [true, true, true]));
+  assert.equal(streak(uid(1)), 3, 'a game everyone won changes nothing');
+  h.db.raw.prepare("INSERT INTO party_cheat_alerts (id, user_id, kind, name, detail, first_at, last_at, count, status) VALUES ('a1', ?, 'farm', 'Pip', 'x', 0, 0, 1, 'open')").run(uid(1));
+  advance(h, 3 * MIN);
+  const held = await (await send(h, game(11, [true, false, false]))).json();
+  assert.ok(held.held.includes(uid(1)));
+  assert.equal(held.shards.some((s) => s.id === uid(1)), false);
+  assert.equal(streak(uid(1)), 3, 'held wins do not grow the streak');
+  h.db.raw.prepare("UPDATE party_cheat_alerts SET status = 'handled', handled_at = ? WHERE user_id = ?").run(h.clock.t, uid(1));
+  advance(h, 3 * MIN);
+  const back = await (await send(h, game(12, [true, false, false]))).json();
+  assert.deepEqual(back.shards.find((s) => s.reason === 'winstreak'), { id: uid(1), shards: 30, reason: 'winstreak', streak: 4 });
+});
+
+test('a fast repeat win pays nothing and does not grow the streak', async () => {
+  const h = party();
+  const players = (i) => [
+    { id: uid(1), name: 'Pip', username: null, score: 900 + i, won: true, team: null },
+    { id: uid(2), name: 'Juno', username: null, score: 100, won: false, team: null },
+  ];
+  await send(h, { game: 'trivia', at: h.clock.t, players: players(0), extra: {} });
+  advance(h, PAY_GAP_MS.win / 2);
+  const quick = await (await send(h, { game: 'trivia', at: h.clock.t, players: players(1), extra: {} })).json();
+  assert.deepEqual(quick.shards, []);
+  assert.equal(h.db.raw.prepare('SELECT streak FROM party_win_streaks WHERE user_id = ?').get(uid(1)).streak, 1);
+});
+
+test('honest players at the new rates stay far below the daily Shards alert', async () => {
+  const { SHARDS_ALERT_DAY } = await import('../worker/party-shards.js');
+  const perGame = DEFAULT_RATES.play + DEFAULT_RATES.win + DEFAULT_RATES.win;
+  assert.ok(perGame * 60 < SHARDS_ALERT_DAY, 'sixty maxed-out wins in a day do not trip the alert');
+  assert.ok(SHARDS_ALERT_DAY >= 5 * 4000);
+});
+
+test('a daily Shards alert missed by two racing games still fires on the next paid game, once', async () => {
+  const { SHARDS_ALERT_DAY } = await import('../worker/party-shards.js');
+  const h = party();
+  const day = utcDay(h.clock.t);
+  h.db.raw.prepare('INSERT INTO party_shards (id, user_id, shards, reason, game, at, day, claimed) VALUES (?, ?, ?, ?, ?, ?, ?, 0)').run('seed1', uid(1), SHARDS_ALERT_DAY + 300, 'play', 'trivia', h.clock.t - 10 * MIN, day);
+  const alerts = () => h.db.raw.prepare("SELECT * FROM party_cheat_alerts WHERE user_id = ? AND kind = 'shards_day'").all(uid(1));
+  await send(h, result(h));
+  assert.equal(alerts().length, 1, 'already over the line with no alert raises one');
+  assert.equal(alerts()[0].status, 'open');
+  h.db.raw.prepare("UPDATE party_cheat_alerts SET status = 'handled', handled_at = ? WHERE user_id = ?").run(h.clock.t, uid(1));
+  advance(h, 3 * MIN);
+  const body = await (await send(h, result(h, { players: [{ id: uid(1), name: 'Pip', username: null, score: 800, won: true, team: null }, { id: uid(2), name: 'Juno', username: null, score: 300, won: false, team: null }] }))).json();
+  assert.ok(body.shards.some((s) => s.id === uid(1)), 'a handled alert keeps paying');
+  assert.equal(alerts()[0].count, 1, 'a handled alert from today is not raised again');
+  assert.equal(alerts()[0].status, 'handled');
+});
+
+test('a win streak row and its bonus are only written when that win row really landed', async () => {
+  const { winStreakStatement } = await import('../worker/party-shards.js');
+  const h = party();
+  const day = utcDay(h.clock.t);
+  const t = h.clock.t;
+  const streak = () => h.db.raw.prepare('SELECT streak FROM party_win_streaks WHERE user_id = ?').get(uid(1))?.streak ?? null;
+  const bonus = () => h.db.raw.prepare("SELECT COUNT(*) AS n FROM party_shards WHERE user_id = ? AND reason = 'winstreak'").get(uid(1)).n;
+  await h.db.batch([shardStatement(h.db, { id: uid(1), reason: 'winstreak', shards: 50 }, 'trivia', day, t), winStreakStatement(h.db, uid(1), 6, t)]);
+  assert.equal(bonus(), 0, 'no streak bonus without a paid win');
+  assert.equal(streak(), null, 'no streak growth without a paid win');
+  h.db.raw.prepare('INSERT INTO party_shards (id, user_id, shards, reason, game, at, day, claimed) VALUES (?, ?, ?, ?, ?, ?, ?, 0)').run('early', uid(1), 100, 'win', 'trivia', t - 1000, day);
+  await h.db.batch([
+    shardStatement(h.db, { id: uid(1), reason: 'win', shards: 100 }, 'trivia', day, t),
+    shardStatement(h.db, { id: uid(1), reason: 'winstreak', shards: 50 }, 'trivia', day, t),
+    winStreakStatement(h.db, uid(1), 6, t),
+  ]);
+  assert.equal(bonus(), 0, 'a racing writer whose win lost the race pays no bonus');
+  assert.equal(streak(), null);
+  advance(h, PAY_GAP_MS.win + 1000);
+  const t2 = h.clock.t;
+  await h.db.batch([
+    shardStatement(h.db, { id: uid(1), reason: 'win', shards: 100 }, 'trivia', day, t2),
+    shardStatement(h.db, { id: uid(1), reason: 'winstreak', shards: 50 }, 'trivia', day, t2),
+    winStreakStatement(h.db, uid(1), 6, t2),
+  ]);
+  assert.equal(bonus(), 1);
+  assert.equal(streak(), 6);
+  await h.db.batch([winStreakStatement(h.db, uid(1), 0, t2 + 1)]);
+  assert.equal(streak(), 0, 'a loss always resets');
+});
+
+test('a forged win every pay gap reaches the daily alert in about the same time as before the raise', async () => {
+  const { SHARDS_ALERT_DAY, WIN_STREAK_MAX } = await import('../worker/party-shards.js');
+  const perMinute = (r, streak) => (60000 / PAY_GAP_MS.win) * (r.play + r.win + streak) + (60000 / PAY_GAP_MS.prediction) * r.prediction + (60000 / PAY_GAP_MS.tournament) * r.tournament;
+  const now = perMinute(DEFAULT_RATES, DEFAULT_RATES.win * WIN_STREAK_MAX);
+  const old = perMinute({ play: 10, win: 25, tournament: 100, prediction: 15 }, 0);
+  const minutesNow = SHARDS_ALERT_DAY / now;
+  const minutesOld = 4000 / old;
+  assert.ok(minutesNow >= 30, `a forger is held after ${Math.round(minutesNow)} minutes`);
+  assert.ok(minutesNow >= minutesOld * 0.8, 'the hold comes about as soon as it did');
+});

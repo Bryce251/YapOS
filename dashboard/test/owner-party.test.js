@@ -313,6 +313,7 @@ test('reset clears every Party leaderboard table and only touches badge stats wh
     h.db.raw.prepare('INSERT INTO party_games_day (user_id, day, games) VALUES (?, ?, 11)').run(id, day);
     h.db.raw.prepare("INSERT INTO party_stats (user_id, games, wins, by_game, counters, updated) VALUES (?, 11, 4, '{}', ?, ?)").run(id, counters, h.clock.t);
     h.db.raw.prepare("INSERT INTO party_daily_streaks (user_id, last_day, streak, best, updated) VALUES (?, ?, 7, 7, ?)").run(id, day, h.clock.t);
+    h.db.raw.prepare('INSERT INTO party_win_streaks (user_id, streak, best, updated) VALUES (?, 4, 6, ?)').run(id, h.clock.t);
   };
   const count = (table, id) => h.db.raw.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`).get(id).n;
   fill(XD);
@@ -322,12 +323,14 @@ test('reset clears every Party leaderboard table and only touches badge stats wh
   for (const t of ['party_points', 'party_points_game', 'party_points_month', 'party_points_day', 'party_games_day']) assert.equal(count(t, XD), 0, t);
   assert.deepEqual({ ...h.db.raw.prepare('SELECT games, wins, counters FROM party_stats WHERE user_id = ?').get(XD) }, { games: 11, wins: 4, counters });
   assert.equal(count('party_daily_streaks', XD), 1);
+  assert.equal(count('party_win_streaks', XD), 1);
   assert.equal(count('party_points', uid(2)), 1);
   assert.equal(count('party_points_game', uid(2)), 2);
   const full = await give(h, owner, { user: uid(2), kind: 'party.reset', value: { badges: true } });
   assert.match(full.body.action.result, /were reset too/);
   assert.deepEqual({ ...h.db.raw.prepare('SELECT games, wins, by_game, counters FROM party_stats WHERE user_id = ?').get(uid(2)) }, { games: 0, wins: 0, by_game: '{}', counters: '{}' });
   assert.equal(count('party_daily_streaks', uid(2)), 0);
+  assert.equal(count('party_win_streaks', uid(2)), 0);
   assert.equal((await detail(h, owner, uid(2))).earnedBadges.length, 0);
   assert.deepEqual((await board(h)).rows, []);
   const none = await give(h, owner, { user: uid(7), kind: 'party.reset' });

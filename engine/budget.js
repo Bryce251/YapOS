@@ -1,6 +1,23 @@
-const PRI = { high: 0, normal: 1, low: 2 };
+import { randomBytes } from 'node:crypto';
 
-export function createBudget({ bot, verified = false, log, now = () => Date.now(), perServer = 30, windowMs = 60_000, dmChannels = null } = {}) {
+const PRI = { high: 0, normal: 1, low: 2 };
+const IS_V2 = 1 << 15;
+const NONCE_OFF_MS = 6 * 3600_000;
+const plain = (x) => (x && typeof x.toJSON === 'function' ? x.toJSON() : x);
+const list = (v) => (v === undefined ? undefined : v === null ? null : [].concat(v).map(plain));
+const sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
+
+let nonceSeq = 0;
+export function makeNonce() {
+  nonceSeq = (nonceSeq + 1) % 1_679_616;
+  const nonce = `y${Date.now().toString(36)}${nonceSeq.toString(36).padStart(4, '0')}${randomBytes(6).toString('base64url')}`;
+  return nonce.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+}
+
+export const retryableSend = (e) => e?.status === 502 || e?.status === 504 || e?.status === 0 || e?.name === 'TimeoutError' || e?.name === 'AbortError' || /fetch failed|ECONN|ENOTFOUND|socket|network|gateway connection dropped/i.test(String(e?.message || ''));
+const nonceRefused = (e) => (e?.status === 400 || e?.status === 422) && /nonce/i.test(String(e?.message || ''));
+
+export function createBudget({ bot, verified = false, log, caps = null, now = () => Date.now(), perServer = 30, windowMs = 60_000, dmChannels = null, retryDelays = [1000, 3000] } = {}) {
   const globalLimit = verified ? 300 : 30;
   const sentGlobal = [];
   const sentServer = new Map();
@@ -8,7 +25,51 @@ export function createBudget({ bot, verified = false, log, now = () => Date.now(
   const pendingEdits = new Map();
   let seq = 0;
   let timer = null;
-  let stats = { sent: 0, edits: 0, coalesced: 0, waited: 0, failed: 0 };
+  let stats = { sent: 0, edits: 0, coalesced: 0, waited: 0, failed: 0, retried: 0, duplicates: 0 };
+  let nonceOffAt = 0;
+
+  const nonceOn = (serverId) => {
+    if (typeof bot.api !== 'function') return false;
+    if (caps) return caps.state(serverId, 'nonce') !== false;
+    return !nonceOffAt || now() - nonceOffAt > NONCE_OFF_MS;
+  };
+  const nonceOff = (serverId, reason) => {
+    nonceOffAt = now();
+    caps?.mark(serverId, 'nonce', false, reason);
+  };
+
+  async function post(serverId, channelId, body) {
+    const nonce = makeNonce();
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const out = await bot.api('POST', `/channels/${channelId}/messages`, { ...body, nonce });
+        if (out?.duplicate) stats.duplicates++;
+        return out?.message ?? null;
+      } catch (e) {
+        if (nonceRefused(e)) {
+          nonceOff(serverId, e?.message);
+          return bot.api('POST', `/channels/${channelId}/messages`, body).then((out) => out?.message ?? null);
+        }
+        if (!retryableSend(e) || attempt >= retryDelays.length) throw e;
+        stats.retried++;
+        log?.debug?.(`send to ${channelId} failed (${e?.status || e?.message}), trying again with the same nonce`);
+        await sleep(retryDelays[attempt]);
+      }
+    }
+  }
+
+  function runSend(serverId, channelId, content, opts, layout) {
+    const hasFiles = opts.files != null && [].concat(opts.files).length > 0;
+    if (hasFiles || !nonceOn(serverId)) {
+      return layout
+        ? () => bot.sendLayout(channelId, layout, { replyTo: opts.replyTo })
+        : () => bot.send(channelId, content, opts);
+    }
+    const body = layout
+      ? { flags: IS_V2, reply_to: opts.replyTo, components: list(layout) }
+      : { content: String(content ?? ''), reply_to: opts.replyTo, embeds: list(opts.embeds || undefined), components: list(opts.components || undefined), sticker_id: opts.stickerId };
+    return () => post(serverId, channelId, body);
+  }
 
   const prune = (arr) => { const cut = now() - windowMs; while (arr.length && arr[0] <= cut) arr.shift(); };
   const serverArr = (id) => { const k = id || 'dm'; if (!sentServer.has(k)) sentServer.set(k, []); return sentServer.get(k); };
@@ -61,9 +122,7 @@ export function createBudget({ bot, verified = false, log, now = () => Date.now(
         const old = queue.findIndex((q) => q.key === key);
         if (old >= 0) { stats.coalesced++; queue[old].resolve(null); queue.splice(old, 1); }
       }
-      const run = layout
-        ? () => bot.sendLayout(channelId, layout, { replyTo: opts.replyTo })
-        : () => bot.send(channelId, content, opts);
+      const run = runSend(serverId, channelId, content, opts, layout);
       queue.push({ pri: PRI[priority] ?? 1, seq: seq++, serverId, key, run, resolve, reject, exemptGlobal: !!opts.replyTo && priority === 'high' });
       kick();
     });
@@ -127,7 +186,7 @@ export function createBudget({ bot, verified = false, log, now = () => Date.now(
     headroom,
     get rememberedEdits() { return lastEdit.size; },
     get queued() { return queue.length; },
-    get stats() { return { ...stats, queued: queue.length, globalLimit }; },
+    get stats() { return { ...stats, queued: queue.length, globalLimit, nonce: nonceOn(null) }; },
     _pump: pump,
     verified,
   };

@@ -684,3 +684,40 @@ test('long voter lists and long running lists are shortened without cutting a me
   assert.match(field, /…and \d+ more$/);
   assert.ok(!/<#[^>]*$/m.test(field));
 });
+
+test('/poll ... discuss opens a discussion thread under the poll and links it on the card', async () => {
+  const h = await make({ features: { threads: true } });
+  const ans = await h.slash('poll', 'Best snack? | Chips | Pretzels 2h discuss', { user: IDS.member });
+  assert.match(lastText(h, ans), /Poll #1 is live/);
+  const card = pollCard(h);
+  const call = h.fake.callsTo('POST', new RegExp(`/channels/${G}/threads$`))[0];
+  assert.ok(call, 'a thread was asked for');
+  assert.equal(call.body.message_id, card.id);
+  assert.equal(call.body.name, 'Poll: Best snack?');
+  assert.ok(call.body.content);
+  const thread = h.fake.state.channels[S].find((c) => c.type === 'thread');
+  assert.match(lastText(h, ans), new RegExp(`<#${thread.id}>`));
+  assert.equal(h.store.get('engage', `${S}.poll.1`, null)?.threadId, thread.id);
+  assert.deepEqual(parsePoll('Pizza? | Yes | No discuss').thread, true);
+  assert.equal(parseExtras('2h discuss').thread, true);
+});
+
+test('when threads are off, a discuss poll still posts and says why there is no thread', async () => {
+  const h = await make();
+  const ans = await h.slash('poll', 'Best snack? | Chips | Pretzels discuss', { user: IDS.member });
+  assert.match(lastText(h, ans), /Poll #1 is live/);
+  assert.match(lastText(h, ans), /Threads aren't switched on/);
+  assert.ok(pollCard(h));
+  assert.equal(h.engine.caps.state(S, 'threads'), false);
+  await h.slash('poll', 'Again? | Yes | No discuss', { user: IDS.member });
+  assert.equal(h.fake.callsTo('POST', /\/threads$/).length, 1, 'not tried again while off');
+});
+
+test('a discussion thread never pings from the poll question', async () => {
+  const h = await make({ features: { threads: true } });
+  await h.slash('poll', `@everyone vote <@&${IDS.roles.mod}> @here? | Yes | No discuss`, { user: IDS.member });
+  const call = h.fake.callsTo('POST', new RegExp(`/channels/${G}/threads$`))[0];
+  assert.ok(call, 'a thread was asked for');
+  assert.doesNotMatch(call.body.content, /@everyone|@here|<@&/);
+  assert.doesNotMatch(call.body.name, /[@<>]/);
+});

@@ -2,12 +2,15 @@ import { defineApp } from '../engine/apps.js';
 import { card, dialog, button, row, rows, select, ICONS, COLORS } from '../engine/ui.js';
 import { customId } from '../engine/router.js';
 import { tokenize, didYouMean, fillTemplate, clip, parseDuration, formatDuration } from '../engine/parse.js';
-import { friendly } from '../engine/errors.js';
+import { friendly, explain, looksLikeFeatureOff } from '../engine/errors.js';
 import { isTimeZone, partsAt, zonedTime } from '../engine/scheduler.js';
 
 const ID = 'tools';
 const cid = (action, ...args) => customId(ID, action, ...args);
 const POST_KIND = `${ID}.post`;
+const STATS_KIND = `${ID}.stats`;
+const STATS_EVERY_MS = 10 * 60_000;
+const COUNTS_CAP = 'member_counts';
 
 const TAG_NAME_RE = /^[a-z0-9_-]{1,32}$/;
 const MAX_TAGS = 200;
@@ -98,7 +101,7 @@ const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const plainName = (name) => String(name ?? '').replace(/[<>]/g, '').replace(/@/g, '@​');
 const mdSafe = (text, max = 40) => clip(plainName(text).replace(/[*_`~|\\]/g, '').replace(/\s+/g, ' ').trim(), max);
 const isAdminLevel = (engine, level) => engine.perms.atLeast(level, 'admin');
-const onMessage = (ctx) => !!ctx.source?.message_id && typeof ctx.source.update === 'function';
+const onMessage = (ctx) => (!!ctx.source?.message_id || (ctx.onEphemeral && ctx.kind === 'button')) && typeof ctx.source.update === 'function';
 
 function cursorOf(text) {
   const s = String(text ?? '');
@@ -803,7 +806,7 @@ async function runEmbed(ctx) {
     if (!draft) return ctx.warn("You don't have that draft", `There's no draft #${n}. See yours with **/embed list**.`);
     if (!rest.length) return ctx.warn('Which channel?', `Try \`/embed send ${n} #announcements\`.`);
     const ch = await ctx.findChannel(rest.join(' '));
-    if (!ch) return ctx.warn("I couldn't find that channel", `No text channel matches **${mdSafe(rest.join(' '), 40)}**.`);
+    if (!ch) return ctx.warn("I couldn't find that channel", await ctx.channelMissing(rest.join(' '), `/embed send ${n} #announcements`));
     return postDraft(ctx, draft, ch.id);
   }
   if (sub === 'delete' || sub === 'discard' || sub === 'remove') {
@@ -1134,7 +1137,7 @@ async function createPost(ctx, text) {
   const chanTok = cur.take();
   if (!chanTok) return showPosts(ctx);
   const channel = await ctx.findChannel(chanTok);
-  if (!channel) return ctx.warn("I couldn't find that channel", `No text channel matches **${mdSafe(chanTok, 40)}**. Start with the channel, like \`/schedule #news daily 18:00 Good evening!\`.`);
+  if (!channel) return ctx.warn("I couldn't find that channel", await ctx.channelMissing(chanTok, '/schedule #news daily 18:00 Good evening!'));
   const now = engine.scheduler.now();
   const parsed = parseSchedule(cur.rest(), { tz: serverZone(engine, sid), now });
   if (parsed.error) return ctx.warn("I didn't get the time", parsed.error);
@@ -1266,7 +1269,7 @@ async function saveScheduleForm(ctx) {
   const text = String(v.text ?? '').trim();
   if (!channel || !when) return ctx.warn('Something is missing', 'Fill in the channel and when it should go out.');
   const target = await ctx.findChannel(channel);
-  if (!target) return ctx.warn("I couldn't find that channel", `No text channel matches **${mdSafe(channel, 40)}**.`);
+  if (!target) return ctx.warn("I couldn't find that channel", await ctx.channelMissing(channel, '#announcements'));
   return createPost(ctx, `<#${target.id}> ${when}${tz ? ` tz ${tz.split(/\s+/)[0]}` : ''} ${text}`);
 }
 
@@ -1278,6 +1281,7 @@ async function runSchedule(ctx) {
   const sub = (cur.peek() || '').toLowerCase();
   if (!sub || sub === 'list' || sub === 'all') return showPosts(ctx);
   if (sub === 'new' || sub === 'add') return scheduleForm(ctx);
+  if (sub === 'stats' || sub === 'counters' || sub === 'counter') { cur.skip(); return runStats(ctx, (cur.peek() || '').toLowerCase()); }
   if (['cancel', 'delete', 'remove', 'stop', 'pause', 'resume', 'unpause'].includes(sub)) {
     cur.skip();
     const id = idFrom(cur.peek());
@@ -1297,9 +1301,137 @@ async function runSchedule(ctx) {
       '`/schedule #news weekly mon 9:00 embed 2` posts your saved announcement #2',
       `Times use the server's time zone (${serverZone(ctx.engine, ctx.serverId)}) unless you add \`tz Area/City\`.`,
       '`/schedule list` · `/schedule pause 3` · `/schedule resume 3` · `/schedule cancel 3`',
+      '`/schedule stats on` adds live 👥 Members and 🟢 Online counter channels, updated every 10 minutes · `/schedule stats off` removes them',
     ].join('\n'));
   }
   return createPost(ctx, ctx.args);
+}
+
+const STAT_NAMES = { members: (n) => `👥 Members: ${n.toLocaleString('en-US')}`, online: (n) => `🟢 Online: ${n.toLocaleString('en-US')}` };
+const countsOff = (e) => looksLikeFeatureOff(e) || [400, 403, 404].includes(e?.status) || /isn'?t on|is not on|feature_off/i.test(String(e?.message || ''));
+
+async function liveCounts(engine, sid) {
+  if (typeof engine.yapin?.memberCounts === 'function') {
+    const res = await engine.yapin.memberCounts(sid);
+    const members = Number.isFinite(res?.member_count) ? res.member_count : null;
+    return { members, online: res?.live && Number.isFinite(res?.online_count) ? res.online_count : null, live: !!res?.live };
+  }
+  if (engine.caps.state(sid, COUNTS_CAP) !== false) {
+    try {
+      const out = await engine.bot.api('GET', `/servers/${sid}/counts`);
+      const members = Number(out?.member_count);
+      if (Number.isFinite(members) && members >= 0) {
+        engine.caps.mark(sid, COUNTS_CAP, true);
+        const online = Number(out?.online_count);
+        return { members, online: Number.isFinite(online) && online >= 0 ? online : null, live: true };
+      }
+    } catch (e) {
+      if (countsOff(e)) engine.caps.mark(sid, COUNTS_CAP, false, e?.message);
+      else engine.log.debug(`[tools] live member counts failed: ${e?.message}`);
+    }
+  }
+  const list = await engine.cache.members(sid).catch(() => null);
+  return { members: Array.isArray(list) ? list.length : null, online: null, live: false };
+}
+
+async function updateStats(engine, sid) {
+  const st = readDoc(engine, sid).stats;
+  if (!st?.on) return null;
+  const counts = await liveCounts(engine, sid);
+  const gone = [];
+  const names = {};
+  for (const kind of ['members', 'online']) {
+    const chId = st[kind];
+    const value = counts[kind];
+    if (!chId || value === null || value === undefined) continue;
+    const name = STAT_NAMES[kind](value);
+    if (st.names?.[kind] === name) continue;
+    try {
+      await engine.bot.editChannel(chId, { name });
+      names[kind] = name;
+    } catch (e) {
+      if (e?.status === 404) gone.push(kind);
+      else engine.log.debug(`[tools] renaming the ${kind} counter failed: ${e?.message}`);
+    }
+  }
+  write(engine, sid, (d) => {
+    if (!d.stats) return;
+    d.stats.names = { ...(d.stats.names || {}), ...names };
+    for (const kind of gone) { d.stats[kind] = null; delete d.stats.names[kind]; }
+    d.stats.at = Date.now();
+  });
+  return counts;
+}
+
+function scheduleStats(engine, sid) {
+  return engine.scheduler.schedule({ kind: STATS_KIND, serverId: sid, key: 'stats', repeat: { everyMs: STATS_EVERY_MS } });
+}
+
+async function runStatsJob(job, engine) {
+  const sid = job.serverId;
+  if (!sid) return;
+  if (!readDoc(engine, sid).stats?.on) {
+    engine.scheduler.cancel(job.id);
+    return;
+  }
+  if (!engine.settings.isEnabled(sid, ID)) return;
+  await updateStats(engine, sid);
+}
+
+async function makeCounter(ctx, kind, value) {
+  const ch = await ctx.bot.createChannel(ctx.serverId, STAT_NAMES[kind](value), { kind: 'voice' });
+  if (!ch?.id) throw friendly("Yapin' didn't give me the new channel back. Try again in a moment.", { title: "Couldn't make the counter" });
+  return ch;
+}
+
+async function runStats(ctx, action) {
+  const { engine, serverId: sid } = ctx;
+  const st = readDoc(engine, sid).stats;
+  if (['off', 'remove', 'stop', 'delete'].includes(action)) {
+    if (!st?.on) return ctx.info('Counters are off', 'There are no live counter channels to remove. Add them with `/schedule stats on`.');
+    engine.scheduler.cancelWhere({ kind: STATS_KIND, serverId: sid });
+    const left = [];
+    for (const kind of ['members', 'online']) {
+      if (!st[kind]) continue;
+      await ctx.bot.deleteChannel(st[kind]).catch((e) => { if (e?.status !== 404) left.push(`<#${st[kind]}>`); });
+    }
+    write(engine, sid, (d) => { delete d.stats; });
+    engine.cache.invalidate(sid);
+    return ctx.ok('Counters removed', left.length ? `I stopped updating them, but couldn't delete ${left.join(' and ')}. You can delete ${left.length === 1 ? 'it' : 'them'} by hand.` : 'The live counter channels are gone.');
+  }
+  if (['on', 'add', 'start', 'make', 'create', 'now', 'refresh', 'update'].includes(action)) {
+    const counts = await liveCounts(engine, sid);
+    if (counts.members === null) return ctx.warn("I couldn't count the members", "Yapin' didn't give me the member count or the member list right now. Try again in a minute.");
+    const made = { members: st?.members || null, online: st?.online || null };
+    for (const kind of ['members', 'online']) {
+      if (made[kind] && !(await ctx.bot.channel(made[kind]).catch(() => null))) made[kind] = null;
+    }
+    const names = { ...(st?.names || {}) };
+    const fresh = [];
+    try {
+      for (const kind of ['members', 'online']) {
+        if (made[kind] || counts[kind] === null) continue;
+        made[kind] = (await makeCounter(ctx, kind, counts[kind])).id;
+        names[kind] = STAT_NAMES[kind](counts[kind]);
+        fresh.push(made[kind]);
+      }
+    } catch (e) {
+      for (const id of fresh) await ctx.bot.deleteChannel(id).catch(() => null);
+      return ctx.fail(e, { action: 'make the counter channels', perm: 'manage_channels' });
+    }
+    write(engine, sid, (d) => { d.stats = { on: true, members: made.members, online: made.online, names, at: Date.now() }; });
+    scheduleStats(engine, sid);
+    if (st?.on) await updateStats(engine, sid);
+    engine.cache.invalidate(sid);
+    const lines = [`👥 Members: <#${made.members}>`];
+    if (made.online) lines.push(`🟢 Online: <#${made.online}>`);
+    const note = counts.live ? '' : "\n-# Yapin's live counts aren't switched on for me here yet, so I count members myself and leave out Online. Online shows up once they are.";
+    return ctx.ok(st?.on ? 'Counters updated' : 'Live counters are on', `${lines.join('\n')}\nThey update every 10 minutes. Drag them where you like, and lock them in the channel settings so nobody joins.${note}`);
+  }
+  if (!st?.on) return ctx.info('Live counters', 'Add channels that show the member and online counts with `/schedule stats on`. They update every 10 minutes.');
+  const lines = [st.members ? `👥 Members: <#${st.members}>` : null, st.online ? `🟢 Online: <#${st.online}>` : null].filter(Boolean);
+  const how = engine.caps.state(sid, COUNTS_CAP) === false ? "\n-# Yapin's live counts are off here, so I count members myself and leave out Online." : '';
+  return ctx.info('Live counters', `${lines.join('\n') || 'The counter channels were deleted. Run `/schedule stats on` to make new ones.'}\nThey update every 10 minutes. \`/schedule stats now\` updates them right away, \`/schedule stats off\` removes them.${how}`);
 }
 
 async function runPostJob(job, engine) {
@@ -1480,6 +1612,7 @@ export const { setup, teardown, check } = defineApp({
 
   jobs: {
     post: runPostJob,
+    stats: runStatsJob,
   },
 
   yap: [
@@ -1497,6 +1630,7 @@ export const { setup, teardown, check } = defineApp({
     'Announcements (admins): /embed opens a form with a live preview; change colour, picture or ping, then send it anywhere. Your last 5 drafts are kept: /embed list · /embed send 2 #news',
     "Scheduled posts (admins): /schedule #news every monday 9:00 Meeting! · daily 18:00 · in 2h · on 2026-12-25 10:00 · add tz Europe/London or embed 2. Uses the server's time zone by default.",
     '/schedule list shows the next times · /schedule pause 3 · /schedule resume 3 · /schedule cancel 3. A post whose channel was deleted pauses itself and tells the log channel.',
+    "Live counters (admins): /schedule stats on adds 👥 Members and 🟢 Online channels whose names update every 10 minutes. If Yapin's live counts are off here, I count members myself and leave Online out. /schedule stats off removes them.",
   ],
 
   dispose: (engine) => { states.delete(engine); },

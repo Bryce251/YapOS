@@ -1019,7 +1019,7 @@ async function statusView(ctx) {
 async function showStatus(ctx) {
   await ctx.require('mod');
   const view = await statusView(ctx);
-  if (ctx.kind === 'button' && ctx.source?.message_id && ctx.engine.router.panelOwner(ctx.source.message_id) === ctx.userId) return ctx.update(view);
+  if (ctx.kind === 'button' && (ctx.onEphemeral || (ctx.source?.message_id && ctx.engine.router.panelOwner(ctx.source.message_id) === ctx.userId))) return ctx.update(view);
   return ctx.ephemeral(view);
 }
 

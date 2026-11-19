@@ -869,7 +869,7 @@ async function setPanels(ctx, text) {
     return ctx.ok('Panels go by DM', 'New room owners get their control panel by DM.');
   }
   const channel = /^here$/i.test(t) ? { id: ctx.channelId } : await ctx.findChannel(t);
-  if (!channel?.id) return ctx.warn("I couldn't find that channel", `No text channel matches **${clip(t, 40)}**.`);
+  if (!channel?.id) return ctx.warn("I couldn't find that channel", await ctx.channelMissing(t, '/voice panels #room-panels'));
   ctx.patchConfig({ panelChannel: channel.id });
   return ctx.ok('Panels saved', `New room control panels go to <#${channel.id}>. Only each room's owner and moderators can press their buttons.`);
 }
