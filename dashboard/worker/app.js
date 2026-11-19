@@ -8,7 +8,7 @@ import { isBadgeImagePath, serveBadgeImage } from './custom-badges.js';
 import { isBannerImagePath, serveBannerImage } from './profile-custom.js';
 import { isProfileHidden } from './public-profiles.js';
 
-const SPA_RE = /^\/(servers(\/.*)?|party(\/reports|\/leaderboard|\/modlog)?|packs(\/browse)?|p\/.+|u\/[^/]+|seasons|account|link|owner(\/[0-9a-fA-F-]{36})?)$/;
+const SPA_RE = /^\/(servers(\/.*)?|party(\/reports|\/leaderboard|\/modlog)?|packs(\/browse)?|p\/.+|u\/[^/]+|seasons|account|clans|inbox|link|owner(\/[0-9a-fA-F-]{36})?)$/;
 
 async function spa(request, env, url) {
   if (!env.ASSETS || typeof env.ASSETS.fetch !== 'function') {

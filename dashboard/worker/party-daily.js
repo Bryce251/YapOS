@@ -4,6 +4,7 @@ import { cleanText } from './profiles.js';
 import { reportIpHash } from './reports.js';
 import { offBoard } from './party-leaderboard.js';
 import { activeBan } from './party-mod.js';
+import { dailyShardStatements, dailyShardAmounts } from './party-shards.js';
 import { maskList, HIDDEN_NAME } from './hidden-names.js';
 import { censor } from '../web/activity/js/filter.js';
 import { dailyPuzzle, hiveAnswers, hiveMax, scoreHive, scoreScramble, dailyScrambleWords, dayKey, shiftDay, nextReset, isDateKey, HIVE_MAX_LETTERS, SCRAMBLE_ROUNDS } from '../web/activity/js/daily.js';
@@ -236,7 +237,11 @@ async function postDaily(request, env, url, t) {
     db.prepare('INSERT INTO party_daily_streaks (user_id, last_day, streak, best, updated) VALUES (?, ?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET last_day = excluded.last_day, streak = excluded.streak, best = excluded.best, updated = excluded.updated')
       .bind(sub.user.id, day, streak.streak, streak.best, t),
   );
-  await db.batch(stmts);
+  const payFrom = stmts.length;
+  if (score > 0) stmts.push(...dailyShardStatements(db, sub.user.id, sub.kind, streak.streak, day, t));
+  const done = await db.batch(stmts);
+  const amounts = score > 0 ? dailyShardAmounts(streak.streak) : [];
+  const shards = (Array.isArray(done) ? done.slice(payFrom) : []).reduce((sum, r, i) => sum + (Number(r && r.meta && r.meta.changes) ? amounts[i] || 0 : 0), 0);
   const rankRow = await db.prepare(`SELECT COUNT(*) AS n FROM party_daily_scores s WHERE s.day = ? AND s.kind = ? AND (s.score > ? OR (s.score = ? AND s.ms < ?)) AND ${offBoard('s.user_id', t)}`).bind(day, sub.kind, kept.score, kept.score, kept.ms).first();
   return json({
     ok: true,
@@ -248,6 +253,7 @@ async function postDaily(request, env, url, t) {
     rank: (Number(rankRow && rankRow.n) || 0) + 1,
     streak: streak.streak,
     bestStreak: streak.best,
+    shards,
     ...detail,
   });
 }

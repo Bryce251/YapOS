@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHarness, advance, USERS } from './helpers.js';
-import { DEFAULT_RATES, RATE_BOUNDS, clampRates, shardStatement } from '../worker/party-shards.js';
+import { DEFAULT_RATES, RATE_BOUNDS, PAY_GAP_MS, clampRates, shardStatement, streakShards, DAILY_PUZZLE_SHARDS } from '../worker/party-shards.js';
 import { utcDay } from '../worker/party-results.js';
 
 const uid = (i) => `77777777-7777-4777-8777-${String(i).padStart(12, '0')}`;
@@ -44,8 +44,8 @@ test('playing and winning a Party game queues Shards with the default rates', as
     { id: uid(1), shards: DEFAULT_RATES.win, reason: 'win' },
     { id: uid(2), shards: DEFAULT_RATES.play, reason: 'play' },
   ]);
-  assert.equal(total(h, uid(1)), 20);
-  assert.equal(total(h, uid(2)), 5);
+  assert.equal(total(h, uid(1)), DEFAULT_RATES.play + DEFAULT_RATES.win);
+  assert.equal(total(h, uid(2)), DEFAULT_RATES.play);
   const r = rows(h);
   assert.ok(r.every((x) => x.game === 'trivia' && x.claimed === 0 && x.day === utcDay(h.clock.t)));
 });
@@ -115,29 +115,44 @@ test('bad predictions are refused and banned watchers earn nothing', async () =>
   assert.equal(body.shards.some((s) => s.id === uid(30) || s.id === uid(2)), false);
 });
 
-test('Party Shards stop at the daily cap and start again the next UTC day', async () => {
+test('Party Shards have no daily cap, so every paced game keeps paying all day', async () => {
   const h = party();
-  for (let i = 0; i < 10; i += 1) {
+  for (let i = 0; i < 40; i += 1) {
     advance(h, 3 * MIN);
-    await send(h, result(h, { at: h.clock.t, extra: { tournament: { winner: uid(1) } } }));
+    const g = result(h, { at: h.clock.t, extra: { tournament: { winner: uid(1) } } });
+    g.players[0].won = i % 2 === 0;
+    g.players[1].won = i % 2 === 1;
+    g.players[0].score = 900 + i;
+    await send(h, g);
   }
-  assert.equal(total(h, uid(1)), DEFAULT_RATES.cap);
-  assert.equal(total(h, uid(2)), 50);
-  advance(h, DAY);
-  await send(h, result(h, { at: h.clock.t }));
-  const today = h.db.raw.prepare('SELECT COALESCE(SUM(shards), 0) AS n FROM party_shards WHERE user_id = ? AND day = ?').get(uid(1), utcDay(h.clock.t)).n;
-  assert.equal(today, 20);
+  const day = utcDay(h.clock.t);
+  const today = (id) => h.db.raw.prepare('SELECT COALESCE(SUM(shards), 0) AS n FROM party_shards WHERE user_id = ? AND day = ?').get(id, day).n;
+  const tours = h.db.raw.prepare("SELECT COUNT(*) AS n FROM party_shards WHERE user_id = ? AND reason = 'tournament'").get(uid(1)).n;
+  assert.equal(tours, 10);
+  assert.equal(today(uid(2)), 40 * DEFAULT_RATES.play + 20 * DEFAULT_RATES.win);
+  assert.ok(today(uid(1)) > 150);
+  assert.equal(today(uid(1)), 40 * DEFAULT_RATES.play + 20 * DEFAULT_RATES.win + tours * DEFAULT_RATES.tournament);
 });
 
-test('the cap is enforced in SQL even when two writers race', async () => {
+test('games closer together than the pay gap pay nothing extra, even when two writers race', async () => {
   const h = party();
   const day = utcDay(h.clock.t);
   const stmts = [];
-  for (let i = 0; i < 5; i += 1) stmts.push(shardStatement(h.db, { id: uid(1), reason: 'win', shards: 40 }, 'trivia', day, h.clock.t, 150));
+  for (let i = 0; i < 5; i += 1) stmts.push(shardStatement(h.db, { id: uid(1), reason: 'win', shards: 40 }, 'trivia', day, h.clock.t));
   await h.db.batch(stmts);
-  assert.equal(total(h, uid(1)), 150);
-  const amounts = rows(h).map((r) => r.shards);
-  assert.deepEqual(amounts.sort((a, b) => a - b), [30, 40, 40, 40]);
+  assert.equal(total(h, uid(1)), 40);
+  await send(h, result(h));
+  advance(h, PAY_GAP_MS.play / 2);
+  const quick = result(h, { at: h.clock.t });
+  quick.players[0].score = 901;
+  const fast = await (await send(h, quick)).json();
+  assert.equal(fast.counted, true);
+  assert.deepEqual(fast.shards, []);
+  advance(h, PAY_GAP_MS.play);
+  const later = result(h, { at: h.clock.t });
+  later.players[0].score = 902;
+  const ok = await (await send(h, later)).json();
+  assert.equal(ok.shards.filter((s) => s.reason === 'play').length, 2);
 });
 
 test('the bot polls Party Shards and acks them with shardIds', async () => {
@@ -166,23 +181,23 @@ test('the owner rates come from the bot, are clamped, and change what games pay'
   const set = await h.bot('POST', '/bot/party/rates', { play: 2, win: 9999, tournament: -5, prediction: 3.6, cap: 40 });
   assert.equal(set.status, 200);
   const { rates } = await set.json();
-  assert.deepEqual(rates, { play: 2, win: RATE_BOUNDS.win[1], tournament: 0, prediction: 4, cap: 40 });
+  assert.deepEqual(rates, { play: 2, win: RATE_BOUNDS.win[1], tournament: 0, prediction: 4 });
   const partial = await (await h.bot('POST', '/bot/party/rates', { play: 3 })).json();
   assert.equal(partial.rates.play, 3);
-  assert.equal(partial.rates.cap, 40);
+  assert.equal(partial.rates.win, RATE_BOUNDS.win[1]);
   assert.equal((await h.bot('POST', '/bot/party/rates', { bogus: 1 })).status, 400);
   assert.equal((await h.bot('POST', '/bot/party/rates', { play: '5' })).status, 400);
   assert.equal((await h.bot('POST', '/bot/party/rates', { play: 5 }, 'wrong-secret-wrong-secret-wrong-secret')).status, 401);
   assert.equal((await h.request('POST', '/bot/party/rates', { body: { play: 5 } })).status, 401);
   const body = await (await send(h, result(h, { extra: { tournament: { winner: uid(1) } } }))).json();
-  assert.equal(total(h, uid(1)), 40);
-  assert.equal(body.shards.filter((s) => s.id === uid(1)).reduce((a, s) => a + s.shards, 0), 40);
+  assert.equal(total(h, uid(1)), 3 + RATE_BOUNDS.win[1]);
+  assert.equal(body.shards.filter((s) => s.id === uid(1)).reduce((a, s) => a + s.shards, 0), 3 + RATE_BOUNDS.win[1]);
   assert.equal(body.shards.some((s) => s.reason === 'tournament'), false);
 });
 
 test('rates are clamped to sane bounds', () => {
   assert.deepEqual(clampRates({}), DEFAULT_RATES);
-  assert.deepEqual(clampRates({ play: 1e9, win: -1, tournament: NaN, prediction: 2, cap: 5000 }), { play: 50, win: 0, tournament: 25, prediction: 2, cap: 1000 });
+  assert.deepEqual(clampRates({ play: 1e9, win: -1, tournament: NaN, prediction: 2, cap: 5000 }), { play: RATE_BOUNDS.play[1], win: 0, tournament: DEFAULT_RATES.tournament, prediction: 2 });
 });
 
 test('cleanup drops claimed Party Shards after two days and unclaimed ones after a month', async () => {
@@ -212,7 +227,7 @@ test('a player listed as a watcher earns no prediction Shards', async () => {
   assert.equal(res.shards.some((s) => s.reason === 'prediction'), false);
 });
 
-test('tournament and prediction Shards have their own daily limits', async () => {
+test('tournament and prediction Shards are paced instead of capped', async () => {
   const h = party();
   for (let i = 0; i < 14; i += 1) {
     advance(h, 3 * MIN);
@@ -223,10 +238,58 @@ test('tournament and prediction Shards have their own daily limits', async () =>
     await send(h, { game: 'trivia', at: h.clock.t, players, extra: { tournament: { winner: uid(100 + i) } }, predictions: [{ id: uid(50), name: 'W', pick: uid(100 + i), right: true }] });
   }
   const count = (reason, id) => h.db.raw.prepare('SELECT COUNT(*) AS n FROM party_shards WHERE reason = ? AND user_id = ?').get(reason, id).n;
-  assert.equal(count('prediction', uid(50)), 10);
+  assert.equal(count('prediction', uid(50)), 14);
   const day = utcDay(h.clock.t);
   const stmts = [];
-  for (let i = 0; i < 5; i += 1) stmts.push(shardStatement(h.db, { id: uid(60), reason: 'tournament', shards: 1 }, 'trivia', day, h.clock.t, 150));
+  for (let i = 0; i < 5; i += 1) stmts.push(shardStatement(h.db, { id: uid(60), reason: 'tournament', shards: 1 }, 'trivia', day, h.clock.t));
   await h.db.batch(stmts);
-  assert.equal(count('tournament', uid(60)), 3);
+  assert.equal(count('tournament', uid(60)), 1);
+  advance(h, PAY_GAP_MS.tournament + 1);
+  await h.db.batch([shardStatement(h.db, { id: uid(60), reason: 'tournament', shards: 1 }, 'trivia', day, h.clock.t)]);
+  assert.equal(count('tournament', uid(60)), 2);
+});
+
+test('the daily puzzle streak bonus grows and tops out', () => {
+  assert.equal(streakShards(0), 0);
+  assert.equal(streakShards(1), 0);
+  assert.equal(streakShards(2), 10);
+  assert.equal(streakShards(5), 25);
+  assert.equal(streakShards(500), 50);
+  assert.ok(DAILY_PUZZLE_SHARDS > 0);
+});
+
+test('a big Shards day raises a cheat alert and holds Party Shards until staff handle it', async () => {
+  const { SHARDS_ALERT_DAY } = await import('../worker/party-shards.js');
+  const h = party();
+  const day = utcDay(h.clock.t);
+  h.db.raw.prepare('INSERT INTO party_shards (id, user_id, shards, reason, game, at, day, claimed) VALUES (?, ?, ?, ?, ?, ?, ?, 0)').run('seed1', uid(1), SHARDS_ALERT_DAY - 5, 'play', 'trivia', h.clock.t - 10 * MIN, day);
+  const first = await (await send(h, result(h))).json();
+  assert.ok(first.shards.some((s) => s.id === uid(1)));
+  const alert = h.db.raw.prepare("SELECT * FROM party_cheat_alerts WHERE user_id = ? AND kind = 'shards_day'").get(uid(1));
+  assert.ok(alert, 'crossing the daily alert line raises an alert');
+  assert.equal(alert.status, 'open');
+  advance(h, 3 * MIN);
+  const before = total(h, uid(1));
+  const second = await (await send(h, result(h, { players: [{ id: uid(1), name: 'Pip', username: null, score: 800, won: true, team: null }, { id: uid(2), name: 'Juno', username: null, score: 300, won: false, team: null }] }))).json();
+  assert.deepEqual(second.held, [uid(1)]);
+  assert.equal(total(h, uid(1)), before, 'held players earn nothing more');
+  assert.ok(second.shards.some((s) => s.id === uid(2)), 'the other player still earns');
+  h.db.raw.prepare("UPDATE party_cheat_alerts SET status = 'handled', handled_at = ? WHERE user_id = ?").run(h.clock.t, uid(1));
+  advance(h, 3 * MIN);
+  const third = await (await send(h, result(h, { players: [{ id: uid(1), name: 'Pip', username: null, score: 700, won: true, team: null }, { id: uid(2), name: 'Juno', username: null, score: 200, won: false, team: null }] }))).json();
+  assert.ok(third.shards.some((s) => s.id === uid(1)), 'pay comes back once staff handle the alert');
+});
+
+test('farming one opponent puts Party Shards on hold', async () => {
+  const h = party();
+  const { CHEAT_PAIR_GAMES } = await import('../worker/party-cheats.js');
+  for (let i = 0; i < CHEAT_PAIR_GAMES; i += 1) {
+    advance(h, 40 * 1000);
+    await send(h, result(h, { players: [{ id: uid(1), name: 'Pip', username: null, score: 900 + i, won: true, team: null }, { id: uid(2), name: 'Juno', username: null, score: 100, won: false, team: null }] }));
+  }
+  assert.ok(h.db.raw.prepare("SELECT 1 FROM party_cheat_alerts WHERE user_id = ? AND kind = 'farm' AND status = 'open'").get(uid(1)));
+  advance(h, 40 * 1000);
+  const body = await (await send(h, result(h, { players: [{ id: uid(1), name: 'Pip', username: null, score: 5000, won: true, team: null }, { id: uid(2), name: 'Juno', username: null, score: 100, won: false, team: null }] }))).json();
+  assert.ok(body.held.includes(uid(1)));
+  assert.ok(!body.shards.some((s) => s.id === uid(1)));
 });

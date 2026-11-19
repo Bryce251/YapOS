@@ -228,7 +228,8 @@ async function activityWarnings(request, env, url, t) {
   const want = url.searchParams.get('for');
   if (want !== null && (!ID_RE.test(want) || lower(want) !== me)) return json({ warnings: [], mismatch: true });
   const res = await env.DB.prepare('SELECT id, text, created FROM party_warnings WHERE user_id = ? AND seen_at IS NULL ORDER BY created ASC, id ASC LIMIT ?').bind(me, WARNINGS_DELIVERED).all();
-  return json({ warnings: ((res && res.results) || []).map(activityWarningOut) });
+  const inbox = await env.DB.prepare('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL').bind(me).first();
+  return json({ warnings: ((res && res.results) || []).map(activityWarningOut), inbox: Number((inbox && inbox.n) || 0) });
 }
 
 async function seenWarning(request, env, raw, t) {

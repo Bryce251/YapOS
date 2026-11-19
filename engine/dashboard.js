@@ -84,14 +84,17 @@ const CLAN_JOINS_MAX = 50;
 const CLAN_RESULTS_KEEP = 500;
 const CLAN_RETRY_MS = 60_000;
 const CLAN_CODES = new Set(['joined', 'already', 'invite_only', 'in_clan', 'gone', 'bot', 'failed']);
+const CLAN_ACTIONS_MAX = 50;
+const CLAN_ACTION_CODE = /^[a-z_]{1,24}$/;
+const CLAN_EVENTS_PER_POST = 500;
 const PARTY_BADGES_MAX = 40;
 const PARTY_REASON = 'YapOS Party';
 const PARTY_NS = 'party';
 const PARTY_GAME_RE = /^[a-z0-9_-]{1,32}$/;
 const PARTY_BADGE_RE = /^[A-Za-z0-9_.:-]{1,48}$/;
 const PARTY_SHARDS_MAX = 1000;
-const PARTY_SHARDS_CAP = 150;
-const PARTY_SHARD_REASONS = new Set(['play', 'win', 'tournament', 'prediction']);
+const PARTY_SHARD_REASONS = new Set(['play', 'win', 'tournament', 'prediction', 'daily', 'streak']);
+const PARTY_RATE_KEYS = Object.freeze(['play', 'win', 'tournament', 'prediction']);
 
 export const SLUG_RE = /^[a-z0-9-]{3,32}$/;
 
@@ -304,7 +307,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity, profileRun: null,
     reportsOpen: 0, partyStats: new Map(), partyAcks: [], shardAcks: [], ratesDirty: true, ratesRun: null,
     catalogDirty: true, catalogRun: null, catalogMonth: null, people: new Map(), peopleRun: null,
-    clanRev: null, clanSent: new Map(), clanFull: false, clanRetryAt: -Infinity, clanResults: new Map(),
+    clanRev: null, clanSent: new Map(), clanFull: false, clanRetryAt: -Infinity, clanResults: new Map(), clanActionResults: new Map(), clanFeedSent: 0, clanFeedId: null, clanSettingsSig: null,
   };
 
   async function request(method, path, body) {
@@ -1216,43 +1219,9 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     }, []);
   }
 
-  function shardCap(eco) {
-    try {
-      const n = Number(eco?.partyRates?.()?.cap);
-      if (Number.isInteger(n) && n >= 0) return Math.min(n, PARTY_SHARDS_MAX);
-    } catch (e) {
-      log.debug('[dashboard] reading the Party Shards cap failed', e?.message);
-    }
-    return PARTY_SHARDS_CAP;
-  }
-
-  function reserveShards(user, want, cap) {
-    const day = new Date(now()).toISOString().slice(0, 10);
-    let got = 0;
-    engine.store.update(PARTY_NS, 'shardDay', (cur) => {
-      const doc = plainObject(cur) && cur.day === day && plainObject(cur.users) ? cur : { day, users: {} };
-      const used = Math.max(0, Math.floor(Number(doc.users[user]) || 0));
-      got = Math.max(0, Math.min(want, cap - used));
-      if (got) doc.users[user] = used + got;
-      return doc;
-    }, null);
-    return { day, got };
-  }
-
-  function releaseShards(user, day, n) {
-    engine.store.update(PARTY_NS, 'shardDay', (cur) => {
-      if (!plainObject(cur) || cur.day !== day || !plainObject(cur.users)) return cur;
-      const left = Math.max(0, (Math.floor(Number(cur.users[user]) || 0)) - n);
-      if (left) cur.users[user] = left;
-      else delete cur.users[user];
-      return cur;
-    }, null);
-  }
-
   async function applyShards(rows) {
     const eco = engine.service('economy');
     const done = new Set(appliedShards());
-    const cap = shardCap(eco);
     const ack = [];
     let paid = 0;
     for (const raw of rows) {
@@ -1260,24 +1229,19 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       if (!r || ack.includes(r.id)) continue;
       if (r.bad || done.has(r.id)) { ack.push(r.id); continue; }
       if (!eco || typeof eco.add !== 'function') continue;
-      let hold;
       try {
-        hold = reserveShards(r.user, r.shards, cap);
         editShards(r.id, null);
       } catch (e) {
         log.warn(`[dashboard] couldn't save which Party Shards were paid, so I'll try again later: ${e?.message}`);
-        if (hold?.got) { try { releaseShards(r.user, hold.day, hold.got); } catch (err) { log.debug('[dashboard] undoing a Party Shards hold failed', err?.message); } }
         continue;
       }
       done.add(r.id);
-      if (!hold.got) { ack.push(r.id); continue; }
       try {
-        await eco.add(GLOBAL_KEY, r.user, hold.got, PARTY_REASON);
+        await eco.add(GLOBAL_KEY, r.user, r.shards, PARTY_REASON);
       } catch (e) {
         log.debug('[dashboard] paying Party Shards failed', e?.message);
         done.delete(r.id);
         try { editShards(null, r.id); } catch (err) { log.debug('[dashboard] undoing a Party Shards mark failed', err?.message); }
-        try { releaseShards(r.user, hold.day, hold.got); } catch (err) { log.debug('[dashboard] undoing a Party Shards hold failed', err?.message); }
         continue;
       }
       ack.push(r.id);
@@ -1348,7 +1312,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     const r = eco.partyRates();
     if (!plainObject(r)) return null;
     const out = {};
-    for (const k of ['play', 'win', 'tournament', 'prediction', 'cap']) {
+    for (const k of PARTY_RATE_KEYS) {
       const n = Number(r[k]);
       if (!Number.isInteger(n) || n < 0) return null;
       out[k] = Math.min(n, PARTY_SHARDS_MAX);
@@ -1484,10 +1448,18 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     if (!svc || !enabled) return { sent: 0, removed: 0 };
     if (now() < state.clanRetryAt) return { sent: 0, removed: 0 };
     const rev = typeof svc.rev === 'function' ? svc.rev() : null;
-    if (state.clanFull && rev !== null && rev === state.clanRev) return { sent: 0, removed: 0 };
+    const settings = typeof svc.settings === 'function' ? svc.settings() : null;
+    const settingsSig = settings ? JSON.stringify(settings) : null;
+    const settingsDirty = settingsSig !== null && settingsSig !== state.clanSettingsSig;
+    if (state.clanFull && rev !== null && rev === state.clanRev && !settingsDirty) return { sent: 0, removed: 0 };
+    const feed = typeof svc.feed === 'function' ? svc.feed() : null;
+    const feedId = feed && typeof feed.id === 'string' ? feed.id : null;
+    if (feedId && feedId !== state.clanFeedId) state.clanFeedSent = 0;
+    const events = feedId && Array.isArray(feed.events) ? feed.events.filter((e) => e && Number.isInteger(e.seq) && e.seq > state.clanFeedSent).slice(-CLAN_EVENTS_PER_POST) : [];
+    const extra = events.length > 0 || (settingsDirty && !(state.clanSettingsSig === null && settings.default === true));
     const list = svc.directory();
     const first = !state.clanFull;
-    if (first && !list.length && !state.clanSent.size) {
+    if (first && !list.length && !state.clanSent.size && !extra) {
       state.clanFull = true;
       state.clanRev = rev;
       return { sent: 0, removed: 0 };
@@ -1495,7 +1467,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     const sigs = new Map(list.map((c) => [c.id, JSON.stringify(c)]));
     const changed = list.filter((c) => state.clanSent.get(c.id) !== sigs.get(c.id));
     const removed = [...state.clanSent.keys()].filter((id) => !sigs.has(id));
-    if (!first && !changed.length && !removed.length) {
+    if (!first && !changed.length && !removed.length && !extra) {
       state.clanRev = rev;
       return { sent: 0, removed: 0 };
     }
@@ -1530,6 +1502,11 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       const body = { clans: chunks[i].map((p) => p.entry) };
       if (i === 0) {
         body.removed = removed;
+        if (events.length) {
+          body.feed = feedId;
+          body.events = events;
+        }
+        if (settingsDirty) body.settings = settings;
         if (first) {
           body.full = true;
           body.known = list.map((c) => c.id);
@@ -1548,6 +1525,11 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       }
       if (i === 0) {
         for (const id of removed) state.clanSent.delete(id);
+        if (events.length) {
+          state.clanFeedId = feedId;
+          state.clanFeedSent = Math.max(state.clanFeedSent, ...events.map((e) => e.seq));
+        }
+        if (settingsDirty) state.clanSettingsSig = settingsSig;
         if (first) state.clanFull = true;
       }
     }
@@ -1583,6 +1565,34 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     return { applied, posted: r.ok ? results.length : 0 };
   }
 
+  async function applyClanActions(rows) {
+    const list = Array.isArray(rows) ? rows.slice(0, CLAN_ACTIONS_MAX) : [];
+    const svc = clansService();
+    let applied = 0;
+    for (const raw of list) {
+      if (!plainObject(raw) || typeof raw.id !== 'string' || !SAFE_ID.test(raw.id) || state.clanActionResults.has(raw.id)) continue;
+      let out;
+      if (!svc || typeof svc.webAction !== 'function') out = { ok: false, code: 'failed', message: "Clans aren't running on YapOS right now. Try again later." };
+      else {
+        try {
+          out = await svc.webAction(typeof raw.user === 'string' ? raw.user : '', typeof raw.kind === 'string' ? raw.kind : '', typeof raw.clan === 'string' ? raw.clan : null, plainObject(raw.payload) ? raw.payload : {});
+        } catch (e) {
+          log.debug('[dashboard] applying a clan action failed', e?.message);
+          out = { ok: false, code: 'failed', message: 'Something went wrong, so nothing changed. Try again.' };
+        }
+      }
+      state.clanActionResults.set(raw.id, { id: raw.id, ok: out?.ok === true, code: typeof out?.code === 'string' && CLAN_ACTION_CODE.test(out.code) ? out.code : out?.ok ? 'done' : 'refused', message: typeof out?.message === 'string' ? out.message.slice(0, 300) : '' });
+      applied += 1;
+      while (state.clanActionResults.size > CLAN_RESULTS_KEEP) state.clanActionResults.delete(state.clanActionResults.keys().next().value);
+    }
+    if (!state.clanActionResults.size) return { applied, posted: 0 };
+    const results = [...state.clanActionResults.values()].slice(0, RESULTS_PER_POST);
+    const r = await request('POST', '/bot/clans/actions', { results }).catch((e) => ({ ok: false, status: 0, error: e }));
+    if (r.ok) for (const x of results) state.clanActionResults.delete(x.id);
+    else log.debug('[dashboard] clan action results post failed', r.status);
+    return { applied, posted: r.ok ? results.length : 0 };
+  }
+
   async function tick() {
     if (!enabled) return null;
     if (state.busy) return state.delay;
@@ -1604,6 +1614,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       }
       await syncOwner(r.data?.owner).catch((e) => log.debug('[dashboard] owner sync failed', e?.message));
       if ((Array.isArray(r.data?.clanJoins) && r.data.clanJoins.length) || state.clanResults.size) await applyClanJoins(r.data?.clanJoins).catch((e) => log.debug('[dashboard] clan joins failed', e?.message));
+      if ((Array.isArray(r.data?.clanActions) && r.data.clanActions.length) || state.clanActionResults.size) await applyClanActions(r.data?.clanActions).catch((e) => log.debug('[dashboard] clan actions failed', e?.message));
       await syncClans().catch((e) => log.debug('[dashboard] clan directory push failed', e?.message));
       if (state.catalogMonth && state.catalogMonth !== owner.catalogMonth()) state.catalogDirty = true;
       if (state.catalogDirty && !state.catalogRun) state.catalogRun = sendCatalog().catch((e) => log.debug('[dashboard] owner catalog push failed', e?.message)).finally(() => { state.catalogRun = null; });
@@ -1669,6 +1680,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     syncOwner,
     syncClans,
     applyClanJoins,
+    applyClanActions,
     ownerCatalog: () => owner.catalog(),
     tick,
     runJob,

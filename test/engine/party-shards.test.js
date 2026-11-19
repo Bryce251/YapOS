@@ -136,15 +136,15 @@ test('the owner Party rates go to the Worker on the first poll and again when th
   const { h, w, dash } = await setup();
   await dash.tick();
   await dash.ratesWork;
-  assert.deepEqual(w.rates, [{ play: 5, win: 15, tournament: 25, prediction: 5, cap: 150 }]);
+  assert.deepEqual(w.rates, [{ play: 10, win: 25, tournament: 100, prediction: 15 }]);
   await dash.tick();
   await dash.ratesWork;
   assert.equal(w.rates.length, 1, 'sent once, not every poll');
 
   dash.start();
-  await h.slash('economy', 'party 4 20 30 6 120', { user: IDS.owner });
+  await h.slash('economy', 'party 4 20 30 6', { user: IDS.owner });
   await h.settle();
-  assert.deepEqual(w.rates.at(-1), { play: 4, win: 20, tournament: 30, prediction: 6, cap: 120 });
+  assert.deepEqual(w.rates.at(-1), { play: 4, win: 20, tournament: 30, prediction: 6 });
   dash.stop();
 });
 
@@ -162,17 +162,15 @@ test('a failed rates push is retried on the next poll', async () => {
   assert.equal(w.rates.length, 2);
 });
 
-test('the bot also holds Party Shards to the daily cap, even if the Worker sends more', async () => {
+test('the bot pays every Party Shards row with no daily cap, daily puzzle and streak rows included', async () => {
   const { h, w, dash } = await setup();
-  w.shards = Array.from({ length: 12 }, (_, i) => ({ id: `c${i}`, user: IDS.member, shards: 15, reason: 'win', game: 'trivia' }));
+  w.shards = Array.from({ length: 12 }, (_, i) => ({ id: `c${i}`, user: IDS.member, shards: 25, reason: 'win', game: 'trivia' }));
+  w.shards.push({ id: 'd1', user: IDS.member, shards: 25, reason: 'daily', game: 'hive' }, { id: 'k1', user: IDS.member, shards: 20, reason: 'streak', game: 'daily' });
   await dash.tick();
-  assert.equal(balOf(h, IDS.member), 150, 'capped at 150 a day');
-  assert.equal(w.acks[0].shardIds.length, 12, 'rows over the cap are acked, not kept');
+  assert.equal(balOf(h, IDS.member), 12 * 25 + 25 + 20, 'no daily cap');
+  assert.equal(w.acks[0].shardIds.length, 14);
   assert.equal(w.shards.length, 0);
-  await h.advance(24 * 3600_000);
-  w.shards = [{ id: 'next', user: IDS.member, shards: 15, reason: 'win', game: 'trivia' }];
-  await dash.tick();
-  assert.equal(balOf(h, IDS.member), 165, 'a new UTC day starts fresh');
+  assert.equal(h.engine.store.get('party', 'shardDay', null), null, 'no per-day counter is kept');
 });
 
 test('rates are not pushed when the Economy app is not loaded', async () => {

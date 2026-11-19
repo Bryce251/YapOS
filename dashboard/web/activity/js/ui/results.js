@@ -3,7 +3,7 @@ import { joinButton } from './lobby.js';
 import { board, standings, fmt } from './board.js';
 import { burstFrom } from './juice.js';
 import { createDailyBox, finishDaily } from './daily.js';
-import { partyXp, PARTY_XP_DAY, partyShards, PARTY_SHARDS_PREDICTION, PARTY_SHARDS_DAY } from '../admin.js';
+import { partyXp, PARTY_XP_DAY, partyShards, PARTY_SHARDS_PREDICTION } from '../admin.js';
 import { tourModel, tourCard } from './tournament.js';
 import { predictResultsModel, predictResults } from './predict.js';
 import { createReplayStrip, REPLAY_GAMES } from './replay.js';
@@ -36,7 +36,7 @@ export function xpText(n) {
   return n > 0 ? `+${n} Party XP` : '';
 }
 
-export const SHARDS_TITLE = `Shards go to your YapOS wallet, up to ${PARTY_SHARDS_DAY} a day from YapOS Party.`;
+export const SHARDS_TITLE = 'Shards go to your YapOS wallet. There is no daily limit, so every game with 2 or more players pays.';
 
 export function shardsEarned(last, players, predict = null) {
   if (!last || !Array.isArray(last.ps) || last.ps.length < 2) return 0;

@@ -16,6 +16,8 @@ export const ROUTES = [
   { name: 'packs', pattern: new RegExp('^/packs$'), keys: [], private: true },
   { name: 'packs-browse', pattern: new RegExp('^/packs/browse$'), keys: [], private: false },
   { name: 'account', pattern: new RegExp('^/account$'), keys: [], private: true },
+  { name: 'clans', pattern: new RegExp('^/clans$'), keys: [], private: true },
+  { name: 'inbox', pattern: new RegExp('^/inbox$'), keys: [], private: true },
   { name: 'link', pattern: new RegExp('^/link$'), keys: [], private: true },
   { name: 'seasons', pattern: new RegExp('^/seasons$'), keys: [], private: false },
   { name: 'profile', pattern: new RegExp(`^/u/${HANDLE}$`), keys: ['name'], private: false },

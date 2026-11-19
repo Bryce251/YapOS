@@ -11,6 +11,7 @@ import { GLOBAL_OWNER_KINDS, globalActionPlan, isGlobalHidden } from './owner-gl
 import { accountState, requireAccount, noAccountStatement } from './owner-account.js';
 import { listCustomBadges, catalogEntry, isCustomBadge, liveBadges, badgesRoute } from './custom-badges.js';
 import { staffLookView } from './profile-custom.js';
+import { noteStatements } from './inbox.js';
 
 export const OWNER_ACTIONS_PER_MIN = 120;
 export const OWNER_READS_PER_MIN = 300;
@@ -522,19 +523,38 @@ function afterStatements(db, userId, after, t) {
   return stmts;
 }
 
+const GIFT_NOTES = new Set(['shards.add', 'badge.grant', 'achievement.grant']);
+
+export function giftNote(row, catalog) {
+  const id = `oa-${row.id}`;
+  if (row.kind === 'shards.add') {
+    const n = Math.floor(Number(parseJsonSafe(row.value, 0)));
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return { id, user: row.user_id, kind: 'gift', title: `You got ${nice(n)} 💎 Shards`, body: 'A gift from the YapOS team. Enjoy!' };
+  }
+  const list = row.kind === 'badge.grant' ? catalog.badges : catalog.achievements;
+  const found = (list || []).find((x) => x && x.id === row.ref);
+  const label = found ? [found.emoji, found.label || found.name].filter(Boolean).join(' ') : row.ref;
+  if (!label) return null;
+  return row.kind === 'badge.grant'
+    ? { id, user: row.user_id, kind: 'badge', title: `New badge: ${label}`, body: 'It shows on your profile now.' }
+    : { id, user: row.user_id, kind: 'achievement', title: `New achievement: ${label}`, body: 'The YapOS team gave you an achievement.' };
+}
+
 export async function postOwnerResults(request, env, t) {
   const body = await readJson(request, RESULTS_LIMIT);
   if (!Array.isArray(body.results)) throw bad('bad_results', '"results" must be a list.');
   if (body.results.length > OWNER_RESULTS_MAX) throw new HttpError(413, 'too_many', `Send at most ${OWNER_RESULTS_MAX} results at once.`);
   const db = env.DB;
   let stored = 0;
+  let catalog = null;
   const ignored = [];
   for (const r of body.results) {
     if (!isPlainObject(r) || typeof r.id !== 'string' || !ACTION_ID_RE.test(r.id)) {
       ignored.push(isPlainObject(r) && typeof r.id === 'string' ? r.id.slice(0, 64) : null);
       continue;
     }
-    const row = await db.prepare('SELECT id, user_id, status FROM owner_actions WHERE id = ?').bind(r.id).first();
+    const row = await db.prepare('SELECT id, user_id, kind, value, ref, status FROM owner_actions WHERE id = ?').bind(r.id).first();
     if (!row || (row.status !== 'queued' && row.status !== 'sent')) {
       ignored.push(r.id);
       continue;
@@ -548,6 +568,11 @@ export async function postOwnerResults(request, env, t) {
     if (after && after.badges) after.badges = withoutFounder(after.badges, isPartyOwner(env, row.user_id));
     if (after) stmts.push(...afterStatements(db, row.user_id, after, t));
     if (!ok && r.noAccount === true) stmts.push(noAccountStatement(db, row.user_id, t));
+    if (ok && GIFT_NOTES.has(row.kind)) {
+      if (!catalog) catalog = await readCatalog(db).catch(() => ({ achievements: [], badges: [] }));
+      const note = giftNote(row, catalog);
+      if (note) stmts.push(...noteStatements(db, [note], t));
+    }
     await db.batch(stmts);
     stored += 1;
   }

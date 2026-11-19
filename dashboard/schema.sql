@@ -666,3 +666,58 @@ CREATE TABLE IF NOT EXISTS clan_joins (
 );
 CREATE INDEX IF NOT EXISTS clan_joins_user ON clan_joins (user_id, status, created);
 CREATE INDEX IF NOT EXISTS clan_joins_status ON clan_joins (status, created);
+
+CREATE TABLE IF NOT EXISTS clan_actions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  clan_id TEXT,
+  payload TEXT,
+  created INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  sent_at INTEGER,
+  code TEXT,
+  result TEXT,
+  updated INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS clan_actions_user ON clan_actions (user_id, status, created);
+CREATE INDEX IF NOT EXISTS clan_actions_status ON clan_actions (status, created);
+
+CREATE TABLE IF NOT EXISTS clan_details (
+  clan_id TEXT PRIMARY KEY,
+  bank INTEGER NOT NULL DEFAULT 0,
+  style INTEGER NOT NULL DEFAULT 0,
+  boost INTEGER NOT NULL DEFAULT 0,
+  deposits TEXT,
+  joined TEXT,
+  updated INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS clan_invites (
+  user_id TEXT NOT NULL,
+  clan_id TEXT NOT NULL,
+  by_id TEXT,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, clan_id)
+);
+CREATE INDEX IF NOT EXISTS clan_invites_clan ON clan_invites (clan_id);
+
+CREATE TABLE IF NOT EXISTS clan_sync (
+  id TEXT PRIMARY KEY,
+  seq INTEGER NOT NULL DEFAULT 0,
+  data TEXT,
+  updated INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT,
+  data TEXT,
+  created INTEGER NOT NULL,
+  read_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS notifications_user ON notifications (user_id, created);
+CREATE INDEX IF NOT EXISTS notifications_created ON notifications (created);

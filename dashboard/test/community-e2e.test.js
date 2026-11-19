@@ -20,7 +20,7 @@ function botEngine(h, { paid = [] } = {}) {
     ['economy', {
       add: async (key, user, n, reason) => { paid.push({ key, user, n, reason }); return n; },
       balance: () => 420,
-      partyRates: () => ({ play: 6, win: 14, tournament: 30, prediction: 4, cap: 160 }),
+      partyRates: () => ({ play: 6, win: 14, tournament: 30, prediction: 4 }),
     }],
     ['levels', {
       addXp: async () => 0,
@@ -57,7 +57,7 @@ test('activity results with a tournament and predictions become Party Shards the
   dash.start();
   assert.equal(await dash.pushPartyRates(), true);
   const rates = await (await h.bot('GET', '/bot/party/rates')).json();
-  assert.deepEqual(rates.rates, { play: 6, win: 14, tournament: 30, prediction: 4, cap: 160 });
+  assert.deepEqual(rates.rates, { play: 6, win: 14, tournament: 30, prediction: 4 });
 
   const body = resultsBody({
     game: 'hangman',

@@ -36,12 +36,22 @@ const PAY_CONFIRM_OVER = 1000;
 const TOP_SIZE = 10;
 const MEDALS = ['🥇', '🥈', '🥉'];
 const CASINO_WIN = /^(?:Coinflip|Dice|Slots|Blackjack|Roulette|Crash|Casino) win$/i;
-const SEASON_REASON = /^(?:Trivia win|Daily quest\b.*|YapOS Party\b.*)$/i;
+const SEASON_REASON = /^(?:Trivia win|Daily quest\b.*|YapOS Party\b.*|Chatting|Voice time|Weekly bonus|Level \d+ reward)$/i;
 const QUEST_REASON = /^Daily quest\b/i;
-const PARTY_KEYS = Object.freeze(['play', 'win', 'tournament', 'prediction', 'cap']);
-export const PARTY_DEFAULTS = Object.freeze({ play: 5, win: 15, tournament: 25, prediction: 5, cap: 150 });
-const PARTY_BOUNDS = Object.freeze({ play: 50, win: 200, tournament: 500, prediction: 50, cap: 1000 });
-const PARTY_LABELS = Object.freeze({ play: 'a game played', win: 'a win', tournament: 'a tournament win', prediction: 'a right prediction', cap: 'a day at most' });
+const PARTY_KEYS = Object.freeze(['play', 'win', 'tournament', 'prediction']);
+export const PARTY_DEFAULTS = Object.freeze({ play: 10, win: 25, tournament: 100, prediction: 15 });
+const PARTY_BOUNDS = Object.freeze({ play: 100, win: 250, tournament: 1000, prediction: 100 });
+const PARTY_LABELS = Object.freeze({ play: 'a game played', win: 'a win', tournament: 'a tournament win', prediction: 'a right prediction' });
+export const PARTY_DAILY_PUZZLE = 25;
+export const PARTY_DAILY_STREAK = Object.freeze({ step: 5, max: 50 });
+const PAY_KEYS = Object.freeze(['chat', 'voice', 'levelup', 'weekly']);
+export const PAY_DEFAULTS = Object.freeze({ chat: 3, voice: 1, levelup: 10, weekly: 500 });
+const PAY_BOUNDS = Object.freeze({ chat: 50, voice: 20, levelup: 200, weekly: 10000 });
+const PAY_LABELS = Object.freeze({ chat: 'chatting, once a minute at most', voice: 'a minute in voice with others', levelup: 'each new level, times the level', weekly: 'the weekly bonus' });
+export const CHAT_PAY_COOLDOWN_MS = 60_000;
+export const WEEK_MS = 7 * 24 * 3600_000;
+export const CLAN_PAY_BONUS = 0.1;
+const LEVEL_PAY_STEPS = 50;
 const STREAK_DAYS = Object.freeze([7, 30, 100]);
 export const STREAK_DEFAULTS = Object.freeze({ 7: 50, 30: 100, 100: 200 });
 const STREAK_PCT_MAX = 500;
@@ -50,7 +60,7 @@ const EVENT_MULT_MAX = 5;
 const EVENT_HOURS_MAX = 168;
 const EVENT_DAYS_MAX = 365;
 const EVENT_KINDS = Object.freeze({ xp: { name: 'XP', icon: '⚡' }, shards: { name: CURRENCY.name, icon: CURRENCY.emoji } });
-const BOOSTED_REASON = /^(?:Trivia win|Daily quest\b.*)$/i;
+const BOOSTED_REASON = /^(?:Trivia win|Daily quest\b.*|Chatting|Voice time|Weekly bonus)$/i;
 const OWNER_ONLY_EARN = `Only the bot owner can change how many ${CURRENCY.name} people earn.`;
 const OWNER_ONLY_MOVE = `Only the bot owner can hand out or take ${CURRENCY.name}.`;
 
@@ -99,6 +109,8 @@ const isAuto = (r) => !!r?.auto && r.auto !== 'none';
 
 const busy = new Set();
 const warned = new Set();
+const payTrackers = new WeakMap();
+const PAY_TRACK_MAX = 20000;
 let eng = null;
 
 const clock = (engine) => engine.scheduler?.now?.() ?? Date.now();
@@ -163,6 +175,29 @@ export function partyRates(cfg = {}) {
   const out = {};
   for (const k of PARTY_KEYS) out[k] = clampInt(raw[k], 0, PARTY_BOUNDS[k], PARTY_DEFAULTS[k]);
   return out;
+}
+
+export function activityPay(cfg = {}) {
+  const raw = cfg && cfg.activityPay && typeof cfg.activityPay === 'object' ? cfg.activityPay : {};
+  const out = {};
+  for (const k of PAY_KEYS) out[k] = clampInt(raw[k], 0, PAY_BOUNDS[k], PAY_DEFAULTS[k]);
+  return out;
+}
+
+export function levelUpPay(rate, from, to) {
+  const r = Math.max(0, Math.floor(Number(rate) || 0));
+  const hi = Math.floor(Number(to) || 0);
+  const lo = Math.max(Math.floor(Number(from) || 0), hi - LEVEL_PAY_STEPS);
+  let sum = 0;
+  for (let l = lo + 1; l <= hi; l++) sum += r * l;
+  return Math.min(MAX_AMOUNT, sum);
+}
+
+export function clanPay(n, inClan, boost = 0) {
+  const base = Math.max(0, Math.floor(Number(n) || 0));
+  if (!base || !inClan) return base;
+  const extra = CLAN_PAY_BONUS + Math.max(0, Math.min(0.5, Number(boost) || 0));
+  return Math.max(base + 1, Math.round(base * (1 + extra)));
 }
 
 export function streakTable(cfg = {}) {
@@ -241,6 +276,8 @@ function foldUser(into, from, sid) {
   }
   if ((Number(from.lastWork) || 0) > (into.lastWork || 0)) into.lastWork = Number(from.lastWork) || 0;
   if ((Number(from.lastBeg) || 0) > (into.lastBeg || 0)) into.lastBeg = Number(from.lastBeg) || 0;
+  if ((Number(from.lastWeekly) || 0) > (into.lastWeekly || 0)) into.lastWeekly = Number(from.lastWeekly) || 0;
+  if (Number.isInteger(from.paidLevel) && from.paidLevel > (Number.isInteger(into.paidLevel) ? into.paidLevel : -1)) into.paidLevel = from.paidLevel;
   into.seen = Math.max(into.seen || 0, Number(from.seen) || 0);
   into.inv = into.inv && typeof into.inv === 'object' ? into.inv : {};
   for (const [key, slot] of Object.entries(from.inv || {})) {
@@ -349,6 +386,10 @@ function needAmount(amount) {
 
 export function earnSource(reason) {
   const r = String(reason || '');
+  if (r === 'Chatting') return 'chat';
+  if (r === 'Voice time') return 'voice';
+  if (r === 'Weekly bonus') return 'weekly';
+  if (/^Level \d+ reward$/.test(r)) return 'levelup';
   if (CASINO_WIN.test(r)) return 'casino';
   if (QUEST_REASON.test(r)) return 'quest';
   if (/^YapOS Party\b/i.test(r)) return 'party';
@@ -653,13 +694,17 @@ async function walletView(ctx, targetId, { self = true } = {}) {
     cfg.workEnabled !== false ? { name: 'Work', value: workLeft > 0 ? `in ${waitText(workLeft)}` : 'Ready!', inline: true } : null,
     { name: 'Inventory', value: clip(inv.map((x) => `${fmt(x.n)}× ${plainName(x.name)}`).join(', '), 1024) || 'Empty', inline: false },
   ];
-  const body = self ? `One wallet for every server. Earn ${cur.name} with **/daily** and **/balance work**, spend them in **/shop**.` : null;
+  const body = self ? `One wallet for every server. Earn ${cur.name} with **/daily**, **/daily weekly**, **/balance work**, chatting, voice, level ups and YapOS Party, then spend them in **/shop**. See every way with **/balance earn**.` : null;
   const view = { embeds: [card({ title: `${cur.emoji} ${name}'s wallet`, body, fields, color: 'economy' })], components: [] };
   if (self) {
+    const weeklyOn = activityPay(cfg).weekly > 0;
+    const weeklyLeft = u.lastWeekly ? u.lastWeekly + WEEK_MS - t : 0;
+    if (weeklyOn) fields.splice(4, 0, { name: 'Weekly', value: weeklyLeft > 0 ? `in ${spanText(weeklyLeft)}` : 'Ready!', inline: true });
     const btns = dailyOn ? [button('Daily', cid('daily'), dailyLeft > 0 ? 'secondary' : 'success', '📅')] : [];
+    if (weeklyOn) btns.push(button('Weekly', cid('weekly'), weeklyLeft > 0 ? 'secondary' : 'success', '🗓️'));
     if (cfg.workEnabled !== false) btns.push(button('Work', cid('work'), workLeft > 0 ? 'secondary' : 'success', '💼'));
     btns.push(button('Top 10', cid('top'), 'secondary', '🏆'), button('History', cid('history'), 'secondary', '📜'));
-    view.components = [row(btns)];
+    view.components = [row(btns), row([button('Ways to earn', cid('earn'), 'primary', '💡')])];
   }
   return view;
 }
@@ -720,8 +765,137 @@ async function claimDaily(ctx) {
   if (!res.reward && upcomingPct && upcoming - res.streak <= 3) extra.push(`Streak reward in ${upcoming - res.streak} day${upcoming - res.streak === 1 ? '' : 's'} (day ${upcoming}).`);
   const banner = eventBanner(engine, ctx.serverId, t);
   if (banner) lines.push(banner);
+  extra.push('More ways to earn: **/balance earn**.');
   const body = `${lines.join('\n')}${extra.length ? `\n-# ${extra.join(' ')}` : ''}`;
   return ctx.reply({ embeds: [card({ title: `${cur.emoji} +${fmt(res.got)} ${plural(res.got, cur.name)} (${streakText})`, body, color: 'economy', footer: false })] });
+}
+
+async function claimWeekly(ctx) {
+  const { engine } = ctx;
+  const cfg = cfgOf(engine);
+  const cur = currencyOf();
+  const base = activityPay(cfg).weekly;
+  if (base <= 0) return ctx.info('Weekly bonus is off', 'The weekly bonus is switched off right now. **/daily** still works.');
+  const t = clock(engine);
+  const mult = eventMultiplier(engine, ctx.serverId, 'shards', t);
+  const res = mutateUsers(engine, (doc) => {
+    const u = ensureUser(doc, ctx.userId, cfg, t);
+    if (u.lastWeekly && t - u.lastWeekly < WEEK_MS) return { wait: u.lastWeekly + WEEK_MS - t };
+    u.lastWeekly = t;
+    const got = change(u, boosted(base, mult), 'Weekly bonus', t);
+    return { got, bal: u.bal };
+  });
+  if (res.wait) return ctx.warn('Already claimed this week', `You get one weekly bonus for the whole bot. The next one is ready in **${spanText(res.wait)}**.`);
+  earned(engine, ctx.userId, res.got, 'weekly', 'Weekly bonus', true);
+  const boost = mult > 1 ? `\n-# Boosted ×${mult} by this server's event.` : '';
+  return ctx.reply({ embeds: [card({ title: `🗓️ +${fmt(res.got)} ${plural(res.got, cur.name)} weekly bonus`, body: `Balance **${fmt(res.bal)}** · next weekly bonus in ${spanText(WEEK_MS)}${boost}`, color: 'economy', footer: false })] });
+}
+
+function earnLines(engine) {
+  const cfg = cfgOf(engine);
+  const cur = currencyOf();
+  const pay = activityPay(cfg);
+  const party = partyRates(cfg);
+  const daily = clampSetting(cfg.dailyAmount, 100);
+  const lines = [];
+  if (daily > 0) lines.push(`📅 **/daily**: ${price(cur, daily)} a day, up to +${STREAK_MAX}% with a streak, plus streak rewards on day 7, 30 and 100.`);
+  if (pay.weekly > 0) lines.push(`🗓️ **/daily weekly**: ${price(cur, pay.weekly)} once every 7 days.`);
+  if (cfg.workEnabled !== false) lines.push(`💼 **/balance work**: ${fmt(clampSetting(cfg.workMin, 20))} to ${fmt(clampSetting(cfg.workMax, 80))} ${cur.emoji} once an hour.`);
+  if (cfg.begEnabled !== false) lines.push(`🥺 **/beg**: up to ${fmt(BEG_MAX)} ${cur.emoji} every 5 minutes, if someone helps.`);
+  if (pay.chat > 0) lines.push(`💬 **Chatting**: ${price(cur, pay.chat)} when your chat earns XP, once a minute at most.`);
+  if (pay.voice > 0) lines.push(`🎙️ **Voice**: ${price(cur, pay.voice)} for every minute in voice with someone else.`);
+  if (pay.levelup > 0) lines.push(`📈 **Level ups**: ${fmt(pay.levelup)} × your new level, once per level (level 10 pays ${fmt(pay.levelup * 10)} ${cur.emoji}).`);
+  lines.push(`🛡️ **Clans**: clan members get +${Math.round(CLAN_PAY_BONUS * 100)}% on chat and voice ${cur.name}, more with a clan boost.`);
+  lines.push(`🎉 **YapOS Party**: ${partyText(party)}. The daily puzzle pays ${price(cur, PARTY_DAILY_PUZZLE)} per puzzle and up to ${price(cur, PARTY_DAILY_STREAK.max)} more for a streak.`);
+  lines.push('📜 **/quests**: three daily quests, each with its own reward. **/achievements** pay a one-time reward too.');
+  lines.push('🎲 **Games and trivia**: win bets in /games and trivia prizes.');
+  return lines;
+}
+
+function earnView(engine) {
+  const body = `${earnLines(engine).join('\n')}\n-# Chat, voice and level-up pay is silent, so it never adds messages to the channel. A server event can boost /daily, weekly, work, chat, voice and quests.`;
+  return {
+    embeds: [card({ title: `💡 Ways to earn ${CURRENCY.name}`, body: clip(body, 4000), color: 'economy' })],
+    components: [row([button('Daily', cid('daily'), 'success', '📅'), button('Weekly', cid('weekly'), 'secondary', '🗓️'), button('Wallet', cid('wallet'), 'secondary', '💰')])],
+  };
+}
+
+function clanOf(engine, uid) {
+  try {
+    const c = engine.clans?.getClanOf?.(uid);
+    const b = Number(engine.clans?.xpBoost?.(uid)) || 0;
+    return { in: !!c, boost: b };
+  } catch (e) {
+    engine.log.debug('[economy] clan lookup failed', e?.message);
+    return { in: false, boost: 0 };
+  }
+}
+
+function trackersOf(engine) {
+  let t = payTrackers.get(engine);
+  if (!t) payTrackers.set(engine, (t = { chat: new Map(), voice: new Map() }));
+  return t;
+}
+
+function trackSet(map, key, value) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > PAY_TRACK_MAX) map.delete(map.keys().next().value);
+}
+
+function payLevel(engine, uid, level, rate) {
+  const cfg = cfgOf(engine);
+  const t = clock(engine);
+  const reason = `Level ${level} reward`;
+  const real = mutateUsers(engine, (doc) => {
+    const u = ensureUser(doc, uid, cfg, t);
+    const paid = Number.isInteger(u.paidLevel) ? u.paidLevel : level - 1;
+    if (level <= paid) return 0;
+    u.paidLevel = level;
+    const amount = levelUpPay(rate, paid, level);
+    return amount > 0 ? change(u, amount, reason, t) : 0;
+  });
+  if (real > 0) earned(engine, uid, real, 'levelup', reason, true);
+  return real;
+}
+
+async function onXp(ctx, ev) {
+  const { engine } = ctx;
+  const uid = typeof ev?.user === 'string' ? ev.user : null;
+  if (!uid || uid === botId(engine)) return;
+  const pay = activityPay(cfgOf(engine));
+  const sid = typeof ev.serverId === 'string' && ev.serverId ? ev.serverId : null;
+  const on = !!sid && engine.settings.isEnabled(sid, ID);
+  const t = clock(engine);
+  const { chat: chatPaid, voice: voiceCarry } = trackersOf(engine);
+  if (on && pay.chat > 0 && Number(ev.messages) > 0) {
+    const last = chatPaid.get(uid);
+    if (last === undefined || t - last >= CHAT_PAY_COOLDOWN_MS) {
+      trackSet(chatPaid, uid, t);
+      const clan = clanOf(engine, uid);
+      serviceAdd(engine, sid, uid, clanPay(pay.chat, clan.in, clan.boost), 'Chatting');
+    }
+  }
+  if (on && pay.voice > 0 && Number(ev.voiceSeconds) > 0) {
+    const secs = (voiceCarry.get(uid) || 0) + Math.floor(Number(ev.voiceSeconds));
+    const mins = Math.floor(secs / 60);
+    if (secs % 60) trackSet(voiceCarry, uid, secs % 60);
+    else voiceCarry.delete(uid);
+    if (mins > 0) {
+      const clan = clanOf(engine, uid);
+      serviceAdd(engine, sid, uid, Math.min(MAX_AMOUNT, clanPay(mins * pay.voice, clan.in, clan.boost)), 'Voice time');
+    }
+  }
+  const level = Math.floor(Number(ev.level) || 0);
+  if (pay.levelup > 0 && ev.leveledUp === true && level > 0) payLevel(engine, uid, level, pay.levelup);
+}
+
+async function runDaily(ctx) {
+  const tokens = ctx.argv?.length ? ctx.argv : tokenize(ctx.args);
+  const sub = String(tokens[0] || '').toLowerCase();
+  if (['weekly', 'week'].includes(sub)) return claimWeekly(ctx);
+  if (['earn', 'ways', 'how'].includes(sub)) return ctx.reply(earnView(ctx.engine));
+  return claimDaily(ctx);
 }
 
 async function doBeg(ctx) {
@@ -911,6 +1085,8 @@ async function runBalance(ctx, tokensIn) {
   if (['season', 'seasons', 'month', 'monthly'].includes(sub)) return ctx.reply(await seasonView(ctx));
   if (['history', 'log', 'hist'].includes(sub)) return showHistory(ctx, rest.join(' '));
   if (sub === 'daily') return claimDaily(ctx);
+  if (['weekly', 'week'].includes(sub)) return claimWeekly(ctx);
+  if (['earn', 'earning', 'ways', 'income', 'how'].includes(sub)) return ctx.reply(earnView(ctx.engine));
   return showWallet(ctx, tokens.join(' '));
 }
 
@@ -1225,11 +1401,12 @@ async function settingsView(ctx) {
     { name: 'Shop', value: `${items.length}/${MAX_ITEMS} items here`, inline: true },
     { name: `People with ${cur.name}`, value: `${fmt(list.length)} · ${price(cur, total)} in total`, inline: true },
     { name: 'YapOS Party', value: partyText(partyRates(cfg)), inline: false },
+    { name: 'Activity pay', value: payText(activityPay(cfg)), inline: false },
     { name: 'Streak rewards', value: streakText(streakTable(cfg)), inline: false },
     { name: 'Server events', value: limitsText(eventLimits(cfg)), inline: false },
   ];
   const body = `Wallets are shared across every server. Earn rates are set once for the whole bot, so only the bot owner can change them. Your shop stays yours.
-Typed settings: \`/economy give @sam 100\` · \`/economy take @sam 50\` · \`/economy reset @sam\` · \`/economy daily 150\` · \`/economy work 20 80\` · \`/economy allow @sam\` · \`/economy party 5 15 25 5 150\` · \`/economy streak 50 100 200\` · \`/economy events 2 48 30\``;
+Typed settings: \`/economy give @sam 100\` · \`/economy take @sam 50\` · \`/economy reset @sam\` · \`/economy daily 150\` · \`/economy work 20 80\` · \`/economy allow @sam\` · \`/economy party 10 25 100 15\` · \`/economy earn 3 1 10 500\` · \`/economy streak 50 100 200\` · \`/economy events 2 48 30\``;
   const rate = [
     button('Daily amount', cid('dailyform'), 'secondary', '📅'),
     button(work ? 'Work: on' : 'Work: off', cid('twork'), work ? 'success' : 'secondary', '💼'),
@@ -1243,6 +1420,7 @@ Typed settings: \`/economy give @sam 100\` · \`/economy take @sam 50\` · \`/ec
   ];
   const more = [
     button('Party pay', cid('partyform'), 'secondary', '🎉'),
+    button('Activity pay', cid('payform'), 'secondary', '💬'),
     button('Streak rewards', cid('streakform'), 'secondary', '🔥'),
     button('Event limits', cid('evlimitform'), 'secondary', '🎪'),
   ];
@@ -1396,12 +1574,17 @@ async function changeGiver(ctx, query, on) {
   return ctx.ok('Taken back', `**${name}** can't hand out ${CURRENCY.name} anymore.`);
 }
 
-const PARTY_HELP = `Try \`/economy party 5 15 25 5 150\` (a game, a win, a tournament win, a right prediction, the daily cap) or \`/economy party win 20\`.`;
+const PARTY_HELP = `Try \`/economy party 10 25 100 15\` (a game, a win, a tournament win, a right prediction) or \`/economy party win 30\`. There is no daily limit.`;
+const PAY_HELP = `Try \`/economy earn 3 1 10 500\` (chatting, a voice minute, per level, the weekly bonus) or \`/economy earn chat 5\`. 0 turns one off.`;
 const STREAK_HELP = 'Try `/economy streak 50 100 200` (bonus % at day 7, 30 and 100) or `/economy streak 30 150`.';
 const LIMITS_HELP = 'Try `/economy events 2 48 30` (highest boost, longest hours, days between events). A highest boost of 1 turns server events off.';
 
 function partyText(r) {
-  return `${fmt(r.play)} a game · ${fmt(r.win)} a win · ${fmt(r.tournament)} a tournament win · ${fmt(r.prediction)} a right pick · up to ${fmt(r.cap)} a day`;
+  return `${fmt(r.play)} a game · ${fmt(r.win)} a win · ${fmt(r.tournament)} a tournament win · ${fmt(r.prediction)} a right pick · no daily limit`;
+}
+
+function payText(r) {
+  return `${fmt(r.chat)} for chatting · ${fmt(r.voice)} a voice minute · ${fmt(r.levelup)} × each new level · ${fmt(r.weekly)} weekly`;
 }
 
 function streakText(table) {
@@ -1428,6 +1611,7 @@ async function saveParty(ctx, tokens) {
   const next = { ...now };
   const list = tokens.map((x) => String(x ?? '').trim()).filter(Boolean);
   if (!list.length) return ctx.info(`${CURRENCY.emoji} YapOS Party ${cur.name}`, `${partyText(now)}\n${PARTY_HELP}`);
+  if (list[0].toLowerCase() === 'cap') return ctx.info('No daily cap', `YapOS Party has no daily limit anymore. Every game with 2 or more signed-in players pays, and fast repeat games pay nothing extra.\n${PARTY_HELP}`);
   const named = PARTY_KEYS.includes(list[0].toLowerCase());
   if (named) {
     for (let i = 0; i < list.length; i += 2) {
@@ -1447,6 +1631,31 @@ async function saveParty(ctx, tokens) {
   patchCfg(ctx, { partyRates: next });
   pushRates(ctx.engine);
   return ctx.ok('Party rates saved', `YapOS Party now pays ${partyText(next)} ${cur.emoji}, for games with 2 or more players.`);
+}
+
+async function saveActivityPay(ctx, tokens) {
+  if (!(await needGiver(ctx, OWNER_ONLY_EARN))) return undefined;
+  const now = activityPay(cfgOf(ctx.engine));
+  const next = { ...now };
+  const list = tokens.map((x) => String(x ?? '').trim()).filter(Boolean);
+  if (!list.length) return ctx.info(`${CURRENCY.emoji} Activity pay`, `${payText(now)}\n${PAY_HELP}`);
+  if (PAY_KEYS.includes(list[0].toLowerCase())) {
+    for (let i = 0; i < list.length; i += 2) {
+      const key = list[i].toLowerCase();
+      const n = numberIn(list[i + 1], { min: 0, max: PAY_BOUNDS[key] ?? 0 });
+      if (!PAY_KEYS.includes(key) || n === null) return ctx.warn("That didn't work", `${PAY_BOUNDS[key] !== undefined ? `**${key}** can be 0 to ${fmt(PAY_BOUNDS[key])}. ` : ''}${PAY_HELP}`);
+      next[key] = n;
+    }
+  } else {
+    for (let i = 0; i < Math.min(list.length, PAY_KEYS.length); i++) {
+      const key = PAY_KEYS[i];
+      const n = numberIn(list[i], { min: 0, max: PAY_BOUNDS[key] });
+      if (n === null) return ctx.warn("That didn't work", `**${key}** can be 0 to ${fmt(PAY_BOUNDS[key])}. ${PAY_HELP}`);
+      next[key] = n;
+    }
+  }
+  patchCfg(ctx, { activityPay: next });
+  return ctx.ok('Activity pay saved', `${payText(next)} ${currencyOf().emoji}.`);
 }
 
 async function saveStreak(ctx, tokens) {
@@ -1594,7 +1803,7 @@ async function runEvent(ctx) {
   return ctx.warn("I didn't get that", `I don't know **${plainName(clip(sub, 30))}**.${guess.length ? ` Did you mean ${guess.map((g) => `**${g}**`).join(', ')}?` : ''}\nTry \`/event\`, \`/event xp 48h\`, \`/event shards 24h\` or \`/event stop\`.`);
 }
 
-const ECON_SUBS = ['give', 'take', 'reset', 'daily', 'work', 'start', 'allow', 'deny', 'givers', 'settings', 'party', 'streak', 'events'];
+const ECON_SUBS = ['give', 'take', 'reset', 'daily', 'work', 'start', 'allow', 'deny', 'givers', 'settings', 'party', 'earn', 'streak', 'events'];
 
 const globalField = (field) => ({
   ...field,
@@ -1662,6 +1871,8 @@ async function runEconomy(ctx) {
   }
   if (sub === 'start' || sub === 'starting') return saveStart(ctx, rest[0]);
   if (sub === 'party') return saveParty(ctx, rest);
+  if (['earn', 'pay', 'activity'].includes(sub)) return saveActivityPay(ctx, rest);
+  if (['chat', 'voice', 'levelup', 'weekly'].includes(sub)) return saveActivityPay(ctx, tokens);
   if (sub === 'streak' || sub === 'streaks') return saveStreak(ctx, rest);
   if (sub === 'events' || sub === 'event') return saveLimits(ctx, rest);
   const guess = didYouMean(sub, ECON_SUBS);
@@ -1696,12 +1907,13 @@ export const { setup, teardown, check } = defineApp({
     begEnabled: true,
     startBalance: 0,
     partyRates: { ...PARTY_DEFAULTS },
+    activityPay: { ...PAY_DEFAULTS },
     streakRewards: { ...STREAK_DEFAULTS },
     eventLimits: { ...EVENT_DEFAULTS },
   },
 
   commands: {
-    daily: { description: 'Claim your daily Shards. Come back every day for a streak bonus: /daily', run: claimDaily },
+    daily: { description: 'Claim your daily Shards: /daily, /daily weekly (weekly bonus), /daily earn (all ways to earn)', run: runDaily },
     beg: { description: 'Beg for a few Shards. Sometimes people help, sometimes not: /beg', run: doBeg },
     balance: { description: 'Your wallet: /balance, /balance @sam, /balance pay @sam 50, work, top, history', run: (ctx) => runBalance(ctx) },
     shop: { description: 'The server shop: /shop, /shop buy Name. Admins: /shop add role @Supporter 500', run: runShop },
@@ -1711,6 +1923,8 @@ export const { setup, teardown, check } = defineApp({
 
   components: {
     daily: { run: claimDaily },
+    weekly: { run: claimWeekly },
+    earn: { run: async (ctx) => ctx.ephemeral(earnView(ctx.engine)) },
     work: { run: doWork },
     beg: { run: doBeg },
     top: { run: async (ctx) => ctx.reply(await topView(ctx)) },
@@ -1776,6 +1990,13 @@ export const { setup, teardown, check } = defineApp({
       )) });
     }),
     partysave: rateOwner((ctx) => saveParty(ctx, PARTY_KEYS.flatMap((k) => [k, String(ctx.values?.[k] ?? '').trim() || 'x']))),
+    payform: rateOwner((ctx) => {
+      const r = activityPay(cfgOf(ctx.engine));
+      return ctx.form({ title: 'Activity pay', action: 'paysave', fields: PAY_KEYS.map((k) => (
+        { id: k, label: clip(`${CURRENCY.name} for ${PAY_LABELS[k]} (0 to ${fmt(PAY_BOUNDS[k])})`, 45), style: 'short', value: String(r[k]), max: 6 }
+      )) });
+    }),
+    paysave: rateOwner((ctx) => saveActivityPay(ctx, PAY_KEYS.flatMap((k) => [k, String(ctx.values?.[k] ?? '').trim() || 'x']))),
     streakform: rateOwner((ctx) => {
       const tb = streakTable(cfgOf(ctx.engine));
       return ctx.form({ title: 'Streak rewards', action: 'streaksave', fields: STREAK_DAYS.map((d) => (
@@ -1804,7 +2025,8 @@ export const { setup, teardown, check } = defineApp({
   },
 
   yap: [
-    { words: ['daily'], run: claimDaily },
+    { words: ['daily'], run: runDaily },
+    { words: ['earn', 'income'], run: async (ctx) => ctx.reply(earnView(ctx.engine)) },
     { words: ['event', 'events', 'boost'], run: (ctx) => runEvent(ctx) },
     { words: ['beg', 'plead'], run: doBeg },
     { words: ['balance', 'bal', 'wallet', 'coins', 'shards', 'money'], run: (ctx) => runBalance(ctx, ctx.argv) },
@@ -1826,6 +2048,10 @@ export const { setup, teardown, check } = defineApp({
 
   dashboard: DASHBOARD,
 
+  events: {
+    'xp:gained': onXp,
+  },
+
   services: (engine) => ({
     ranked: (sid) => ranked(engine),
     currency: (sid) => currencyOf(),
@@ -1844,6 +2070,8 @@ export const { setup, teardown, check } = defineApp({
     seasonBoard: () => seasonBoard(engine, 'shards'),
     seasonScore: (uid) => seasonScore(engine, 'shards', uid),
     partyRates: () => partyRates(cfgOf(engine)),
+    activityPay: () => activityPay(cfgOf(engine)),
+    earnLines: () => earnLines(engine),
     eventMultiplier: (sid, kind) => eventMultiplier(engine, sid, kind),
     activeEvent: (sid) => {
       const ev = activeEvent(engine, sid);
@@ -1874,7 +2102,9 @@ export const { setup, teardown, check } = defineApp({
     `Only the bot owner hands out ${CURRENCY.name} or changes earn rates: /economy give @sam 100 · /economy daily 150 · /economy allow @sam lets someone else help.`,
     'Streak rewards: reaching a 7, 30 or 100-day streak (and every 100 after) pays a one-time bonus on top of that day\'s /daily (by default +50%, +100% and +200% of the daily amount).',
     `Server events: admins start a Double XP or Double ${CURRENCY.name} event with /event xp 48h or /event shards 24h. It only counts in that server, ends on its own and, by default, can run once every 30 days (the bot owner sets the limits).`,
-    `YapOS Party pays ${CURRENCY.name} too: a few for every game with 2 or more players, more for wins, tournaments and right predictions, up to a daily cap.`,
+    `YapOS Party pays ${CURRENCY.name} with no daily limit: ${PARTY_DEFAULTS.play} for every game with 2 or more signed-in players, ${PARTY_DEFAULTS.win} more for a win, ${PARTY_DEFAULTS.tournament} for a tournament win, ${PARTY_DEFAULTS.prediction} for a right prediction and ${PARTY_DAILY_PUZZLE} for each daily puzzle, plus a puzzle streak bonus (by default). Games played back to back faster than 30 seconds pay nothing extra, and banned players earn nothing.`,
+    `More ways to earn: chatting pays ${PAY_DEFAULTS.chat} at most once a minute, voice with friends ${PAY_DEFAULTS.voice} a minute, each new level ${PAY_DEFAULTS.levelup} × the level, and /daily weekly ${PAY_DEFAULTS.weekly} every 7 days (by default). Clan members get +${Math.round(CLAN_PAY_BONUS * 100)}% on chat and voice pay. See it all with /balance earn or /daily earn.`,
+    'Bot owner: /economy earn 3 1 10 500 sets chat, voice, level-up and weekly pay, /economy earn chat 5 changes one, and /economy party 10 25 100 15 sets Party pay.',
   ],
 
   init: (engine) => {
@@ -1882,7 +2112,7 @@ export const { setup, teardown, check } = defineApp({
     migrate(engine);
   },
 
-  dispose: () => { busy.clear(); warned.clear(); eng = null; },
+  dispose: (engine) => { busy.clear(); warned.clear(); if (engine) payTrackers.delete(engine); eng = null; },
 });
 
 async function runShopTokens(ctx, tokens) {

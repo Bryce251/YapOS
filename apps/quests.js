@@ -15,7 +15,7 @@ const PRUNE_EVERY_MS = 6 * 3600_000;
 const PRUNE_BATCH = 5000;
 const COLOR = 0x8e7cff;
 const SAFE_ID = /^[\w-]{1,64}$/;
-const SHARD_SOURCES = new Set(['daily', 'work', 'beg', 'game', 'party']);
+const SHARD_SOURCES = new Set(['daily', 'work', 'beg', 'game', 'party', 'chat', 'voice', 'weekly', 'levelup']);
 
 export const QUESTS = Object.freeze([
   { id: 'party2', group: 'party', name: 'Play 2 YapOS Party games', goal: 2, reward: 50, needs: 'party' },
@@ -209,7 +209,7 @@ export function questsView(engine, uid, t = nowOf(engine)) {
   const wait = formatDuration(nextReset(t) - t);
   let body;
   if (!today.quests.length) body = 'No quests today. Check back tomorrow!';
-  else body = [...lines, '', left ? `-# Finish a quest, then press **Claim** to collect your ${CURRENCY.name}.` : '-# All done for today. Nice work! 🎉'].join('\n');
+  else body = [...lines, '', left ? `-# Finish a quest, then press **Claim** to collect your ${CURRENCY.name}.` : '-# All done for today. Nice work! 🎉', `-# More ways to earn ${CURRENCY.name}: chatting, voice, level ups, **/daily weekly** and YapOS Party with no daily limit. See them all with **/balance earn**.`].join('\n');
   const buttons = [];
   if (readyCount) buttons.push(button(`Claim ${fmt(ready)} ${CURRENCY.name}`, cid('claim', uid), 'success', CURRENCY.emoji));
   buttons.push(button('Refresh', cid('view', uid), 'secondary', '🔄'));

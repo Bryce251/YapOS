@@ -1,10 +1,12 @@
 import { MINUTE, DAY, HttpError, json, fail, readJson, isPlainObject, clientIp, randomToken, publicOrigin } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
-import { cleanText, cleanUsername } from './profiles.js';
-import { safeName, applySettings } from './public-profiles.js';
+import { cleanText } from './profiles.js';
+import { safeName } from './public-profiles.js';
 import { getActivityUser, bearer } from './activity-auth.js';
-import { hiddenNameMap, flagsFor, maskEntry } from './hidden-names.js';
 import { findBlocked } from '../web/activity/js/filter.js';
+import { people } from './clan-people.js';
+import { cleanExtras, extrasStatements, extrasRemoveStatements, settingsStatement, feedStatements, clanManageCleanupStatements, browseClans } from './clan-manage.js';
+import { noteStatements } from './inbox.js';
 
 export const CLAN_TAG_RE = /^[A-Za-z0-9]{3,4}$/;
 export const CLAN_ID_RE = /^c\d{1,9}$/;
@@ -26,12 +28,10 @@ const RESULTS_LIMIT = 256 * 1024;
 const NAME_MAX = 32;
 const BANNER_MAX = 60;
 const MESSAGE_MAX = 300;
-const PERSON_NAME_MAX = 64;
 const USER_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const COLOUR_RE = /^#[0-9a-f]{6}$/i;
 const REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const MEMBER_ROWS = 30;
-const NAME_CHUNK = 90;
 const CODES = new Set(['joined', 'already', 'invite_only', 'in_clan', 'gone', 'bot', 'failed']);
 const MISSING = "We couldn't find a clan with that tag.";
 const GAVE_UP = "YapOS didn't answer for a day, so this request was dropped. Try again.";
@@ -58,7 +58,7 @@ function cleanEntry(raw) {
   const list = Array.isArray(raw.members) ? raw.members : [];
   const members = [...new Set(list.filter((x) => typeof x === 'string' && USER_RE.test(x)).map(lower))];
   const count = Number.isFinite(raw.count) ? whole(raw.count, members.length, 1e9) : members.length;
-  return { id, tag, name, banner, colour, join, leader, created: whole(raw.created, 0, 1e15), members, count, append: raw.append === true };
+  return { id, tag, name, banner, colour, join, leader, created: whole(raw.created, 0, 1e15), members, count, append: raw.append === true, ...cleanExtras(raw) };
 }
 
 function memberStatements(db, clan, t) {
@@ -77,6 +77,7 @@ function removeStatements(db, id) {
   return [
     db.prepare('DELETE FROM clan_directory WHERE id = ?').bind(id),
     db.prepare('DELETE FROM clan_members WHERE clan_id = ?').bind(id),
+    ...extrasRemoveStatements(db, id),
   ];
 }
 
@@ -107,8 +108,12 @@ export async function postClanDirectory(request, env, t) {
       db.prepare('INSERT INTO clan_directory (id, tag, tag_key, name, colour, banner, members, join_mode, leader_id, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET tag = excluded.tag, tag_key = excluded.tag_key, name = excluded.name, colour = excluded.colour, banner = excluded.banner, members = excluded.members, join_mode = excluded.join_mode, leader_id = excluded.leader_id, created = excluded.created, updated = excluded.updated')
         .bind(c.id, c.tag, lower(c.tag), c.name, c.colour, c.banner, c.count, c.join, c.leader, c.created, t),
       ...memberStatements(db, c, t),
+      ...extrasStatements(db, c, t),
     );
   }
+  const settings = settingsStatement(db, body.settings, t);
+  if (settings) stmts.push(settings);
+  const feed = await feedStatements(db, body, t);
   for (const id of removed) stmts.push(...removeStatements(db, id));
   let dropped = removed.length;
   if (body.full === true && Array.isArray(body.known)) {
@@ -122,8 +127,9 @@ export async function postClanDirectory(request, env, t) {
       dropped += 1;
     }
   }
+  stmts.push(...feed.stmts);
   if (stmts.length) await db.batch(stmts);
-  return json({ ok: true, stored: clans.length, removed: dropped, ignored });
+  return json({ ok: true, stored: clans.length, removed: dropped, ignored, notes: feed.notes });
 }
 
 export async function clanJoinPoll(db, t) {
@@ -149,7 +155,7 @@ export async function postClanJoinResults(request, env, t) {
       ignored.push(isPlainObject(r) && typeof r.id === 'string' ? r.id.slice(0, 64) : null);
       continue;
     }
-    const row = await db.prepare('SELECT id, user_id, clan_id, status FROM clan_joins WHERE id = ?').bind(r.id).first();
+    const row = await db.prepare('SELECT id, user_id, clan_id, tag, status FROM clan_joins WHERE id = ?').bind(r.id).first();
     if (!row || (row.status !== 'queued' && row.status !== 'sent')) {
       ignored.push(r.id);
       continue;
@@ -168,6 +174,7 @@ export async function postClanJoinResults(request, env, t) {
     } else if (code === 'gone') {
       stmts.push(...removeStatements(db, row.clan_id));
     }
+    if (!ok) stmts.push(...noteStatements(db, [{ id: `cj-${row.id}`, user: row.user_id, kind: 'clan_refused', title: `You couldn't join [${row.tag}]`, body: message, data: { clan: row.clan_id, tag: row.tag } }], t));
     await db.batch(stmts);
     stored += 1;
   }
@@ -177,6 +184,7 @@ export async function postClanJoinResults(request, env, t) {
 export function clanCleanupStatements(db, t) {
   return [
     db.prepare("DELETE FROM clan_joins WHERE created < ? AND status NOT IN ('queued', 'sent')").bind(t - CLAN_JOIN_KEEP),
+    ...clanManageCleanupStatements(db, t),
   ];
 }
 
@@ -184,33 +192,6 @@ async function findClan(db, raw) {
   if (typeof raw !== 'string' || !CLAN_TAG_RE.test(raw)) return { bad: true };
   const row = await db.prepare('SELECT id, tag, name, colour, banner, members, join_mode, leader_id, created, updated FROM clan_directory WHERE tag_key = ? ORDER BY updated DESC LIMIT 1').bind(lower(raw)).first();
   return row ? { row } : { missing: true };
-}
-
-async function people(db, ids, t) {
-  const list = [...new Set(ids.filter(Boolean).map(lower))];
-  const out = new Map();
-  for (let i = 0; i < list.length; i += NAME_CHUNK) {
-    const part = list.slice(i, i + NAME_CHUNK);
-    const marks = part.map(() => '?').join(', ');
-    const res = await db
-      .prepare(`SELECT p.user_id, p.name, p.username, p.level, p.hidden, p.shards, p.updated, s.hidden AS s_hidden, s.show_shards AS s_show_shards, s.claimed AS s_claimed, s.updated AS s_updated FROM public_profiles p LEFT JOIN profile_settings s ON s.user_id = p.user_id WHERE p.user_id IN (${marks})`)
-      .bind(...part)
-      .all();
-    for (const r of (res && res.results) || []) {
-      const settings = r.s_updated === null || r.s_updated === undefined ? null : { hidden: r.s_hidden, show_shards: r.s_show_shards, claimed: r.s_claimed, updated: r.s_updated };
-      if (applySettings(r, settings).hidden) continue;
-      const username = cleanUsername(r.username);
-      out.set(lower(r.user_id), { name: safeName(r.name, PERSON_NAME_MAX, null) || username || 'Player', username: username && !findBlocked(username).length ? username : null, level: whole(r.level, 0, 100000) });
-    }
-  }
-  const map = await hiddenNameMap(db, t);
-  for (const [id, p] of out) {
-    const flags = flagsFor(map, id);
-    if (!flags) continue;
-    const masked = maskEntry(p, flags, id);
-    out.set(id, { name: masked.name, username: masked.username, level: p.level });
-  }
-  return out;
 }
 
 async function topMembers(db, row, t) {
@@ -340,6 +321,10 @@ async function joinClan(request, env, raw, t) {
 
 export function clansRoute(request, env, segs, t) {
   const method = request.method;
+  if (segs.length === 2) {
+    if (method !== 'GET' && method !== 'HEAD') return fail(405, 'method_not_allowed', 'That action is not allowed here.');
+    return browseClans(request, env, new URL(request.url), t);
+  }
   if (segs.length === 3) {
     if (method !== 'GET' && method !== 'HEAD') return fail(405, 'method_not_allowed', 'That action is not allowed here.');
     return getClan(request, env, segs[2], t);

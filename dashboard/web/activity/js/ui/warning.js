@@ -15,7 +15,15 @@ export function readWarnings(data) {
     .map((w) => ({ id: w.id, text: Array.from(w.text.trim()).slice(0, TEXT_MAX).join(''), created: Number(w.created) || 0 }));
 }
 
-export function createWarnings({ win, gate, fetchImpl = null, pollMs = WARNING_POLL_MS, minGapMs = WARNING_MIN_GAP_MS, now = () => Date.now() } = {}) {
+export function inboxNotice(before, n) {
+  const count = Math.max(0, Math.floor(Number(n) || 0));
+  if (!count) return null;
+  if (before === null || before === undefined) return `📬 You have ${count} unread in your YapOS inbox. Open yapos.dev/inbox to see ${count === 1 ? 'it' : 'them'}.`;
+  if (count > before) return `📬 Something new arrived in your YapOS inbox. Open yapos.dev/inbox to see it.`;
+  return null;
+}
+
+export function createWarnings({ win, gate, fetchImpl = null, pollMs = WARNING_POLL_MS, minGapMs = WARNING_MIN_GAP_MS, now = () => Date.now(), onInbox = null } = {}) {
   const doc = (win && win.document) || (typeof document !== 'undefined' ? document : null);
   const doFetch = fetchImpl || (win && typeof win.fetch === 'function' ? (...a) => win.fetch(...a) : null);
   let queue = [];
@@ -93,6 +101,11 @@ export function createWarnings({ win, gate, fetchImpl = null, pollMs = WARNING_P
       if (destroyed || !data || data.mismatch) return false;
       const current = signedIn();
       if (!current || current.me !== s.me) return false;
+      if (typeof onInbox === 'function' && Number.isFinite(data.inbox)) {
+        try {
+          onInbox(Math.max(0, Math.floor(data.inbox)));
+        } catch {}
+      }
       const queued = new Set(queue.map((w) => w.id).concat(shown ? [shown.id] : []));
       const fresh = readWarnings(data).filter((w) => !done.has(w.id) && !queued.has(w.id));
       queue = queue.concat(fresh);

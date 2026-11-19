@@ -4,10 +4,10 @@ import { cleanText } from './profiles.js';
 import { reportIpHash } from './reports.js';
 import { activeBanIds } from './party-mod.js';
 import { PARTY_BADGES, COUNTER_GAMES, COUNTER_KEYS, badgesFor, applySkills, SKILL_KEYS, SKILL_GAMES, SKILL_GAME_CAPS, PERFECT_MIN_QUESTIONS, PERFECT_MAX_QUESTIONS } from './party-badges.js';
-import { MAX_PREDICTIONS, REASON_DAILY_LIMIT, loadRates, shardWants, shardStatement, shardTotals, shardReasonCounts, shardsPoll, ackShards, shardsCleanupStatements } from './party-shards.js';
+import { MAX_PREDICTIONS, loadRates, shardWants, shardStatement, recentShards, tooSoon, shardHolds, SHARDS_ALERT_DAY, shardsPoll, ackShards, shardsCleanupStatements } from './party-shards.js';
 import { ackSettings } from './public-profiles.js';
 import { pointsStatements, pointsCleanupStatements } from './party-leaderboard.js';
-import { detectCheats, cheatsCleanupStatements } from './party-cheats.js';
+import { detectCheats, shardsDayAlert, cheatsCleanupStatements } from './party-cheats.js';
 
 export const PARTY_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel', 'typerace', 'memory', 'beatdrop', 'closest', 'namefive']);
 export const MAX_PLAYERS = 16;
@@ -198,13 +198,13 @@ export async function postResults(request, env, t) {
   const everyone = [...new Set([...ids, ...result.predictions.map((w) => w.id)])];
   const marks = ids.map(() => '?').join(', ');
   const day = utcDay(t);
-  const [statRes, xpRes, banned, rates, shardSums, reasonCounts] = await Promise.all([
+  const [statRes, xpRes, banned, rates, recent, holds] = await Promise.all([
     db.prepare(`SELECT user_id, games, wins, by_game, counters FROM party_stats WHERE user_id IN (${marks})`).bind(...ids).all(),
     db.prepare(`SELECT user_id, SUM(xp) AS total FROM party_xp WHERE day = ? AND user_id IN (${marks}) GROUP BY user_id`).bind(day, ...ids).all(),
     activeBanIds(db, everyone, t),
     loadRates(db),
-    shardTotals(db, everyone, day),
-    shardReasonCounts(db, everyone, day),
+    recentShards(db, everyone, t),
+    shardHolds(db, everyone, day),
   ]);
   const stats = new Map(((statRes && statRes.results) || []).map((r) => [String(r.user_id), readStats(r)]));
   const earned = new Map(((xpRes && xpRes.results) || []).map((r) => [String(r.user_id), Number(r.total) || 0]));
@@ -237,18 +237,24 @@ export async function postResults(request, env, t) {
   }
   stmts.push(...pointsStatements(db, result, banned, day, t));
   const shards = [];
+  const held = [];
+  const crossed = new Map();
   for (const want of shardWants(result, rates, banned)) {
-    const room = Math.max(0, rates.cap - (shardSums.get(want.id) || 0));
-    const amount = Math.min(want.shards, room);
-    if (amount <= 0) continue;
-    const limit = REASON_DAILY_LIMIT[want.reason];
-    const key = `${want.id}|${want.reason}`;
-    if (limit && (reasonCounts.get(key) || 0) >= limit) continue;
-    if (limit) reasonCounts.set(key, (reasonCounts.get(key) || 0) + 1);
-    shardSums.set(want.id, (shardSums.get(want.id) || 0) + amount);
-    shards.push({ id: want.id, shards: amount, reason: want.reason });
-    stmts.push(shardStatement(db, { ...want, shards: amount }, result.game, day, t, rates.cap));
+    if (want.shards <= 0 || tooSoon(recent, want, t)) continue;
+    if (holds.held.has(want.id)) {
+      if (!held.includes(want.id)) held.push(want.id);
+      continue;
+    }
+    recent.set(`${want.id}|${want.reason}`, t);
+    const before = holds.today.get(want.id) || 0;
+    const after = before + want.shards;
+    holds.today.set(want.id, after);
+    if (before < SHARDS_ALERT_DAY && after >= SHARDS_ALERT_DAY) crossed.set(want.id, after);
+    shards.push({ id: want.id, shards: want.shards, reason: want.reason });
+    stmts.push(shardStatement(db, want, result.game, day, t));
   }
+  const names = new Map([...result.players, ...result.predictions].map((p) => [p.id, p.name]));
+  for (const [id, total] of crossed) stmts.push(shardsDayAlert(db, { id, name: names.get(id) || null, total, limit: SHARDS_ALERT_DAY }, t));
   try {
     await db.batch(stmts);
   } catch (err) {
@@ -256,7 +262,7 @@ export async function postResults(request, env, t) {
     throw err;
   }
   await detectCheats(db, result, banned, day, t).catch(() => []);
-  return json({ ok: true, counted: true, xp: given, shards }, 201);
+  return json({ ok: true, counted: true, xp: given, shards, held }, 201);
 }
 
 export async function partyPoll(db) {

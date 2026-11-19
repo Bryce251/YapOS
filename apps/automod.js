@@ -82,7 +82,6 @@ const DEFAULTS = {
   exempt: { channels: [], roles: [] },
   actions: { spam: 'delete', mentions: 'delete', caps: 'delete', links: 'delete', invites: 'delete', words: 'delete' },
   filterExempt: { spam: [], mentions: [], caps: [], links: [], invites: [], words: [] },
-  verify: { enabled: false, channelId: null, roleId: null },
 };
 
 function actionOf(cfg, filter) {
@@ -116,9 +115,7 @@ const TRACK_MS = 60_000;
 const MAX_TRACKED = 5000;
 const LIFT_RETRY_MS = 5 * 60_000;
 const RESUME_DELAY_MS = 15_000;
-const VERIFY_ALERT_GAP_MS = 10 * 60_000;
 const MAX_ALERTS = 200;
-const ELEVATED_PERMS = ['administrator', 'manage_server', 'manage_roles', 'manage_channels', 'manage_messages', 'manage_webhooks', 'manage_nicknames', 'manage_threads', 'manage_emojis', 'manage_events', 'kick_members', 'ban_members', 'timeout_members', 'move_members', 'mute_members', 'deafen_members', 'mention_everyone'];
 const own = (table, key) => typeof key === 'string' && Object.hasOwn(table, key);
 
 const memories = new WeakMap();
@@ -126,7 +123,7 @@ const memories = new WeakMap();
 function mem(engine) {
   let m = memories.get(engine);
   if (!m) {
-    m = { tracker: new Map(), noticeAt: new Map(), strikeAt: new Map(), joins: new Map(), liftTimers: new Map(), warnedNoDelete: new Set(), busy: new Set(), verifyAlertAt: new Map(), alerts: new Set(), pruneTimer: null };
+    m = { tracker: new Map(), noticeAt: new Map(), strikeAt: new Map(), joins: new Map(), liftTimers: new Map(), warnedNoDelete: new Set(), busy: new Set(), alerts: new Set(), pruneTimer: null };
     memories.set(engine, m);
   }
   return m;
@@ -590,16 +587,6 @@ function onLockdownAlert(ctx) {
   return mem(ctx.engine).alerts.has(messageId) || lockState(ctx.engine, ctx.serverId)?.alertId === messageId;
 }
 
-async function verifyAlert(engine, sid, kind, embed) {
-  const { verifyAlertAt } = mem(engine);
-  const key = `${sid}:${kind}`;
-  const last = verifyAlertAt.get(key);
-  if (last && now() - last < VERIFY_ALERT_GAP_MS) return;
-  verifyAlertAt.set(key, now());
-  capMap(verifyAlertAt);
-  await postLog(engine, sid, embed, { content: modPing(engine, sid) || undefined, priority: 'normal' });
-}
-
 function scheduleLift(engine, sid, until) {
   const { liftTimers } = mem(engine);
   clearTimeout(liftTimers.get(sid));
@@ -689,7 +676,7 @@ function panelView(engine, sid, { canEdit = true } = {}) {
   const body = [
     `Strictness: **${s.emoji} ${s.label}**`,
     exempt.length ? `Exempt from everything: ${exempt.join(' ')}` : 'Mods, admins and the owner are always exempt.',
-    cfg.verify.enabled ? `Verification: on in <#${cfg.verify.channelId}>` : null,
+    cfg.verify ? '-# Verification moved to the Verify app: **/verify**.' : null,
     lock ? `${ICONS.lock} **Lockdown is on** (lifts <t:${Math.floor(lock.until / 1000)}:R>)` : null,
     noModWarning(engine, cfg),
     canEdit ? '-# Tap a filter to turn it on or off. Typed: `/automod words add …`, `/automod action links timeout`, `/automod exempt links #media`' : '-# Only admins can change these.',
@@ -1036,52 +1023,18 @@ async function presetCommand(ctx, name) {
   return changed(ctx, `Preset: ${key}`, line, before);
 }
 
-function riskyVerifyRole(engine, sid, role) {
-  const core = engine.settings.core(sid);
-  if ([...(core.modRoles || []), ...(core.adminRoles || [])].includes(role.id)) return `**${role.name}** is a mod or admin role here. Anyone pressing Verify would get it, so pick a plain member role.`;
-  const strong = ELEVATED_PERMS.filter((p) => role.perms?.[p] || role[p]);
-  if (strong.length) return `**${role.name}** has moderator-level permissions. Anyone pressing Verify would get them, so pick a plain member role.`;
-  return null;
+function verifyInstalled(engine, sid) {
+  return !!engine.service('verify')?.press && engine.apps.has('verify') && engine.settings.isEnabled(sid, 'verify');
 }
 
-async function verifyCommand(ctx, rest) {
+async function verifyCommand(ctx) {
   await ctx.require('admin');
-  const { engine, serverId: sid } = ctx;
-  const sub = (rest[0] || 'setup').toLowerCase();
-  const cfg = ctx.config();
-  if (/^(off|disable|stop|remove)$/.test(sub)) {
-    const before = snapshot(ctx);
-    ctx.patchConfig({ verify: { ...cfg.verify, enabled: false } });
-    return changed(ctx, 'Verification off', 'The Verify button stops working. You can delete the old panel message.', before);
-  }
-  if (!/^(setup|set|on|post|panel|start)$/.test(sub)) return ctx.warn("I didn't get that", 'Try `/automod verify setup #verify @Verified` or `/automod verify off`.');
-  let channel = null;
-  let role = null;
-  for (const t of rest.slice(1)) {
-    const isChannel = t.startsWith('#') || !!parseChannelId(t);
-    const found = isChannel ? await ctx.findChannel(t) : await ctx.findRole(t);
-    if (!found) return ctx.warn(`I couldn't find ${clip(t, 60)}`, isChannel ? 'Mention the channel, like #verify.' : 'Mention the role, like @Verified.');
-    if (isChannel) channel = found; else role = found;
-  }
-  if (!channel && cfg.verify.channelId) channel = (await ctx.channels('text')).find((c) => c.id === cfg.verify.channelId) || null;
-  if (!channel) channel = (await engine.detectChannels(sid)).verify || null;
-  if (!role && cfg.verify.roleId) role = (await ctx.roles()).find((r) => r.id === cfg.verify.roleId) || null;
-  if (!channel) return ctx.warn('Which channel?', 'Make a channel like #verify, then run `/automod verify setup #verify @Verified`.');
-  if (!role) return ctx.warn('Which role?', 'Tell me the role people get, like `/automod verify setup #verify @Verified`.');
-  const risky = riskyVerifyRole(engine, sid, role);
-  if (risky) return ctx.warn("That role is too powerful for a Verify button", risky);
-  const can = await engine.perms.canManageRole(sid, role.id);
-  if (!can.ok) return ctx.warn("I can't hand out that role", can.reason);
-  const before = snapshot(ctx);
-  ctx.patchConfig({ verify: { enabled: true, channelId: channel.id, roleId: role.id } });
-  await ctx.ok('Verification is on', `Posting the Verify panel in <#${channel.id}>. Pressing it gives **${role.name}**.\n-# Tip: hide your other channels from everyone and show them to **${role.name}**.`);
-  try {
-    await ctx.send(channel.id, { embeds: [card({ title: '✅ Verify to join in', body: 'Press the button below to confirm you\'re a real person and unlock the rest of the server.', color: 'ok' })], components: [row(button('Verify', cid('verify'), 'success', '✅'))] }, { priority: 'high' });
-  } catch (e) {
-    engine.settings.patchApp(sid, ID, before);
-    return ctx.fail(e, { action: 'post the Verify panel', target: `#${channel.name}` });
-  }
-  return null;
+  const installed = verifyInstalled(ctx.engine, ctx.serverId);
+  const body = installed
+    ? 'Your settings came with it, and old Verify buttons keep working. Use **/verify setup** for a step-by-step guide, **/verify status** to check it, or **/help verify** for how it works.'
+    : "Your settings came with it, but the Verify app isn't installed here. An admin can install it with **/apps**, then run **/verify setup**.";
+  const components = installed ? [row(button('Open Verify setup', customId('verify', 'setup'), 'primary', '🛂'), button('Verify status', customId('verify', 'status'), 'secondary', '🩺'))] : [];
+  return ctx.info('Verification moved to the Verify app', body, { components });
 }
 
 async function manualLockdown(ctx) {
@@ -1121,7 +1074,7 @@ async function runAutomod(ctx) {
   if (own(STRICTNESS, first)) return strictCommand(ctx, first);
   if (first === 'preset') return presetCommand(ctx, rest[0]);
   if (own(PRESETS, first)) return presetCommand(ctx, first);
-  if (/^(verify|verification|gate)$/.test(first)) return verifyCommand(ctx, rest);
+  if (/^(verify|verification|gate)$/.test(first)) return verifyCommand(ctx);
   if (/^(lockdown|lock)$/.test(first)) return manualLockdown(ctx);
   if (/^(lift|unlock|unlockdown)$/.test(first)) return manualLift(ctx);
   const firstOnOff = onOffWord(first);
@@ -1312,11 +1265,6 @@ const DASHBOARD = [
       return { applied: added ? { 'words.list': value, filters: patch.filters } : { 'words.list': value } };
     },
   },
-  {
-    key: 'verify', label: 'Verification gate', type: 'complex', web: false,
-    help: 'Posts a Verify button that gives new members a role.',
-    note: 'Set it up in the server with /automod verify #channel @role, since it posts the Verify button.',
-  },
   wholeIn('spam.max', 'Flood: max messages', 'More than this many messages inside the flood window counts as flooding (scaled by strictness).', 2, 50),
   wholeIn('spam.seconds', 'Flood window (seconds)', 'Time window for the flood count.', 1, 60),
   wholeIn('spam.dupes', 'Repeat limit', 'The same text this many times inside the repeat window counts as spam.', 2, 20),
@@ -1434,34 +1382,9 @@ export const { setup, teardown, check } = defineApp({
     },
     verify: {
       run: async (ctx) => {
-        const { engine, serverId: sid, userId: uid } = ctx;
-        if (!sid || !uid) return ctx.warn('Verification only works in a server', 'Press the Verify button in the server you want to join.');
-        const cfg = ctx.config();
-        if (!cfg.verify.enabled || !cfg.verify.roleId) return ctx.warn('Verification is off', 'Ask a mod for help getting in.');
-        const member = await engine.perms.member(sid, uid).catch(() => null);
-        if (member?.roles?.includes(cfg.verify.roleId)) return ctx.info("You're already verified", 'Enjoy the server!');
-        const can = await engine.perms.canManageRole(sid, cfg.verify.roleId);
-        if (!can.ok) {
-          await ctx.warn("I can't verify you right now", 'A mod has been told. Please try again a bit later.');
-          await verifyAlert(engine, sid, 'stuck', dialog.warn('Verification is stuck', `<@${uid}> pressed Verify but I can't give the role: ${can.reason}`));
-          return null;
-        }
-        if (riskyVerifyRole(engine, sid, can.role)) {
-          await ctx.warn("I can't verify you right now", 'A mod has been told. Please try again a bit later.');
-          await verifyAlert(engine, sid, 'paused', dialog.warn('Verification paused', `<@${uid}> pressed Verify, but **${can.role.name}** now has moderator-level permissions, so I didn't hand it out. Pick a plain member role with \`/automod verify setup\`.`));
-          return null;
-        }
-        try {
-          await engine.bot.addRole(sid, uid, cfg.verify.roleId);
-        } catch (e) {
-          if (looksLikeFeatureOff(e)) engine.caps.mark(sid, 'roles', false, e?.message);
-          await ctx.warn("I couldn't verify you", 'Something went wrong giving you the role. A mod has been told.');
-          await verifyAlert(engine, sid, 'failed', dialog.warn('Verification failed', `I couldn't give **${can.role.name}** to <@${uid}>. Role changes may not be available on this server yet, so please give it by hand.`));
-          return null;
-        }
-        engine.perms.invalidate(`m:${sid}:${uid}`);
-        for (const kind of ['stuck', 'paused', 'failed']) mem(engine).verifyAlertAt.delete(`${sid}:${kind}`);
-        return ctx.ok("You're verified", `Welcome in! You now have **${can.role.name}**.`);
+        const v = ctx.engine.service('verify');
+        if (v?.press) return v.press(ctx);
+        return ctx.warn('Verification moved to the Verify app', 'Ask an admin to install the Verify app with **/apps**.');
       },
     },
   },
@@ -1496,7 +1419,7 @@ export const { setup, teardown, check } = defineApp({
     '`/automod exempt links #media` lets links through in #media only; the other filters still check it.',
     'Word matching ignores caps, leetspeak and repeated letters but only matches whole words.',
     '`/automod raid on` pauses chat during a join flood; `/automod lockdown` and `/automod lift` do it by hand.',
-    '`/automod verify setup #verify @Verified` posts a Verify button that gives the role.',
+    'Verification moved to the Verify app: `/verify setup` walks you through it, and `/help verify` explains it.',
   ],
 
   init(engine) {

@@ -421,11 +421,10 @@ export const RESULT_TEAM_MAX = 24;
 export const PARTY_XP_PLAY = 10;
 export const PARTY_XP_WIN = 15;
 export const PARTY_XP_DAY = 200;
-export const PARTY_SHARDS_PLAY = 5;
-export const PARTY_SHARDS_WIN = 15;
-export const PARTY_SHARDS_TOURNAMENT = 25;
-export const PARTY_SHARDS_PREDICTION = 5;
-export const PARTY_SHARDS_DAY = 150;
+export const PARTY_SHARDS_PLAY = 10;
+export const PARTY_SHARDS_WIN = 25;
+export const PARTY_SHARDS_TOURNAMENT = 100;
+export const PARTY_SHARDS_PREDICTION = 15;
 export const PREDICTIONS_MAX = 16;
 export const DAILY_ENDPOINT = '/api/activity/daily';
 export const DAILY_TOP_ENDPOINT = '/api/activity/daily/top';
@@ -713,7 +712,10 @@ export async function sendDaily(input) {
   topCache.delete(body.kind);
   const score = num(out.score) ?? 0;
   const best = num(out.best);
-  return { score, best: best !== null && best > score ? best : score, rank: num(out.rank), streak: num(out.streak) ?? 0 };
+  const res = { score, best: best !== null && best > score ? best : score, rank: num(out.rank), streak: num(out.streak) ?? 0 };
+  const shards = num(out.shards);
+  if (shards) res.shards = shards;
+  return res;
 }
 
 function cleanTopRow(r) {

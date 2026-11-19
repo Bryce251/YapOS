@@ -6,7 +6,7 @@ import { board, standings, fmt } from './board.js';
 import { viewFor } from '../views/index.js';
 import { createAdminPanel } from './admin-panel.js';
 import { banUntil } from '../admin.js';
-import { createWarnings } from './warning.js';
+import { createWarnings, inboxNotice } from './warning.js';
 import { createTrolls, ALL_FX, seesFx } from './trolls.js';
 import { sfx as defaultSfx } from './sfx.js';
 import { createRecorder } from './replay.js';
@@ -230,7 +230,12 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const offProfileCard = profileCard.bind(root);
   const gate = signin ? createSignin({ win, engine, toast, dev: Boolean(signin.dev), alone, host: root, onChange: () => repaintHead() }) : null;
   if (gate) root.append(gate.el);
-  const warnings = gate ? createWarnings({ win, gate }) : null;
+  let inboxSeen = null;
+  const warnings = gate ? createWarnings({ win, gate, onInbox: (n) => {
+    const note = inboxNotice(inboxSeen, n);
+    inboxSeen = n;
+    if (note) toast(note);
+  } }) : null;
   if (warnings) root.append(warnings.el);
 
   function withSignin(m) {

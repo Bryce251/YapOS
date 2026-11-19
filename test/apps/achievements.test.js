@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHarness, IDS } from '../harness.js';
 import { ACHIEVEMENTS, rewardOf, scanTickets, evaluate, statsOf } from '../../apps/achievements.js';
-import { GLOBAL_KEY } from '../../engine/global.js';
+import { GLOBAL_KEY, patchGlobalConfig } from '../../engine/global.js';
 
 const S = IDS.server;
 const make = (apps = ['economy', 'levels', 'quests', 'clans', 'achievements']) => createHarness({ apps, fakeClock: true });
@@ -20,6 +20,7 @@ test('the achievement list covers the brief with small one-time rewards', () => 
 
 test('reaching 1,000 messages unlocks once, pays once and DMs privately', async () => {
   const h = await make();
+  patchGlobalConfig(h.engine, 'economy', { activityPay: { chat: 0, voice: 0, levelup: 0, weekly: 500 } });
   h.engine.store.update('levels', GLOBAL_KEY, (d) => { d.users ||= {}; d.users[IDS.member] = { xp: 10, level: 0, voiceSeconds: 0, messages: 999, lastXpAt: 0 }; return d; }, { users: {} });
   const channelBefore = h.sent(IDS.channels.general).length;
   await h.message('this one makes a thousand', { user: IDS.member });

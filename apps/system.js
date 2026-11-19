@@ -53,7 +53,8 @@ function panelPerm(engine, a) {
 }
 
 function visibleTiles(engine, sid, level) {
-  return appTiles(engine, sid).filter((a) => engine.perms.atLeast(level, panelPerm(engine, a)));
+  const rank = (a) => engine.perms.LEVELS.indexOf(panelPerm(engine, a));
+  return appTiles(engine, sid).filter((a) => engine.perms.atLeast(level, panelPerm(engine, a))).sort((a, b) => rank(b) - rank(a));
 }
 
 async function homeView(ctx) {
@@ -144,8 +145,9 @@ function helpView(engine, sid, asked) {
     inline: true,
   }));
   const opts = list.map((a) => ({ label: a.meta.name, value: a.meta.id, emoji: a.meta.icon, description: a.meta.description.slice(0, 100) }));
+  const verifyTip = engine.apps.has('verify') ? '\n🛂 New members should prove they are real first? **/help verify** shows how to set up a verification gate, step by step.' : '';
   return {
-    embeds: [card({ title: '❔ YapOS help', body: 'Every app has one main command that opens a panel. Many also take typed shortcuts, like `/mod timeout @sam 10m spam`.\n**/yap** understands plain words: `/yap timeout @sam 10m`, `/yap welcome`.', fields, color: 'info' })],
+    embeds: [card({ title: '❔ YapOS help', body: `Every app has one main command that opens a panel. Many also take typed shortcuts, like \`/mod timeout @sam 10m spam\`.\n**/yap** understands plain words: \`/yap timeout @sam 10m\`, \`/yap welcome\`.${verifyTip}`, fields, color: 'info' })],
     components: [select(cid('helppick'), opts.slice(0, 25), { placeholder: 'Pick an app for details' })],
     fallbackComponents: rows(list.slice(0, 20).map((a) => button(a.meta.name, cid('helpapp', a.meta.id), 'secondary', a.meta.icon))),
   };

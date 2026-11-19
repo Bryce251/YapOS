@@ -28,6 +28,9 @@ import { renderStats } from './pages/stats.js';
 import { renderAccount } from './pages/account.js';
 import { renderLink } from './pages/link.js';
 import { renderOwner, renderOwnerUser } from './pages/owner.js';
+import { renderClans } from './pages/clans.js';
+import { renderInbox } from './pages/inbox.js';
+import { startInboxWatch } from './inbox-watch.js';
 import { spotlight } from './spotlight.js';
 
 const root = document.getElementById('app');
@@ -49,6 +52,8 @@ const TITLES = {
   packs: 'Word packs',
   'packs-browse': 'Browse word packs',
   account: 'Your account',
+  clans: 'Your clan',
+  inbox: 'Inbox',
   link: 'Link YapOS Party',
   seasons: 'Past seasons',
   'party-leaderboard': 'Party leaderboard',
@@ -75,6 +80,8 @@ const PAGES = {
   'owner-user': renderOwnerUser,
   packs: renderPacks,
   account: renderAccount,
+  clans: renderClans,
+  inbox: renderInbox,
   link: renderLink,
   stats: renderStats,
   overview: renderOverview,
@@ -219,6 +226,7 @@ async function render() {
     shell = createShell({ onLogout: logout });
     root.replaceChildren(shell.root);
   }
+  startInboxWatch({ api, onCount: (n) => shell && shell.setUnread(n) });
   shell.close();
   const ctx = {
     api,
@@ -226,6 +234,7 @@ async function render() {
     route,
     signal,
     main: shell.main,
+    user: state.user,
     navigate,
     setTitle,
     setChrome: (chrome) => shell.update({ ...chrome, user: state.user, partyOwner: state.partyOwner, partyAdmin: state.partyAdmin }),

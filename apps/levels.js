@@ -359,7 +359,7 @@ async function addXp(engine, sid, uid, amount, extra = {}) {
   if (res.leveledUp && sid) await onLevelUp(engine, sid, uid, res.level, { channelId: extra.channelId });
   if (gained > 0 || extra.messages || extra.voiceSeconds) {
     try {
-      await engine.bot.emit?.('xp:gained', { user: uid, server_id: null, serverId: sid || null, amount: Math.max(0, gained), reason: extra.reason || null, messages: Number(extra.messages) || 0, voiceSeconds: Number(extra.voiceSeconds) || 0 });
+      await engine.bot.emit?.('xp:gained', { user: uid, server_id: null, serverId: sid || null, amount: Math.max(0, gained), reason: extra.reason || null, messages: Number(extra.messages) || 0, voiceSeconds: Number(extra.voiceSeconds) || 0, level: res.level, leveledUp: res.leveledUp });
     } catch (e) {
       engine.log.debug('[levels] xp:gained listener failed', e?.message);
     }

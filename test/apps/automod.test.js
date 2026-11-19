@@ -18,7 +18,7 @@ function modStub() {
 }
 
 async function setup({ mod = true, features, store, actions = null, fakeClock = false } = {}) {
-  const h = await createHarness({ apps: ['automod'], features, fakeClock, ...(store ? { store } : {}) });
+  const h = await createHarness({ apps: ['automod', 'verify'], features, fakeClock, ...(store ? { store } : {}) });
   const stub = mod ? modStub() : null;
   if (stub) h.engine.services.set('mod', stub);
   if (actions) h.engine.settings.patchApp(IDS.server, 'automod', { actions: { ...h.engine.settings.appConfig(IDS.server, 'automod').actions, ...actions } });
@@ -28,6 +28,15 @@ async function setup({ mod = true, features, store, actions = null, fakeClock = 
 const notices = (h, cid = C.general) => h.sent(cid).filter((m) => m.content.startsWith(`<@${IDS.member}>,`));
 const isDeleted = (h, cid, id) => h.fake.state.messages[cid].find((m) => m.id === id)?.deleted === true;
 const config = (h) => h.engine.settings.appConfig(IDS.server, 'automod');
+
+async function legacyPanel(h) {
+  h.engine.settings.patchApp(IDS.server, 'automod', { verify: { enabled: true, channelId: C.welcome, roleId: IDS.roles.vip } });
+  h.engine.service('verify').migrate(IDS.server);
+  return h.engine.budget.send({
+    serverId: IDS.server, channelId: C.welcome, content: '', priority: 'high',
+    opts: { embeds: [{ title: '✅ Verify to join in', description: 'Press the button below.' }], components: [{ type: 'row', components: [{ type: 'button', style: 'success', label: 'Verify', custom_id: 'yo:automod:verify', emoji: '✅' }] }] },
+  });
+}
 
 test('loads with one command and the right defaults', async () => {
   const { h } = await setup();
@@ -262,34 +271,6 @@ test('manual lockdown and lift by mods', async () => {
   assert.equal(h.fake.state.everyone[IDS.server].send_messages, true);
 });
 
-test('verify button grants the role', async () => {
-  const { h } = await setup();
-  const ans = await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  assert.match(h.textOf(ans[0]), /Verification is on/);
-  const panel = h.lastSent(C.welcome);
-  assert.match(h.textOf(panel), /Verify/);
-  const got = await h.clickButton('Verify', { user: IDS.member2, in: panel });
-  assert.match(h.textOf(got[0]), /verified/);
-  assert.ok(h.fake.memberOf(IDS.server, IDS.member2).roles.includes(IDS.roles.vip));
-  const again = await h.clickButton('Verify', { user: IDS.member2, in: panel });
-  assert.match(h.textOf(again[0]), /already verified/);
-});
-
-test('verify refuses roles above the bot and reports role API failures', async () => {
-  const { h, stub } = await setup();
-  h.fake.state.roles[IDS.server].find((r) => r.id === IDS.roles.gamer).position = 8;
-  h.engine.perms.invalidate();
-  const high = await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.gamer}>`, { user: IDS.admin });
-  assert.match(h.textOf(high[0]), /can't hand out/);
-  const admin = await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.admin}>`, { user: IDS.admin });
-  assert.match(h.textOf(admin[0]), /too powerful/);
-  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  h.fake.fail('PUT', /\/roles\//, { status: 403, error: 'Role management is in testing (flag bot_roles)' });
-  const got = await h.clickButton('Verify', { user: IDS.member2, in: h.lastSent(C.welcome) });
-  assert.match(h.textOf(got[0]), /couldn't verify you/);
-  assert.ok(stub.calls.some((c) => c.fn === 'log' && /Verification failed/.test(c.embed.title)));
-});
-
 test('panel: mods can view, admins toggle, select fallback to buttons', async () => {
   const { h } = await setup({ features: { selects: false } });
   const member = await h.slash('automod', '', { user: IDS.member });
@@ -439,28 +420,6 @@ test('lifting from the alert keeps the alert text for the record', async () => {
   assert.equal(h.fake.state.everyone[IDS.server].send_messages, true);
 });
 
-test('verify setup refuses powerful roles and unknown channels', async () => {
-  const { h } = await setup();
-  const modRole = await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.mod}>`, { user: IDS.admin });
-  assert.match(h.textOf(modRole[0]), /too powerful/);
-  assert.equal(config(h).verify.enabled, false);
-  const typo = await h.slash('automod', `verify setup #nope-channel <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  assert.match(h.textOf(typo[0]), /couldn't find/);
-  assert.equal(config(h).verify.enabled, false);
-});
-
-test('verify button will not hand out a role that became powerful', async () => {
-  const { h } = await setup({ mod: false });
-  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  const panel = h.lastSent(C.welcome);
-  h.fake.state.roles[IDS.server].find((r) => r.id === IDS.roles.vip).perms.ban_members = true;
-  h.engine.perms.invalidate();
-  const got = await h.clickButton('Verify', { user: IDS.member2, in: panel });
-  assert.match(h.textOf(got[0]), /can't verify you/);
-  assert.ok(!h.fake.memberOf(IDS.server, IDS.member2).roles.includes(IDS.roles.vip));
-  assert.ok(h.sent(C.modlog).some((m) => /Verification paused/.test(h.textOf(m))));
-});
-
 test('settings panel buttons are locked to the admin who opened it', async () => {
   const { h } = await setup({ features: { selects: false } });
   h.addSecondAdmin();
@@ -584,23 +543,6 @@ test('Lift lockdown inside a settings panel is locked, the alert stays open to s
   assert.equal(h.fake.state.everyone[IDS.server].send_messages, true);
 });
 
-test('the posted Verify button is public and only ever gives the presser the verify role', async () => {
-  const { h } = await setup();
-  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  const panel = h.lastSent(C.welcome);
-  for (const user of [IDS.member, IDS.member2]) {
-    const got = await h.clickButton('Verify', { user, in: panel });
-    assert.match(h.textOf(got[0]), /verified/);
-    assert.deepEqual(h.fake.memberOf(IDS.server, user).roles, [IDS.roles.member, IDS.roles.vip]);
-  }
-  const extra = await h.click(`yo:automod:verify:${IDS.roles.mod}:${IDS.mod}`, { user: IDS.member, messageId: panel.id });
-  assert.match(h.textOf(extra[0]), /already verified/);
-  assert.ok(!h.fake.memberOf(IDS.server, IDS.member).roles.includes(IDS.roles.mod));
-  await h.slash('automod', 'verify off', { user: IDS.admin });
-  const off = await h.click('yo:automod:verify', { user: IDS.member2, messageId: panel.id });
-  assert.match(h.textOf(off[0]), /Verification is off/);
-});
-
 const S2 = '5e000000-0000-4000-8000-000000000002';
 const G2 = 'c0000000-0000-4000-8000-000000000021';
 const BOT_ROLE_2 = 'r0000000-0000-4000-8000-000000000026';
@@ -701,64 +643,9 @@ test('owning another server gives no power over this one', async () => {
   assert.deepEqual(config(h), before);
 });
 
-test('verify pressed from another server gives nothing here', async () => {
-  const { h } = await setup({ mod: false });
-  addSecondServer(h, IDS.member);
-  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  const panel = h.lastSent(C.welcome);
-  const away = await h.click('yo:automod:verify', { user: IDS.member, server: S2, channel: G2, messageId: panel.id });
-  assert.match(h.textOf(away[0]), /Verification is off/);
-  assert.deepEqual(h.fake.memberOf(IDS.server, IDS.member).roles, [IDS.roles.member]);
-  assert.deepEqual(h.fake.memberOf(S2, IDS.member).roles, []);
-});
-
-test('a role with webhook, nickname or move powers cannot become or stay the verify role', async () => {
-  const { h } = await setup({ mod: false });
-  const gamer = h.fake.state.roles[IDS.server].find((r) => r.id === IDS.roles.gamer);
-  for (const perm of ['manage_webhooks', 'manage_nicknames', 'move_members']) {
-    gamer.perms = { [perm]: true };
-    h.engine.perms.invalidate();
-    const ans = await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.gamer}>`, { user: IDS.admin });
-    assert.match(h.textOf(ans[0]), /too powerful/, perm);
-  }
-  assert.equal(config(h).verify.enabled, false);
-  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  const panel = h.lastSent(C.welcome);
-  h.fake.state.roles[IDS.server].find((r) => r.id === IDS.roles.vip).perms.manage_webhooks = true;
-  h.engine.perms.invalidate();
-  const got = await h.clickButton('Verify', { user: IDS.member2, in: panel });
-  assert.match(h.textOf(got[0]), /can't verify you/);
-  assert.deepEqual(h.fake.memberOf(IDS.server, IDS.member2).roles, [IDS.roles.member]);
-});
-
-test('verify role moved above the bot after setup is not handed out', async () => {
-  const { h } = await setup({ mod: false });
-  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  const panel = h.lastSent(C.welcome);
-  h.fake.state.roles[IDS.server].find((r) => r.id === IDS.roles.vip).position = 8;
-  h.engine.perms.invalidate();
-  const got = await h.clickButton('Verify', { user: IDS.member, in: panel });
-  assert.match(h.textOf(got[0]), /can't verify you/);
-  assert.deepEqual(h.fake.memberOf(IDS.server, IDS.member).roles, [IDS.roles.member]);
-});
-
-test('hammering a stuck Verify button alerts the mods once, not every press', async () => {
-  const { h } = await setup({ mod: false });
-  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  const panel = h.lastSent(C.welcome);
-  h.fake.fail('PUT', /\/roles\//, { status: 403, error: 'Role management is in testing (flag bot_roles)' });
-  for (let i = 0; i < 6; i++) {
-    const got = await h.clickButton('Verify', { user: i % 2 ? IDS.member : IDS.member2, in: panel });
-    assert.match(h.textOf(got[0]), /couldn't verify you|can't verify you/);
-  }
-  const alerts = h.sent(C.modlog).filter((m) => /Verification (failed|is stuck|paused)/.test(h.textOf(m)));
-  assert.equal(alerts.length, 1);
-});
-
 test('staff buttons replayed after Automod is uninstalled do nothing', async () => {
   const { h } = await setup({ mod: false, features: { selects: false } });
-  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  const verifyPanel = h.lastSent(C.welcome);
+  const verifyPanel = await legacyPanel(h);
   await h.slash('automod', 'words add one', { user: IDS.admin });
   const cleared = await h.slash('automod', 'words clear', { user: IDS.admin });
   const undo = h.findButton('Undo', cleared);
@@ -828,8 +715,7 @@ test('an admin who lost the role cannot keep using the panel they opened', async
 
 test('staff cannot repaint a public panel by pressing settings ids on it', async () => {
   const { h } = await setup({ mod: false, features: { selects: false } });
-  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  const panel = h.lastSent(C.welcome);
+  const panel = await legacyPanel(h);
   const stored = () => h.fake.state.messages[C.welcome].find((m) => m.id === panel.id);
   for (const [user, id] of [[IDS.mod, 'yo:automod:panel'], [IDS.mod, 'yo:automod:lift'], [IDS.admin, 'yo:automod:toggle:caps'], [IDS.admin, 'yo:automod:strict:strict']]) {
     await h.click(id, { user, channel: C.welcome, messageId: panel.id });
@@ -1143,8 +1029,7 @@ test('action buttons are locked to the opener and refuse forged or made-up value
 
 test('action ids pressed on a public message never repaint it', async () => {
   const { h } = await setup({ mod: false, features: { selects: false } });
-  await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
-  const posted = h.lastSent(C.welcome);
+  const posted = await legacyPanel(h);
   const stored = () => h.fake.state.messages[C.welcome].find((m) => m.id === posted.id);
   for (const [user, id] of [[IDS.mod, 'yo:automod:actions'], [IDS.mod, 'yo:automod:filter:links'], [IDS.admin, 'yo:automod:act:links:warn'], [IDS.admin, 'yo:automod:fxclear:links']]) {
     await h.click(id, { user, channel: C.welcome, messageId: posted.id });
@@ -1186,4 +1071,32 @@ test('typed actions read the way the panel labels them', async () => {
   const junk = await h.slash('automod', 'action links banana', { user: IDS.admin });
   assert.match(h.textOf(junk[0]), /didn't get that action/);
   assert.equal(config(h).actions.links, 'timeout');
+});
+
+test('verify typed under Automod points to the Verify app', async () => {
+  const { h } = await setup();
+  const ans = await h.slash('automod', `verify setup <#${C.welcome}> <@&${IDS.roles.vip}>`, { user: IDS.admin });
+  assert.match(h.textOf(ans[0]), /Verification moved to the Verify app/);
+  assert.ok(h.findButton('Open Verify setup', ans));
+  assert.equal(h.engine.settings.appConfig(IDS.server, 'verify').enabled, false);
+  const panel = await h.slash('automod', '', { user: IDS.admin });
+  assert.doesNotMatch(h.textOf(panel[panel.length - 1]), /Verification: on/);
+  h.engine.settings.setEnabled(IDS.server, 'verify', false);
+  const off = await h.slash('automod', 'verify', { user: IDS.admin });
+  assert.match(h.textOf(off[0]), /isn't installed here/);
+});
+
+test('an old Automod Verify button still verifies through the Verify app', async () => {
+  const { h, stub } = await setup();
+  const panel = await legacyPanel(h);
+  const got = await h.clickButton('Verify', { user: IDS.member2, in: panel });
+  assert.match(h.textOf(got[0]), /verified/);
+  assert.ok(h.fake.memberOf(IDS.server, IDS.member2).roles.includes(IDS.roles.vip));
+  assert.ok(stub.calls.some((c) => c.fn === 'log' && /Member verified/.test(c.embed.title)));
+  const again = await h.clickButton('Verify', { user: IDS.member2, in: panel });
+  assert.match(h.textOf(again[0]), /already verified/);
+  h.engine.settings.setEnabled(IDS.server, 'verify', false);
+  const gone = await h.clickButton('Verify', { user: IDS.member, in: panel });
+  assert.match(h.textOf(gone[0]), /isn't installed here/);
+  assert.deepEqual(h.fake.memberOf(IDS.server, IDS.member).roles, [IDS.roles.member]);
 });

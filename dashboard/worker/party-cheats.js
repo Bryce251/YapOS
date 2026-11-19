@@ -24,6 +24,7 @@ export const CHEAT_KINDS = Object.freeze({
   fast: 'Games too close together',
   same_name: 'Same name as the other player',
   reported: 'Reported for cheating',
+  shards_day: 'Lots of Party Shards in one day',
 });
 export const CHEAT_REPORTERS = 2;
 
@@ -104,7 +105,7 @@ export async function detectCheats(db, result, banned, day, t) {
     }
     await db
       .prepare('INSERT INTO party_cheat_pairs (a, b, day, games, wins_a, wins_b, fast, last_at) VALUES (?, ?, ?, 1, ?, ?, 0, ?) ON CONFLICT (a, b, day) DO UPDATE SET games = party_cheat_pairs.games + 1, wins_a = party_cheat_pairs.wins_a + excluded.wins_a, wins_b = party_cheat_pairs.wins_b + excluded.wins_b, fast = party_cheat_pairs.fast + CASE WHEN ABS(excluded.last_at - party_cheat_pairs.last_at) < ? THEN 1 ELSE 0 END, last_at = excluded.last_at')
-      .bind(x.id, y.id, day, x.won ? 1 : 0, y.won ? 1 : 0, result.at, CHEAT_FAST_MS)
+      .bind(x.id, y.id, day, x.won ? 1 : 0, y.won ? 1 : 0, t, CHEAT_FAST_MS)
       .run();
     const pair = await db.prepare('SELECT games, wins_a, wins_b, fast FROM party_cheat_pairs WHERE a = ? AND b = ? AND day = ?').bind(x.id, y.id, day).first();
     const games = Number(pair && pair.games) || 0;
@@ -121,6 +122,10 @@ export async function detectCheats(db, result, banned, day, t) {
   }
   if (alerts.length) await db.batch(alerts.map((a) => upsert(db, a, t)));
   return alerts;
+}
+
+export function shardsDayAlert(db, { id, name, total, limit }, t) {
+  return upsert(db, { id, name, kind: 'shards_day', detail: `Earned ${nice(total)} Party Shards today (alert at ${nice(limit)}). Shards are on hold until staff mark this handled.`, bump: true }, t);
 }
 
 export async function cheatReportAlert(db, who, t) {

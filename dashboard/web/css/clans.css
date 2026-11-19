@@ -1,0 +1,607 @@
+.bell-link {
+  position: relative;
+}
+
+.bell-count {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.bell-count[hidden] {
+  display: none;
+}
+
+.bell-link.has-unread {
+  color: var(--accent-text);
+}
+
+.inbox-page .page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.inbox-item {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 4px 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.inbox-item:first-child {
+  border-top: 0;
+}
+
+.inbox-item-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.inbox-item.is-unread .inbox-item-icon {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.inbox-item-main {
+  min-width: 0;
+}
+
+.inbox-item-title {
+  margin: 0;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.inbox-item.is-read .inbox-item-title {
+  font-weight: 450;
+  color: var(--text-2);
+}
+
+.inbox-item-body {
+  margin: 2px 0 0;
+  color: var(--text-2);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.inbox-item-time {
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.inbox-item-actions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.inbox-answer {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.inbox-answer.is-done {
+  color: var(--success);
+}
+
+.inbox-answer.is-refused {
+  color: var(--danger);
+}
+
+.inbox-more {
+  display: flex;
+  justify-content: center;
+  padding-top: 12px;
+}
+
+.inbox-warnings {
+  margin-top: 16px;
+}
+
+.clan-page-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.clan-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.clan-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .clan-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.clan-hero {
+  --clan: var(--accent);
+  border-top: 3px solid var(--clan);
+}
+
+.clan-hero-body {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.clan-crest {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: var(--clan, var(--accent));
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.clan-crest-sm {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.clan-hero-text {
+  min-width: 0;
+}
+
+.clan-hero-name {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 22px;
+  line-height: 28px;
+  overflow-wrap: anywhere;
+}
+
+.clan-hero-tag {
+  color: var(--text-2);
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.clan-hero-name .clan-hero-tag {
+  margin-right: 0;
+}
+
+.clan-hero-banner {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.clan-hero-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.clan-pending-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 14px;
+}
+
+.clan-actions,
+.clan-members,
+.clan-pending-list,
+.clan-deposits,
+.clan-upgrades,
+.clan-browse,
+.clan-suggest {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.clan-action {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 14px;
+}
+
+.clan-action .icon {
+  margin-top: 3px;
+  flex: none;
+}
+
+.clan-action.is-done {
+  color: var(--success);
+}
+
+.clan-action.is-refused {
+  color: var(--danger);
+}
+
+.clan-action-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.clan-action-time {
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.clan-member {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.clan-member:first-child {
+  border-top: 0;
+}
+
+.clan-member-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.clan-member-name {
+  font-weight: 550;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+a.clan-member-name:hover {
+  text-decoration: underline;
+}
+
+.clan-member-handle {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.clan-member-level {
+  color: var(--text-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.clan-member-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.clan-subtitle {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.clan-pending-list li,
+.clan-deposits li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.clan-deposits li {
+  justify-content: space-between;
+}
+
+.clan-invite-form,
+.clan-create,
+.clan-inline-form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.clan-create,
+.clan-inline-form:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.field.clan-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.clan-create .field.clan-field + .field.clan-field {
+  margin-top: 8px;
+}
+
+.clan-field .field-label {
+  font-weight: 550;
+}
+
+.clan-field .field-help {
+  margin: 0;
+}
+
+.clan-field .input {
+  width: 100%;
+}
+
+.clan-choice .btn-primary:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.clan-tag-input {
+  text-transform: uppercase;
+  max-width: 120px;
+}
+
+.clan-suggest {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.clan-suggest:empty {
+  display: none;
+}
+
+.clan-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  text-align: left;
+  color: var(--text);
+}
+
+.clan-suggest-item:hover,
+.clan-suggest-item:focus-visible {
+  background: var(--surface-2);
+}
+
+.clan-suggest-name {
+  font-weight: 550;
+}
+
+.clan-suggest-handle,
+.clan-suggest-clan {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.clan-join-mode {
+  margin: 0 0 16px;
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.clan-join-mode .clan-subtitle {
+  margin-top: 0;
+}
+
+.clan-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.clan-locked {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.clan-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.clan-swatch {
+  --swatch: var(--accent);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--border-strong);
+  background: var(--swatch);
+}
+
+.clan-swatch:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.clan-bank {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
+.clan-bank-amount {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.clan-upgrade {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.clan-upgrade-name {
+  flex: 1;
+  min-width: 140px;
+}
+
+.clan-upgrade.is-owned .clan-upgrade-name {
+  color: var(--text-2);
+}
+
+.clan-danger-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.clan-browse-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.clan-browse-tools .input {
+  flex: 1;
+  min-width: 180px;
+}
+
+.clan-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.clan-browse-item {
+  --clan: var(--accent);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.clan-browse-item:first-child {
+  border-top: 0;
+}
+
+.clan-browse-text {
+  flex: 1;
+  min-width: 160px;
+}
+
+.clan-browse-name {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.clan-browse-text .field-help {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.clan-browse-pages {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+@media (max-width: 520px) {
+  .clan-hero-body {
+    align-items: flex-start;
+  }
+
+  .clan-crest {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+
+  .clan-hero-name {
+    font-size: 18px;
+    line-height: 24px;
+  }
+}

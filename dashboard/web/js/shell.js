@@ -77,6 +77,52 @@ export function ownerLink(active = false) {
   }, icon('gift', { size: 16 }));
 }
 
+export function clansLink(active = false) {
+  return h('a', {
+    href: '/clans',
+    class: ['icon-btn', 'party-link', active ? 'is-active' : ''],
+    title: 'Your clan',
+    dataset: { link: '' },
+    attrs: { 'aria-label': 'Your clan', 'aria-current': active ? 'page' : null },
+  }, icon('shield', { size: 16 }));
+}
+
+export function bellLabel(n) {
+  const count = Math.max(0, Math.floor(Number(n) || 0));
+  return count ? `Inbox, ${count} unread` : 'Inbox';
+}
+
+export function bellText(n) {
+  const count = Math.max(0, Math.floor(Number(n) || 0));
+  return count > 99 ? '99+' : count ? String(count) : '';
+}
+
+export function inboxLink(active = false, unread = 0) {
+  const count = h('span', { class: 'bell-count', attrs: { 'aria-hidden': 'true' }, text: bellText(unread) });
+  count.hidden = !bellText(unread);
+  return h('a', {
+    href: '/inbox',
+    class: ['icon-btn', 'party-link', 'bell-link', active ? 'is-active' : '', bellText(unread) ? 'has-unread' : ''],
+    title: bellLabel(unread),
+    dataset: { link: '', bell: '' },
+    attrs: { 'aria-label': bellLabel(unread), 'aria-current': active ? 'page' : null },
+  }, icon('bell', { size: 16 }), count);
+}
+
+export function paintBells(root, unread) {
+  const text = bellText(unread);
+  for (const a of root.querySelectorAll('.bell-link')) {
+    a.classList.toggle('has-unread', Boolean(text));
+    a.setAttribute('aria-label', bellLabel(unread));
+    a.title = bellLabel(unread);
+    const c = a.querySelector('.bell-count');
+    if (c) {
+      c.textContent = text;
+      c.hidden = !text;
+    }
+  }
+}
+
 export function accountLink(active = false) {
   return h('a', {
     href: '/account',
@@ -87,13 +133,15 @@ export function accountLink(active = false) {
   }, icon('user', { size: 16 }));
 }
 
-function userBlock(user, onLogout, { partyOwner = false, partyAdmin = false, section = '' } = {}) {
+function userBlock(user, onLogout, { partyOwner = false, partyAdmin = false, section = '', unread = 0 } = {}) {
   const name = user?.display_name || user?.username || 'You';
   return h('div', { class: 'user-block' },
     avatar({ name, url: user?.avatar_url, id: user?.id, size: 'sm' }),
     h('div', { class: 'user-text' },
       h('span', { class: 'user-name', text: name }),
       user?.username && user.username !== name ? h('span', { class: 'user-handle', text: `@${user.username}` }) : null),
+    inboxLink(section === 'inbox', unread),
+    clansLink(section === 'clans'),
     accountLink(section === 'account'),
     packsLink(section === 'packs' || section === 'packs-browse'),
     partyOwner ? ownerLink(section === 'owner') : null,
@@ -124,6 +172,7 @@ export function createShell({ onLogout }) {
   const root = h('div', { class: 'app-shell' }, skip, sidebar, overlay, h('div', { class: 'app-main' }, appAurora(), topbar, main));
 
   let open = false;
+  let unread = 0;
   function setOpen(v) {
     open = v;
     root.classList.toggle('sidebar-open', v);
@@ -152,8 +201,13 @@ export function createShell({ onLogout }) {
     root,
     main,
     close: () => setOpen(false),
+    get unread() { return unread; },
+    setUnread(n) {
+      unread = Math.max(0, Math.floor(Number(n) || 0));
+      paintBells(root, unread);
+    },
     update({ variant, section, server, user, partyOwner = false, partyAdmin = false, crumbs: trail }) {
-      const who = { partyOwner, partyAdmin, section };
+      const who = { partyOwner, partyAdmin, section, unread };
       root.classList.toggle('shell-plain', variant === 'plain');
       replace(topRight, variant === 'plain' ? null : h('span', { class: 'topbar-cta' }, addToServerButton({ compact: true })), themeToggle(), variant === 'plain' ? userBlock(user, onLogout, who) : null);
       replace(root.querySelector('.topbar-brand'), ...(variant === 'plain' ? [brand({ href: '/servers' }), addToServerButton()] : []));

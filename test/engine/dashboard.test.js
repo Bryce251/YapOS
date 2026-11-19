@@ -430,6 +430,7 @@ test('cases come newest first, capped at 2000', async () => {
 
 test('the public page is off by default and publishes the one global board once turned on', async () => {
   const { h, w, run, change } = await setup({ harness: { apps: ['levels', 'economy', 'wrapped'] } });
+  patchGlobalConfig(h.engine, 'economy', { activityPay: { chat: 0, voice: 0, levelup: 0, weekly: 500 } });
   await run('access', IDS.admin);
   assert.deepEqual(w.publics, {});
   assert.ok(!w.requests.some((r) => r.path.startsWith('/bot/public')));

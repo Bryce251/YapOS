@@ -19,6 +19,8 @@ import { getPartyProfile } from './party-profile.js';
 import { activityAuthRoute, isActivityAuthPath, linkSessionRoute } from './activity-auth.js';
 import { ownerApi } from './owner.js';
 import { clansRoute } from './clans.js';
+import { clanManageRoute, answerInvite } from './clan-manage.js';
+import { inboxRoute } from './inbox.js';
 import { activityWarningsRoute } from './party-mod.js';
 import { getBlockedPublic, blockedWordsRoute, blockedPatternsRoute } from './party-blocked.js';
 import { parseDays, readStats } from './server-stats.js';
@@ -513,6 +515,8 @@ export async function handleApi(request, env, deps, url) {
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-look') return lookRoute(request, env, session, t);
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-banner') return bannerRoute(request, env, session, t);
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-notices') return noticesRoute(request, env, session, t);
+  if (route[0] === 'me' && route[1] === 'clan') return clanManageRoute(request, env, session, route, url, t);
+  if (route[0] === 'me' && route[1] === 'inbox') return inboxRoute(request, env, session, route, url, t, { answer: answerInvite });
   if (n === 2 && (route[0] === 'link' || (route[0] === 'me' && route[1] === 'party-signins'))) return linkSessionRoute(request, env, session, route, t);
   if (route[0] === 'party' && route[1] === 'blocked-words') return blockedWordsRoute(request, env, session, route, t);
   if (route[0] === 'party' && route[1] === 'blocked-patterns') return blockedPatternsRoute(request, env, session, route, t);

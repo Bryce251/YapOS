@@ -113,7 +113,8 @@ export function myLine(p) {
     const r = p.result;
     const rank = r.rank ? ` · #${r.rank} today` : '';
     const best = Number.isFinite(r.best) && r.best > r.score ? ` · your best today is ${plural(r.best, 'point', 'points')}` : '';
-    return { tone: 'good', text: `Your daily score: ${plural(r.score, 'point', 'points')}${best}${rank}`, streak: streakText(r.streak) };
+    const paid = r.shards > 0 ? ` · +${r.shards} 💎` : '';
+    return { tone: 'good', text: `Your daily score: ${plural(r.score, 'point', 'points')}${best}${rank}${paid}`, streak: streakText(r.streak) };
   }
   return null;
 }

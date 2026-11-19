@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHarness, IDS } from '../harness.js';
-import { seasonMonth, seasonName, seasonEndsAt, seasonTop, addSeason, rollSeason, seasonBoard, seasonBadges, seasonBadgeText, SEASON_NS, GLOBAL_KEY } from '../../engine/global.js';
+import { seasonMonth, seasonName, seasonEndsAt, seasonTop, addSeason, rollSeason, seasonBoard, seasonBadges, seasonBadgeText, SEASON_NS, GLOBAL_KEY, patchGlobalConfig } from '../../engine/global.js';
 import { partyText, partyGameName, partyBadgeName } from '../../apps/levels.js';
 import { earnSource } from '../../apps/economy.js';
 
@@ -24,6 +24,7 @@ test('season months, names and the end of the month are UTC', () => {
 
 test('XP earned counts toward the season, admin changes do not, and the month end keeps levels and Shards', async () => {
   const h = await make();
+  patchGlobalConfig(h.engine, 'economy', { activityPay: { chat: 0, voice: 0, levelup: 0, weekly: 500 } });
   const levels = h.engine.service('levels');
   const eco = h.engine.service('economy');
   await levels.addXp(S, IDS.member, 300, 'test');
