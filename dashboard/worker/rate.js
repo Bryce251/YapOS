@@ -31,6 +31,8 @@ export const LIMITS = {
   activityWarnings: 30,
   profileLook: 20,
   profileBanner: 6,
+  profileAvatar: 6,
+  avatarRefresh: 20,
   staffProfile: 30,
   clans: 120,
   clanJoin: 10,

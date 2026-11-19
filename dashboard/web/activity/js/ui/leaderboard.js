@@ -61,13 +61,19 @@ export function valueText(board, value) {
   return `${fmt(value)} ${Number(value) === 1 ? unit[0] : unit[1]}`;
 }
 
-export function meLine(board, me) {
+export const BOARD_HIDDEN_TEXT = 'Hidden from leaderboards';
+
+export function meLine(board, me, hidden = false) {
+  if (hidden) return BOARD_HIDDEN_TEXT;
   if (!me) return "You're not on this board yet. Finish a game with friends to get on it!";
   return `You're #${fmt(me.rank)} with ${valueText(board, me.value)}`;
 }
 
+const OWN_PIC = /^\/avatar-img\/a-[a-z0-9]{10}-[0-9a-f]{16}(-still)?\.(png|webp|jpg|gif)$/;
+
 function safeAvatar(url) {
   if (typeof url !== 'string' || !url) return null;
+  if (OWN_PIC.test(url)) return url;
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:' || !AVATAR_HOSTS.has(u.hostname) || u.username || u.password || u.port) return null;
@@ -100,7 +106,7 @@ export function readBoard(data) {
       id,
       name,
       username,
-      avatar: safeAvatar(r.avatar),
+      avatar: safeAvatar(r.avatarStill) || safeAvatar(r.avatar),
       initials: initials(name),
       hue: hueOf(id || name),
       value: count(r.value),
@@ -112,7 +118,7 @@ export function readBoard(data) {
   });
   const me = raw.me && typeof raw.me === 'object' && count(raw.me.rank) > 0 ? { rank: count(raw.me.rank), value: count(raw.me.value) } : null;
   const m = raw.month && typeof raw.month === 'object' && /^\d{4}-\d{2}$/.test(raw.month.month) ? { month: raw.month.month, daysLeft: count(raw.month.daysLeft), prizes: count(raw.month.prizes) || 3 } : null;
-  return { rows, me, total: count(raw.total), month: m };
+  return { rows, me, meHidden: raw.meHidden === true, total: count(raw.total), month: m };
 }
 
 export function monthLine(month) {
@@ -169,13 +175,22 @@ function detail(board, r) {
   return bits.join(' · ');
 }
 
+export function nameTrigger(r) {
+  if (!r.id || !ID_RE.test(r.id)) return h('strong', { class: 'lb-name', text: r.name });
+  return h('strong', {
+    class: 'lb-name',
+    attrs: { 'data-profile-id': r.id, 'data-profile-name': r.name, role: 'button', tabindex: '-1', 'aria-haspopup': 'dialog', 'aria-label': `View ${r.name}'s profile` },
+    text: r.name,
+  });
+}
+
 function rowEl(board, r, meId) {
   const top = r.rank <= 3;
   return h('li', { class: ['lb-row', top ? `is-top-${r.rank}` : null, meId && r.id.toLowerCase() === meId ? 'is-me' : null] },
     h('span', { class: ['lb-rank', top ? `lb-medal medal medal-${r.rank}` : null], attrs: { 'aria-label': `Rank ${r.rank}` }, text: top ? String(r.rank) : `#${r.rank}` }),
     pfp({ ...r, isMe: Boolean(meId && r.id.toLowerCase() === meId) }, 'md'),
     h('span', { class: 'lb-who' },
-      h('strong', { class: 'lb-name', text: r.name }),
+      nameTrigger(r),
       h('span', { class: 'lb-meta', text: detail(board, r) })),
     h('span', { class: 'lb-value', text: valueText(board, r.value) }));
 }
@@ -263,7 +278,7 @@ export function openLeaderboard(container, { engine = null, me = null } = {}) {
         swap(body, h('ol', { class: 'lb-list', attrs: { 'aria-label': `${tabMeta(board).label} leaderboard` } }, data.rows.map((r) => rowEl(board, r, meId))),
           data.total ? h('p', { class: 'lb-total', text: `${fmt(data.total)} ${data.total === 1 ? 'player' : 'players'} on this board` }) : null);
       }
-      if (meId) swap(mine, h('span', { class: ['lb-me-text', data.me ? null : 'is-off'], text: meLine(board, data.me) }));
+      if (meId) swap(mine, h('span', { class: ['lb-me-text', data.me || data.meHidden ? null : 'is-off'], text: meLine(board, data.me, data.meHidden) }));
     } catch (err) {
       if (closed || mineToken !== token) return;
       const busy = err && err.message === 'busy';

@@ -12,6 +12,8 @@ import { accountState, requireAccount, noAccountStatement } from './owner-accoun
 import { listCustomBadges, catalogEntry, isCustomBadge, liveBadges, badgesRoute } from './custom-badges.js';
 import { staffLookView } from './profile-custom.js';
 import { noteStatements } from './inbox.js';
+import { customAvatars } from './avatar-store.js';
+import { likesForgetStatements } from './profile-likes.js';
 
 export const OWNER_ACTIONS_PER_MIN = 120;
 export const OWNER_READS_PER_MIN = 300;
@@ -324,7 +326,10 @@ async function searchUsers(env, url, t) {
     return 4;
   };
   users.sort((a, b) => score(a) - score(b) || (b.seen || 0) - (a.seen || 0) || a.id.localeCompare(b.id));
-  return json({ users: users.slice(0, OWNER_SEARCH_MAX) });
+  const shown = users.slice(0, OWNER_SEARCH_MAX);
+  const pics = await customAvatars(db, shown.map((u) => u.id), { hidden: true }).catch(() => new Map());
+  for (const u of shown) if (pics.has(u.id.toLowerCase())) u.avatar = pics.get(u.id.toLowerCase()).avatar;
+  return json({ users: shown });
 }
 
 function idList(value) {
@@ -356,6 +361,8 @@ async function userDetail(env, raw, t) {
     isGlobalHidden(db, id),
   ]);
   const user = mergeUser(blankUser(id), { pub, prof, sess: sess && sess.user_id ? sess : null, known });
+  const own = (await customAvatars(db, [id], { hidden: true }).catch(() => new Map())).get(String(id).toLowerCase());
+  if (own) user.avatar = own.avatar;
   const pubAt = pub ? Number(pub.updated) || 0 : 0;
   const knownAt = known ? Number(known.updated) || 0 : 0;
   user.xp = freshest(pub && !Number(pub.hidden) ? pub.xp : null, pubAt, known ? known.xp : null, knownAt);
@@ -567,7 +574,7 @@ export async function postOwnerResults(request, env, t) {
     const after = ok ? cleanAfter(r.after) : null;
     if (after && after.badges) after.badges = withoutFounder(after.badges, isPartyOwner(env, row.user_id));
     if (after) stmts.push(...afterStatements(db, row.user_id, after, t));
-    if (!ok && r.noAccount === true) stmts.push(noAccountStatement(db, row.user_id, t));
+    if (!ok && r.noAccount === true) stmts.push(noAccountStatement(db, row.user_id, t), ...likesForgetStatements(db, row.user_id));
     if (ok && GIFT_NOTES.has(row.kind)) {
       if (!catalog) catalog = await readCatalog(db).catch(() => ({ achievements: [], badges: [] }));
       const note = giftNote(row, catalog);

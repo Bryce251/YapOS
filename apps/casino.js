@@ -5,6 +5,7 @@ import { customId } from '../engine/router.js';
 import { tokenize, didYouMean, clip } from '../engine/parse.js';
 import { accept as acceptValue, reject as rejectValue, boolField } from '../engine/dashboard.js';
 import { HARD_CAP, UNLIMITED, isUnlimited, parseLimit, storeLimit, limitText, limitHelp, atMost, withinLimit } from '../engine/limits.js';
+import { hiddenFromBoards } from '../engine/global.js';
 
 const ID = 'casino';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -1372,7 +1373,7 @@ async function statsCommand(ctx, tokens) {
 
 function topView(engine, sid, biggest) {
   const doc = readDoc(engine, sid);
-  const list = Object.entries(doc.stats).filter(([, u]) => u && Number(u.n) > 0).map(([uid, u]) => ({ uid, n: Number(u.n) || 0, net: (Number(u.returned) || 0) - (Number(u.wagered) || 0), best: Number(u.best) || 0 }));
+  const list = Object.entries(doc.stats).filter(([uid, u]) => u && Number(u.n) > 0 && !hiddenFromBoards(engine, uid)).map(([uid, u]) => ({ uid, n: Number(u.n) || 0, net: (Number(u.returned) || 0) - (Number(u.wagered) || 0), best: Number(u.best) || 0 }));
   const sorted = biggest ? list.filter((x) => x.best > 0).sort((a, b) => b.best - a.best) : list.sort((a, b) => b.net - a.net);
   const lines = sorted.slice(0, 10).map((x, i) => `${MEDALS[i] || `**${i + 1}.**`} ${mention(x.uid)} · ${biggest ? `biggest win ${money(engine, sid, x.best)}` : `net ${signedMoney(engine, sid, x.net)}`} · ${plural(x.n, 'game')}`);
   const t = doc.totals;

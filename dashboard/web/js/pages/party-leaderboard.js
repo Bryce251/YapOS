@@ -3,10 +3,12 @@ import { icon } from '../icons.js';
 import { avatar, button, emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
 import { formatNumber } from '../format.js';
 import { isAbort } from '../api.js';
-import { profilePath } from '../router.js';
 import { publicFrame } from '../public-frame.js';
 import { PARTY_GAMES, gameInfo } from '../community-data.js';
 import { medalFor } from '../public-data.js';
+import { state } from '../state.js';
+import { BOARD_HIDDEN_TEXT, boardRowLabel, openBoardPerson } from './board-person.js';
+import { openProfilePanel } from './party-person.js';
 
 export const LEADERBOARD_API = '/api/activity/leaderboard';
 export const LEADERBOARD_PATH = '/party/leaderboard';
@@ -62,18 +64,20 @@ export function normalizeLeaderboard(data) {
       name: str(r.name) || username || 'Player',
       username,
       avatar: str(r.avatar) || null,
+      ...(str(r.avatarStill) ? { avatarStill: str(r.avatarStill) } : {}),
       value: num(r.value),
       games: num(r.games),
       wins: num(r.wins),
       best: num(r.best),
       bestGame: GAME_IDS.includes(r.bestGame) ? r.bestGame : null,
       link: r.link === true && Boolean(username),
+      ...(r.private === true ? { private: true } : {}),
       ...(r.nameHidden === true || r.usernameHidden === true ? { hiddenHint: str(r.hint).slice(0, 12) || '-' } : {}),
     };
   });
   const me = raw.me && typeof raw.me === 'object' && num(raw.me.rank) > 0 ? { rank: num(raw.me.rank), value: num(raw.me.value) } : null;
   const m = raw.month && typeof raw.month === 'object' && /^\d{4}-\d{2}$/.test(str(raw.month.month)) ? { month: str(raw.month.month), daysLeft: num(raw.month.daysLeft), prizes: num(raw.month.prizes) || 3 } : null;
-  return { rows, me, total: num(raw.total), month: m };
+  return { rows, me, meHidden: raw.meHidden === true, total: num(raw.total), month: m };
 }
 
 export function monthText(month) {
@@ -87,7 +91,8 @@ export function valueText(board, value) {
   return `${formatNumber(value)} ${value === 1 ? unit[0] : unit[1]}`;
 }
 
-export function meText(board, me) {
+export function meText(board, me, hidden = false) {
+  if (hidden) return BOARD_HIDDEN_TEXT;
   if (!me) return '';
   return `You're #${formatNumber(me.rank)} with ${valueText(board, me.value)}`;
 }
@@ -109,17 +114,59 @@ function detail(board, r) {
   return bits.join(' · ');
 }
 
-export function boardRows(board, rows, meId = null) {
+export function boardFacts(board, r) {
+  const info = boardInfo(board);
+  const facts = [
+    { label: `${info.label} rank`, value: `#${formatNumber(r.rank)}`, key: 'rank' },
+    { label: info.label, value: valueText(board, r.value), key: 'value' },
+  ];
+  if (board !== 'games') facts.push({ label: 'Games', value: formatNumber(r.games), key: 'games' });
+  if (board !== 'wins') facts.push({ label: 'Wins', value: formatNumber(r.wins), key: 'wins' });
+  if (board !== 'best' && r.best) facts.push({ label: 'Best game', value: r.bestGame ? `${formatNumber(r.best)} in ${gameInfo(r.bestGame).emoji} ${gameInfo(r.bestGame).name}` : formatNumber(r.best), key: 'best' });
+  return facts;
+}
+
+export function boardPerson(r) {
+  return {
+    id: r.id,
+    name: r.name,
+    avatar: r.avatar || '',
+    avatarStill: r.avatarStill || '',
+    handle: r.link && r.username ? r.username : '',
+    private: !(r.link && r.username),
+  };
+}
+
+export function boardRows(board, rows, meId = null, onOpen = null) {
   return h('ol', { class: 'plb-list', attrs: { 'aria-label': `${boardInfo(board).label} leaderboard` } },
-    ...rows.map((r) => h('li', { class: ['plb-row', r.rank <= 3 ? `is-top-${r.rank}` : '', meId && r.id === meId ? 'is-me' : ''] },
-      rankMark(r.rank),
-      avatar({ name: r.name, url: r.avatar || '', id: r.id, size: 'sm' }),
-      h('span', { class: 'plb-who' },
-        r.link
-          ? h('a', { href: profilePath(r.username), class: 'plb-name', dataset: { link: '' }, text: r.name })
-          : h('span', { class: 'plb-name', text: r.name, attrs: { title: hiddenHintText(r) || null } }),
-        h('span', { class: 'plb-meta', text: detail(board, r) })),
-      h('span', { class: 'plb-value', text: valueText(board, r.value) }))));
+    ...rows.map((r) => h('li', { class: 'plb-item' }, h('button', {
+      type: 'button',
+      class: ['plb-row', 'plb-row-btn', r.rank <= 3 ? `is-top-${r.rank}` : '', meId && r.id === meId ? 'is-me' : ''],
+      dataset: { id: r.id || null },
+      attrs: { 'aria-haspopup': 'dialog', 'aria-label': `${boardRowLabel(r.name, r.rank)}, ${valueText(board, r.value)}`, title: hiddenHintText(r) || null },
+      on: { click: () => onOpen?.(r) },
+    },
+    rankMark(r.rank),
+    avatar({ name: r.name, url: r.avatar || '', still: r.avatarStill || '', animate: false, id: r.id, size: 'sm' }),
+    h('span', { class: 'plb-who' },
+      h('span', { class: 'plb-name', text: r.name }),
+      h('span', { class: 'plb-meta', text: detail(board, r) })),
+    h('span', { class: 'plb-value', text: valueText(board, r.value) })))));
+}
+
+export function openBoardRow({ board, row, api, signal, monthly = false, game = 'all', isOwner = () => state.partyOwner === true, isStaff = () => state.partyAdmin === true || state.partyOwner === true }) {
+  const info = boardInfo(board);
+  const where = monthly || game === 'all' ? info.label : `${info.label} in ${gameInfo(game).name}`;
+  return openBoardPerson({
+    person: boardPerson(row),
+    api,
+    signal,
+    subtitle: `Party leaderboard · ${where}`,
+    facts: boardFacts(board, row),
+    owner: Promise.resolve(isOwner()),
+    staff: Promise.resolve(isStaff()),
+    onStaff: (p) => openProfilePanel({ api, signal, id: p.id, seed: { id: p.id, name: p.name, avatar: p.avatar }, role: isOwner() ? 'owner' : 'admin', gameName: (g) => gameInfo(g).name }),
+  });
 }
 
 function boardSkeleton() {
@@ -211,8 +258,9 @@ export function renderPartyLeaderboard(root, ctx) {
         replace(list, emptyState({ icon: 'trophy', title: 'Nobody here yet', body: monthly ? 'Nobody has scored this month yet. Win a game now to grab the top spot!' : game === 'all' ? 'Finish a YapOS Party game with at least one friend to be the first on the board.' : `Nobody has scored in ${gameInfo(game).name} yet. Be the first!` }));
         return;
       }
-      replace(list, boardRows(board, view.rows, user?.id ? String(user.id).toLowerCase() : null), h('p', { class: 'plb-total muted', text: `${formatNumber(view.total)} ${view.total === 1 ? 'player' : 'players'} on this board` }));
-      if (view.me) replace(mine, h('span', { class: 'plb-me-rank', text: `#${formatNumber(view.me.rank)}` }), h('span', { text: meText(board, view.me) }));
+      replace(list, boardRows(board, view.rows, user?.id ? String(user.id).toLowerCase() : null, (row) => openBoardRow({ board, row, api, signal, monthly, game })), h('p', { class: 'plb-total muted', text: `${formatNumber(view.total)} ${view.total === 1 ? 'player' : 'players'} on this board` }));
+      if (view.meHidden) replace(mine, h('span', { class: 'plb-me-rank', text: BOARD_HIDDEN_TEXT }));
+      else if (view.me) replace(mine, h('span', { class: 'plb-me-rank', text: `#${formatNumber(view.me.rank)}` }), h('span', { text: meText(board, view.me) }));
       else if (user) replace(mine, h('span', { class: 'muted', text: "You're not on this board yet. Play a game to get on it!" }));
     } catch (err) {
       if (isAbort(err) || signal.aborted || mineToken !== token) return;

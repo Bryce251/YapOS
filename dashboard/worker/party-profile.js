@@ -1,6 +1,6 @@
 import { ID_RE, json, fail, isPlainObject, parseJsonSafe, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
-import { cleanAvatar, cleanUsername } from './profiles.js';
+import { cleanUsername } from './profiles.js';
 import { safeName } from './public-profiles.js';
 import { PARTY_BADGES, badgeTier, badgesFor, partySeasonBadges, seasonBadgeInfo, specialBadgesFirst } from './party-badges.js';
 import { readCatalog } from './owner.js';
@@ -9,6 +9,8 @@ import { LEADERBOARD_GAMES, isOffBoard, offBoard } from './party-leaderboard.js'
 import { findBlocked } from '../web/activity/js/filter.js';
 import { readCustom, cardLook, ownedSet, safeTexts } from './profile-custom.js';
 import { hiddenNameMap, flagsFor, maskEntry } from './hidden-names.js';
+import { avatarsFor, refreshStale } from './avatar-store.js';
+import { likeCount } from './profile-likes.js';
 
 export const CARD_TTL = 30_000;
 export const CARD_CACHE_MAX = 500;
@@ -115,7 +117,7 @@ async function rankOf(db, id, points) {
 export async function buildCard(db, rawId, t = Date.now()) {
   const id = rawId.toLowerCase();
   const pair = id === rawId ? [id, id] : [id, rawId];
-  const [pub, settings, prof, stats, streak, pts, catalog, partySeason] = await Promise.all([
+  const [pub, settings, prof, stats, streak, pts, catalog, partySeason, pics] = await Promise.all([
     db.prepare('SELECT username, name, level, xp, shards, badges, achievements, clan, hidden, updated FROM public_profiles WHERE user_id IN (?, ?) ORDER BY updated DESC LIMIT 1').bind(...pair).first(),
     db.prepare('SELECT hidden, show_shards, claimed, updated FROM profile_settings WHERE user_id IN (?, ?) ORDER BY updated DESC LIMIT 1').bind(...pair).first(),
     db.prepare('SELECT username, display_name, avatar_url, missing FROM profiles WHERE id IN (?, ?) ORDER BY fetched DESC LIMIT 1').bind(...pair).first(),
@@ -124,13 +126,16 @@ export async function buildCard(db, rawId, t = Date.now()) {
     db.prepare('SELECT user_id, name, username, points FROM party_points WHERE user_id IN (?, ?) ORDER BY points DESC LIMIT 1').bind(...pair).first(),
     readCatalog(db).catch(() => ({ achievements: [], badges: [] })),
     partySeasonBadges(db, pair).catch(() => []),
+    avatarsFor(db, [rawId]).catch(() => new Map()),
   ]);
+  const pic = pics.get(id) || null;
   if (!pub && !prof && !stats && !pts) return null;
   const known = prof && !Number(prof.missing) ? prof : null;
-  const avatar = known ? cleanAvatar(known.avatar_url) : null;
+  const avatar = pic ? pic.avatar : null;
+  const still = pic && pic.avatarStill ? { avatarStill: pic.avatarStill } : {};
   const callName = known ? safeName(known.display_name, NAME_MAX, null) : null;
   const view = visible(pub, settings);
-  if (view.hidden) return { hidden: true, name: callName, avatar };
+  if (view.hidden) return { hidden: true, name: callName, avatar, ...still };
   const username = handle(pub && pub.username) || handle(known && known.username) || handle(pts && pts.username);
   const names = [pub && safeName(pub.name, NAME_MAX, null), callName, pts && safeName(pts.name, NAME_MAX, null)].filter(Boolean);
   const real = names.find((n) => !username || n.replace(/^@+/, '').toLowerCase() !== username.toLowerCase());
@@ -157,6 +162,7 @@ export async function buildCard(db, rawId, t = Date.now()) {
     name,
     username,
     avatar,
+    ...still,
     level,
     xp,
     progress: level === null ? null : levelProgress(level, xp),
@@ -168,6 +174,7 @@ export async function buildCard(db, rawId, t = Date.now()) {
     party: { games, wins, bestStreak, favourites: favourites(parseJsonSafe(stats && stats.by_game, {})) },
     rank: await rankOf(db, pts ? String(pts.user_id) : id, Math.floor(Number(pts && pts.points) || 0)),
     page: Boolean(pub && username && handle(pub.username) === username),
+    likes: pub && username && handle(pub.username) === username ? await likeCount(db, id, t).catch(() => null) : null,
     look,
   };
 }
@@ -191,6 +198,11 @@ export async function getPartyProfile(request, env, raw, t) {
     if (cards.size > CARD_CACHE_MAX) cards.delete(cards.keys().next().value);
   }
   if (!entry.card) return fail(404, 'not_found', MISSING, undefined, CACHE_HEADERS);
+  if (!entry.refreshed) {
+    entry.refreshed = true;
+    const pics = await avatarsFor(env.DB, [raw], { sessions: false }).catch(() => null);
+    if (pics) await refreshStale(env, pics, [raw], t, clientIp(request));
+  }
   const flags = flagsFor(await hiddenNameMap(env.DB, t), key);
   return json({ profile: flags ? maskEntry(entry.card, flags, key, { link: ['page'] }) : entry.card }, 200, CACHE_HEADERS);
 }

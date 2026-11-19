@@ -1,5 +1,9 @@
 import { formatNumber, toNumber } from './format.js';
 
+function still(r) {
+  return typeof r.avatar_still === 'string' && r.avatar_still ? { avatarStill: r.avatar_still } : {};
+}
+
 export function normalizeBoard(list, kind) {
   if (!Array.isArray(list)) return [];
   return list
@@ -10,7 +14,7 @@ export function normalizeBoard(list, kind) {
       const handle = typeof r.handle === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(r.handle) ? r.handle : '';
       if (kind === 'economy') {
         const balance = toNumber(r.balance) ?? 0;
-        return { rank, id: String(r.id ?? ''), name, avatar: r.avatar_url ?? '', handle, balance, primary: balance, primaryLabel: 'coins', secondary: '' };
+        return { rank, id: String(r.id ?? ''), name, avatar: r.avatar_url ?? '', ...still(r), handle, balance, primary: balance, primaryLabel: 'coins', secondary: '' };
       }
       const level = toNumber(r.level) ?? 0;
       const xp = toNumber(r.xp);
@@ -18,7 +22,7 @@ export function normalizeBoard(list, kind) {
       const parts = [];
       if (xp !== null) parts.push(`${formatNumber(xp)} XP`);
       if (messages !== null) parts.push(`${formatNumber(messages)} ${messages === 1 ? 'message' : 'messages'}`);
-      return { rank, id: String(r.id ?? ''), name, avatar: r.avatar_url ?? '', handle, level, xp, messages, primary: level, primaryLabel: 'level', secondary: parts.join(' · ') };
+      return { rank, id: String(r.id ?? ''), name, avatar: r.avatar_url ?? '', ...still(r), handle, level, xp, messages, primary: level, primaryLabel: 'level', secondary: parts.join(' · ') };
     })
     .sort((a, b) => a.rank - b.rank);
 }
@@ -30,6 +34,7 @@ export function boardPeople(levels, economy) {
     if (!people.has(r.id)) people.set(r.id, { id: r.id, name: r.name, avatar: r.avatar, handle: r.handle, levelRank: null, level: null, xp: null, messages: null, shardsRank: null, shards: null });
     const p = people.get(r.id);
     if (!p.avatar && r.avatar) p.avatar = r.avatar;
+    if (!p.avatarStill && r.avatarStill) p.avatarStill = r.avatarStill;
     if (!p.handle && r.handle) p.handle = r.handle;
     return p;
   };

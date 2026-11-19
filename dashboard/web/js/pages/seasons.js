@@ -3,10 +3,11 @@ import { icon } from '../icons.js';
 import { emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
 import { formatNumber } from '../format.js';
 import { isAbort } from '../api.js';
-import { profilePath } from '../router.js';
 import { publicFrame } from '../public-frame.js';
 import { normalizeSeasons, SEASON_KINDS } from '../community-data.js';
 import { medalFor } from '../public-data.js';
+import { state } from '../state.js';
+import { boardRowLabel, openBoardPerson } from './board-person.js';
 
 export const SEASONS_API = '/api/seasons';
 
@@ -16,25 +17,45 @@ function rankMark(rank) {
   return h('span', { class: 'rank-num', attrs: { 'aria-label': `Rank ${rank}` }, text: String(rank) });
 }
 
-function boardList(rows, kind) {
+export function seasonValueText(kind, value) {
+  return kind === 'shards' ? `💎 ${formatNumber(value)}` : `${formatNumber(value)} XP`;
+}
+
+export function seasonPerson(r) {
+  return { id: r.id || '', name: r.name, avatar: '', handle: r.linked && r.username ? r.username : '', private: !(r.linked && r.username) };
+}
+
+export function seasonFacts(s, kind, r) {
+  return [
+    { label: 'Season', value: s.label, key: 'season' },
+    { label: `${SEASON_KINDS[kind].label} rank`, value: `#${formatNumber(r.rank)}`, key: 'rank' },
+    { label: kind === 'shards' ? 'Shards earned' : 'XP earned', value: seasonValueText(kind, r.value), key: 'value' },
+  ];
+}
+
+function boardList(rows, kind, onOpen) {
   const meta = SEASON_KINDS[kind];
   if (!rows.length) return h('p', { class: 'muted season-none', text: 'Nobody placed here.' });
   return h('ol', { class: 'season-board', attrs: { 'aria-label': meta.long } },
-    ...rows.map((r) => h('li', { class: ['season-row', r.rank <= 3 ? `is-top-${r.rank}` : ''] },
-      rankMark(r.rank),
-      r.linked
-        ? h('a', { href: profilePath(r.username), class: 'season-name', dataset: { link: '' }, text: r.name })
-        : h('span', { class: 'season-name', text: r.name }),
-      h('span', { class: 'season-value', text: kind === 'shards' ? `💎 ${formatNumber(r.value)}` : `${formatNumber(r.value)} XP` }))));
+    ...rows.map((r) => h('li', { class: 'season-item' }, h('button', {
+      type: 'button',
+      class: ['season-row', 'season-row-btn', r.rank <= 3 ? `is-top-${r.rank}` : ''],
+      dataset: { id: r.id || null },
+      attrs: { 'aria-haspopup': 'dialog', 'aria-label': `${boardRowLabel(r.name, r.rank)}, ${seasonValueText(kind, r.value)}` },
+      on: { click: () => onOpen?.(r, kind) },
+    },
+    rankMark(r.rank),
+    h('span', { class: 'season-name', text: r.name }),
+    h('span', { class: 'season-value', text: seasonValueText(kind, r.value) })))));
 }
 
-export function seasonCard(s) {
+export function seasonCard(s, onOpen = null) {
   return h('section', { class: 'season-card', id: `season-${s.month}` },
     h('h2', { class: 'season-title' }, icon('trophy', { size: 16 }), h('span', { text: s.label })),
     h('div', { class: 'season-boards' },
       ...['xp', 'shards'].map((kind) => h('div', { class: 'season-col' },
-        h('h3', { class: 'season-col-title' }, h('span', { attrs: { 'aria-hidden': 'true' }, text: SEASON_KINDS[kind].emoji }), h('span', { text: SEASON_KINDS[kind].long })),
-        boardList(s[kind], kind)))));
+        h('h3', { class: 'season-col-title' }, h('span', { attrs: { 'aria-hidden': 'true' }, text: SEASON_KINDS[kind].emoji }), h('span', { text: SEASON_KINDS[kind].long.replace(`${SEASON_KINDS[kind].emoji} `, '') })),
+        boardList(s[kind], kind, onOpen ? (r) => onOpen(s, kind, r) : null)))));
 }
 
 function seasonsSkeleton() {
@@ -72,7 +93,15 @@ export function renderSeasons(root, ctx) {
         replace(list, emptyState({ icon: 'trophy', title: 'No finished seasons yet', body: 'The first season shows up here as soon as the month ends.' }));
         return;
       }
-      replace(list, ...seasons.map(seasonCard));
+      const open = (s, kind, r) => openBoardPerson({
+        person: seasonPerson(r),
+        api,
+        signal,
+        subtitle: `Past season · ${s.label}`,
+        facts: seasonFacts(s, kind, r),
+        owner: Promise.resolve(state.partyOwner === true),
+      });
+      replace(list, ...seasons.map((s) => seasonCard(s, open)));
     } catch (err) {
       if (isAbort(err) || signal.aborted) return;
       replace(list, errorState({ title: "Couldn't load past seasons", body: err.message, onRetry: load }));

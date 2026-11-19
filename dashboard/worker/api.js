@@ -1,7 +1,7 @@
 import { MINUTE, ID_RE, SERVER_ID_RE, APP_RE, SLUG_RE, SETTING_KEY_RE, USER_BODY_LIMIT, HttpError, json, fail, redirect, readJson, isPlainObject, parseJsonSafe, publicOrigin, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { getSession, touchSession, publicUser } from './sessions.js';
-import { profileRoute } from './profiles.js';
+import { profileRoute, cleanAvatar } from './profiles.js';
 import { activityAdminsRoute, partyRoute, isPartyOwner } from './party.js';
 import { postActivityReport, partyStaffRoute, partyRole } from './reports.js';
 import { postResults } from './party-results.js';
@@ -10,6 +10,8 @@ import { packsRoute, getPublicPack } from './party-packs.js';
 import { browsePacks, packReportsRoute } from './pack-browse.js';
 import { getPublicProfile, visibilityRoute, publicHandles } from './public-profiles.js';
 import { lookRoute, bannerRoute } from './profile-custom.js';
+import { avatarRoute, refreshRoute, avatarPartRoute, looksRoute } from './avatars.js';
+import { withAvatar, avatarsFor } from './avatar-store.js';
 import { maskList } from './hidden-names.js';
 import { staffProfileRoute, noticesRoute } from './staff-profile.js';
 import { globalHiddenIds, withoutHidden } from './owner-global.js';
@@ -21,6 +23,7 @@ import { ownerApi } from './owner.js';
 import { clansRoute } from './clans.js';
 import { clanManageRoute, answerInvite } from './clan-manage.js';
 import { inboxRoute } from './inbox.js';
+import { likesRoute, likedByRoute } from './profile-likes.js';
 import { activityWarningsRoute } from './party-mod.js';
 import { getBlockedPublic, blockedWordsRoute, blockedPatternsRoute } from './party-blocked.js';
 import { parseDays, readStats } from './server-stats.js';
@@ -418,10 +421,15 @@ async function getPublic(request, env, slug, t) {
   const hidden = await globalHiddenIds(env.DB);
   const levels = withoutHidden(data && data.levels, hidden);
   const economy = withoutHidden(data && data.economy, hidden);
-  const handles = await publicHandles(env.DB, [...levels, ...economy].map((r) => r && r.id));
+  const boardIds = [...levels, ...economy].map((r) => r && r.id);
+  const [handles, pics] = await Promise.all([publicHandles(env.DB, boardIds), avatarsFor(env.DB, boardIds.filter((x) => typeof x === 'string'), { sessions: false }).catch(() => new Map())]);
   const withHandle = (list) => maskList(env.DB, list.map((r) => {
-    const handle = r && typeof r === 'object' && typeof r.id === 'string' ? handles.get(r.id.toLowerCase()) : null;
-    return handle ? { ...r, handle } : r;
+    if (!r || typeof r !== 'object' || typeof r.id !== 'string') return r;
+    const handle = handles.get(r.id.toLowerCase());
+    const pic = pics.get(r.id.toLowerCase());
+    const out = handle ? { ...r, handle } : r;
+    if (pic && pic.custom) return { ...out, avatar_url: pic.avatar, ...(pic.avatarStill ? { avatar_still: pic.avatarStill } : {}) };
+    return pic && pic.yapin && !cleanAvatar(out.avatar_url) ? { ...out, avatar_url: pic.yapin } : out;
   }), t, { username: ['username', 'handle'] });
   return json(
     {
@@ -464,10 +472,15 @@ export async function handleApi(request, env, deps, url) {
     return profileRoute(request, env, segs, url, t);
   }
 
+  if (segs[1] === 'likes') return likesRoute(request, env, segs, t, { csrf: csrfOk(request, env) });
+
   if (segs[1] === 'u') {
     if (segs.length !== 3) return fail(404, 'not_found', "This profile is private or doesn't exist.");
     return getPublicProfile(request, env, segs[2], t);
   }
+
+  if (segs[1] === 'avatars' && segs[2] === 'refresh' && segs.length === 3) return refreshRoute(request, env, t);
+  if (segs[1] === 'avatars' && segs[2] === 'looks' && segs.length === 3) return looksRoute(request, env, url, t);
 
   if (segs[1] === 'seasons' && segs.length === 2) return getSeasons(request, env, t);
 
@@ -509,13 +522,16 @@ export async function handleApi(request, env, deps, url) {
 
   if (n === 1 && route[0] === 'me' && readOnly) {
     const role = await partyRole(env, session.user_id);
-    return json({ user: publicUser(session), partyOwner: role === 'owner', partyAdmin: Boolean(role) });
+    return json({ user: await withAvatar(env.DB, publicUser(session)), partyOwner: role === 'owner', partyAdmin: Boolean(role) });
   }
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-visibility') return visibilityRoute(request, env, session, t);
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-look') return lookRoute(request, env, session, t);
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-banner') return bannerRoute(request, env, session, t);
+  if (n === 2 && route[0] === 'me' && route[1] === 'profile-avatar') return avatarRoute(request, env, session, t);
+  if (n === 3 && route[0] === 'me' && route[1] === 'profile-avatar') return avatarPartRoute(request, env, session, route[2], t, deps);
   if (n === 2 && route[0] === 'me' && route[1] === 'profile-notices') return noticesRoute(request, env, session, t);
   if (route[0] === 'me' && route[1] === 'clan') return clanManageRoute(request, env, session, route, url, t);
+  if (route[0] === 'me' && route[1] === 'likes') return likedByRoute(request, env, session, route, url, t);
   if (route[0] === 'me' && route[1] === 'inbox') return inboxRoute(request, env, session, route, url, t, { answer: answerInvite });
   if (n === 2 && (route[0] === 'link' || (route[0] === 'me' && route[1] === 'party-signins'))) return linkSessionRoute(request, env, session, route, t);
   if (route[0] === 'party' && route[1] === 'blocked-words') return blockedWordsRoute(request, env, session, route, t);

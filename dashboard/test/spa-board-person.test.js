@@ -140,7 +140,8 @@ test('the close button and backdrop close the window', async () => {
   await flush();
   const panel = document.querySelector('.drawer-panel');
   assert.match(panel.textContent, /mwa/);
-  assert.match(panel.textContent, /don't have a public profile/);
+  assert.match(panel.textContent, /Private profile/);
+  assert.ok(panel.querySelector('.bp-private'), 'people without a public page get the small private card');
   click(document.querySelector('.drawer-overlay'));
   assert.ok(document.querySelector('.drawer-root').classList.contains('is-closing'));
   cleanup(ctrl);

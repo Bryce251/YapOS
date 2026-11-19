@@ -1,0 +1,29 @@
+.avatar.av-cut,
+.pcard-face.av-cut,
+.pcard-avatar.has-img .pcard-face.av-cut {
+  background: radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 62%), linear-gradient(135deg, var(--av-bd-1), var(--av-bd-3), var(--av-bd-2));
+}
+
+.avatar.av-cut.av-cut-clear,
+.pcard-face.av-cut.av-cut-clear,
+.pcard-avatar.has-img .pcard-face.av-cut.av-cut-clear {
+  background: transparent;
+}
+
+.avatar.av-ring,
+.pcard-face.av-ring {
+  outline: 2px solid var(--av-ring);
+  outline-offset: 0;
+}
+
+.avatar-xs.av-ring,
+.avatar-sm.av-ring {
+  outline-width: 1.5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avatar.av-cut,
+  .pcard-face.av-cut {
+    transition: none;
+  }
+}

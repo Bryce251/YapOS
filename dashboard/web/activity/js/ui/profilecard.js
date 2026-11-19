@@ -2,6 +2,8 @@ import { h as defaultH } from './dom.js';
 import { profileAvatar } from '../profiles.js';
 import { gameById } from '../games/index.js';
 import { copyText } from './copy.js';
+import { backdropFor } from '../../../js/avatar-backdrop.js';
+import { ensureBackdropSheet } from './cardlook.js';
 import { cleanPalette, readMotion, readCrop, cropBox, themeOf, paintTheme, gradientOf, readCustomGradient, customGradientOf, motionOk, ensureSheet, ensureFontSheet, createCardFx, pick, EFFECT_IDS, FEATURED_IDS } from './cardlook.js';
 import { createClanJoin, joinState, clanParts, clanTagOk } from '../clanjoin.js';
 
@@ -125,7 +127,7 @@ function initialsOf(name) {
 
 export function cleanCard(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  if (raw.hidden === true) return { hidden: true, name: text(raw.name), avatar: profileAvatar(raw.avatar) };
+  if (raw.hidden === true) return { hidden: true, name: text(raw.name), avatar: profileAvatar(raw.avatar), avatarStill: profileAvatar(raw.avatarStill) };
   const list = (v) => (Array.isArray(v) ? v : []).filter((b) => b && typeof b.id === 'string').map((b) => {
     const out = { id: b.id.slice(0, 40), label: text(b.label, 48) || b.id.slice(0, 40), emoji: text(b.emoji, 16) };
     if (typeof b.image === 'string' && BADGE_IMAGE_RE.test(b.image)) out.image = b.image;
@@ -143,6 +145,7 @@ export function cleanCard(raw) {
     name: text(raw.name),
     username: text(raw.username),
     avatar: profileAvatar(raw.avatar),
+    avatarStill: profileAvatar(raw.avatarStill),
     level: raw.level === null || raw.level === undefined ? null : Math.max(0, Math.floor(Number(raw.level) || 0)),
     progress: prog,
     shards: raw.shards === null || raw.shards === undefined ? null : Math.max(0, Number(raw.shards) || 0),
@@ -158,6 +161,7 @@ export function cleanCard(raw) {
     },
     rank,
     page: raw.page === true,
+    likes: raw.likes === null || raw.likes === undefined || !Number.isFinite(Number(raw.likes)) ? null : Math.max(0, Math.floor(Number(raw.likes))),
     look: cleanLook(raw.look),
   };
 }
@@ -193,6 +197,7 @@ export function cardModel(card) {
     const pts = `${card.rank.points === 1 ? 'point' : 'points'}`;
     facts.push({ key: 'rank', icon: '🏆', text: `#${num(card.rank.rank)} · ${short(card.rank.points)} ${card.rank.points === 1 ? 'pt' : 'pts'}`, title: `#${num(card.rank.rank)} on the Party leaderboard with ${num(card.rank.points)} ${pts}`, top: card.rank.rank <= 3 ? card.rank.rank : 0 });
   }
+  if (card.likes > 0) facts.push({ key: 'likes', icon: '❤️', text: `${short(card.likes)} ${card.likes === 1 ? 'like' : 'likes'}`, title: `${num(card.likes)} ${card.likes === 1 ? 'person likes' : 'people like'} this profile` });
   if (card.shards !== null && !(feat && feat.key === 'shards')) facts.push({ key: 'shards', icon: '💎', text: `${short(card.shards)} Shards`, title: `${num(card.shards)} Shards` });
   const favourites = p.favourites
     .map((f) => {
@@ -389,7 +394,8 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
   }
 
   function heroAvatar(who, card) {
-    const pic = (card && card.avatar) || profileAvatar(who.avatar) || null;
+    const quiet = card && card.avatar && card.avatarStill && !motionOk(win) ? card.avatarStill : null;
+    const pic = quiet || (card && card.avatar) || profileAvatar(who.avatar) || null;
     const ring = card && card.look && card.look.ring;
     const box = h('div', { class: ['pcard-avatar', ring ? `ring-${ring}` : null, who.away ? 'is-away' : null, pic ? 'has-img' : null], vars: { '--hue': who.hue } });
     const face = h('span', { class: 'pcard-face' });
@@ -402,6 +408,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
       });
       img.src = pic;
       face.append(img);
+      backdropFor(face, pic, () => ensureBackdropSheet());
     } else letters();
     box.append(face);
     if (who.isHost) box.append(h('span', { class: 'pcard-crown', text: '👑', attrs: { 'aria-hidden': 'true' } }));

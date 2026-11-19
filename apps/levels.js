@@ -5,7 +5,7 @@ import { tokenize, didYouMean, fillTemplate, clip, normalizeName, parseBool, cha
 import { permName, explain, friendly } from '../engine/errors.js';
 import { avatarUrl } from '../engine/links.js';
 import { accept, reject, boolField, channelById, roleById, idList, plainObject } from '../engine/dashboard.js';
-import { globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, mergeOnce, canGiveCurrency, addSeason, seasonBoard, seasonScore, seasonBadges, seasonBadgeText, seasonName, rollSeason, CURRENCY, GIFT_BADGES, customBadges, customBadgeInfo, isCustomBadge } from '../engine/global.js';
+import { globalConfig, patchGlobalConfig, globalDoc, mutateGlobal, mergeOnce, canGiveCurrency, addSeason, seasonBoard, seasonScore, seasonBadges, seasonBadgeText, seasonName, rollSeason, CURRENCY, GIFT_BADGES, customBadges, customBadgeInfo, isCustomBadge, onBoards, hiddenFromBoards, BOARD_HIDDEN_TEXT } from '../engine/global.js';
 
 const ID = 'levels';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -550,6 +550,10 @@ function ranked(engine, sort = 'xp') {
     .sort((a, b) => b[field] - a[field] || b.xp - a.xp || a.id.localeCompare(b.id));
 }
 
+export function boardRanked(engine, sort = 'xp') {
+  return onBoards(engine, ranked(engine, sort));
+}
+
 const num = (n) => Math.max(0, Math.round(Number(n) || 0)).toLocaleString('en-US');
 const graphemes = (text) => (typeof Intl.Segmenter === 'function'
   ? Array.from(new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text), (g) => g.segment)
@@ -664,8 +668,9 @@ async function partyStatsOf(engine, uid) {
 
 function seasonText(engine, uid) {
   const score = seasonScore(engine, 'xp', uid);
-  const board = score > 0 ? seasonBoard(engine, 'xp') : null;
-  const pos = board ? board.list.findIndex((x) => x.id === uid) : -1;
+  const hidden = hiddenFromBoards(engine, uid);
+  const board = score > 0 && !hidden ? seasonBoard(engine, 'xp') : null;
+  const pos = board ? onBoards(engine, board.list).findIndex((x) => x.id === uid) : -1;
   const badges = seasonBadges(engine, uid);
   if (!score && !badges.length) return null;
   const lines = [score ? `This month: \`${num(score)} XP\`${pos >= 0 ? ` · #${num(pos + 1)}` : ''}` : 'No XP this month yet.'];
@@ -684,8 +689,9 @@ async function rankView(ctx, target) {
   const u = readUser(engine, target.id);
   const p = progressOf(u.xp);
   const tier = tierOf(p.level);
-  const list = ranked(engine);
-  const pos = list.findIndex((x) => x.id === target.id);
+  const list = boardRanked(engine);
+  const offBoard = hiddenFromBoards(engine, target.id);
+  const pos = offBoard ? -1 : list.findIndex((x) => x.id === target.id);
   const cfg = ctx.config();
   const earn = earnOf(engine);
   const rewards = rewardList(cfg);
@@ -722,7 +728,7 @@ async function rankView(ctx, target) {
     ]).join('\n');
     const msgs = Number.isFinite(stored?.messages) ? `\`${num(stored.messages)}\`` : 'not counted yet';
     fields = [
-      { name: '🏆 Global rank', value: pos >= 0 ? `\`#${num(pos + 1)} of ${num(list.length)}\`` : 'not ranked yet', inline: true },
+      { name: '🏆 Global rank', value: offBoard ? BOARD_HIDDEN_TEXT : pos >= 0 ? `\`#${num(pos + 1)} of ${num(list.length)}\`` : 'not ranked yet', inline: true },
       { name: '✨ Total XP', value: `\`${num(u.xp)}\``, inline: true },
       { name: '💬 Messages', value: msgs, inline: true },
       { name: '🎙️ Voice', value: u.voiceSeconds >= 60 ? `\`${voiceText(u.voiceSeconds)}\`` : voiceText(u.voiceSeconds), inline: true },
@@ -853,7 +859,7 @@ function seasonEndText(endsAt, now) {
 async function seasonBoardView(ctx, page) {
   const { engine } = ctx;
   const board = seasonBoard(engine, 'xp');
-  const list = board.list;
+  const list = onBoards(engine, board.list);
   const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
   const p = Math.min(Math.max(1, Math.floor(Number(page) || 1)), pages);
   const start = (p - 1) * PAGE_SIZE;
@@ -869,7 +875,7 @@ async function seasonBoardView(ctx, page) {
   const mine = list.findIndex((x) => x.id === ctx.userId);
   let you = null;
   if (mine < start || mine >= start + PAGE_SIZE) {
-    you = mine >= 0 ? `-# You: #${num(mine + 1)} · ${num(list[mine].score)} XP this month` : "-# You haven't earned XP this month yet. Chat, hang out in voice or play YapOS Party to join in!";
+    you = hiddenFromBoards(engine, ctx.userId) ? `-# You: ${BOARD_HIDDEN_TEXT}` : mine >= 0 ? `-# You: #${num(mine + 1)} · ${num(list[mine].score)} XP this month` : "-# You haven't earned XP this month yet. Chat, hang out in voice or play YapOS Party to join in!";
   }
   const intro = `The top 10 by XP earned in **${seasonName(board.month)}** keep a season badge on their **/rank** forever. Levels never reset.`;
   const body = [intro, '', ...(lines.length ? lines : ['Nobody has earned XP this month yet. Be the first!']), ...(you ? ['', you] : [])].join('\n');
@@ -890,7 +896,7 @@ async function leaderboardView(ctx, page, sort) {
   const { engine } = ctx;
   if (sort === 'season') return seasonBoardView(ctx, page);
   const by = sort === 'voice' ? 'voice' : 'xp';
-  const list = ranked(engine, by);
+  const list = boardRanked(engine, by);
   const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
   const p = Math.min(Math.max(1, Math.floor(Number(page) || 1)), pages);
   const start = (p - 1) * PAGE_SIZE;
@@ -906,7 +912,9 @@ async function leaderboardView(ctx, page, sort) {
   });
   const mine = list.findIndex((x) => x.id === ctx.userId);
   let you = null;
-  if (list.length && (mine < start || mine >= start + PAGE_SIZE)) {
+  if (hiddenFromBoards(engine, ctx.userId)) {
+    you = `-# You: ${BOARD_HIDDEN_TEXT}`;
+  } else if (list.length && (mine < start || mine >= start + PAGE_SIZE)) {
     you = mine >= 0
       ? `-# You: #${num(mine + 1)} · ${by === 'voice' ? `${voiceText(list[mine].voiceSeconds)} in voice` : `Level ${num(levelFor(list[mine].xp))}`}`
       : `-# You're not on the board yet. ${by === 'voice' ? 'Hang out in voice with friends' : 'Say hi in chat'} to join in!`;

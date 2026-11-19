@@ -2,6 +2,8 @@ import { h, nextId, replace, trapFocus, focusFirst } from './dom.js';
 import { icon } from './icons.js';
 import { hueFrom, initials, safeImageUrl } from './format.js';
 import { OFFLINE_MESSAGE, SLOW_AFTER_MS } from './api.js';
+import { reportBrokenAvatar } from './avatar-heal.js';
+import { backdropFor } from './avatar-backdrop.js';
 
 export function badgeArt(b, emojiClass = '', imgClass = 'badge-art') {
   if (b && typeof b.image === 'string' && b.image) {
@@ -10,17 +12,25 @@ export function badgeArt(b, emojiClass = '', imgClass = 'badge-art') {
   return h('span', { class: emojiClass, attrs: { 'aria-hidden': 'true' }, text: (b && b.emoji) || '\u{1F3C5}' });
 }
 
-export function avatar({ name = '', url = '', id = '', size = 'md', shape = 'circle' } = {}) {
+export function avatar({ name = '', url = '', still = '', animate = true, id = '', healName = '', size = 'md', shape = 'circle' } = {}) {
   const el = h('span', { class: ['avatar', `avatar-${size}`, shape === 'square' ? 'avatar-square' : ''], attrs: { 'aria-hidden': 'true' } });
   el.style.setProperty('--avatar-hue', String(hueFrom(id || name)));
   const fallback = h('span', { class: 'avatar-initials', text: initials(name) });
   el.appendChild(fallback);
-  const src = safeImageUrl(url);
+  const moving = safeImageUrl(url);
+  const quiet = safeImageUrl(still);
+  const src = quiet && !animate ? quiet : moving || quiet;
   if (src) {
     const img = h('img', { alt: '', src, loading: 'lazy', decoding: 'async', attrs: { referrerpolicy: 'no-referrer' } });
     img.addEventListener('load', () => el.classList.add('has-image'));
-    img.addEventListener('error', () => img.remove());
-    el.appendChild(img);
+    img.addEventListener('error', () => {
+      img.remove();
+      el.classList.remove('has-image');
+      reportBrokenAvatar(healName ? { name: healName } : id, src);
+    });
+    if (quiet && animate && src === moving) el.appendChild(h('picture', { class: 'avatar-pic' }, h('source', { attrs: { media: '(prefers-reduced-motion: reduce)', srcset: quiet } }), img));
+    else el.appendChild(img);
+    backdropFor(el, src);
   }
   return el;
 }

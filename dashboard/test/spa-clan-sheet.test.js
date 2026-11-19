@@ -49,6 +49,7 @@ function mount({ get, post, user = null } = {}) {
     api: {
       get: async (path, opts) => {
         calls.push({ method: 'GET', path, opts });
+        if (path.startsWith('/api/likes/')) return { count: 0, liked: false, own: false, signedIn: false, canLike: false };
         return path.startsWith('/api/u/') ? PROFILE : get(path, opts);
       },
       post: async (path, body, opts) => {
@@ -136,7 +137,10 @@ test('the sheet body covers every state without a join button where joining cann
   const st = (v, clan = CLAN) => ({ phase: 'ready', clan: { ...clan, leader: clan.leader, top: clan.top }, viewer: v, busy: false, note: null });
   const read = (s) => clanSheetBody(s, { onJoin: () => {}, onRetry: () => {} });
   const signedOut = read(st({ ...viewer('signed_out'), pendingTag: null }));
-  const link = walk(signedOut).find((n) => n.localName === 'a');
+  const link = walk(signedOut).find((n) => n.localName === 'a' && String(n.className).includes('clan-sheet-join'));
+  const people = walk(signedOut).filter((n) => n.localName === 'a' && String(n.className).includes('clan-sheet-member-btn'));
+  assert.ok(people.length >= 1);
+  assert.match(String(people[0].getAttribute('href') || people[0].href), /^\/u\//);
   assert.match(String(link.getAttribute('href') || link.href), /\/auth\/login\?next=/);
   assert.match(link.textContent, /Sign in to join/);
   for (const [v, re] of [

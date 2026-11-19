@@ -46,7 +46,8 @@ test('profiles-sync: people active lately get a public snapshot in the agreed sh
   assert.equal(r.sent, 2);
   assert.equal(w.profiles.length, 1);
   const sam = w.profiles[0].profiles.find((p) => p.id === IDS.member);
-  assert.deepEqual(Object.keys(sam).sort(), ['achievements', 'badges', 'clan', 'hidden', 'id', 'level', 'name', 'season', 'shards', 'username', 'xp']);
+  assert.deepEqual(Object.keys(sam).sort(), ['achievements', 'avatar_url', 'badges', 'clan', 'hidden', 'id', 'level', 'name', 'season', 'shards', 'username', 'xp']);
+  assert.equal(sam.avatar_url, null, 'a person with no Yapin picture is sent as null so the site shows initials');
   assert.equal(sam.name, 'sam');
   assert.equal(sam.username, 'sam');
   assert.ok(sam.level >= 1 && sam.xp >= 500);
@@ -129,4 +130,31 @@ test('profiles-sync: nothing is sent without a dashboard', async () => {
   sync.note(IDS.member, { username: 'sam' });
   assert.deepEqual(await sync.push(), { sent: 0, batches: 0 });
   assert.equal(w.profiles.length, 0);
+});
+
+test('profiles-sync: a picture seen on a message is sent with the snapshot, and a new picture sends a fresh one', async () => {
+  const { h, w, sync } = await make();
+  h.engine.bot.user = async () => { throw new Error('should not be needed'); };
+  sync.note(IDS.member, { username: 'sam', display_name: 'Sam', avatar_path: 'sam/r2-1-a.png' });
+  await sync.push();
+  const first = w.profiles[0].profiles.find((p) => p.id === IDS.member);
+  assert.equal(first.avatar_url, 'https://files.yapper.website/avatars/sam/r2-1-a.png');
+  h.clock.t += MIN;
+  sync.note(IDS.member, { username: 'sam', avatar_path: 'sam/r2-2-b.png' });
+  h.clock.t += MIN;
+  await sync.push();
+  const second = w.profiles.at(-1).profiles.find((p) => p.id === IDS.member);
+  assert.equal(second.avatar_url, 'https://files.yapper.website/avatars/sam/r2-2-b.png', 'a changed picture goes out on the next push');
+});
+
+test('profiles-sync: people whose picture is unknown or old are looked up, a few per run', async () => {
+  const { h, w, sync } = await make();
+  const asked = [];
+  h.engine.bot.user = async (id) => { asked.push(id); return { id, username: `u${asked.length}`, display_name: 'Someone', avatar_path: `${id}/pic.png` }; };
+  for (let i = 0; i < 30; i++) sync.note(`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, { username: `u${i}` });
+  await sync.push();
+  assert.equal(asked.length, 20, 'at most 20 picture lookups per run');
+  const sent = w.profiles.flatMap((b) => b.profiles);
+  assert.equal(sent.filter((p) => 'avatar_url' in p).length, 20);
+  assert.equal(sent.filter((p) => !('avatar_url' in p)).length, 10, 'unknown pictures are left out, never sent as empty');
 });

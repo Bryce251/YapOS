@@ -11,7 +11,10 @@ import { ACH_PREFIX, EFFECTS, SPECIAL_KINDS, THEME_KEYS, badgeKindOf, cropBox, d
 import { effectsAllowed, prefersReducedMotion, setEffectsAllowed, startEffect } from '../profile-fx.js';
 import { openProfileEditor } from './profile-editor.js';
 import { openClanSheet } from './clan-sheet.js';
+import { primeBackdrop } from '../avatar-backdrop.js';
+import { backdropColours } from '../avatar-cutout.js';
 import { clanParts, clanTagOk } from '../../activity/js/clanjoin.js';
+import { profileLikes } from '../profile-like.js';
 
 export const THEME_VARS = Object.freeze(THEME_KEYS.map((k) => k.replace(/[A-Z0-9]/g, (c) => `-${c.toLowerCase()}`)));
 const THEME_CLASSES = Object.freeze(['has-ptheme', 'pt-mode-auto', 'pt-mode-dark', 'pt-mode-light', 'pt-pat-glow', 'pt-pat-dots', 'pt-pat-grid', 'pt-pat-waves', 'pt-pat-stars', 'pt-pat-plain']);
@@ -90,6 +93,7 @@ export const NOTICES_API = '/api/me/profile-notices';
 export const HIDDEN_HANDLE = 'hidden';
 const RESET_TEXT = Object.freeze({
   profile_banner_remove: 'your banner picture was removed',
+  profile_avatar_remove: 'your uploaded profile picture was removed',
   profile_name_style_reset: 'your name colour and style were reset',
   profile_pins_clear: 'your pinned badges were cleared',
   profile_theme_reset: 'your profile theme was reset',
@@ -450,7 +454,7 @@ export function profileCard(p, opts = {}) {
     banner,
     h('div', { class: 'profile-hero' },
       h('div', { class: 'profile-hero-top' },
-        h('div', { class: ['profile-avatar-wrap', look.ring !== 'none' ? `ring-${look.ring}` : ''] }, avatar({ name: p.name, url: p.avatar, id: p.id || p.username, size: 'xl' })),
+        h('div', { class: ['profile-avatar-wrap', look.ring !== 'none' ? `ring-${look.ring}` : ''] }, avatar({ name: p.name, url: p.avatar, still: p.avatarStill, id: p.id || p.username, healName: p.id ? '' : p.username || '', size: 'xl' })),
         h('div', { class: 'profile-who' },
           nameHeading(p.name, look),
           h('div', { class: 'profile-sub' },
@@ -493,6 +497,7 @@ export function renderProfile(root, ctx) {
   const frame = publicFrame(root);
   const { content } = frame;
   const fx = effectStage(frame.site, { signal });
+  const likes = profileLikes({ api, name: String(params.name || '').trim().replace(/^@+/, ''), signal });
   signal?.addEventListener?.('abort', () => applyTheme(frame.site, null));
   frame.setUser(null);
   let user = null;
@@ -519,9 +524,15 @@ export function renderProfile(root, ctx) {
     const own = isOwn(v);
     const card = profileCard(v.profile, { own, look: v.look, bannerImage: v.bannerImage, bannerMotion: v.bannerMotion, hints: v.hints, fx, onCustomize: own ? () => edit(v) : null, onClan: (tag) => openClanSheet(tag, { api, signal, clan: v.profile.clan }) });
     applyTheme(frame.site, v.look);
+    primeBackdrop(v.profile.avatar, backdropColours(v.look));
     fx.set(v.look.effect);
     replace(content, own ? noticeBox(notices) : null, card);
+    likes.attach(card);
     if (own) askNotices();
+    if (own && !editor && !ctx.editAsked && /[?&]edit=1(&|$)/.test(window.location.search || '')) {
+      ctx.editAsked = true;
+      edit(v);
+    }
   }
 
   function askNotices() {
@@ -547,6 +558,7 @@ export function renderProfile(root, ctx) {
       renderCard: (look, bannerImage, bannerMotion) => profileCard(v.profile, { own: true, look, bannerImage, bannerMotion, hints: v.hints, editing: true }),
       onLook: (look) => {
         applyTheme(frame.site, look);
+        primeBackdrop(v.profile.avatar, backdropColours(look));
         fx.set(look.effect, { always: true });
       },
       onDone: (saved) => {

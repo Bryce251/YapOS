@@ -39,6 +39,17 @@ export function mergeOnce(engine, ns, { blank, fold, flag = 'merged' }) {
   return out || { merged: true, servers };
 }
 
+export const BOARD_HIDDEN_TEXT = 'Hidden from leaderboards';
+
+export function hiddenFromBoards(engine, uid) {
+  const id = asId(uid);
+  return !!id && engine?.isBotOwner?.(id) === true;
+}
+
+export function onBoards(engine, list, idOf = (x) => x?.id) {
+  return Array.isArray(list) ? list.filter((x) => !hiddenFromBoards(engine, idOf(x))) : [];
+}
+
 export function ownerIds(engine) {
   const list = globalDoc(engine, 'economy', {}).givers;
   return Array.isArray(list) ? list.filter(Boolean).map(String) : [];
@@ -115,11 +126,12 @@ export function seasonTop(scores, size = SEASON_TOP) {
     .slice(0, size);
 }
 
-function closeMonth(d) {
+function closeMonth(d, skip = null) {
   const month = d.month;
   const tops = {};
   for (const kind of SEASON_KINDS) {
-    const top = seasonTop(d[kind]);
+    const scores = typeof skip === 'function' ? Object.fromEntries(Object.entries(d[kind] || {}).filter(([id]) => !skip(id))) : d[kind];
+    const top = seasonTop(scores);
     tops[kind] = top;
     top.forEach(([uid, score], i) => {
       const list = Array.isArray(d.badges[uid]) ? d.badges[uid] : [];
@@ -135,12 +147,12 @@ function closeMonth(d) {
   return { month, tops };
 }
 
-function rollIn(d, now) {
+function rollIn(d, now, skip = null) {
   fixSeason(d);
   const cur = seasonMonth(now);
   if (!d.month) { d.month = cur; return null; }
   if (d.month >= cur) return null;
-  const closed = closeMonth(d);
+  const closed = closeMonth(d, skip);
   d.month = cur;
   return closed;
 }
@@ -157,7 +169,7 @@ function announceSeason(engine, closed) {
 export function rollSeason(engine, now = clockOf(engine)) {
   const doc = fixSeason(globalDoc(engine, SEASON_NS, null));
   if (doc.month && doc.month >= seasonMonth(now)) return null;
-  const closed = mutateGlobal(engine, SEASON_NS, (d) => rollIn(d, now), blankSeason());
+  const closed = mutateGlobal(engine, SEASON_NS, (d) => rollIn(d, now, (id) => hiddenFromBoards(engine, id)), blankSeason());
   announceSeason(engine, closed);
   return closed;
 }
@@ -168,7 +180,7 @@ export function addSeason(engine, kind, uid, amount, now = clockOf(engine)) {
   if (!id || n <= 0 || !SEASON_KINDS.includes(kind)) return 0;
   let closed = null;
   const total = mutateGlobal(engine, SEASON_NS, (d) => {
-    closed = rollIn(d, now);
+    closed = rollIn(d, now, (id) => hiddenFromBoards(engine, id));
     const next = Math.max(0, Math.floor(Number(d[kind][id]) || 0)) + n;
     d[kind][id] = Math.min(Number.MAX_SAFE_INTEGER, next);
     return d[kind][id];
@@ -211,6 +223,7 @@ export const GIFT_BADGES = Object.freeze([
   Object.freeze({ id: 'vip', label: 'VIP', emoji: '🎩' }),
   Object.freeze({ id: 'event-winner', label: 'Event winner', emoji: '🎊' }),
   Object.freeze({ id: 'legend', label: 'YapOS legend', emoji: '🌠' }),
+  Object.freeze({ id: 'contributor', label: 'Contributor', emoji: '⭐', note: 'Helped build YapOS with code, art, ideas or testing' }),
   Object.freeze({ id: 'einstein', label: 'Einstein', emoji: '🧠', note: 'Can only be given by Jolli' }),
   Object.freeze({ id: 'founder', label: 'Founder', emoji: '🔱', note: 'The owner of YapOS. Only Jolli has it' }),
 ]);

@@ -36,11 +36,20 @@ export function clanParts(clan) {
   return { code: tag ? `[${tag}]` : '', name: same ? '' : name, full: tag ? `[${tag}]${same || !name ? '' : ` ${name}`}` : name };
 }
 
+const OWN_PIC = /^\/avatar-img\/a-[a-z0-9]{10}-[0-9a-f]{16}(-still)?\.(png|webp|jpg|gif)$/;
+const YAPIN_PIC = /^https:\/\/(files\.yapper\.website|www\.yapin\.gg)\/[^\s"'<>\\]{1,1000}$/;
+
+function pic(v) {
+  return typeof v === 'string' && (OWN_PIC.test(v) || YAPIN_PIC.test(v)) ? v : null;
+}
+
 function person(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const name = str(raw.name, 64) || str(raw.username, 64);
   if (!name) return null;
-  return { name, username: str(raw.username, 64) || null, level: whole(raw.level), leader: raw.leader === true };
+  const avatar = pic(raw.avatar);
+  const still = avatar ? pic(raw.avatarStill) : null;
+  return { name, username: str(raw.username, 64) || null, level: whole(raw.level), leader: raw.leader === true, ...(avatar ? { avatar } : {}), ...(still ? { avatarStill: still } : {}) };
 }
 
 export function readClan(raw) {

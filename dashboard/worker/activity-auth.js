@@ -1,6 +1,7 @@
 import { MINUTE, DAY, ID_RE, USER_BODY_LIMIT, json, fail, readJson, randomToken, sha256Hex, clientIp, publicOrigin } from './util.js';
 import { hit, ipKey, tooMany } from './rate.js';
 import { getSession, publicUser } from './sessions.js';
+import { withAvatar } from './avatar-store.js';
 
 export const LINK_TTL = 10 * MINUTE;
 export const LINK_GRACE = 2 * MINUTE;
@@ -127,7 +128,7 @@ async function pollLink(request, env, t) {
   if (!taken || !taken.user_id) return json({ status: 'expired' });
   const user = userOf(taken);
   const session = await createActivitySession(env.DB, user, t);
-  return json({ status: 'approved', token: session, expires: t + ACTIVITY_SESSION_TTL, user, matches: taken.expect ? taken.expect === user.id : null });
+  return json({ status: 'approved', token: session, expires: t + ACTIVITY_SESSION_TTL, user: await withAvatar(env.DB, user), matches: taken.expect ? taken.expect === user.id : null });
 }
 
 export async function getActivityUser(db, request, t) {
@@ -153,7 +154,7 @@ async function activityMe(request, env, t) {
   if (stop) return stop;
   const found = await getActivityUser(env.DB, request, t);
   if (!found) return fail(401, 'signed_out', 'Sign in to YapOS Party to play.');
-  return json({ user: found.user, via: found.via });
+  return json({ user: await withAvatar(env.DB, found.user), via: found.via });
 }
 
 async function activityLogout(request, env, t) {

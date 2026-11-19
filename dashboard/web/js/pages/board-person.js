@@ -1,4 +1,5 @@
 import { h, nextId, replace } from '../dom.js';
+import { icon } from '../icons.js';
 import { avatar, badge, button, confirmDialog, drawer, linkButton, setBusy, toast } from '../ui.js';
 import { ApiError } from '../api.js';
 import { formatNumber, formatShort } from '../format.js';
@@ -9,10 +10,26 @@ export const BOARD_CURRENCY = 'Shards';
 export const BOARD_EMOJI = '\u{1F48E}';
 export const WATCH_MS = 3000;
 export const WATCH_TRIES = 40;
+export const PRIVATE_TITLE = 'Private profile';
+export const PRIVATE_BODY = "Their profile page isn't public.";
+export const BOARD_HIDDEN_TEXT = 'Hidden from leaderboards';
 export const QUEUED_NOTE = 'YapOS applies it as soon as the bot picks it up, usually within a few seconds while it is online. The leaderboard catches up about a minute after that.';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OPEN = new Set(['queued', 'sent']);
+
+export function boardRowLabel(name, rank) {
+  const who = typeof name === 'string' && name.trim() ? name.trim() : 'this player';
+  return rank ? `Rank ${rank}: open ${who}'s profile` : `Open ${who}'s profile`;
+}
+
+export function privateCard() {
+  return h('div', { class: 'bp-private', attrs: { role: 'note' } },
+    h('span', { class: 'bp-private-icon', attrs: { 'aria-hidden': 'true' } }, icon('lock', { size: 16 })),
+    h('span', { class: 'bp-private-text' },
+      h('strong', { class: 'bp-private-title', text: PRIVATE_TITLE }),
+      h('span', { class: 'muted bp-private-body', text: PRIVATE_BODY })));
+}
 
 export function canManage(person) {
   return Boolean(person && typeof person.id === 'string' && UUID_RE.test(person.id));
@@ -66,16 +83,17 @@ function field(label, placeholder = '0') {
   return { input, wrap: h('div', { class: 'bp-field' }, h('label', { class: 'field-label', htmlFor: id, text: label }), input) };
 }
 
-export function openBoardPerson({ person, api, signal = null, owner = Promise.resolve(false), onChanged = null }) {
+export function openBoardPerson({ person, api, signal = null, owner = Promise.resolve(false), onChanged = null, subtitle = 'Global leaderboard', facts = null, staff = Promise.resolve(false), onStaff = null }) {
   const ctrl = new AbortController();
   if (signal && typeof signal.addEventListener === 'function') signal.addEventListener('abort', () => ctrl.abort());
   const p = { ...person };
   const pending = {};
   let hidden = false;
-  const d = drawer({ title: p.name || 'Player', subtitle: 'Global leaderboard', onClose: () => ctrl.abort() });
+  const factList = Array.isArray(facts) ? facts.filter((f) => f && typeof f.label === 'string') : null;
+  const d = drawer({ title: p.name || 'Player', subtitle, onClose: () => ctrl.abort() });
   d.root.classList.add('board-person');
   const head = h('div', { class: 'person-head bp-head' });
-  const stats = h('dl', { class: 'person-stats bp-stats' });
+  const stats = h('dl', { class: ['person-stats', 'bp-stats', factList ? 'bp-stats-facts' : ''] });
   const links = h('div', { class: 'bp-links' });
   const modSlot = h('div', { class: 'bp-mod-slot' });
   replace(d.body, head, stats, links, modSlot);
@@ -87,7 +105,7 @@ export function openBoardPerson({ person, api, signal = null, owner = Promise.re
 
   function drawHead() {
     replace(head,
-      avatar({ name: p.name || p.id, url: p.avatar, id: p.id, size: 'xl' }),
+      avatar({ name: p.name || p.id, url: p.avatar, still: p.avatarStill, id: p.id, size: 'xl' }),
       h('div', { class: 'person-names' },
         h('p', { class: 'person-name', text: p.name || 'Player' }),
         p.handle ? h('p', { class: 'person-handle', text: `@${p.handle}` }) : null,
@@ -95,6 +113,10 @@ export function openBoardPerson({ person, api, signal = null, owner = Promise.re
   }
 
   function drawStats() {
+    if (factList) {
+      replace(stats, ...factList.map((f) => stat(f.label, String(f.value ?? ''), { key: f.key || '' })));
+      return;
+    }
     const shardText = (n) => (n === null || n === undefined ? 'Not on the board' : `${formatShort(n)} ${BOARD_EMOJI}`);
     replace(stats,
       stat('Level', pending.level !== undefined ? formatNumber(pending.level) : (p.level === null || p.level === undefined ? 'Not on the board' : formatNumber(p.level)), { pending: pending.level !== undefined, key: 'level' }),
@@ -104,10 +126,12 @@ export function openBoardPerson({ person, api, signal = null, owner = Promise.re
       stat(`${BOARD_CURRENCY} rank`, rankText(p.shardsRank), { key: 'shards-rank' }));
   }
 
+  let staffBtn = null;
+
   function drawLinks() {
     replace(links, p.handle
       ? closeOnNav(linkButton({ label: 'View full profile', href: profilePath(p.handle), icon: 'user', size: 'sm' }))
-      : h('p', { class: 'muted bp-note', text: "They don't have a public profile page." }));
+      : privateCard(), staffBtn);
   }
 
   drawHead();
@@ -123,6 +147,17 @@ export function openBoardPerson({ person, api, signal = null, owner = Promise.re
   Promise.resolve(owner).then((isOwner) => {
     if (isOwner === true && !ctrl.signal.aborted && canManage(p)) buildMod();
   }).catch(() => {});
+
+  if (typeof onStaff === 'function') {
+    Promise.resolve(staff).then((isStaff) => {
+      if (isStaff !== true || ctrl.signal.aborted || !canManage(p)) return;
+      staffBtn = button({ label: 'Party mod view', icon: 'shield', size: 'sm', className: 'bp-staff', onClick: () => {
+        d.close();
+        onStaff({ ...p });
+      } });
+      drawLinks();
+    }).catch(() => {});
+  }
 
   function buildMod() {
     const status = h('p', { class: 'bp-mod-status muted', attrs: { 'aria-live': 'polite' }, text: 'Checking their latest numbers.' });
@@ -184,7 +219,7 @@ export function openBoardPerson({ person, api, signal = null, owner = Promise.re
         if (u.shards !== null) p.shards = u.shards;
         if (u.level !== null) p.level = u.level;
         if (u.xp !== null) p.xp = u.xp;
-        if (!p.handle && u.username && data?.user?.hidden !== true) p.handle = u.username;
+        if (!factList && !p.handle && u.username && data?.user?.hidden !== true) p.handle = u.username;
         hidden = data?.user?.globalHidden === true;
         status.textContent = 'Numbers from YapOS. Changes go to the bot, like in the owner panel.';
         drawStats();

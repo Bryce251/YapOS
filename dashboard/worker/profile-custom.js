@@ -6,7 +6,9 @@ import { readCatalog } from './owner.js';
 import { blockedIn } from './party-blocked.js';
 import { logModAction, personName } from './party-mod.js';
 import { clearPartyProfileCache } from './party-profile.js';
+import { clearLeaderboardCache } from './party-leaderboard.js';
 import { isBannerImagePath } from './security.js';
+import { customAvatars, removeAvatarStatements } from './avatar-store.js';
 import { cleanLook, defaultLook, isDefaultLook, lookTexts, readCrop, readGradientCustom, gradientStops, themeColours, themePalette, LookError, LOOK_VERSION, LOOK_BODY_MAX, ACH_PREFIX, PIN_MAX, BIO_MAX, PRONOUNS_MAX, STATUS_MAX, THEME_IDS, EFFECT_IDS } from '../web/js/profile-look.js';
 import { AnimError, readAnimated, checkAnimSize, isGif, isWebp, webpAnimated, pngAnimated, ANIM_MAX_BYTES, ANIM_MAX_FRAMES, ANIM_MIN_W, ANIM_MAX_W, ANIM_MIN_H, ANIM_MAX_H } from '../web/js/banner-anim.js';
 
@@ -382,15 +384,19 @@ export function bannerRoute(request, env, session, t) {
   return fail(405, 'method_not_allowed', 'That action is not allowed here.');
 }
 
-export const RESET_PARTS = Object.freeze(['banner', 'bio', 'status', 'pronouns', 'text', 'name-style', 'pins', 'theme', 'effect', 'all']);
-export const RESET_ACTIONS = Object.freeze(['profile_banner_remove', 'profile_text_clear', 'profile_name_style_reset', 'profile_pins_clear', 'profile_theme_reset', 'profile_effect_clear', 'profile_reset']);
+export const RESET_PARTS = Object.freeze(['banner', 'avatar', 'bio', 'status', 'pronouns', 'text', 'name-style', 'pins', 'theme', 'effect', 'all']);
+export const RESET_ACTIONS = Object.freeze(['profile_banner_remove', 'profile_avatar_remove', 'profile_text_clear', 'profile_name_style_reset', 'profile_pins_clear', 'profile_theme_reset', 'profile_effect_clear', 'profile_reset']);
 const NO_THEME = Object.freeze({ theme: 'none', themeCustom: null, themeMode: 'auto', themePattern: 'glow' });
 const TEXT_PARTS = Object.freeze({ bio: ['bio'], status: ['status', 'statusEmoji'], pronouns: ['pronouns'] });
 const FIELD_NAMES = Object.freeze({ bio: 'about me', status: 'status', pronouns: 'pronouns' });
 
 export async function staffLookView(db, userId) {
-  const { look, banner, still } = await readCustom(db, userId);
+  const [{ look, banner, still }, pics] = await Promise.all([readCustom(db, userId), customAvatars(db, [userId], { hidden: true }).catch(() => new Map())]);
+  const pic = pics.get(lower(userId)) || null;
   return {
+    avatar: pic ? pic.avatar : null,
+    avatarStill: pic ? pic.avatarStill : null,
+    avatarAnimated: Boolean(pic && pic.animated),
     banner: bannerUrl(banner),
     bannerStill: stillUrl(banner, still),
     bannerAnimated: isMoving(banner, still),
@@ -425,12 +431,16 @@ function possessive(name) {
 }
 
 export function resetPlan(db, id, part, current, name, t) {
-  const { look, banner } = current;
+  const { look, banner, avatar = false } = current;
   const who = possessive(name);
   const store = (next) => (isDefaultLook(next) ? db.prepare('DELETE FROM profile_custom WHERE user_id = ?').bind(id) : saveStatement(db, id, next, t));
   if (part === 'banner') {
     if (!banner) return null;
     return { action: 'profile_banner_remove', stmts: removeBannerStatements(db, id, look, t), detail: { part, summary: `Removed ${who} profile banner picture` } };
+  }
+  if (part === 'avatar') {
+    if (!avatar) return null;
+    return { action: 'profile_avatar_remove', stmts: removeAvatarStatements(db, id), detail: { part, summary: `Removed ${who} uploaded profile picture` } };
   }
   if (part === 'bio' || part === 'status' || part === 'pronouns' || part === 'text') {
     const fields = textFields(look, part);
@@ -458,11 +468,11 @@ export function resetPlan(db, id, part, current, name, t) {
     return { action: 'profile_effect_clear', stmts: [store({ ...look, effect: 'none' })], detail: { part, effect: EFFECT_IDS.includes(look.effect) ? look.effect : undefined, summary: `Turned off ${who} profile effect` } };
   }
   if (part === 'all') {
-    if (!banner && isDefaultLook(look)) return null;
+    if (!banner && !avatar && isDefaultLook(look)) return null;
     return {
       action: 'profile_reset',
-      stmts: [db.prepare('DELETE FROM profile_custom WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_banners WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_banner_stills WHERE user_id = ?').bind(id)],
-      detail: { part, banner: Boolean(banner) || undefined, bio: look.bio || undefined, status: look.status || undefined, theme: look.theme !== 'none' ? look.theme : undefined, effect: look.effect !== 'none' ? look.effect : undefined, summary: `Reset ${who} whole profile look` },
+      stmts: [db.prepare('DELETE FROM profile_custom WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_banners WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_banner_stills WHERE user_id = ?').bind(id), ...(avatar ? removeAvatarStatements(db, id) : [])],
+      detail: { part, banner: Boolean(banner) || undefined, avatar: avatar || undefined, bio: look.bio || undefined, status: look.status || undefined, theme: look.theme !== 'none' ? look.theme : undefined, effect: look.effect !== 'none' ? look.effect : undefined, summary: `Reset ${who} whole profile look` },
     };
   }
   return null;
@@ -470,6 +480,7 @@ export function resetPlan(db, id, part, current, name, t) {
 
 export const NOTHING_TO_RESET = Object.freeze({
   banner: "They don't have a banner picture.",
+  avatar: "They haven't uploaded a profile picture.",
   bio: 'There is no about me to clear.',
   status: 'There is no status to clear.',
   pronouns: 'There are no pronouns to clear.',
@@ -482,12 +493,14 @@ export const NOTHING_TO_RESET = Object.freeze({
 });
 
 export async function resetLook(db, { id, part, actor, t }) {
-  const current = await readCustom(db, id);
+  const [custom, pics] = await Promise.all([readCustom(db, id), customAvatars(db, [id], { hidden: true }).catch(() => new Map())]);
+  const current = { ...custom, avatar: pics.has(lower(id)) };
   const name = await personName(db, id);
   const plan = resetPlan(db, id, part, current, name, t);
   if (!plan) return { done: false, message: NOTHING_TO_RESET[part] || 'There is nothing to reset.' };
   await db.batch([...plan.stmts, logModAction(db, { actorId: actor.id, actorName: actor.name, action: plan.action, targetId: id, targetName: name, detail: plan.detail, t })]);
   clearPartyProfileCache(db);
+  if (current.avatar && (part === 'avatar' || part === 'all')) clearLeaderboardCache(db);
   return { done: true, action: plan.action };
 }
 

@@ -1,11 +1,12 @@
 import { DAY, USER_BODY_LIMIT, json, fail, readJson, isPlainObject, parseJsonSafe, randomToken } from './util.js';
 import { cleanText } from './profiles.js';
+import { avatarsFor } from './avatar-store.js';
 
 export const INBOX_MAX = 200;
 export const INBOX_KEEP = 90 * DAY;
 export const INBOX_PAGE = 30;
 export const INBOX_NEWEST = 5;
-export const NOTE_KINDS = Object.freeze(['clan_invite', 'clan_joined', 'clan_left', 'clan_kicked', 'clan_leader', 'clan_closed', 'clan_declined', 'clan_refused', 'clan_done', 'gift', 'badge', 'achievement']);
+export const NOTE_KINDS = Object.freeze(['clan_invite', 'clan_joined', 'clan_left', 'clan_kicked', 'clan_leader', 'clan_closed', 'clan_declined', 'clan_refused', 'clan_done', 'gift', 'badge', 'achievement', 'profile_like']);
 const KIND_SET = new Set(NOTE_KINDS);
 const NOTE_ID_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
 const TITLE_MAX = 120;
@@ -79,10 +80,23 @@ export function noteOut(r, { live = null, action = null } = {}) {
     canAnswer: false,
     answer: actionStatus(action),
   };
+  if (typeof data.person === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(data.person)) out.person = { id: lower(data.person) };
   if (r.kind === 'clan_invite') out.canAnswer = Boolean(live && live.has(data.clan)) && !out.answer;
   if (r.kind.startsWith('clan_')) out.link = '/clans';
   if (r.kind === 'badge' || r.kind === 'achievement' || r.kind === 'gift') out.link = '/account';
+  if (r.kind === 'profile_like' && typeof data.link === 'string' && /^\/u\/[^/?#]{1,200}$/.test(data.link)) out.link = data.link;
   return out;
+}
+
+async function withPeople(db, items) {
+  const ids = [...new Set(items.filter((x) => x.person).map((x) => x.person.id))];
+  if (!ids.length) return items;
+  const found = await avatarsFor(db, ids).catch(() => new Map());
+  return items.map((x) => {
+    if (!x.person) return x;
+    const pic = found.get(x.person.id);
+    return { ...x, person: { id: x.person.id, avatar: (pic && pic.avatar) || null, ...(pic && pic.avatarStill ? { avatarStill: pic.avatarStill } : {}) } };
+  });
 }
 
 async function listItems(db, me, url, t) {
@@ -101,7 +115,7 @@ async function listItems(db, me, url, t) {
     const a = await db.prepare('SELECT id, status, result FROM clan_actions WHERE id = ? AND user_id = ?').bind(id, me).first();
     if (a) actions.set(id, a);
   }
-  const items = page.map((r) => noteOut(r, { live, action: actions.get(parseJsonSafe(r.data, null)?.action) || null }));
+  const items = await withPeople(db, page.map((r) => noteOut(r, { live, action: actions.get(parseJsonSafe(r.data, null)?.action) || null })));
   const warn = await db.prepare('SELECT id, author_name, text, created, seen_at FROM party_warnings WHERE user_id = ? ORDER BY created DESC LIMIT ?').bind(me, WARNINGS_SHOWN).all();
   const warnings = ((warn && warn.results) || []).map((w) => ({ id: w.id, by: w.author_name || 'Staff', text: w.text, created: Number(w.created), seen: w.seen_at !== null && w.seen_at !== undefined }));
   return json({ items, unread: await unreadCount(db, me), more, next: more && page.length ? Number(page[page.length - 1].created) : null, warnings });

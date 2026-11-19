@@ -3,6 +3,7 @@ import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanText } from './profiles.js';
 import { reportIpHash } from './reports.js';
 import { offBoard } from './party-leaderboard.js';
+import { isBoardOwner } from './board-owner.js';
 import { activeBan } from './party-mod.js';
 import { dailyShardStatements, dailyShardAmounts } from './party-shards.js';
 import { maskList, HIDDEN_NAME } from './hidden-names.js';
@@ -250,7 +251,8 @@ async function postDaily(request, env, url, t) {
     score,
     best: kept.score,
     improved,
-    rank: (Number(rankRow && rankRow.n) || 0) + 1,
+    rank: isBoardOwner(sub.user.id) ? null : (Number(rankRow && rankRow.n) || 0) + 1,
+    ...(isBoardOwner(sub.user.id) ? { meHidden: true } : {}),
     streak: streak.streak,
     bestStreak: streak.best,
     shards,

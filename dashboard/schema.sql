@@ -728,3 +728,54 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS notifications_user ON notifications (user_id, created);
 CREATE INDEX IF NOT EXISTS notifications_created ON notifications (created);
+
+CREATE TABLE IF NOT EXISTS profile_avatars (
+  user_id TEXT PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  image BLOB NOT NULL,
+  mime TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  bytes INTEGER NOT NULL,
+  frames INTEGER NOT NULL DEFAULT 1,
+  updated INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profile_avatar_stills (
+  user_id TEXT PRIMARY KEY,
+  avatar_hash TEXT NOT NULL,
+  image BLOB NOT NULL,
+  mime TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  bytes INTEGER NOT NULL,
+  updated INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profile_avatar_cutouts (
+  user_id TEXT PRIMARY KEY,
+  avatar_hash TEXT NOT NULL,
+  source TEXT NOT NULL,
+  backdrop TEXT NOT NULL DEFAULT 'theme',
+  original BLOB,
+  original_mime TEXT,
+  updated INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profile_likes (
+  liker_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (liker_id, target_id)
+);
+CREATE INDEX IF NOT EXISTS profile_likes_target ON profile_likes (target_id, at);
+
+CREATE TABLE IF NOT EXISTS profile_like_pings (
+  liker_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (liker_id, target_id)
+);
+CREATE INDEX IF NOT EXISTS profile_like_pings_at ON profile_like_pings (at);

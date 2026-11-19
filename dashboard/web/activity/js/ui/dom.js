@@ -1,3 +1,6 @@
+import { reportBrokenAvatar } from '../profiles.js';
+import { backdropFor } from '../../../js/avatar-backdrop.js';
+import { ensureBackdropSheet } from './cardlook.js';
 export function h(tag, props, ...kids) {
   const el = document.createElement(tag);
   const p = props || {};
@@ -94,9 +97,11 @@ export function avatar(p, size = 'md') {
       img.remove();
       wrap.classList.remove('has-img');
       wrap.textContent = p.initials || '?';
+      if (uid) reportBrokenAvatar(uid, p.avatar);
     });
     img.src = p.avatar;
     wrap.append(img);
+    backdropFor(wrap, p.avatar, () => ensureBackdropSheet());
   } else {
     wrap.textContent = p.initials || '?';
   }

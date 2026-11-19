@@ -29,6 +29,20 @@ export function setTheme(theme) {
   return applyListeners();
 }
 
+export function themeChoice() {
+  return stored() || 'system';
+}
+
+export function clearTheme() {
+  document.documentElement.removeAttribute('data-theme');
+  try {
+    window.localStorage.removeItem(KEY);
+  } catch {
+    return applyListeners();
+  }
+  return applyListeners();
+}
+
 function applyListeners() {
   const t = effectiveTheme();
   for (const fn of Array.from(listeners)) fn(t);

@@ -1909,6 +1909,7 @@ img {
 }
 
 .board-name {
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1917,6 +1918,7 @@ img {
 }
 
 .board-user {
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

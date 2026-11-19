@@ -3450,6 +3450,97 @@ a.season-name:hover {
   background: var(--accent-soft);
 }
 
+.plb-item,
+.season-item {
+  display: block;
+}
+
+.clan-sheet-member-btn {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.clan-sheet-member-btn:hover {
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.plb-row-btn,
+.season-row-btn {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plb-row-btn.is-me {
+  background-color: var(--accent-soft);
+}
+
+.plb-row-btn:hover,
+.season-row-btn:hover {
+  background-color: var(--surface-2);
+}
+
+.plb-row-btn:hover .plb-name,
+.season-row-btn:hover .season-name {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.plb-row-btn:focus-visible,
+.season-row-btn:focus-visible,
+.clan-sheet-member-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.bp-stats.bp-stats-facts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas: none;
+  align-items: start;
+}
+
+.bp-stats-facts .bp-stat {
+  grid-area: auto;
+  height: 100%;
+}
+
+.bp-private {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background-color: var(--surface-2);
+}
+
+.bp-private-icon {
+  display: inline-flex;
+  color: var(--text-3);
+  padding-top: 2px;
+}
+
+.bp-private-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bp-private-title {
+  font-size: 14px;
+}
+
+.bp-private-body {
+  font-size: 13px;
+}
+
 .plb-who {
   display: flex;
   flex-direction: column;

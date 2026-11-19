@@ -30,6 +30,35 @@ export function avatarUrl(path) {
   return AVATAR_HOST + p;
 }
 
+const AVATAR_KEYS = Object.freeze(['avatar_path', 'avatarPath', 'avatar_url', 'avatarUrl', 'avatar']);
+
+export function pickAvatar(obj) {
+  const out = { known: false, url: null };
+  const look = (o) => {
+    if (!o || typeof o !== 'object') return false;
+    for (const k of AVATAR_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(o, k)) continue;
+      const v = o[k];
+      if (v === null || v === '') {
+        out.known = true;
+        continue;
+      }
+      if (typeof v !== 'string') continue;
+      const url = avatarUrl(v) || avatarUrl(v.replace(/[?#].*$/, ''));
+      if (url) {
+        out.known = true;
+        out.url = url;
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!look(obj)) look(obj?.user);
+  return out;
+}
+
+export const avatarOf = (obj) => pickAvatar(obj).url;
+
 export const isPicture =(nameOrPath) => PICTURE.test(String(nameOrPath ?? '').split('?')[0]);
 
 export function messageLink(serverId, channelId, messageId) {

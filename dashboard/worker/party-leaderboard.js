@@ -1,10 +1,12 @@
 import { DAY, ID_RE, HttpError, json, fail, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
-import { cleanAvatar, cleanUsername } from './profiles.js';
+import { cleanUsername, requestRefresh } from './profiles.js';
+import { avatarsFor, staleIds } from './avatar-store.js';
 import { safeName } from './public-profiles.js';
 import { findBlocked } from '../web/activity/js/filter.js';
 import { banLive } from './party-mod.js';
 import { maskList, HIDDEN_NAME } from './hidden-names.js';
+import { isBoardOwner, notOwnerSql, useBoardOwner } from './board-owner.js';
 
 export const LEADERBOARD_GAMES = Object.freeze(['trivia', 'draw', 'chain', 'wyr', 'odd', 'telephone', 'scramble', 'hive', 'emoji', 'hottakes', 'truths', 'reflex', 'bluff', 'pixel', 'higherlower', 'hangman', 'story', 'musicquiz', 'sketchduel', 'typerace', 'memory', 'beatdrop', 'closest', 'namefive']);
 export const LEADERBOARD_BOARDS = Object.freeze(['points', 'wins', 'games', 'best']);
@@ -145,21 +147,23 @@ function source(board, game, month = null) {
 export const OFF_BOARD_SQL = 'NOT EXISTS (SELECT 1 FROM party_bans b WHERE b.id = {u} AND {live}) AND NOT EXISTS (SELECT 1 FROM party_board_hidden x WHERE x.user_id = LOWER({u}))';
 
 export function offBoard(u, t = Date.now()) {
-  return OFF_BOARD_SQL.replaceAll('{live}', banLive('b', t)).replaceAll('{u}', u);
+  return `${OFF_BOARD_SQL.replaceAll('{live}', banLive('b', t)).replaceAll('{u}', u)} AND ${notOwnerSql(u)}`;
 }
 
 export async function isOffBoard(db, id, t = Date.now()) {
+  if (isBoardOwner(id)) return true;
   const row = await db.prepare(`SELECT 1 AS x FROM party_bans b WHERE b.id = ? AND ${banLive('b', t)} UNION ALL SELECT 1 AS x FROM party_board_hidden WHERE user_id = LOWER(?) LIMIT 1`).bind(id, id).first();
   return Boolean(row);
 }
 
 async function lookup(db, ids) {
-  if (!ids.length) return { avatars: new Map(), handles: new Map(), names: new Map(), open: new Map(), hidden: new Set() };
+  if (!ids.length) return { avatars: new Map(), handles: new Map(), names: new Map(), open: new Map(), hidden: new Set(), pics: new Map() };
   const marks = ids.map(() => '?').join(', ');
-  const [prof, pub, settings] = await Promise.all([
+  const [prof, pub, settings, pics] = await Promise.all([
     db.prepare(`SELECT id, username, display_name, avatar_url, missing FROM profiles WHERE id IN (${marks})`).bind(...ids).all(),
     db.prepare(`SELECT user_id, username, hidden, updated FROM public_profiles WHERE user_id IN (${marks})`).bind(...ids).all(),
     db.prepare(`SELECT user_id, hidden, claimed, updated FROM profile_settings WHERE user_id IN (${marks})`).bind(...ids).all(),
+    avatarsFor(db, ids).catch(() => new Map()),
   ]);
   const avatars = new Map();
   const handles = new Map();
@@ -167,7 +171,6 @@ async function lookup(db, ids) {
   for (const r of (prof && prof.results) || []) {
     const id = String(r.id).toLowerCase();
     if (Number(r.missing)) continue;
-    avatars.set(id, cleanAvatar(r.avatar_url));
     const u = cleanUsername(r.username);
     if (u) handles.set(id, u);
     const n = safeName(r.display_name, NAME_MAX, null);
@@ -191,7 +194,8 @@ async function lookup(db, ids) {
       if (u) open.set(id, u);
     }
   }
-  return { avatars, handles, names, open, hidden: hiddenSet };
+  for (const [id, p] of pics) if (p.avatar) avatars.set(id, { avatar: p.avatar, avatarStill: p.avatarStill });
+  return { avatars, handles, names, open, hidden: hiddenSet, pics };
 }
 
 function cleanHandleOut(value) {
@@ -233,16 +237,18 @@ async function buildBoard(db, board, game, limit, month = null) {
       id,
       name: found.names.get(id) || safeName(r.name, NAME_MAX, username || 'Player'),
       username,
-      avatar: shy ? null : found.avatars.get(id) || null,
+      avatar: shy ? null : found.avatars.get(id)?.avatar || null,
+      ...(!shy && found.avatars.get(id)?.avatarStill ? { avatarStill: found.avatars.get(id).avatarStill } : {}),
       value,
       games: Number(r.games) || 0,
       wins: Number(r.wins) || 0,
       best: Number(r.best) || 0,
       bestGame,
       link: Boolean(linked && username && linked.toLowerCase() === username.toLowerCase()),
+      ...(shy ? { private: true } : {}),
     };
   });
-  return { rows, total: Number(count && count.n) || 0 };
+  return { rows, total: Number(count && count.n) || 0, pics: found.pics, ids };
 }
 
 async function myRank(db, board, game, me, month = null) {
@@ -266,6 +272,7 @@ export async function getLeaderboard(request, env, url, t) {
   const limit = await hit(env.DB, await ipKey('leaderboard', clientIp(request)), LIMITS.leaderboard, t);
   if (!limit.ok) return tooMany(limit.retryAfter);
   const q = parseLeaderboardQuery(url);
+  const ownerKey = useBoardOwner(env) || '-';
   let boards = cache.get(env.DB);
   if (!boards) {
     boards = new Map();
@@ -273,16 +280,19 @@ export async function getLeaderboard(request, env, url, t) {
   }
   const info = q.period === 'month' ? monthInfo(t) : null;
   const month = info ? info.month : null;
-  const key = `${q.board}|${q.game}|${q.limit}|${month || 'all'}`;
+  const key = `${q.board}|${q.game}|${q.limit}|${month || 'all'}|${ownerKey}`;
   let entry = boards.get(key);
   if (!entry || entry.at + LEADERBOARD_TTL < t || entry.at > t) {
     entry = { at: t, ...(await buildBoard(env.DB, q.board, q.game, q.limit, month)) };
     boards.set(key, entry);
+    const stale = staleIds(entry.pics, entry.ids || [], t).slice(0, 40);
+    if (stale.length) await requestRefresh(env, stale, t, clientIp(request)).catch(() => 0);
     if (boards.size > 200) boards.delete(boards.keys().next().value);
   }
   const me = await myRank(env.DB, q.board, q.game, q.me, month);
   const rows = await maskList(env.DB, entry.rows, t, { link: ['link'] });
   const out = { board: q.board, game: q.game, period: q.period, rows, me, total: entry.total, updated: entry.at };
+  if (q.me && isBoardOwner(q.me)) out.meHidden = true;
   if (info) out.month = info;
   return json(out, 200, { 'Cache-Control': 'public, max-age=30' });
 }

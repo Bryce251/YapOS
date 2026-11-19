@@ -1,6 +1,7 @@
 import { ID_RE, USER_BODY_LIMIT, HttpError, json, fail, readJson, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
-import { parseIds, lookupProfiles, cleanAvatar, cleanText } from './profiles.js';
+import { parseIds, lookupProfiles, cleanText } from './profiles.js';
+import { withAvatar } from './avatar-store.js';
 import { activeBans, logModAction, actorName, personName } from './party-mod.js';
 import { hiddenNameMap, flagsFor } from './hidden-names.js';
 
@@ -67,7 +68,7 @@ async function listAdmins(request, env, session, t, extra = {}) {
     id: session.user_id,
     username: cleanText(session.username, 64),
     display_name: cleanText(session.display_name, 64),
-    avatar: cleanAvatar(session.avatar_url),
+    avatar: (await withAvatar(env.DB, { id: session.user_id, avatar_url: session.avatar_url })).avatar_url,
   };
   const admins = rows.map((r) => ({ ...person(r.id, found.profiles.get(r.id)), added_by: r.added_by, added_at: Number(r.added_at) }));
   return json({ owner, admins, max: MAX_PARTY_ADMINS, pending: found.pending, ...extra });

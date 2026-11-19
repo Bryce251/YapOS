@@ -1,3 +1,4 @@
+import { OWN_AVATAR } from './profiles.js';
 export const AUTH_KEY = 'yapos-party-auth';
 export const MAX_SAVED = 4;
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -67,8 +68,9 @@ export function cleanUser(u) {
   if (!u || typeof u !== 'object' || typeof u.id !== 'string') return null;
   const username = typeof u.username === 'string' ? u.username.slice(0, 64) : '';
   const display = typeof u.display_name === 'string' && u.display_name ? u.display_name.slice(0, 64) : username;
-  const avatar = typeof u.avatar_url === 'string' && /^https:\/\//.test(u.avatar_url) ? u.avatar_url : null;
-  return { id: u.id, username, display_name: display || 'you', avatar_url: avatar };
+  const avatar = typeof u.avatar_url === 'string' && (/^https:\/\//.test(u.avatar_url) || OWN_AVATAR.test(u.avatar_url)) ? u.avatar_url : null;
+  const still = avatar && typeof u.avatar_still === 'string' && OWN_AVATAR.test(u.avatar_still) ? u.avatar_still : null;
+  return { id: u.id, username, display_name: display || 'you', avatar_url: avatar, ...(still ? { avatar_still: still } : {}) };
 }
 
 export function createAccountApi({ win, fetchImpl } = {}) {

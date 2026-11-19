@@ -81,27 +81,50 @@ export function createInboxWatch({ api, onCount = () => {}, onNew = () => {}, do
 }
 
 let watcher = null;
+let lastCount = 0;
+let primary = () => {};
+const countListeners = new Set();
 
-export function startInboxWatch({ api, onCount }) {
+function broadcast(n) {
+  lastCount = Math.max(0, Math.floor(Number(n) || 0));
+  primary(lastCount);
+  for (const fn of Array.from(countListeners)) fn(lastCount);
+}
+
+export function startInboxWatch({ api, onCount } = {}) {
+  if (typeof onCount === 'function') primary = onCount;
   if (!watcher) {
     watcher = createInboxWatch({
       api,
-      onCount,
+      onCount: broadcast,
       onNew: (item) => toast(item.body ? `${item.title}. ${item.body}` : item.title, { tone: 'info', title: 'New in your inbox', timeout: 6000 }),
     });
     watcher.start();
   } else {
-    watcher.onCount = onCount;
-    onCount(watcher.unread);
+    broadcast(watcher.unread);
   }
   return watcher;
 }
 
+export function watchInboxCount(fn) {
+  if (typeof fn !== 'function') return () => {};
+  countListeners.add(fn);
+  fn(lastCount);
+  return () => countListeners.delete(fn);
+}
+
+export function inboxUnread() {
+  return lastCount;
+}
+
 export function inboxCountChanged(n) {
   if (watcher) watcher.setCount(n);
+  else broadcast(n);
 }
 
 export function stopInboxWatch() {
   if (watcher) watcher.stop();
   watcher = null;
+  primary = () => {};
+  broadcast(0);
 }

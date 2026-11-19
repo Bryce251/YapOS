@@ -11,10 +11,18 @@ const CACHE_MAX = 500;
 const AVATAR_HOSTS = new Set(['files.yapper.website', 'www.yapin.gg']);
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const DEV_AVATAR = /^\/activity-dev\/avatars\/[a-z0-9-]{1,32}\.svg$/;
+export const OWN_AVATAR = /^\/avatar-img\/a-[a-z0-9]{10}-[0-9a-f]{16}(-still)?\.(png|webp|jpg|gif)$/;
+export const HEAL_ENDPOINT = '/api/avatars/refresh';
+export const HEAL_WAIT_MS = 1500;
+export const HEAL_MAX = 30;
+export const HEAL_BATCH = 10;
 const STRIP = /[\u0000-\u001f\u007f​-‏‪-‮⁦-⁩]/g;
 
 const cache = new Map();
 const asks = new Map();
+const healSent = new Set();
+let healWaiting = new Set();
+let healTimer = null;
 let env = defaults();
 let timer = null;
 let timerAt = Infinity;
@@ -41,6 +49,9 @@ export function resetProfiles() {
   timerAt = Infinity;
   cache.clear();
   asks.clear();
+  healSent.clear();
+  healWaiting = new Set();
+  healTimer = null;
   env = defaults();
 }
 
@@ -79,6 +90,7 @@ function devPage() {
 
 export function profileAvatar(url) {
   if (typeof url !== 'string' || !url || url.length > 2048) return null;
+  if (OWN_AVATAR.test(url)) return url;
   try {
     if (url.startsWith('/') && !url.startsWith('//')) {
       const here = devPage() ? location() : null;
@@ -88,6 +100,8 @@ export function profileAvatar(url) {
     const u = new URL(url);
     if (u.username || u.password) return null;
     if (u.protocol === 'https:' && AVATAR_HOSTS.has(u.hostname) && !u.port) return u.href;
+    const page = location();
+    if (page && u.origin === page.origin && OWN_AVATAR.test(u.pathname) && !u.search && !u.hash) return u.pathname;
     const here = devPage() ? location() : null;
     if (here && u.origin === here.origin && DEV_AVATAR.test(u.pathname) && !u.search && !u.hash) return u.href;
     return null;
@@ -101,13 +115,29 @@ export function profileOf(id) {
   return cache.get(String(id)) || null;
 }
 
+export function lessMotion(win = env.win) {
+  try {
+    return Boolean(win && typeof win.matchMedia === 'function' && win.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch {
+    return false;
+  }
+}
+
+export function pickAvatar(raw, still = lessMotion()) {
+  if (!raw || typeof raw !== 'object') return null;
+  const moving = profileAvatar(raw.avatar ?? raw.avatar_url ?? null);
+  const quiet = moving ? profileAvatar(raw.avatarStill ?? raw.avatar_still ?? null) : null;
+  return still && quiet ? quiet : moving;
+}
+
 function store(raw) {
   if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !ID_RE.test(raw.id)) return false;
   const next = {
     username: cleanUsername(raw.username),
     displayName: cleanDisplay(raw.display_name ?? raw.displayName ?? null),
-    avatar: profileAvatar(raw.avatar ?? raw.avatar_url ?? null),
+    avatar: pickAvatar(raw),
   };
+  if (healSent.has(raw.id.toLowerCase()) && next.avatar && !OWN_AVATAR.test(next.avatar) && next.avatar === cache.get(raw.id)?.broken) next.avatar = null;
   const old = cache.get(raw.id);
   asks.delete(raw.id);
   if (old && old.username === next.username && old.displayName === next.displayName && old.avatar === next.avatar) return false;
@@ -124,6 +154,38 @@ function announce() {
     const Ctor = win.CustomEvent || (typeof CustomEvent === 'function' ? CustomEvent : null);
     if (Ctor) win.dispatchEvent(new Ctor(PROFILES_EVENT));
   } catch {}
+}
+
+function isYapinPic(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && AVATAR_HOSTS.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function healFlush() {
+  healTimer = null;
+  const ids = [...healWaiting].slice(0, HEAL_BATCH);
+  for (const id of ids) healWaiting.delete(id);
+  if (healWaiting.size) healTimer = env.setTimeout(healFlush, HEAL_WAIT_MS);
+  if (!ids.length || typeof env.fetch !== 'function') return;
+  try {
+    await env.fetch(HEAL_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+  } catch {}
+}
+
+export function reportBrokenAvatar(id, url) {
+  if (typeof id !== 'string' || !ID_RE.test(id) || typeof url !== 'string' || !isYapinPic(url)) return false;
+  const key = id.toLowerCase();
+  if (healSent.has(key) || healSent.size >= HEAL_MAX) return false;
+  healSent.add(key);
+  healWaiting.add(key);
+  const hit = cache.get(id);
+  if (hit && hit.avatar === url) cache.set(id, { ...hit, avatar: null, broken: url });
+  if (!healTimer) healTimer = env.setTimeout(healFlush, HEAL_WAIT_MS);
+  return true;
 }
 
 export function rememberProfiles(list) {

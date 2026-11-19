@@ -1396,6 +1396,15 @@ test('one global board is published, with no server id and nobody dropped', asyn
   assert.deepEqual(w.board.economy[0].balance, 500);
 });
 
+test('the global board the bot sends leaves the owner out and keeps a full top list', async () => {
+  const { h, dash } = await setup({ harness: { apps: ['levels'] } });
+  h.engine.services.set('levels', { ranked: () => [{ id: IDS.owner.toUpperCase(), level: 99, xp: 99999 }, { id: IDS.member, level: 2, xp: 120 }] });
+  h.engine.services.set('economy', { ranked: () => [{ id: IDS.owner, bal: 9999 }, { id: IDS.member, bal: 5 }] });
+  const board = await dash.globalBoard();
+  assert.deepEqual(board.levels.map((u) => [u.rank, u.id]), [[1, IDS.member]]);
+  assert.deepEqual(board.economy.map((u) => [u.rank, u.id]), [[1, IDS.member]]);
+});
+
 test('people on the global board who are in none of the bot servers are looked up on Yapin once and cached', async () => {
   const { h, dash } = await setup({ harness: { apps: ['levels'] } });
   const far = 'b0000000-0000-4000-8000-0000000000aa';
@@ -1413,9 +1422,9 @@ test('people on the global board who are in none of the bot servers are looked u
   assert.deepEqual(board.levels.map((u) => u.name), ['Far Away', 'Old Name', 'Sam']);
   assert.ok(board.levels[0].avatar_url && board.levels[0].avatar_url.includes('far.png'));
   assert.equal(JSON.stringify(board).includes('x@example.test'), false);
-  assert.deepEqual(asked.sort(), [far, left].sort());
+  assert.deepEqual(asked.sort(), [far, left, IDS.member].sort(), 'a member whose cached record has no picture field is looked up too');
   await dash.globalBoard();
-  assert.equal(asked.length, 2, 'cached between boards');
+  assert.equal(asked.length, 3, 'cached between boards');
 });
 
 test('profiles the dashboard asks for are looked up with bot.user and uploaded with public fields only', async () => {
@@ -1486,4 +1495,74 @@ test('a missing bot.user or a refused upload never breaks the poll loop', async 
   assert.equal(await dash.tick(), 15_000);
   assert.equal(dash.profileWork, null);
   assert.equal(await dash.lookupProfiles([]), null);
+});
+
+test('wanted ids that arrive while lookups run are queued, not dropped, and timed out lookups are retried on the next poll', async () => {
+  const { h, w, dash } = await setup();
+  const gates = [];
+  const asked = [];
+  h.engine.bot.user = (id) => new Promise((resolve, reject) => {
+    asked.push(id);
+    gates.push({ id, go: () => (id === 'slow-1' && asked.filter((x) => x === id).length === 1 ? reject(Object.assign(new Error('busy'), { status: 429 })) : resolve({ id, username: `u-${id}`, display_name: null, avatar_path: `${id}.png` })) });
+  });
+  w.wanted.push('first-1', 'slow-1');
+  await dash.tick();
+  const work = dash.profileWork;
+  w.wanted.push('late-1');
+  await dash.tick();
+  assert.equal(asked.includes('late-1'), false, 'the late id waits for the running batch');
+  while (gates.length) {
+    gates.shift().go();
+    await new Promise((r) => setImmediate(r));
+  }
+  await work;
+  await new Promise((r) => setImmediate(r));
+  assert.ok(asked.includes('late-1'), 'the late id is looked up right after');
+  while (gates.length) {
+    gates.shift().go();
+    await new Promise((r) => setImmediate(r));
+  }
+  await dash.profileWork;
+  const sent = w.profiles.flatMap((b) => b.profiles.map((p) => p.id));
+  assert.ok(sent.includes('first-1') && sent.includes('late-1'));
+  assert.equal(sent.includes('slow-1'), false, 'a busy answer is not reported as missing');
+  assert.equal(w.profiles.flatMap((b) => b.missing).includes('slow-1'), false);
+  await dash.tick();
+  while (gates.length) {
+    gates.shift().go();
+    await new Promise((r) => setImmediate(r));
+  }
+  await dash.profileWork;
+  assert.ok(w.profiles.flatMap((b) => b.profiles.map((p) => p.id)).includes('slow-1'), 'the busy id is tried again on the next poll');
+  assert.equal(w.profiles.flatMap((b) => b.profiles).find((p) => p.id === 'slow-1').avatar_url, 'https://files.yapper.website/avatars/slow-1.png');
+});
+
+test('someone Yapin says it cannot find but who is still in a bot server keeps their picture instead of being marked missing', async () => {
+  const { h, w, dash } = await setup({ harness: { apps: ['levels'] } });
+  h.engine.settings.setEnabled(S, 'levels', true);
+  const members = await h.engine.cache.members(S);
+  const sam = members.find((m) => m.id === IDS.member);
+  sam.avatar_path = 'sam/r2-1-a.webp';
+  h.engine.bot.user = async () => { throw Object.assign(new Error('nope'), { status: 404 }); };
+  w.wanted.push(IDS.member, 'c0000000-0000-4000-8000-0000000000ee');
+  await dash.tick();
+  await dash.profileWork;
+  const batch = w.profiles[0];
+  assert.deepEqual(batch.missing, ['c0000000-0000-4000-8000-0000000000ee']);
+  const row = batch.profiles.find((p) => p.id === IDS.member);
+  assert.equal(row.avatar_url, 'https://files.yapper.website/avatars/sam/r2-1-a.webp');
+  assert.equal(row.username, 'sam');
+});
+
+test('picture fields are read from avatar_path first, then avatar_url, nested user objects, and with cache-busting queries', async () => {
+  const { pickAvatar, avatarOf } = await import('../../engine/links.js');
+  assert.equal(avatarOf({ avatar_path: 'u/1.png', avatar_url: 'https://evil.example/x.png' }), 'https://files.yapper.website/avatars/u/1.png');
+  assert.equal(avatarOf({ avatar_url: 'https://evil.example/x.png', avatar_path: 'u/2.png' }), 'https://files.yapper.website/avatars/u/2.png', 'a rejected link does not hide a good path');
+  assert.equal(avatarOf({ user: { avatar_path: '/uploads/a.png' } }), 'https://www.yapin.gg/uploads/a.png');
+  assert.equal(avatarOf({ avatar_path: 'u/3.png?v=2' }), 'https://files.yapper.website/avatars/u/3.png');
+  assert.equal(avatarOf({ avatar: 'https://files.yapper.website/avatars/u/4.gif' }), 'https://files.yapper.website/avatars/u/4.gif');
+  assert.deepEqual(pickAvatar({ avatar_path: null }), { known: true, url: null }, 'null means no picture');
+  assert.deepEqual(pickAvatar({ username: 'x' }), { known: false, url: null }, 'no field means unknown');
+  assert.equal(avatarOf({ avatar_path: '../../etc/passwd' }), null);
+  assert.equal(avatarOf(null), null);
 });

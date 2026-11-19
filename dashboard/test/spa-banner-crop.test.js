@@ -263,7 +263,7 @@ test('cancelling the cropper uploads nothing', async () => {
       renderCard: () => document.createElement('div'),
     });
     ed.showTab('card');
-    const input = mount.querySelectorAll('input').find((i) => (i.type || i.getAttribute('type')) === 'file');
+    const input = mount.querySelector('.pe-upload').parentNode.querySelectorAll('input').find((i) => (i.type || i.getAttribute('type')) === 'file');
     Object.defineProperty(input, 'files', { value: [file], configurable: true });
     input.dispatchEvent(new FakeEvent('change'));
     for (let i = 0; i < 5 && !document.querySelector('.pe-crop'); i++) await flush();

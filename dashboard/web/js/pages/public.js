@@ -1,10 +1,9 @@
 import { h, replace } from '../dom.js';
 import { icon } from '../icons.js';
 import { avatar, copyButton, emptyState, errorState, linkButton, loadingRegion, skeleton } from '../ui.js';
-import { brand } from '../shell.js';
-import { themeToggle } from '../theme.js';
+import { siteHeader } from '../shell.js';
 import { boardPeople, medalFor, normalizeBoard } from '../public-data.js';
-import { openBoardPerson } from './board-person.js';
+import { boardRowLabel, openBoardPerson } from './board-person.js';
 import { formatNumber, formatShort, relativeTime } from '../format.js';
 import { ApiError, isAbort } from '../api.js';
 import { publicPath } from '../router.js';
@@ -47,11 +46,11 @@ function boardView(rows, kind, onOpen = null) {
       type: 'button',
       class: ['board-row', 'board-row-btn', r.rank <= 3 ? `is-top is-top-${r.rank}` : ''],
       dataset: { id: r.id },
-      attrs: { 'aria-haspopup': 'dialog', title: `Open ${r.name}'s profile` },
+      attrs: { 'aria-haspopup': 'dialog', 'aria-label': boardRowLabel(r.name, r.rank), title: `Open ${r.name}'s profile` },
       on: { click: () => onOpen?.(r) },
     },
     rankBadge(r.rank),
-    avatar({ name: r.name, url: r.avatar, id: r.id, size: 'md' }),
+    avatar({ name: r.name, url: r.avatar, still: r.avatarStill, animate: false, id: r.id, size: 'md' }),
     h('span', { class: 'board-who' },
       h('span', { class: 'board-name', text: r.name }),
       r.secondary ? h('span', { class: 'board-sub', text: r.secondary }) : null),
@@ -76,7 +75,7 @@ export function renderPublic(root, ctx) {
   const { params, signal, api } = ctx;
   const content = h('div', { class: 'public-content' });
   root.replaceChildren(h('div', { class: 'public-site' },
-    h('header', { class: 'site-header' }, h('div', { class: 'site-header-inner' }, brand({ href: '/' }), h('div', { class: 'site-header-actions' }, themeToggle()))),
+    siteHeader({ current: '/p/global', viewer: ctx.getViewer }).el,
     h('main', { class: 'public-main', id: 'main', tabIndex: -1 }, content),
     h('footer', { class: 'site-footer' }, h('span', { text: 'Powered by YapOS' }))));
   replace(content, publicSkeleton());
@@ -119,7 +118,7 @@ export function renderPublic(root, ctx) {
       select(current);
     };
     const open = (row) => {
-      const person = people.get(row.id) || { id: row.id, name: row.name, avatar: row.avatar, handle: row.handle };
+      const person = people.get(row.id) || { id: row.id, name: row.name, avatar: row.avatar, avatarStill: row.avatarStill, handle: row.handle };
       openBoardPerson({ person, api, signal, owner: isOwner(), onChanged: changed });
     };
     const asked = new URLSearchParams(window.location.search).get('tab');

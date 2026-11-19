@@ -369,7 +369,7 @@ test('picking a moving GIF opens the moving cropper and sends the GIF, a still a
 });
 
 test('staff tools, the owner panel, the mod log and the owner notice know about themes and effects', () => {
-  assert.deepEqual(RESET_PARTS.map((r) => r.part), ['banner', 'bio', 'status', 'pronouns', 'name-style', 'pins', 'theme', 'effect', 'all']);
+  assert.deepEqual(RESET_PARTS.map((r) => r.part), ['banner', 'avatar', 'bio', 'status', 'pronouns', 'name-style', 'pins', 'theme', 'effect', 'all']);
   const staff = readStaffProfile({ look: { theme: 'ember', effect: 'embers', banner: GIF_URL, bannerStill: STILL_URL, bannerAnimated: true, custom: true }, canAct: true });
   assert.deepEqual([staff.look.theme, staff.look.effect, staff.look.banner, staff.look.bannerStill], ['ember', 'embers', GIF_URL, STILL_URL]);
   assert.equal(canReset(staff.look, 'theme'), true);

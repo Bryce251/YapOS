@@ -148,15 +148,15 @@ function eventNotes(e, names) {
   const base = { clan: e.clan, tag: e.tag };
   const id = (suffix = '') => `ce-${e.feed}-${e.seq}${suffix}`;
   const out = [];
-  if (e.kind === 'invite' && e.user) out.push({ id: id(), user: e.user, kind: 'clan_invite', title: `Clan invite from ${label}`, body: `${who(e.by)} invited you to join. Invites last 7 days.`, data: { ...base, by: e.by } });
-  if (e.kind === 'joined' && e.user && e.leader && e.leader !== e.user) out.push({ id: id(), user: e.leader, kind: 'clan_joined', title: `${who(e.user)} joined ${label}`, body: e.via === 'web' ? 'They joined on the website.' : e.via === 'party' ? 'They joined in YapOS Party.' : null, data: base });
+  if (e.kind === 'invite' && e.user) out.push({ id: id(), user: e.user, kind: 'clan_invite', title: `Clan invite from ${label}`, body: `${who(e.by)} invited you to join. Invites last 7 days.`, data: { ...base, by: e.by, person: e.by || undefined } });
+  if (e.kind === 'joined' && e.user && e.leader && e.leader !== e.user) out.push({ id: id(), user: e.leader, kind: 'clan_joined', title: `${who(e.user)} joined ${label}`, body: e.via === 'web' ? 'They joined on the website.' : e.via === 'party' ? 'They joined in YapOS Party.' : null, data: { ...base, person: e.user } });
   if (e.kind === 'left' && e.user) {
-    if (e.leader && e.leader !== e.user) out.push({ id: id(), user: e.leader, kind: 'clan_left', title: `${who(e.user)} left ${label}`, data: base });
+    if (e.leader && e.leader !== e.user) out.push({ id: id(), user: e.leader, kind: 'clan_left', title: `${who(e.user)} left ${label}`, data: { ...base, person: e.user } });
     if (e.next) out.push({ id: id('-lead'), user: e.next, kind: 'clan_leader', title: `You lead ${label} now`, body: 'The old leader left, so you were next in line.', data: base });
   }
   if (e.kind === 'kicked' && e.user) out.push({ id: id(), user: e.user, kind: 'clan_kicked', title: `You were removed from ${label}`, body: 'The clan leader removed you. You can join another clan any time.', data: base });
-  if (e.kind === 'leader' && e.user) out.push({ id: id(), user: e.user, kind: 'clan_leader', title: `You lead ${label} now`, body: `${who(e.by)} made you the clan leader.`, data: base });
-  if (e.kind === 'declined' && e.user && e.leader) out.push({ id: id(), user: e.leader, kind: 'clan_declined', title: `${who(e.user)} said no thanks`, body: `They turned down your invite to ${label}.`, data: base });
+  if (e.kind === 'leader' && e.user) out.push({ id: id(), user: e.user, kind: 'clan_leader', title: `You lead ${label} now`, body: `${who(e.by)} made you the clan leader.`, data: { ...base, person: e.by || undefined } });
+  if (e.kind === 'declined' && e.user && e.leader) out.push({ id: id(), user: e.leader, kind: 'clan_declined', title: `${who(e.user)} said no thanks`, body: `They turned down your invite to ${label}.`, data: { ...base, person: e.user } });
   if (e.kind === 'disbanded') {
     for (const m of e.members) {
       if (m === e.by) continue;
@@ -254,7 +254,8 @@ async function membership(db, me) {
 
 function personOut(id, found, extra = {}) {
   const p = found.get(id);
-  return { id, name: p ? p.name : 'Private profile', username: p ? p.username : null, level: p ? p.level : null, hidden: !p, ...extra };
+  const pic = p && p.avatar ? { avatar: p.avatar, ...(p.avatarStill ? { avatarStill: p.avatarStill } : {}) } : {};
+  return { id, name: p ? p.name : 'Private profile', username: p ? p.username : null, level: p ? p.level : null, hidden: !p, ...pic, ...extra };
 }
 
 export async function myClanView(db, me, t, { owner = false } = {}) {
@@ -282,7 +283,7 @@ export async function myClanView(db, me, t, { owner = false } = {}) {
     for (const id of roster) ids.add(id);
     for (const r of outgoing) ids.add(lower(r.user_id));
     for (const id of Object.keys(deposits)) ids.add(id);
-    const found = await people(db, [...ids], t);
+    const found = await people(db, [...ids], t, { pics: true });
     const lead = leaderId === me;
     const members = roster.slice(0, CLAN_ROSTER_MAX)
       .map((id) => personOut(id, found, { leader: id === leaderId, you: id === me }))

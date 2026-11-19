@@ -1,3 +1,5 @@
+import { boardOwnerId } from './board-owner.js';
+
 export const GLOBAL_OWNER_KINDS = Object.freeze({
   'global.hide': Object.freeze({ label: 'Hide from the global leaderboard', input: 'none', gift: false, instant: true }),
   'global.show': Object.freeze({ label: 'Show on the global leaderboard again', input: 'none', gift: false, instant: true }),
@@ -7,7 +9,10 @@ const lower = (id) => String(id ?? '').toLowerCase();
 
 export async function globalHiddenIds(db) {
   const res = await db.prepare('SELECT user_id FROM global_board_hidden').all();
-  return new Set(((res && res.results) || []).map((r) => lower(r.user_id)));
+  const out = new Set(((res && res.results) || []).map((r) => lower(r.user_id)));
+  const owner = boardOwnerId();
+  if (owner) out.add(owner);
+  return out;
 }
 
 export async function isGlobalHidden(db, id) {

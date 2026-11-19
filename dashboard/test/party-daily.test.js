@@ -182,6 +182,20 @@ test('people hidden from the Party leaderboards are left off the daily puzzle bo
   assert.deepEqual(back.top.map((r) => r.id), [uid(1), uid(2)]);
 });
 
+test('the owner gets no daily rank, is off the daily board and does not push anyone down', async () => {
+  const h = daily();
+  const words = dailyScrambleWords(TODAY);
+  const mine = await (await submit(h, { date: TODAY, kind: 'scramble', user: { id: USERS.alice.id.toUpperCase(), name: 'Jolli', username: 'jolli' }, answers: words, ms: 5000 })).json();
+  assert.equal(mine.rank, null);
+  assert.equal(mine.meHidden, true);
+  assert.equal(mine.score > 0, true);
+  const next = await (await submit(h, { date: TODAY, kind: 'scramble', user: user(2), answers: words, ms: 30000 }, { ip: '198.51.100.35' })).json();
+  assert.equal(next.rank, 1);
+  assert.equal(next.meHidden, undefined);
+  const top = await (await h.request('GET', '/api/activity/daily/top?kind=scramble', { ip: '198.51.100.36' })).json();
+  assert.deepEqual(top.top.map((r) => [r.id, r.rank]), [[uid(2), 1]]);
+});
+
 test('playing on the next day grows the streak and old puzzles are closed', async () => {
   const h = daily();
   await submit(h, { date: TODAY, kind: 'hive', user: user(1), words: [], ms: 1000 });

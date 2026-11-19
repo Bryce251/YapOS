@@ -48,6 +48,7 @@ export const ACTION_LABELS = Object.freeze({
   owner_banner_remove: ['\u{1F5BC}️', 'Owner: profile banners removed'],
   owner_profile_text_clear: ['\u{1F9FD}','Owner: profile text cleared'],
   profile_banner_remove: ['\u{1F5BC}️', 'Profile banners removed'],
+  profile_avatar_remove: ['\u{1F5BC}️', 'Uploaded profile pictures removed'],
   profile_text_clear: ['\u{1F9FD}','Profile text cleared'],
   profile_name_style_reset: ['\u{1F3A8}', 'Name styles reset'],
   profile_pins_clear: ['\u{1F4CC}', 'Pinned badges cleared'],
@@ -221,6 +222,8 @@ export function modLogSentence(e) {
     case 'owner_banner_remove':
     case 'profile_banner_remove':
       return `${who} removed ${them}'s profile banner picture`;
+    case 'profile_avatar_remove':
+      return `${who} removed ${them}'s uploaded profile picture`;
     case 'profile_text_clear': {
       const names = { bio: 'about me', status: 'status', pronouns: 'pronouns' };
       const list = (Array.isArray(d.fields) ? d.fields : []).filter((f) => names[f]).map((f) => names[f]);

@@ -154,6 +154,7 @@ export function readPerson(data, readReport = (r) => r) {
       name: str(p.name) || 'Player',
       username: str(p.username),
       avatar: str(p.avatar),
+      ...(str(p.avatarStill) ? { avatarStill: str(p.avatarStill) } : {}),
       role: p.role === 'owner' || p.role === 'admin' ? p.role : '',
       banned: ban ? { reason: str(ban.reason), by: str(ban.by), at: num(ban.at) || 0, until: num(ban.until), duration: BAN_LENGTHS.some(([v]) => v === ban.duration) ? ban.duration : 'forever' } : null,
       card: readCard(p.card),
@@ -231,7 +232,7 @@ export function personHead(model, { size = 'xl' } = {}) {
   if (p.role === 'owner') tags.push(badge('Owner', 'neutral', 'crown'));
   else if (p.role === 'admin') tags.push(badge('Party admin', 'neutral', 'crown'));
   return h('div', { class: 'person-head' },
-    avatar({ name: p.name || p.id, url: p.avatar, id: p.id, size }),
+    avatar({ name: p.name || p.id, url: p.avatar, still: p.avatarStill || '', id: p.id, size }),
     h('div', { class: 'person-names' },
       h('p', { class: 'person-name', text: p.name }),
       p.username ? h('p', { class: 'person-handle', text: `@${p.username}` }) : null,
@@ -409,11 +410,14 @@ export const HIDE_REASON_MAX = 200;
 export const HIDDEN_TAG = 'Hidden from others';
 const BANNER_URL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg|gif)$/;
 const STILL_URL_RE = /^\/banner-img\/b-[a-z0-9]{10}-[0-9a-f]{16}-still\.(png|webp|jpg)$/;
+const AVATAR_URL_RE = /^\/avatar-img\/a-[a-z0-9]{10}-[0-9a-f]{16}\.(png|webp|jpg|gif)$/;
+const AVATAR_STILL_RE = /^\/avatar-img\/a-[a-z0-9]{10}-[0-9a-f]{16}-still\.(png|webp|jpg)$/;
 const THEME_LABELS = Object.freeze(Object.fromEntries([...THEMES.map((t) => [t.id, t.label]), ['custom', 'Custom']]));
 const EFFECT_LABELS = Object.freeze(Object.fromEntries(EFFECTS.map((e) => [e.id, e.label])));
 
 export const RESET_PARTS = Object.freeze([
   Object.freeze({ part: 'banner', label: 'Remove banner picture', icon: 'trash', done: 'Banner picture removed.', ask: 'Their banner picture is deleted straight away and their card goes back to no banner. They can upload a new one.' }),
+  Object.freeze({ part: 'avatar', label: 'Remove uploaded profile picture', icon: 'trash', done: 'Uploaded profile picture removed.', ask: 'Their uploaded profile picture is deleted straight away and their Yapin picture shows again. They can upload a new one.' }),
   Object.freeze({ part: 'bio', label: 'Clear about me', icon: 'x', done: 'About me cleared.', ask: 'Their about me is emptied straight away.' }),
   Object.freeze({ part: 'status', label: 'Clear status', icon: 'x', done: 'Status cleared.', ask: 'Their status and status emoji are emptied straight away.' }),
   Object.freeze({ part: 'pronouns', label: 'Clear pronouns', icon: 'x', done: 'Pronouns cleared.', ask: 'Their pronouns are emptied straight away.' }),
@@ -421,7 +425,7 @@ export const RESET_PARTS = Object.freeze([
   Object.freeze({ part: 'pins', label: 'Clear pinned badges', icon: 'x', done: 'Pinned badges cleared.', ask: 'Their pinned badges are unpinned. They keep the badges themselves.' }),
   Object.freeze({ part: 'theme', label: 'Reset profile theme', icon: 'sun', done: 'Profile theme reset.', ask: 'Their profile page goes back to the normal YapOS colours.' }),
   Object.freeze({ part: 'effect', label: 'Turn off profile effect', icon: 'sparkles', done: 'Profile effect turned off.', ask: 'The effect that plays over their profile page is switched off.' }),
-  Object.freeze({ part: 'all', label: 'Reset everything', icon: 'refresh', done: 'Their profile look is back to the default.', ask: 'Their banner picture, about me, status, pronouns, name style, pins, theme, effect, colours and layout all go back to the default.' }),
+  Object.freeze({ part: 'all', label: 'Reset everything', icon: 'refresh', done: 'Their profile look is back to the default.', ask: 'Their banner picture, uploaded profile picture, about me, status, pronouns, name style, pins, theme, effect, colours and layout all go back to the default.' }),
 ]);
 
 export const HIDE_KINDS = Object.freeze([
@@ -448,6 +452,9 @@ export function readStaffProfile(data) {
   const hidden = data?.hidden && typeof data.hidden === 'object' ? data.hidden : {};
   return {
     look: {
+      avatar: typeof l.avatar === 'string' && AVATAR_URL_RE.test(l.avatar) ? l.avatar : null,
+      avatarStill: typeof l.avatarStill === 'string' && AVATAR_STILL_RE.test(l.avatarStill) ? l.avatarStill : null,
+      avatarAnimated: l.avatarAnimated === true,
       banner: typeof l.banner === 'string' && BANNER_URL_RE.test(l.banner) ? l.banner : null,
       bannerStill: typeof l.bannerStill === 'string' && STILL_URL_RE.test(l.bannerStill) ? l.bannerStill : null,
       bannerAnimated: l.bannerAnimated === true,
@@ -473,6 +480,7 @@ export function readStaffProfile(data) {
 export function canReset(look, part) {
   if (!look) return false;
   if (part === 'banner') return Boolean(look.banner);
+  if (part === 'avatar') return Boolean(look.avatar);
   if (part === 'bio') return Boolean(look.bio);
   if (part === 'status') return Boolean(look.status || look.statusEmoji);
   if (part === 'pronouns') return Boolean(look.pronouns);
@@ -480,7 +488,7 @@ export function canReset(look, part) {
   if (part === 'pins') return look.pins.length > 0;
   if (part === 'theme') return Boolean(look.theme && look.theme !== 'none');
   if (part === 'effect') return Boolean(look.effect && look.effect !== 'none');
-  if (part === 'all') return Boolean(look.banner || look.custom);
+  if (part === 'all') return Boolean(look.banner || look.avatar || look.custom);
   return false;
 }
 
@@ -511,6 +519,7 @@ export function hiddenTag(flags) {
 
 export function lookRows(look) {
   const rows = [];
+  rows.push(['Profile picture', look.avatar ? (look.avatarAnimated ? 'Uploaded moving picture' : 'Uploaded picture') : 'Their Yapin picture']);
   rows.push(['Banner', look.banner ? (look.bannerAnimated ? 'Moving banner' : null) : 'No banner picture']);
   rows.push(['About me', look.bio || 'Empty']);
   rows.push(['Status', [look.statusEmoji, look.status].filter(Boolean).join(' ') || 'Empty']);

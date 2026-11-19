@@ -1,6 +1,7 @@
 import { MINUTE, HOUR, DAY, ID_RE, HttpError, json, fail, readJson, isPlainObject, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { maskList } from './hidden-names.js';
+import { customAvatars } from './avatar-store.js';
 
 export const MAX_PROFILE_IDS = 40;
 export const PROFILE_STALE = 6 * HOUR;
@@ -58,13 +59,15 @@ export function parseIds(raw) {
   return [...new Set(parts)];
 }
 
-function outProfile(row) {
-  if (Number(row.missing)) return { id: row.id, username: null, display_name: null, avatar: null };
+function outProfile(row, pic = null) {
+  const extra = pic && pic.avatarStill ? { avatarStill: pic.avatarStill } : {};
+  if (Number(row.missing)) return { id: row.id, username: null, display_name: null, avatar: pic ? pic.avatar : null, ...extra };
   return {
     id: row.id,
     username: cleanUsername(row.username),
     display_name: cleanText(row.display_name, DISPLAY_MAX),
-    avatar: cleanAvatar(row.avatar_url),
+    avatar: pic ? pic.avatar : cleanAvatar(row.avatar_url),
+    ...extra,
   };
 }
 
@@ -91,29 +94,45 @@ async function freshAsks(db, ids, t) {
   return new Set(((res && res.results) || []).map((r) => r.id));
 }
 
+export async function requestRefresh(env, ids, t, ip) {
+  const list = [...new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && ID_RE.test(id)))];
+  if (!list.length) return 0;
+  const asked = await freshAsks(env.DB, list, t);
+  const fresh = list.filter((id) => !asked.has(id));
+  if (!fresh.length) return 0;
+  const budget = await hit(env.DB, await ipKey('profileAsks', ip), LIMITS.profileAsks, t, fresh.length);
+  if (!budget.ok) return 0;
+  await want(env.DB, fresh, t);
+  return fresh.length;
+}
+
 export async function lookupProfiles(env, ids, t, ip) {
   const rows = new Map();
   if (!ids.length) return { profiles: new Map(), pending: [] };
-  const marks = ids.map(() => '?').join(', ');
-  const res = await env.DB
-    .prepare(`SELECT id, username, display_name, avatar_url, missing, fetched FROM profiles WHERE id IN (${marks})`)
-    .bind(...ids)
-    .all();
-  for (const r of (res && res.results) || []) rows.set(r.id, r);
+  const lowered = ids.map((id) => id.toLowerCase());
+  const variants = [...new Set([...ids, ...lowered])];
+  const marks = variants.map(() => '?').join(', ');
+  const [res, pics] = await Promise.all([
+    env.DB.prepare(`SELECT id, username, display_name, avatar_url, missing, fetched FROM profiles WHERE id IN (${marks})`).bind(...variants).all(),
+    customAvatars(env.DB, lowered).catch(() => new Map()),
+  ]);
+  for (const r of (res && res.results) || []) {
+    const key = String(r.id).toLowerCase();
+    const prev = rows.get(key);
+    if (!prev || Number(r.fetched) > Number(prev.fetched)) rows.set(key, r);
+  }
   const profiles = new Map();
   const wanted = [];
   for (const id of ids) {
-    const row = rows.get(id);
-    if (row) profiles.set(id, outProfile(row));
+    const key = id.toLowerCase();
+    const row = rows.get(key);
+    const pic = pics.get(key) || null;
+    if (row) profiles.set(id, { ...outProfile(row, pic), id });
+    else if (pic) profiles.set(id, { id, username: null, display_name: null, avatar: pic.avatar, ...(pic.avatarStill ? { avatarStill: pic.avatarStill } : {}) });
     if (!row || Number(row.fetched) < t - PROFILE_STALE) wanted.push(id);
   }
-  const asked = await freshAsks(env.DB, wanted, t);
-  const fresh = wanted.filter((id) => !asked.has(id));
-  if (fresh.length) {
-    const budget = await hit(env.DB, await ipKey('profileAsks', ip), LIMITS.profileAsks, t, fresh.length);
-    if (budget.ok) await want(env.DB, fresh, t);
-  }
-  return { profiles, pending: wanted.filter((id) => !rows.has(id)) };
+  await requestRefresh(env, wanted, t, ip);
+  return { profiles, pending: wanted.filter((id) => !rows.has(id.toLowerCase())) };
 }
 
 export async function getProfiles(request, env, url, t) {
@@ -188,7 +207,7 @@ export async function storeProfiles(env, body, t, extra = {}) {
     stmts.push(
       db
         .prepare(
-          'INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, NULL, NULL, NULL, 1, ?) ON CONFLICT (id) DO UPDATE SET username = NULL, display_name = NULL, avatar_url = NULL, missing = 1, fetched = excluded.fetched',
+          'INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, NULL, NULL, NULL, 1, ?) ON CONFLICT (id) DO UPDATE SET username = NULL, display_name = NULL, missing = 1, fetched = excluded.fetched',
         )
         .bind(id, t),
     );
@@ -197,6 +216,12 @@ export async function storeProfiles(env, body, t, extra = {}) {
   for (const id of done) stmts.push(db.prepare('DELETE FROM profile_wanted WHERE id = ?').bind(id));
   if (stmts.length) await db.batch(stmts);
   return json({ ok: true, stored, missing, ignored, ...(extra.out || {}) });
+}
+
+export function profileUpsert(db, id, { username = null, display_name = null, avatar_url, t }) {
+  return db
+    .prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (id) DO UPDATE SET username = COALESCE(excluded.username, profiles.username), display_name = COALESCE(excluded.display_name, profiles.display_name), avatar_url = excluded.avatar_url, missing = 0, fetched = MAX(profiles.fetched, excluded.fetched)')
+    .bind(id.toLowerCase(), cleanUsername(username), cleanText(display_name, DISPLAY_MAX), cleanAvatar(avatar_url), t);
 }
 
 export function profileRoute(request, env, segs, url, t) {

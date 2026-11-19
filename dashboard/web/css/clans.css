@@ -68,6 +68,22 @@
   color: var(--accent-text);
 }
 
+.inbox-item-icon.has-person {
+  position: relative;
+}
+
+.inbox-item-icon.has-person > .avatar {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+}
+
+.inbox-item-icon.has-person > .avatar.has-image {
+  opacity: 1;
+}
+
 .inbox-item-main {
   min-width: 0;
 }

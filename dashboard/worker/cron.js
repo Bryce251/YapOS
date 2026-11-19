@@ -14,6 +14,8 @@ import { inboxCleanupStatements } from './inbox.js';
 import { linkCleanupStatements } from './activity-auth.js';
 import { awardMonth, monthCleanup } from './party-leaderboard.js';
 import { banCleanupStatements, BAN_CLEANUP_NAMES } from './party-mod.js';
+import { avatarCleanupStatements } from './avatar-store.js';
+import { likesCleanupStatements } from './profile-likes.js';
 
 export const PUBLIC_STALE = 2 * HOUR;
 export const SNAPSHOT_STALE = DAY;
@@ -31,7 +33,7 @@ export async function cleanup(db, t) {
     db.prepare('DELETE FROM public_pages WHERE updated < ?').bind(t - PUBLIC_STALE),
     db.prepare('DELETE FROM snapshots WHERE updated < ?').bind(t - SNAPSHOT_STALE),
     db.prepare('DELETE FROM profile_wanted WHERE asked < ?').bind(t - WANTED_TTL),
-    db.prepare('DELETE FROM profiles WHERE fetched < ?').bind(t - PROFILE_KEEP),
+    db.prepare('DELETE FROM profiles WHERE fetched < ? AND NOT EXISTS (SELECT 1 FROM public_profiles p WHERE p.user_id = LOWER(profiles.id))').bind(t - PROFILE_KEEP),
     ...linkCleanupStatements(db, t),
     ...cleanupStatements(db, t),
     ...resultsCleanupStatements(db, t),
@@ -56,6 +58,12 @@ export async function cleanup(db, t) {
   removed.clanInvites = Number((clanResults[2] && clanResults[2].meta && clanResults[2].meta.changes) || 0);
   const inboxResults = await db.batch(inboxCleanupStatements(db, t));
   removed.notifications = Number((inboxResults[0] && inboxResults[0].meta && inboxResults[0].meta.changes) || 0);
+  const avatarResults = await db.batch(avatarCleanupStatements(db, t));
+  removed.profileAvatars = Number((avatarResults[0] && avatarResults[0].meta && avatarResults[0].meta.changes) || 0);
+  removed.profileAvatarStills = Number((avatarResults[1] && avatarResults[1].meta && avatarResults[1].meta.changes) || 0);
+  const likeResults = await db.batch(likesCleanupStatements(db, t));
+  removed.profileLikes = Number((likeResults[0] && likeResults[0].meta && likeResults[0].meta.changes) || 0);
+  removed.profileLikePings = Number((likeResults[1] && likeResults[1].meta && likeResults[1].meta.changes) || 0);
   const season = await awardMonth(db, t).catch(() => ({ awarded: 0 }));
   removed.partySeasonAwards = season.awarded;
   removed.partyPointsMonth = await monthCleanup(db, t).catch(() => 0);

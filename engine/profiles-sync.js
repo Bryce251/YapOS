@@ -1,5 +1,6 @@
 import { workerClient } from './worker-post.js';
 import { profileData, publicSnapshot, partyMany, setPrivacy, privacyOf, validId, cleanText } from './profile-data.js';
+import { pickAvatar } from './links.js';
 
 export const PROFILES_PER_POST = 50;
 const PER_RUN = 200;
@@ -8,6 +9,8 @@ const REPUSH_MS = 10 * 60_000;
 const MAX_TRACKED = 5000;
 const MAX_SETTINGS = 100;
 const LOOKUP_MS = 3000;
+export const AVATAR_FRESH_MS = 6 * 60 * 60_000;
+export const AVATAR_LOOKUPS_PER_RUN = 20;
 
 const syncs = new WeakMap();
 
@@ -34,8 +37,19 @@ function createProfileSync(engine, { fetch = null, now = null } = {}) {
     const prev = seen.get(uid);
     const name = cleanText(who?.display_name ?? who?.displayName ?? who?.nickname ?? null) || prev?.name || null;
     const username = cleanText(who?.username ?? null, 32) || prev?.username || null;
+    const pic = pickAvatar(who);
+    const t = clock();
+    const next = { at: t, name, username };
+    if (pic.known) {
+      next.avatar = pic.url;
+      next.avatarAt = t;
+      if (prev && prev.avatarAt !== undefined && prev.avatar !== pic.url) dirty.add(uid);
+    } else if (prev && prev.avatarAt !== undefined) {
+      next.avatar = prev.avatar;
+      next.avatarAt = prev.avatarAt;
+    }
     seen.delete(uid);
-    seen.set(uid, { at: clock(), name, username });
+    seen.set(uid, next);
     while (seen.size > MAX_TRACKED) seen.delete(seen.keys().next().value);
   }
 
@@ -50,10 +64,15 @@ function createProfileSync(engine, { fetch = null, now = null } = {}) {
   }
   const onAction = (ev) => note(ev?.user_id ?? null, { username: ev?.username ?? null });
 
-  async function lookup(uid) {
+  function picFresh(hit) {
+    return Boolean(hit && hit.avatarAt !== undefined && clock() - hit.avatarAt < AVATAR_FRESH_MS);
+  }
+
+  async function lookup(uid, budget = { left: AVATAR_LOOKUPS_PER_RUN }) {
     const hit = seen.get(uid);
-    if (hit?.username) return hit;
+    if (hit?.username && (picFresh(hit) || budget.left <= 0)) return hit;
     if (typeof engine.bot.user !== 'function') return hit || {};
+    if (hit?.username) budget.left -= 1;
     let timer;
     const late = new Promise((resolve) => {
       timer = setTimeout(() => resolve(null), LOOKUP_MS);
@@ -62,7 +81,16 @@ function createProfileSync(engine, { fetch = null, now = null } = {}) {
     try {
       const u = await Promise.race([Promise.resolve().then(() => engine.bot.user(uid)).catch(() => null), late]);
       if (!u || typeof u !== 'object') return hit || {};
-      const out = { name: cleanText(u.display_name ?? u.displayName ?? null) || hit?.name || null, username: cleanText(u.username, 32) || null };
+      const fresh = cleanText(u.display_name ?? u.displayName ?? null);
+      const out = { name: (hit?.username ? hit?.name || fresh : fresh || hit?.name) || null, username: cleanText(u.username, 32) || hit?.username || null };
+      const pic = pickAvatar(u);
+      if (pic.known) {
+        out.avatar = pic.url;
+        out.avatarAt = clock();
+      } else if (hit && hit.avatarAt !== undefined) {
+        out.avatar = hit.avatar;
+        out.avatarAt = hit.avatarAt;
+      }
       if (hit) Object.assign(hit, out);
       return out;
     } finally {
@@ -87,10 +115,11 @@ function createProfileSync(engine, { fetch = null, now = null } = {}) {
   async function snapshotsFor(ids) {
     const party = await partyMany(engine, ids.filter((id) => !privacyOf(engine, id).hidden));
     const out = [];
+    const budget = { left: AVATAR_LOOKUPS_PER_RUN };
     for (const id of ids) {
       const data = profileData(engine, id, { party: party[id] || null });
-      const who = await lookup(id);
-      out.push(publicSnapshot(data, who));
+      const who = await lookup(id, budget);
+      out.push(publicSnapshot(data, { name: who.name ?? null, username: who.username ?? null, ...(who.avatarAt !== undefined ? { avatar: who.avatar ?? null } : {}) }));
     }
     return out;
   }

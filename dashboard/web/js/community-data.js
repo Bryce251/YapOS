@@ -65,6 +65,7 @@ export const BADGES = Object.freeze({
   vip: { label: 'VIP', emoji: '🎩' },
   'event-winner': { label: 'Event winner', emoji: '🎊' },
   legend: { label: 'YapOS legend', emoji: '🌠' },
+  contributor: { label: 'Contributor', emoji: '⭐', note: 'Helped build YapOS with code, art, ideas or testing' },
   einstein: { label: 'Einstein', emoji: '🧠', note: 'Can only be given by Jolli' },
   founder: { label: 'Founder', emoji: '🔱', note: 'The owner of YapOS. Only Jolli has it' },
 });
@@ -246,6 +247,7 @@ export function normalizeProfile(input) {
     name,
     username,
     avatar: str(p.avatar) || str(p.avatar_url),
+    avatarStill: str(p.avatarStill),
     level: count(p.level),
     xp: toNumber(p.xp),
     shards: shards === null ? null : Math.max(0, Math.floor(shards)),

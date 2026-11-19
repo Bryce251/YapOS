@@ -7,6 +7,7 @@ import { findBlocked } from '../web/activity/js/filter.js';
 import { people } from './clan-people.js';
 import { cleanExtras, extrasStatements, extrasRemoveStatements, settingsStatement, feedStatements, clanManageCleanupStatements, browseClans } from './clan-manage.js';
 import { noteStatements } from './inbox.js';
+import { isBoardOwner } from './board-owner.js';
 
 export const CLAN_TAG_RE = /^[A-Za-z0-9]{3,4}$/;
 export const CLAN_ID_RE = /^c\d{1,9}$/;
@@ -201,17 +202,21 @@ async function topMembers(db, row, t) {
     .all();
   const ids = ((res && res.results) || []).map((r) => lower(r.user_id));
   const leader = row.leader_id ? lower(row.leader_id) : null;
-  const found = await people(db, leader ? [leader, ...ids] : ids, t);
+  const found = await people(db, leader ? [leader, ...ids] : ids, t, { pics: true });
   const top = [];
   const order = leader && ids.includes(leader) ? [leader, ...ids.filter((x) => x !== leader)] : ids;
   for (const id of order) {
     const p = found.get(id);
-    if (!p) continue;
-    top.push({ name: p.name, username: p.username, level: p.level, leader: id === leader });
+    if (!p || isBoardOwner(id)) continue;
+    top.push({ name: p.name, username: p.username, level: p.level, leader: id === leader, ...picOut(p) });
     if (top.length >= CLAN_TOP) break;
   }
   const lead = leader ? found.get(leader) : null;
-  return { leader: lead ? { name: lead.name, username: lead.username } : null, top };
+  return { leader: lead ? { name: lead.name, username: lead.username, ...picOut(lead) } : null, top };
+}
+
+function picOut(p) {
+  return p && p.avatar ? { avatar: p.avatar, ...(p.avatarStill ? { avatarStill: p.avatarStill } : {}) } : {};
 }
 
 function clanOut(row, extra) {

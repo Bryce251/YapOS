@@ -5,7 +5,7 @@ import { tokenize, didYouMean, clip, formatDuration, fuzzyFind, fillTemplate, pa
 import { permName, friendly } from '../engine/errors.js';
 import { accept, reject, boolField } from '../engine/dashboard.js';
 import { HARD_CAP, parseLimit, readLimit, isUnlimited } from '../engine/limits.js';
-import { GLOBAL_KEY, CURRENCY, globalConfig, patchGlobalConfig, mergeOnce, canGiveCurrency, allowGiver, denyGiver, ownerIds, addSeason, seasonBoard, seasonScore, seasonName } from '../engine/global.js';
+import { GLOBAL_KEY, CURRENCY, globalConfig, patchGlobalConfig, mergeOnce, canGiveCurrency, allowGiver, denyGiver, ownerIds, addSeason, seasonBoard, seasonScore, seasonName, onBoards, hiddenFromBoards, BOARD_HIDDEN_TEXT } from '../engine/global.js';
 
 const ID = 'economy';
 const cid = (action, ...args) => customId(ID, action, ...args);
@@ -505,6 +505,10 @@ function ranked(engine) {
     .sort((a, b) => b.bal - a.bal || a.id.localeCompare(b.id));
 }
 
+export function richList(engine) {
+  return onBoards(engine, ranked(engine));
+}
+
 async function memberOf(engine, sid, uid) {
   return engine.perms.member(sid, uid).catch(() => null);
 }
@@ -682,8 +686,9 @@ async function walletView(ctx, targetId, { self = true } = {}) {
   const doc = readUsers(engine);
   const u = doc.users[targetId] || blankUser(clampSetting(cfg.startBalance, 0), 0);
   const t = clock(engine);
-  const list = ranked(engine);
-  const pos = list.findIndex((x) => x.id === targetId);
+  const list = richList(engine);
+  const offBoard = hiddenFromBoards(engine, targetId);
+  const pos = offBoard ? -1 : list.findIndex((x) => x.id === targetId);
   const name = await displayName(engine, sid, targetId);
   const alive = u.lastDaily && t - u.lastDaily <= STREAK_GRACE_MS ? u.streak || 0 : 0;
   const dailyOn = clampSetting(cfg.dailyAmount, 100) > 0;
@@ -692,7 +697,7 @@ async function walletView(ctx, targetId, { self = true } = {}) {
   const inv = Object.values(u.inv || {}).filter((x) => x && x.n > 0);
   const fields = [
     { name: 'Wallet', value: `${fmt(u.bal || 0)} ${plural(u.bal || 0, cur.name)} ${cur.emoji}`, inline: true },
-    { name: 'Rank', value: pos >= 0 ? `#${pos + 1} of ${fmt(list.length)} everywhere` : 'Not ranked yet', inline: true },
+    { name: 'Rank', value: offBoard ? BOARD_HIDDEN_TEXT : pos >= 0 ? `#${pos + 1} of ${fmt(list.length)} everywhere` : 'Not ranked yet', inline: true },
     { name: 'Daily streak', value: alive ? `${alive} day${alive === 1 ? '' : 's'}${alive > 1 ? ' 🔥' : ''}` : 'None yet', inline: true },
     { name: 'Daily', value: !dailyOn ? 'Off' : dailyLeft > 0 ? `in ${waitText(dailyLeft)}` : 'Ready!', inline: true },
     cfg.workEnabled !== false ? { name: 'Work', value: workLeft > 0 ? `in ${waitText(workLeft)}` : 'Ready!', inline: true } : null,
@@ -977,12 +982,12 @@ async function boardNamer(engine, members, ids) {
 async function topView(ctx) {
   const { engine } = ctx;
   const cur = currencyOf();
-  const list = ranked(engine);
+  const list = richList(engine);
   const members = await ctx.members().catch(() => []);
   const nameOf = await boardNamer(engine, members, list.slice(0, TOP_SIZE).map((x) => x.id));
   const lines = list.slice(0, TOP_SIZE).map((x, i) => `${MEDALS[i] || `**${i + 1}.**`} ${nameOf(x.id)} · ${price(cur, x.bal)}`);
   const pos = list.findIndex((x) => x.id === ctx.userId);
-  const mine = pos >= 0 ? `You: **#${pos + 1}** of ${fmt(list.length)} · ${price(cur, list[pos].bal)}` : `You aren't ranked yet. Grab your **/daily**!`;
+  const mine = hiddenFromBoards(engine, ctx.userId) ? `You: ${BOARD_HIDDEN_TEXT}` : pos >= 0 ? `You: **#${pos + 1}** of ${fmt(list.length)} · ${price(cur, list[pos].bal)}` : `You aren't ranked yet. Grab your **/daily**!`;
   const body = lines.length ? `${lines.join('\n')}\n\n${mine}\n-# One leaderboard for every server YapOS is in.` : `Nobody has any ${cur.name} yet. Be the first with **/daily**!`;
   return { embeds: [card({ title: `🏆 Richest yappers everywhere`, body, color: 'economy' })], components: [row(button('This season', cid('season'), 'secondary', '🗓️'))] };
 }
@@ -990,12 +995,13 @@ async function topView(ctx) {
 async function seasonView(ctx) {
   const { engine } = ctx;
   const cur = currencyOf();
-  const board = seasonBoard(engine, 'shards');
+  const season = seasonBoard(engine, 'shards');
+  const board = { ...season, list: onBoards(engine, season.list) };
   const members = await ctx.members().catch(() => []);
   const nameOf = await boardNamer(engine, members, board.list.slice(0, TOP_SIZE).map((x) => x.id));
   const lines = board.list.slice(0, TOP_SIZE).map((x, i) => `${MEDALS[i] || `**${i + 1}.**`} ${nameOf(x.id)} · ${price(cur, x.score)} earned`);
   const pos = board.list.findIndex((x) => x.id === ctx.userId);
-  const mine = pos >= 0 ? `You: **#${pos + 1}** of ${fmt(board.list.length)} · ${price(cur, board.list[pos].score)} earned` : `You haven't earned any ${cur.name} this month yet. **/daily** is a good start!`;
+  const mine = hiddenFromBoards(engine, ctx.userId) ? `You: ${BOARD_HIDDEN_TEXT}` : pos >= 0 ? `You: **#${pos + 1}** of ${fmt(board.list.length)} · ${price(cur, board.list[pos].score)} earned` : `You haven't earned any ${cur.name} this month yet. **/daily** is a good start!`;
   const intro = `${cur.name} earned in **${seasonName(board.month)}** from /daily, work, begging, trivia and quests. The top 10 at month end keep a season badge on **/rank**. Nobody's wallet resets.`;
   const body = [intro, '', ...(lines.length ? lines : [`Nobody has earned ${cur.name} this month yet.`]), '', mine].join('\n');
   return { embeds: [card({ title: `🗓️ ${cur.name} season · ${seasonName(board.month)}`, body, color: 'economy' })], components: [row(button('All-time richest', cid('top'), 'secondary', '🏆'))] };

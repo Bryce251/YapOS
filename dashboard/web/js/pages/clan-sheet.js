@@ -1,9 +1,9 @@
 import { h, replace } from '../dom.js';
 import { icon } from '../icons.js';
-import { button, drawer, linkButton } from '../ui.js';
+import { avatar, button, drawer, linkButton } from '../ui.js';
 import { formatNumber } from '../format.js';
 import { ApiError } from '../api.js';
-import { loginUrl } from '../router.js';
+import { loginUrl, profilePath } from '../router.js';
 import { createClanJoin, joinState, clanParts } from '../../activity/js/clanjoin.js';
 
 export function apiTransport(api, signal) {
@@ -27,11 +27,20 @@ function fact(label, value, iconName) {
 }
 
 function personLine(m) {
-  return h('li', { class: ['clan-sheet-member', m.leader ? 'is-leader' : ''] },
+  const kids = [
+    avatar({ name: m.name, url: m.avatar || '', still: m.avatarStill || '', animate: false, id: m.username || m.name, size: 'xs' }),
     h('span', { class: 'clan-sheet-member-name', text: m.name }),
     m.username ? h('span', { class: 'clan-sheet-member-handle', text: `@${m.username}` }) : null,
     m.leader ? h('span', { class: 'clan-sheet-member-tag' }, icon('crown', { size: 12 }), h('span', { text: 'Leader' })) : null,
-    h('span', { class: 'clan-sheet-member-level', text: `Lv ${formatNumber(m.level)}` }));
+    h('span', { class: 'clan-sheet-member-level', text: `Lv ${formatNumber(m.level)}` }),
+  ];
+  const cls = ['clan-sheet-member', m.leader ? 'is-leader' : ''];
+  if (!m.username) return h('li', { class: 'clan-sheet-item' }, h('span', { class: cls }, ...kids));
+  return h('li', { class: 'clan-sheet-item' }, h('a', {
+    href: profilePath(m.username),
+    class: [...cls, 'clan-sheet-member-btn'],
+    attrs: { 'aria-label': `Open ${m.name}'s profile` },
+  }, ...kids));
 }
 
 export function clanSheetBody(st, { onJoin, onRetry, here = '/' } = {}) {
@@ -71,6 +80,9 @@ export function openClanSheet(tag, { api, signal = null, clan = null, win = glob
   let ctl = null;
   const d = drawer({ title: parts ? parts.full : `[${String(tag).toUpperCase()}]`, subtitle: 'Clan', onClose: () => ctl && ctl.stop() });
   d.root.classList.add('clan-drawer');
+  d.body.addEventListener('click', (e) => {
+    if (e.target && typeof e.target.closest === 'function' && e.target.closest('a.clan-sheet-member-btn')) d.close();
+  });
   const here = win && win.location ? `${win.location.pathname}${win.location.search || ''}` : '/';
   const paint = (st) => {
     if (st.clan) d.setTitle(clanParts(st.clan).full);

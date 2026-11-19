@@ -1,5 +1,5 @@
 import { HttpError, fail, isLocalHttp, publicOrigin } from './util.js';
-import { withSecurityHeaders, isActivityPath } from './security.js';
+import { withSecurityHeaders, isActivityPath, isAvatarImagePath } from './security.js';
 import { login, callback, logout } from './auth.js';
 import { handleApi } from './api.js';
 import { handleBot } from './bot.js';
@@ -7,6 +7,8 @@ import { cleanup } from './cron.js';
 import { isBadgeImagePath, serveBadgeImage } from './custom-badges.js';
 import { isBannerImagePath, serveBannerImage } from './profile-custom.js';
 import { isProfileHidden } from './public-profiles.js';
+import { serveAvatarImage } from './avatars.js';
+import { useBoardOwner } from './board-owner.js';
 
 const SPA_RE = /^\/(servers(\/.*)?|party(\/reports|\/leaderboard|\/modlog)?|packs(\/browse)?|p\/.+|u\/[^/]+|seasons|account|clans|inbox|link|owner(\/[0-9a-fA-F-]{36})?)$/;
 
@@ -47,6 +49,7 @@ async function route(request, env, deps) {
   if (isActivityPath(path)) return activity(request, env, url);
   if (isBadgeImagePath(path)) return serveBadgeImage(request, env, url);
   if (isBannerImagePath(path)) return serveBannerImage(request, env, url, isProfileHidden);
+  if (isAvatarImagePath(path)) return serveAvatarImage(request, env, url, isProfileHidden);
   if (path === '/api' || path.startsWith('/api/')) return handleApi(request, env, deps, url);
   if (path === '/bot' || path.startsWith('/bot/')) return handleBot(request, env, deps, url);
   if (path === '/auth/login') {
@@ -83,6 +86,7 @@ export function createWorker(options = {}) {
   return {
     async fetch(request, env, ctx) {
       const secure = !isLocalHttp(env);
+      useBoardOwner(env);
       let response;
       let pathname = '';
       try {
@@ -99,6 +103,7 @@ export function createWorker(options = {}) {
       return withSecurityHeaders(response, secure, pathname);
     },
     async scheduled(event, env, ctx) {
+      useBoardOwner(env);
       const work = cleanup(env.DB, deps.now()).catch((err) => {
         deps.log(`yapos-dashboard: cleanup failed (${describe(err)})`);
       });

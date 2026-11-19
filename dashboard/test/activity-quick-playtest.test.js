@@ -8,12 +8,12 @@ import { FUN, ROOM, SCORES } from '../web/activity/js/engine.js';
 import { MAX_STATE_BYTES, MAX_KEYS, MAX_VALUE_BYTES, stateBytes, jsonBytes } from '../web/activity/js/limits.js';
 import { unmask } from '../web/activity/js/games/draw.js';
 import { questionById, YEAR } from '../web/activity/data/closest.js';
-import { STYLES, DIFFS, STEPS, JACK_SECS, TAIL_SECS, buildSong, stepTime, songFor, createRun, lastNoteAt } from '../web/activity/js/games/beatchart.js';
+import { STYLES, DIFFS, STEPS, TAIL_SECS, buildSong, bpmFor, stepTime, songFor, createJudge, lastNoteAt } from '../web/activity/js/games/beatchart.js';
 import typerace, { KEY as TR, IDLE_AFTER_MS, IDLE_CALL_MS } from '../web/activity/js/games/typerace.js';
 import memory, { KEY as MEM, MAX_ROUNDS, unmaskSeq } from '../web/activity/js/games/memory.js';
 import closest from '../web/activity/js/games/closest.js';
 import name5, { UNIQUE_POINTS, SHARED_POINTS } from '../web/activity/js/games/name5.js';
-import beatdrop, { POINT_DIV } from '../web/activity/js/games/beatdrop.js';
+import beatdrop, { pointsFor } from '../web/activity/js/games/beatdrop.js';
 
 const WORDS_TXT = readFileSync(new URL('../web/activity/data/words.txt', import.meta.url), 'utf8');
 await dictionary.load(() => Promise.resolve(WORDS_TXT));
@@ -99,23 +99,23 @@ function step(p, game, now, R) {
     }
     if (st.phase !== 'play' || !(st.in || []).includes(me) || m.sent === st.n || st.at === null) return;
     if (m.n !== st.n) {
-      const song = songFor(st.seed, st.sty, st.df, st.len);
-      const presses = song.notes.filter(() => R() >= sk.miss).map((x) => ({ t: x.t + gauss(R) * sk.sig, l: x.l })).sort((a, b) => a.t - b.t);
-      Object.assign(m, { n: st.n, song, run: createRun(song, { from: (Number(st.jt && st.jt[me]) || 0) / 1000 }), presses, pi: 0, prog: now });
+      const song = songFor(st.seed, st.sty, st.df, st.len, st.bpm);
+      const presses = song.notes.filter(() => R() >= sk.miss).map((x) => ({ t: x.t + gauss(R) * sk.sig * 1000, l: x.l })).sort((a, b) => a.t - b.t);
+      Object.assign(m, { n: st.n, song, judge: createJudge(song, st.df), presses, pi: 0, prog: now });
     }
-    const t = (now - st.at) / 1000;
+    const t = now - st.at;
     while (m.pi < m.presses.length && m.presses[m.pi].t <= t) {
       const x = m.presses[m.pi++];
-      m.run.press(x.l, x.t);
+      m.judge.press(x.l, x.t);
     }
-    m.run.tick(t);
-    if (now - m.prog >= 3000 && t > 0) {
+    m.judge.sweep(t);
+    if (now - m.prog >= 1500 && t > 0) {
       m.prog = now;
-      p.e.act({ type: 'prog', n: st.n, s: m.run.stats.s, c: m.run.stats.c, j: m.run.judged });
+      p.e.act({ type: 'prog', n: st.n, v: m.judge.prog() });
     }
-    if (m.run.done && t > lastNoteAt(m.song) + 0.2) {
+    if (m.judge.done && t > lastNoteAt(m.song) * 1000 + 200) {
       m.sent = st.n;
-      p.e.act({ type: 'done', n: st.n, ...m.run.final() });
+      p.e.act({ type: 'done', n: st.n, v: m.judge.final() });
     }
   }
 }
@@ -268,41 +268,42 @@ test('Memory Chain stops after its last chain, flags it as the final round and l
 test('Name 5 and Beat Drop points sit on the same scale as the other games', () => {
   assert.equal(UNIQUE_POINTS, 100);
   assert.equal(SHARED_POINTS * 2, UNIQUE_POINTS);
-  assert.equal(POINT_DIV, 20);
+  assert.equal(pointsFor(1, 1, true), 500);
   assert.equal(beatdrop.settings.find((s) => s.id === 'songs').default, 2);
   assert.equal(typerace.settings.find((s) => s.id === 'rounds').default, 5);
 });
 
 test('Beat Drop charts are playable for every style, difficulty and length across many seeds', () => {
   for (const style of STYLES) {
-    for (const diff of DIFFS) {
+    DIFFS.forEach((diff, df) => {
       for (const len of [45, 90]) {
         for (let s = 1; s <= 25; s += 1) {
           const seed = (s * 2654435761) % 2147483646 || 1;
-          const song = buildSong(seed, style.id, diff.id, len);
+          const song = buildSong(seed, style.id, df, len, bpmFor(style.id, df));
           const label = `${style.id}/${diff.id}/${len}/${seed}`;
           const grid = new Set();
-          for (let k = 0; k < song.bars * STEPS; k += 1) grid.add(Math.round(stepTime(song, k) * 10000) / 10000);
+          for (let k = 0; k < song.bars * STEPS; k += 1) grid.add(Math.round(stepTime(song, k) * 1000));
           assert.ok(song.notes.length > 20, label);
-          const last = [-Infinity, -Infinity, -Infinity, -Infinity];
+          const last = new Array(diff.lanes).fill(-Infinity);
           let prevT = -Infinity;
           let same = 0;
           for (const n of song.notes) {
             assert.ok(grid.has(n.t), `${label}: note at ${n.t} is on the beat grid`);
-            assert.ok(n.t <= song.dur - TAIL_SECS, label);
-            assert.ok(n.t - last[n.l] >= JACK_SECS - 1e-6, `${label}: lane ${n.l} repeats ${(n.t - last[n.l]).toFixed(3)} s apart at ${n.t}`);
+            assert.ok(n.t <= (song.dur - TAIL_SECS) * 1000, label);
+            assert.ok(n.l >= 0 && n.l < diff.lanes, label);
+            assert.ok(n.t - last[n.l] >= diff.gap, `${label}: lane ${n.l} repeats ${n.t - last[n.l]} ms apart at ${n.t}`);
             last[n.l] = n.t;
             if (n.t === prevT) {
               same += 1;
               assert.ok(same <= 1, `${label}: more than two notes at ${n.t}`);
             } else {
-              assert.ok(n.t - prevT >= diff.gap - 1e-6, `${label}: notes ${(n.t - prevT).toFixed(3)} s apart at ${n.t}`);
+              assert.ok(n.t - prevT >= diff.spread * 1000 - 1, `${label}: notes ${n.t - prevT} ms apart at ${n.t}`);
               same = 0;
             }
             prevT = n.t;
           }
         }
       }
-    }
+    });
   }
 });

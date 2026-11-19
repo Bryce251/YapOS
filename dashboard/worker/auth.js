@@ -1,6 +1,7 @@
 import { MINUTE, ID_RE, redirect, json, fail, randomToken, publicOrigin, clipString, safeHttpsUrl, clientIp, safeEqual } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { STATE_COOKIE, cookie, readToken, createSession, sessionCookie, deleteSession, clearSessionCookie } from './sessions.js';
+import { cleanAvatar, profileUpsert } from './profiles.js';
 
 export const STATE_TTL = 10 * MINUTE;
 const STATE_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -103,7 +104,14 @@ async function fetchMe(env, deps, token) {
     username,
     display_name: clipString(me.display_name, 64) || username,
     avatar_url: safeHttpsUrl(me.avatar_url),
+    avatar_known: me.avatar_url === null || Boolean(cleanAvatar(me.avatar_url)),
   };
+}
+
+export async function rememberSignInAvatar(db, user, t) {
+  if (!user || !user.avatar_known) return false;
+  await profileUpsert(db, user.id, { username: user.username, display_name: user.display_name, avatar_url: user.avatar_url, t }).run();
+  return true;
 }
 
 export async function callback(request, env, deps) {
@@ -135,6 +143,7 @@ export async function callback(request, env, deps) {
   }
   if (!user) return loginFailed(env, 'failed', 'yapin');
   const id = await createSession(env.DB, user, t);
+  await rememberSignInAvatar(env.DB, user, t).catch(() => false);
   const headers = new Headers();
   headers.append('Set-Cookie', sessionCookie(env, id));
   headers.append('Set-Cookie', clearStateCookie(env));

@@ -13,6 +13,7 @@ import { effectThumb } from '../profile-fx.js';
 import { allBadges, cropVars, isSpecial, nameGradientClass, openAllBadges, paintNameGradient } from './profile.js';
 import { colourRow, createColourPicker, parseColour } from '../colour-picker.js';
 import { dataUrlBytes, loadPicture, sniffFile } from './owner-badges.js';
+import { avatarControls } from './avatar-editor.js';
 
 export const LOOK_API = '/api/me/profile-look';
 export const BANNER_API = '/api/me/profile-banner';
@@ -1221,7 +1222,11 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     onPick: (id) => update({ featured: id }),
   });
 
+  const avatarCtl = avatarControls({ api, signal, profile, look: () => draft, onChange: () => { if (!closed) refresh(); } });
+
   panels.card = h('div', { class: 'pe-panel' },
+    heading('Profile picture'),
+    avatarCtl.el,
     heading('Banner'),
     bannerWrap,
     h('div', { class: 'pe-actions-row' }, uploadBtn, moveBtn, removeBtn, fileInput),

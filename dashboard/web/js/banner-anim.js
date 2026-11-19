@@ -26,8 +26,8 @@ function outside() {
   return new AnimError('bad_image', 'That moving picture has frames bigger than the picture itself. Save it again with an image editor.');
 }
 
-function tooMany() {
-  return new AnimError('too_many_frames', `Animated banners can have up to ${ANIM_MAX_FRAMES} frames. Make the GIF shorter and try again.`);
+function tooMany(max = ANIM_MAX_FRAMES, noun = 'banners') {
+  return new AnimError('too_many_frames', `Animated ${noun} can have up to ${max} frames. Make the GIF shorter and try again.`);
 }
 
 function join(parts, total) {
@@ -61,7 +61,7 @@ export function isGif(b) {
   return b instanceof Uint8Array && b.length >= 6 && (ascii(b, 0, 6) === 'GIF87a' || ascii(b, 0, 6) === 'GIF89a');
 }
 
-export function readGif(bytes) {
+export function readGif(bytes, { maxFrames = ANIM_MAX_FRAMES, noun = 'banners' } = {}) {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(0);
   if (!isGif(b) || b.length < 14) throw broken();
   const width = u16le(b, 6);
@@ -122,7 +122,7 @@ export function readGif(bytes) {
       if (!(packed & 0x80) && !(lp & 0x80)) throw broken();
       const next = subBlocks(b, j + 1);
       frames += 1;
-      if (frames > ANIM_MAX_FRAMES) throw tooMany();
+      if (frames > maxFrames) throw tooMany(maxFrames, noun);
       keep.push(b.subarray(i, next));
       total += next - i;
       i = next;
@@ -175,12 +175,12 @@ function frameChunks(b, from, to, fw, fh) {
   if (!image) throw broken();
 }
 
-export function readAnimWebp(bytes) {
+export function readAnimWebp(bytes, { maxFrames = ANIM_MAX_FRAMES, noun = 'banners' } = {}) {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(0);
   if (!isWebp(b) || b.length < 30) throw broken();
   if (u32le(b, 4) + 8 !== b.length) throw broken();
   if (ascii(b, 12, 4) !== 'VP8X' || u32le(b, 16) !== 10) throw broken();
-  if (!(b[20] & 0x02)) throw new AnimError('not_animated', "That WebP doesn't move. Upload it as a normal banner.");
+  if (!(b[20] & 0x02)) throw new AnimError('not_animated', `That WebP doesn't move. Upload it as a normal ${noun === 'banners' ? 'banner' : 'picture'}.`);
   const width = 1 + u24le(b, 24);
   const height = 1 + u24le(b, 27);
   const head = new Uint8Array(30);
@@ -219,7 +219,7 @@ export function readAnimWebp(bytes) {
       if (fx + fw > width || fy + fh > height) throw broken();
       frameChunks(b, p + 16, end, fw, fh);
       frames += 1;
-      if (frames > ANIM_MAX_FRAMES) throw tooMany();
+      if (frames > maxFrames) throw tooMany(maxFrames, noun);
       keep.push(b.subarray(i, padded));
       total += padded - i;
     } else if (id === 'VP8 ' || id === 'VP8L' || id === 'ALPH' || id === 'VP8X') {
@@ -251,11 +251,11 @@ export function pngAnimated(b) {
   return false;
 }
 
-export function readAnimated(bytes) {
+export function readAnimated(bytes, opts = {}) {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(0);
-  if (isGif(b)) return readGif(b);
-  if (isWebp(b)) return readAnimWebp(b);
-  throw new AnimError('bad_image', 'Animated banners must be a GIF or an animated WebP.');
+  if (isGif(b)) return readGif(b, opts);
+  if (isWebp(b)) return readAnimWebp(b, opts);
+  throw new AnimError('bad_image', `Animated ${opts.noun || 'banners'} must be a GIF or an animated WebP.`);
 }
 
 export function checkAnimSize({ width, height, frames }) {

@@ -125,7 +125,7 @@ test('a public profile renders the card with badges, favourites, placings and cl
   const seen = [];
   const { root, ctx } = mountPublic(renderProfile, { params: { name: 'bea' }, get: async (path) => { seen.push(path); return PROFILE; } });
   await flush();
-  assert.deepEqual(seen, ['/api/u/bea']);
+  assert.deepEqual(seen, ['/api/u/bea', '/api/likes/bea'], 'the profile loads first, then its like count');
   assert.equal(ctx.title, 'Bea');
   const text = root.textContent;
   assert.match(text, /@bea/);
@@ -199,8 +199,10 @@ test('season history lists the newest season first and links only open profiles'
   assert.equal(cards.length, 2);
   assert.match(cards[0].textContent, /October 2026/);
   assert.match(cards[0].textContent, /💎 5,000/);
-  const links = root.querySelectorAll('a.season-name').map((a) => a.href);
-  assert.deepEqual(links, ['/u/bea', '/u/al']);
+  assert.equal(root.querySelectorAll('a.season-name').length, 0);
+  const rows = root.querySelectorAll('button.season-row');
+  assert.equal(rows.length, 4);
+  assert.ok(rows.every((b) => b.getAttribute('aria-haspopup') === 'dialog'));
   assert.ok(root.textContent.includes(EVIL));
   assert.equal(tags(root.querySelector('.season-list')).includes('img'), false);
   ctx.abort();

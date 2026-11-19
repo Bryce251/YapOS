@@ -1,4 +1,4 @@
-import { profileOf, profileAvatar, cleanUsername } from './profiles.js';
+import { profileOf, profileAvatar, cleanUsername, OWN_AVATAR } from './profiles.js';
 import { HIDDEN_NAME, nameHidden, handleHidden, noteHandle } from './hidden.js';
 
 const AVATAR_HOSTS = new Set(['files.yapper.website', 'www.yapin.gg']);
@@ -27,6 +27,7 @@ export function nameOf(p) {
 
 export function safeAvatar(url) {
   if (typeof url !== 'string' || url.length > 2048) return null;
+  if (OWN_AVATAR.test(url)) return url;
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:' || !AVATAR_HOSTS.has(u.hostname) || u.username || u.password || u.port) return null;

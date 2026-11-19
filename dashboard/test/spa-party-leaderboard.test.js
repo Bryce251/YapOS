@@ -73,7 +73,8 @@ test('the page lists players, links only open profiles and pins your rank', asyn
   assert.ok(calls.some((c) => c.includes(`me=${ME.toUpperCase()}`)));
   const rows = root.querySelectorAll('.plb-row');
   assert.equal(rows.length, 4);
-  assert.deepEqual(root.querySelectorAll('a.plb-name').map((a) => a.href), ['/u/bea']);
+  assert.equal(root.querySelectorAll('a.plb-name').length, 0);
+  assert.ok(rows.every((r) => r.localName === 'button' && r.getAttribute('aria-haspopup') === 'dialog'));
   assert.ok(root.textContent.includes(EVIL));
   assert.equal(root.querySelector('.plb-list').querySelectorAll('img').length, 0);
   assert.match(root.textContent, /52,000 points/);

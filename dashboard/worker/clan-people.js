@@ -2,6 +2,7 @@ import { safeName, applySettings } from './public-profiles.js';
 import { cleanUsername } from './profiles.js';
 import { hiddenNameMap, flagsFor, maskEntry } from './hidden-names.js';
 import { findBlocked } from '../web/activity/js/filter.js';
+import { avatarsFor } from './avatar-store.js';
 
 const NAME_CHUNK = 90;
 const PERSON_NAME_MAX = 64;
@@ -12,7 +13,7 @@ function whole(v, lo, hi) {
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : lo;
 }
 
-export async function people(db, ids, t) {
+export async function people(db, ids, t, { pics = false } = {}) {
   const list = [...new Set(ids.filter(Boolean).map(lower))];
   const out = new Map();
   for (let i = 0; i < list.length; i += NAME_CHUNK) {
@@ -35,6 +36,13 @@ export async function people(db, ids, t) {
     if (!flags) continue;
     const masked = maskEntry(p, flags, id);
     out.set(id, { name: masked.name, username: masked.username, level: p.level });
+  }
+  if (pics && out.size) {
+    const found = await avatarsFor(db, [...out.keys()]).catch(() => new Map());
+    for (const [id, p] of out) {
+      const pic = found.get(id);
+      if (pic && pic.avatar) out.set(id, { ...p, avatar: pic.avatar, ...(pic.avatarStill ? { avatarStill: pic.avatarStill } : {}) });
+    }
   }
   return out;
 }

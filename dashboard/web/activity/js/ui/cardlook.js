@@ -198,6 +198,12 @@ export function ensureFontSheet(doc, font) {
   return addSheet(doc, FONT_SHEET, 'data-pcard-fonts');
 }
 
+export const BACKDROP_SHEET = '/activity/css/avatar-backdrop.css';
+
+export function ensureBackdropSheet(doc = typeof document === 'object' ? document : null) {
+  return addSheet(doc, BACKDROP_SHEET, 'data-av-backdrop');
+}
+
 function loopWin(win) {
   const loop = sharedLoop();
   return {

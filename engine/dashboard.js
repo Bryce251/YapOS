@@ -1,8 +1,8 @@
 import { VERSION, hideSecret } from './config.js';
 import { parseBool, parseDuration } from './parse.js';
-import { avatarUrl } from './links.js';
+import { avatarUrl, avatarOf, pickAvatar } from './links.js';
 import { HARD_CAP } from './limits.js';
-import { canGiveCurrency, CURRENCY, GLOBAL_KEY, withGiftBadges, badgeGifts, customBadges, customBadgeVersion, setCustomBadges, FOUNDER_BADGE } from './global.js';
+import { canGiveCurrency, CURRENCY, GLOBAL_KEY, withGiftBadges, badgeGifts, customBadges, customBadgeVersion, setCustomBadges, FOUNDER_BADGE, onBoards } from './global.js';
 import { profileSync } from './profiles-sync.js';
 import { createOwnerActions } from './owner-actions.js';
 
@@ -71,6 +71,8 @@ const PEOPLE_PER_BOARD = 80;
 const PEOPLE_MAX = 2000;
 const PEOPLE_WAIT_MS = 15_000;
 const PROFILE_LOOKUP_MS = 5_000;
+const PROFILE_QUEUE_MAX = 200;
+const PROFILE_RETRIES = 3;
 const PROFILE_TEXT_MAX = 64;
 const PARTY_ROWS = 100;
 const PARTY_XP_MAX = 200;
@@ -304,7 +306,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
   const state = {
     timer: null, stopped: true, busy: false, failures: 0, delay: null, hot: false,
     used: new Map(), snapped: new Map(), published: new Map(), pending: [],
-    gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity, profileRun: null,
+    gone: new Set(), botIds: null, botIdsAt: -Infinity, dirty: new Set(), boardAt: -Infinity, profileRun: null, profileQueue: new Set(), profileRetry: new Set(), profileTries: new Map(),
     reportsOpen: 0, partyStats: new Map(), partyAcks: [], shardAcks: [], ratesDirty: true, ratesRun: null,
     catalogDirty: true, catalogRun: null, catalogMonth: null, people: new Map(), peopleRun: null,
     clanRev: null, clanSent: new Map(), clanFull: false, clanRetryAt: -Infinity, clanResults: new Map(), clanActionResults: new Map(), clanFeedSent: 0, clanFeedId: null, clanSettingsSig: null,
@@ -515,7 +517,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       while (next < todo.length) {
         const id = todo[next++];
         const out = await lookupProfile(id);
-        if (out.user) state.people.set(id, { at: now(), user: { name: profileText(out.user.display_name ?? out.user.displayName ?? null) || profileText(out.user.username), avatar: out.user.avatar_url ?? out.user.avatar_path ?? null } });
+        if (out.user) state.people.set(id, { at: now(), user: { name: profileText(out.user.display_name ?? out.user.displayName ?? null) || profileText(out.user.username), avatar: avatarOf(out.user) } });
         else if (out.gone) state.people.set(id, { at: now(), user: null });
       }
     }
@@ -529,9 +531,9 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     const known = await knownPeople();
     const levelsSvc = engine.service('levels');
     const econSvc = engine.service('economy');
-    const levelRows = (levelsSvc?.ranked?.() || []).slice(0, TOP);
-    const econRows = (econSvc?.ranked?.() || []).slice(0, TOP);
-    const unknown = [...levelRows, ...econRows].map((u) => u.id).filter((id) => typeof id === 'string' && !known.has(id));
+    const levelRows = onBoards(engine, levelsSvc?.ranked?.() || []).slice(0, TOP);
+    const econRows = onBoards(engine, econSvc?.ranked?.() || []).slice(0, TOP);
+    const unknown = [...levelRows, ...econRows].map((u) => u.id).filter((id) => typeof id === 'string' && (!known.has(id) || !pickAvatar(known.get(id)).known));
     if (unknown.length) {
       if (!state.peopleRun) state.peopleRun = lookUpPeople(unknown).catch(() => null).finally(() => { state.peopleRun = null; });
       let timer;
@@ -544,10 +546,10 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     }
     const who = (u) => {
       const m = known.get(u.id);
-      const found = m ? null : state.people.get(u.id)?.user || null;
+      const found = state.people.get(u.id)?.user || null;
       const saved = typeof u.name === 'string' && u.name.trim() ? plainName(u.name) : null;
       const name = m ? memberName(m) : found?.name ? plainName(found.name) : saved || 'Someone';
-      return { name, avatar_url: avatarUrl(m?.avatar_path ?? found?.avatar ?? u.avatar_path ?? null) };
+      return { name, avatar_url: avatarOf(m) ?? avatarUrl(found?.avatar ?? null) ?? avatarOf(u) };
     };
     const levels = levelRows.map((u, i) => ({ rank: i + 1, id: u.id, ...who(u), level: u.level, xp: u.xp, messages: u.messages || 0 }));
     const economy = econRows.map((u, i) => ({ rank: i + 1, id: u.id, ...who(u), balance: u.bal }));
@@ -726,7 +728,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       ...detail,
       id: target,
       name: m ? memberName(m) : lastKnownName(cases) || (detail.banned ? 'Banned member' : 'Not in the server'),
-      avatar_url: avatarUrl(m?.avatar_path ?? null),
+      avatar_url: avatarOf(m),
       bot: isBotMember(m, engine.bot.me?.id ?? null),
       warnings,
       cases,
@@ -778,7 +780,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       id: m.id,
       name: memberName(m),
       username: typeof m.username === 'string' ? m.username.slice(0, 64) : '',
-      avatar_url: avatarUrl(m.avatar_path ?? null),
+      avatar_url: avatarOf(m),
       joined_at: typeof m.joined_at === 'string' ? m.joined_at : null,
       roles: ids,
       bot: isBotMember(m, botId),
@@ -1125,46 +1127,95 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
     }
   }
 
+  function profileRow(id, user) {
+    return {
+      id,
+      username: profileText(user.username),
+      display_name: profileText(user.display_name ?? user.displayName ?? user.nickname ?? null),
+      avatar_url: avatarOf(user),
+    };
+  }
+
   async function profileBatch(ids) {
     const profiles = [];
     const missing = [];
+    const skipped = [];
+    let members = null;
+    const memberOf = async (id) => {
+      if (!members) members = await knownPeople().catch(() => new Map());
+      return members.get(id) || null;
+    };
     let next = 0;
     async function worker() {
       while (next < ids.length) {
         const id = ids[next++];
         const out = await lookupProfile(id);
-        if (out.gone) missing.push(id);
-        else if (out.user) {
-          profiles.push({
-            id,
-            username: profileText(out.user.username),
-            display_name: profileText(out.user.display_name ?? out.user.displayName ?? null),
-            avatar_url: avatarUrl(out.user.avatar_url ?? out.user.avatar_path ?? null),
-          });
-        }
+        if (out.user) profiles.push(profileRow(id, out.user));
+        else if (out.gone) {
+          const m = await memberOf(id);
+          if (m) profiles.push(profileRow(id, { ...m, username: m.username ?? m.user?.username ?? null, display_name: m.display_name ?? m.user?.display_name ?? null }));
+          else missing.push(id);
+        } else skipped.push(id);
       }
     }
     await Promise.all(Array.from({ length: Math.min(PROFILE_WORKERS, ids.length) }, worker));
-    if (!profiles.length && !missing.length) return { profiles, missing, posted: false };
+    if (!profiles.length && !missing.length) return { profiles, missing, skipped, posted: false };
     const r = await request('POST', '/bot/profiles', { profiles, missing });
     if (!r.ok) log.debug(`[dashboard] profile upload answered ${r.status}`);
-    return { profiles, missing, posted: r.ok };
+    return { profiles, missing, skipped, posted: r.ok };
   }
 
-  function lookupProfiles(list) {
+  function queueProfiles(list) {
+    for (const id of Array.isArray(list) ? list : []) {
+      if (typeof id !== 'string' || !SAFE_ID.test(id)) continue;
+      if (state.profileQueue.size >= PROFILE_QUEUE_MAX && !state.profileQueue.has(id)) break;
+      state.profileQueue.add(id);
+    }
+  }
+
+  function settleTries(out) {
+    for (const id of out?.skipped || []) {
+      const tries = (state.profileTries.get(id) || 0) + 1;
+      if (tries > PROFILE_RETRIES) {
+        state.profileTries.delete(id);
+        continue;
+      }
+      state.profileTries.set(id, tries);
+      state.profileRetry.add(id);
+    }
+    for (const p of out?.profiles || []) state.profileTries.delete(p.id);
+    for (const id of out?.missing || []) state.profileTries.delete(id);
+    while (state.profileTries.size > PROFILE_QUEUE_MAX) state.profileTries.delete(state.profileTries.keys().next().value);
+  }
+
+  function startProfiles() {
     if (state.profileRun) return state.profileRun;
-    const ids = [...new Set((Array.isArray(list) ? list : []).filter((id) => typeof id === 'string' && SAFE_ID.test(id)))].slice(0, MAX_WANTED);
-    if (!ids.length || typeof engine.bot?.user !== 'function') return Promise.resolve(null);
+    if (!state.profileQueue.size || typeof engine.bot?.user !== 'function') return Promise.resolve(null);
+    const ids = [...state.profileQueue].slice(0, MAX_WANTED);
+    for (const id of ids) state.profileQueue.delete(id);
     const run = profileBatch(ids)
+      .then((out) => {
+        settleTries(out);
+        return out;
+      })
       .catch((e) => {
         log.debug('[dashboard] profile lookups failed', e?.message);
         return null;
       })
       .finally(() => {
         if (state.profileRun === run) state.profileRun = null;
+        if (state.profileQueue.size) startProfiles();
       });
     state.profileRun = run;
     return run;
+  }
+
+  function lookupProfiles(list) {
+    if (typeof engine.bot?.user !== 'function') return Promise.resolve(null);
+    const retry = [...state.profileRetry];
+    state.profileRetry.clear();
+    queueProfiles([...(Array.isArray(list) ? list : []), ...retry]);
+    return startProfiles();
   }
 
   function partyRow(raw) {
@@ -1603,7 +1654,7 @@ export function createDashboard({ engine, url, secret, fetch: fetchImpl = global
       if (!r.ok) throw Object.assign(new Error(`poll answered ${r.status}`), { status: r.status });
       const jobs = Array.isArray(r.data?.jobs) ? r.data.jobs.slice(0, MAX_JOBS) : [];
       state.hot = r.data?.hot === true;
-      if (Array.isArray(r.data?.wanted) && r.data.wanted.length) lookupProfiles(r.data.wanted);
+      if ((Array.isArray(r.data?.wanted) && r.data.wanted.length) || state.profileRetry.size) lookupProfiles(Array.isArray(r.data?.wanted) ? r.data.wanted : []);
       const results = [];
       for (const job of jobs) results.push(await runJob(job));
       await postResults(results);

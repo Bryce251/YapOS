@@ -46,7 +46,7 @@ export function renderAccount(ctx) {
     }),
     card({ title: 'Signed in as', icon: 'user' },
       h('div', { class: 'account-who' },
-        avatar({ name, url: user.avatar_url, id: user.id, size: 'lg' }),
+        avatar({ name, url: user.avatar_url, still: user.avatar_still, id: user.id, size: 'lg' }),
         h('div', { class: 'account-who-text' },
           h('span', { class: 'account-name', text: name }),
           user.username ? h('span', { class: 'account-handle', text: `@${user.username}` }) : null),

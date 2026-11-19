@@ -1,6 +1,6 @@
 import { h, nextId, replace } from '../dom.js';
 import { icon } from '../icons.js';
-import { badge, button, card, confirmDialog, emptyState, loadingRegion, pageHeader, skeleton, toast } from '../ui.js';
+import { avatar, badge, button, card, confirmDialog, emptyState, loadingRegion, pageHeader, skeleton, toast } from '../ui.js';
 import { ApiError } from '../api.js';
 import { formatNumber, relativeTime } from '../format.js';
 import { profilePath } from '../router.js';
@@ -41,6 +41,8 @@ function readPerson(p) {
     name: str(p?.name, 64) || 'Private profile',
     username: str(p?.username, 64) || null,
     level: Number.isFinite(p?.level) ? p.level : null,
+    avatar: str(p?.avatar, 300) || null,
+    avatarStill: str(p?.avatarStill, 300) || null,
     leader: p?.leader === true,
     you: p?.you === true,
     hidden: p?.hidden === true,
@@ -218,6 +220,7 @@ export function renderClans(ctx) {
     const self = m.you && m.hidden && ctx.user ? (ctx.user.display_name || ctx.user.username || '') : '';
     return h('li', { class: ['clan-member', m.leader ? 'is-leader' : '', m.you ? 'is-you' : ''] },
       h('div', { class: 'clan-member-who' },
+        avatar({ name: m.name, url: m.avatar || '', still: m.avatarStill || '', animate: false, id: m.id, size: 'sm' }),
         m.username ? h('a', { href: profilePath(m.username), class: 'clan-member-name', dataset: { link: '' }, text: m.name }) : h('span', { class: 'clan-member-name', text: self ? `${self} (private profile)` : m.name }),
         m.username ? h('span', { class: 'clan-member-handle', text: `@${m.username}` }) : null,
         m.leader ? badge('Leader', 'accent', 'crown') : badge('Member', 'neutral'),

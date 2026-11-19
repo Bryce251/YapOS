@@ -119,8 +119,11 @@ export function hueFrom(text) {
   return Math.floor(((h * 0.618033988749895) % 1) * 360);
 }
 
+const OWN_AVATAR_RE = /^\/avatar-img\/a-[a-z0-9]{10}-[0-9a-f]{16}(-still)?\.(png|webp|jpg|gif)$/;
+
 export function safeImageUrl(url) {
   if (typeof url !== 'string' || !url) return '';
+  if (OWN_AVATAR_RE.test(url)) return url;
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:') return '';

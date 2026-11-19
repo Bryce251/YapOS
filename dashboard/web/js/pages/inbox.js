@@ -1,6 +1,6 @@
 import { h, replace } from '../dom.js';
 import { icon } from '../icons.js';
-import { button, card, emptyState, linkButton, loadingRegion, pageHeader, skeleton, toast } from '../ui.js';
+import { avatar, button, card, emptyState, linkButton, loadingRegion, pageHeader, skeleton, toast } from '../ui.js';
 import { ApiError } from '../api.js';
 import { relativeTime } from '../format.js';
 import { inboxCountChanged } from '../inbox-watch.js';
@@ -22,6 +22,7 @@ const KIND_ICONS = {
   gift: 'gift',
   badge: 'star',
   achievement: 'trophy',
+  profile_like: 'heart',
 };
 
 export function kindIcon(kind) {
@@ -43,6 +44,9 @@ export function readInbox(data) {
       link: typeof x.link === 'string' && x.link.startsWith('/') && !x.link.startsWith('//') ? x.link : null,
       canAnswer: x.canAnswer === true,
       answer: x.answer && typeof x.answer === 'object' ? { status: String(x.answer.status || ''), message: typeof x.answer.message === 'string' ? x.answer.message : '' } : null,
+      ...(x.person && typeof x.person === 'object' && typeof x.person.id === 'string' && typeof x.person.avatar === 'string' && x.person.avatar
+        ? { person: { id: x.person.id, avatar: x.person.avatar, still: typeof x.person.avatarStill === 'string' ? x.person.avatarStill : '' } }
+        : {}),
     })),
     unread: Math.max(0, Math.floor(Number(d.unread) || 0)),
     more: d.more === true,
@@ -186,7 +190,9 @@ export function renderInbox(ctx) {
       item.read ? null : button({ label: 'Mark read', size: 'sm', icon: 'check', onClick: () => markRead([item.id]) }),
       button({ icon: 'trash', size: 'sm', ariaLabel: `Delete "${item.title}"`, onClick: () => remove(item) }));
     return h('li', { class: ['inbox-item', item.read ? 'is-read' : 'is-unread'], dataset: { id: item.id, kind: item.kind } },
-      h('span', { class: 'inbox-item-icon', attrs: { 'aria-hidden': 'true' } }, icon(kindIcon(item.kind), { size: 16 })),
+      item.person
+        ? h('span', { class: 'inbox-item-icon has-person', attrs: { 'aria-hidden': 'true' } }, icon(kindIcon(item.kind), { size: 16 }), avatar({ name: item.title, url: item.person.avatar, still: item.person.still, animate: false, id: item.person.id, size: 'sm' }))
+        : h('span', { class: 'inbox-item-icon', attrs: { 'aria-hidden': 'true' } }, icon(kindIcon(item.kind), { size: 16 })),
       h('div', { class: 'inbox-item-main' },
         h('p', { class: 'inbox-item-title' },
           item.read ? null : h('span', { class: 'sr-only', text: 'Unread: ' }),

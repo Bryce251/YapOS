@@ -632,6 +632,7 @@ async function personReports(request, env, session, raw, role, t) {
       name,
       username,
       avatar: (prof && prof.avatar) || null,
+      ...(prof && prof.avatarStill ? { avatarStill: prof.avatarStill } : {}),
       role: isPartyOwner(env, id) ? 'owner' : isAdmin ? 'admin' : null,
       banned: ban ? { reason: ban.reason || null, by: ban.banned_by, at: Number(ban.banned_at), until: ban.until === null || ban.until === undefined ? null : Number(ban.until), duration: ban.duration || 'forever' } : null,
       card: shown,

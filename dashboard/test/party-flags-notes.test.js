@@ -253,7 +253,7 @@ test('notes show in the person view and as a count on report cards', async () =>
   const person = await (await h.api('GET', `/api/party/reports/person/${REX}`, cookie)).json();
   assert.deepEqual(person.notes.map((n) => n.text), ['Two', 'One']);
   assert.equal(person.notes[0].author.name, 'Alice');
-  assert.equal(person.notes[0].author.avatar, 'https://files.yapper.website/alice.png');
+  assert.equal(person.notes[0].author.avatar, OWNER.avatar_url, 'signing in refreshes the saved picture from Yapin');
   assert.equal(person.reports[0].drawer.notes, 2);
 });
 

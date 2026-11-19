@@ -158,8 +158,9 @@ export function profileData(engine, uid, { party = null } = {}) {
   };
 }
 
-export function publicSnapshot(data, { name = null, username = null } = {}) {
+export function publicSnapshot(data, { name = null, username = null, avatar } = {}) {
   const base = { id: data.id, name: cleanText(name) || cleanText(username) || 'Someone', username: cleanText(username, 32) };
+  if (avatar === null || typeof avatar === 'string') base.avatar_url = avatar;
   if (data.privacy?.hidden) {
     return { ...base, level: 0, xp: 0, shards: null, badges: [], achievements: [], season: [], clan: null, hidden: true };
   }

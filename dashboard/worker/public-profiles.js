@@ -7,6 +7,7 @@ import { findBlocked } from '../web/activity/js/filter.js';
 import { readCatalog } from './owner.js';
 import { lookForProfile, ownedSet } from './profile-custom.js';
 import { hiddenNameMap, flagsFor, maskEntry } from './hidden-names.js';
+import { avatarsFor, refreshStale } from './avatar-store.js';
 
 export const MAX_SNAPSHOTS = 50;
 export const MAX_BADGES = 64;
@@ -96,15 +97,30 @@ export function cleanSnapshot(p) {
     season: cleanSeason(p.season),
     clan: cleanClan(p.clan),
     hidden: p.hidden === true,
+    ...snapshotAvatar(p),
   };
 }
 
+function snapshotAvatar(p) {
+  if (!Object.prototype.hasOwnProperty.call(p, 'avatar_url')) return {};
+  if (p.avatar_url === null) return { avatar: null };
+  const url = cleanAvatar(p.avatar_url);
+  return url ? { avatar: url } : {};
+}
+
+function snapshotAvatarStatement(db, s, t) {
+  return db
+    .prepare('INSERT INTO profiles (id, username, display_name, avatar_url, missing, fetched) VALUES (?, ?, NULL, ?, 0, ?) ON CONFLICT (id) DO UPDATE SET avatar_url = excluded.avatar_url, username = COALESCE(profiles.username, excluded.username), missing = 0')
+    .bind(s.id, s.username, s.avatar, t);
+}
+
 export function snapshotStatements(db, list, t) {
-  return list.map((s) =>
+  const pics = list.filter((s) => s.avatar !== undefined).map((s) => snapshotAvatarStatement(db, s, t));
+  return [...list.map((s) =>
     db
       .prepare('INSERT INTO public_profiles (user_id, username, username_key, name, level, xp, shards, badges, achievements, season, clan, hidden, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET username = excluded.username, username_key = excluded.username_key, name = excluded.name, level = excluded.level, xp = excluded.xp, shards = excluded.shards, badges = excluded.badges, achievements = excluded.achievements, season = excluded.season, clan = excluded.clan, hidden = excluded.hidden, updated = excluded.updated')
       .bind(s.id, s.username, s.username ? s.username.toLowerCase() : null, s.name, s.level, s.xp, s.shards, JSON.stringify(s.badges), JSON.stringify(s.achievements), JSON.stringify(s.season), s.clan ? JSON.stringify(s.clan) : null, s.hidden ? 1 : 0, t),
-  );
+  ), ...pics];
 }
 
 export async function settingsPoll(db, t) {
@@ -189,16 +205,19 @@ export async function getPublicProfile(request, env, raw, t) {
     .bind(name.toLowerCase())
     .first();
   if (!row) return missing();
-  const [settings, stats, streak, prof, catalog, partySeason] = await Promise.all([
+  const [settings, stats, streak, prof, catalog, pics, partySeason] = await Promise.all([
     env.DB.prepare('SELECT hidden, show_shards, claimed, updated FROM profile_settings WHERE user_id = ?').bind(row.user_id).first(),
     env.DB.prepare('SELECT games, wins, by_game, counters FROM party_stats WHERE user_id = ?').bind(row.user_id).first(),
     env.DB.prepare('SELECT best FROM party_daily_streaks WHERE user_id = ?').bind(row.user_id).first(),
-    env.DB.prepare('SELECT avatar_url, display_name, missing FROM profiles WHERE id = ?').bind(row.user_id).first(),
+    env.DB.prepare('SELECT display_name, missing FROM profiles WHERE id IN (?, ?) ORDER BY fetched DESC LIMIT 1').bind(row.user_id, String(row.user_id).toLowerCase()).first(),
     readCatalog(env.DB).catch(() => ({ achievements: [], badges: [] })),
+    avatarsFor(env.DB, [row.user_id]).catch(() => new Map()),
     partySeasonBadges(env.DB, row.user_id).catch(() => []),
   ]);
   const view = applySettings(row, settings);
   if (view.hidden) return missing();
+  await refreshStale(env, pics, [row.user_id], t, clientIp(request));
+  const pic = pics.get(String(row.user_id).toLowerCase()) || { avatar: null, avatarStill: null };
   const byGame = parseJsonSafe(stats && stats.by_game, {});
   const counters = parseJsonSafe(stats && stats.counters, {});
   const party = {
@@ -214,7 +233,8 @@ export async function getPublicProfile(request, env, raw, t) {
   const profile = {
     username: row.username,
     name: displayNameOf(row, prof),
-    avatar: prof && !Number(prof.missing) ? cleanAvatar(prof.avatar_url) : null,
+    avatar: pic.avatar,
+    ...(pic.avatarStill ? { avatarStill: pic.avatarStill } : {}),
     level: Number(row.level) || 0,
     xp: Number(row.xp) || 0,
     shards: view.showShards && row.shards !== null && row.shards !== undefined ? Number(row.shards) : null,
