@@ -9,6 +9,8 @@ export const SONGS_PAGE = '/party/songs';
 export const RIGHTS_TEXT = 'I own this song or have permission to use it in YapOS Party.';
 export const CREDIT_HINT = 'e.g. CC BY 4.0 - Artist name, or Made by me';
 export const LENGTH_RULE = `Songs must be between ${SONG_MIN_MS / 1000} seconds and ${SONG_MAX_MS / 60000} minutes long.`;
+export const MATURE_LABEL = '18+';
+export const MATURE_TEXT = '18+ song. Only the owner and Party admins can play it, and only when they host.';
 export const OGG_NOTE = `MP3, OGG or M4A, up to ${SONG_MAX_BYTES / 1048576} MB and ${SONG_MIN_MS / 1000} seconds to ${SONG_MAX_MS / 60000} minutes long. OGG may not play on older iPhones, so MP3 or M4A is safest.`;
 
 export function readSongs(data) {
@@ -28,6 +30,7 @@ export function readSongs(data) {
     cv: Number(s.cv) || 1,
     counts: Array.isArray(s.counts) ? s.counts.map((n) => Number(n) || 0) : [],
     hidden: s.hidden === true,
+    mature: s.mature === true,
     uploader: String(s.uploader || ''),
     uploaderName: typeof s.uploaderName === 'string' ? s.uploaderName : '',
     url: typeof s.url === 'string' && s.url.startsWith('/song-audio/') ? s.url : '',
@@ -219,7 +222,7 @@ export function renderPartySongs(ctx, deps = {}) {
     return h('li', { class: ['song-item', s.hidden ? 'is-hidden' : ''], dataset: { song: s.id } },
       h('div', { class: 'song-item-head' },
         h('div', { class: 'song-item-text' },
-          h('p', { class: 'song-item-title', text: `${s.title} - ${s.artist}` }),
+          h('p', { class: 'song-item-title' }, `${s.title} - ${s.artist}`, s.mature ? h('span', { class: 'song-item-badge', text: MATURE_LABEL, attrs: { title: MATURE_TEXT } }) : null),
           s.credit ? h('p', { class: 'song-item-credit muted', text: `Credit: ${s.credit}` }) : null,
           h('p', { class: 'song-item-facts muted', text: facts.join(' / ') }),
           s.hidden ? h('p', { class: 'song-item-flag', text: 'Hidden from Beat Drop' }) : null),
@@ -233,11 +236,13 @@ export function renderPartySongs(ctx, deps = {}) {
     const c = textField('Credit', { max: CREDIT_MAX, value: s.credit, placeholder: CREDIT_HINT });
     const offId = nextId('song-offset');
     const off = h('input', { id: offId, class: 'input song-offset', type: 'number', min: OFFSET_MIN, max: OFFSET_MAX, step: 1, value: s.offset_ms });
+    const matureId = nextId('song-mature');
+    const mature = h('input', { id: matureId, type: 'checkbox', class: 'song-rights-box song-mature', checked: s.mature });
     const err = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
     const save = button({ label: 'Save', variant: 'primary', size: 'sm', onClick: async () => {
       setBusy(save, true);
       try {
-        await api.patch(`${SONGS_PATH}/${s.id}`, { title: t.input.value.trim(), artist: a.input.value.trim(), credit: c.input.value.trim(), offset_ms: clampOffset(off.value) });
+        await api.patch(`${SONGS_PATH}/${s.id}`, { title: t.input.value.trim(), artist: a.input.value.trim(), credit: c.input.value.trim(), offset_ms: clampOffset(off.value), mature: mature.checked === true });
         toast('Saved.');
         await load();
       } catch (e) {
@@ -249,6 +254,7 @@ export function renderPartySongs(ctx, deps = {}) {
     const notes = canChangeNotes(s, view.role, me) && s.url ? button({ label: 'Remake notes', size: 'sm', onClick: () => rechart(s, body) }) : null;
     return h('div', { class: 'song-edit' }, t.el, a.el, c.el,
       h('div', { class: 'field' }, h('label', { class: 'field-label', htmlFor: offId, text: `Offset in ms (${OFFSET_MIN} to ${OFFSET_MAX})` }), off),
+      h('div', { class: 'song-rights' }, mature, h('label', { htmlFor: matureId, text: MATURE_TEXT })),
       err,
       h('div', { class: 'song-row' }, save, notes, button({ label: 'Cancel', size: 'sm', onClick: () => replace(body) })));
   }

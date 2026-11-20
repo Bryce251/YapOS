@@ -345,7 +345,8 @@ test('the game is a quick rhythm game with a one-line pitch and clean text', () 
   assert.equal(def('length'), 60);
   assert.equal(def('songs'), 2);
   assert.equal(def('song'), 'random');
-  assert.deepEqual(beatdrop.settings.map((s) => s.id), ['difficulty', 'song', 'length', 'songs'], 'no built-in beat or tempo settings');
+  assert.deepEqual(beatdrop.settings.map((s) => s.id), ['difficulty', 'song', 'mature', 'length', 'songs'], 'no built-in beat or tempo settings');
+  assert.equal(def('mature'), false, '18+ songs stay out of Random unless an admin host turns them on');
   assert.equal(beatdrop.settings.find((s) => s.id === 'song').type, 'song');
   assert.equal(beatdrop.blurb, BLURB);
   assert.equal(BLURB, 'Tap notes on the beat. Long streaks score big.');
@@ -428,7 +429,7 @@ test('lineups only use uploaded songs: random never repeats, a picked song repea
   assert.deepEqual(songChoices(cat).map((o) => o.label), ['Random song', 'Night Test - The Testers', 'Second Test', 'Third - X']);
   assert.equal(songChoices(cat).some((o) => /built-in|beats/i.test(`${o.value} ${o.label}`)), false, 'no built-in option');
   const bd = { ...settingsFor(beatdrop, { opts: { beatdrop: { song: 'beats', style: 'funk', difficulty: 'hard' } } }) };
-  assert.deepEqual(bd, { difficulty: 'hard', song: 'random', length: 60, songs: 2 }, 'old rooms with built-in settings load cleanly');
+  assert.deepEqual(bd, { difficulty: 'hard', song: 'random', mature: false, length: 60, songs: 2 }, 'old rooms with built-in settings load cleanly');
   const lenSpec = beatdrop.settings.find((s) => s.id === 'length');
   assert.deepEqual(lenSpec.options.map((o) => [o.value, o.label]), [[45, '45 s'], [60, '60 s'], [90, '90 s'], [120, '120 s'], [150, '150 s'], [0, 'Full song']]);
   assert.equal(lenSpec.default, 60);
@@ -1761,7 +1762,7 @@ test('uploaded songs: a random lineup without repeats, ready waits for everyone 
   assert.equal(show.res[a][1], MAX_SCORE);
   assert.deepEqual(show.tt, [s.sid === SID ? 'Night Test' : 'Second Test', 'The Testers']);
   const m = beatdrop.model(bySlot(r, a).snapshot());
-  assert.deepEqual(m.song, { title: show.tt[0], artist: 'The Testers', credit: 'Made by me' }, 'results carry only the song and its credit');
+  assert.deepEqual(m.song, { title: show.tt[0], artist: 'The Testers', credit: 'Made by me', adult: false }, 'results carry only the song and its credit');
   assert.equal(m.track.emoji, '🎵');
   assert.equal(songLine(m.song), `${m.song.title} - The Testers`);
   assert.equal(m.next.title, s.lineup[1][0] === SID ? 'Night Test' : 'Second Test');

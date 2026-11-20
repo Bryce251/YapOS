@@ -42,7 +42,7 @@ export const HOLD_DIFFS = Object.freeze(['hard', 'expert']);
 export const CUT_LEAD_MS = 1000;
 export const HOLD_MIN_MS = 200;
 
-const env = { fetch: null, now: () => Date.now(), timer: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id) };
+const env = { fetch: null, auth: null, now: () => Date.now(), timer: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id) };
 const cat = { at: -Infinity, failAt: -Infinity, list: [], ok: false, tried: false, pending: null };
 const charts = new Map();
 const pending = new Map();
@@ -59,6 +59,19 @@ export function setSongFetch(fn, { now, timer, clear } = {}) {
   if (typeof now === 'function') env.now = now;
   if (typeof timer === 'function') env.timer = timer;
   if (typeof clear === 'function') env.clear = clear;
+}
+
+export function setSongAuth(fn) {
+  env.auth = typeof fn === 'function' ? fn : null;
+}
+
+function authToken() {
+  try {
+    const t = env.auth ? env.auth() : null;
+    return typeof t === 'string' && /^[A-Za-z0-9_-]{43}$/.test(t) ? t : null;
+  } catch {
+    return null;
+  }
 }
 
 export function resetSongs() {
@@ -91,7 +104,9 @@ function tell() {
 
 export function songFetch(url, opts) {
   if (typeof env.fetch !== 'function') return Promise.reject(new Error('offline'));
-  return Promise.resolve().then(() => env.fetch(url, opts));
+  const token = authToken();
+  const init = token ? { ...(opts || {}), headers: { ...((opts && opts.headers) || {}), Authorization: `Bearer ${token}` } } : opts;
+  return Promise.resolve().then(() => env.fetch(url, init));
 }
 
 function cleanText(v, max) {
@@ -100,7 +115,7 @@ function cleanText(v, max) {
 }
 
 function rowOf(r) {
-  const a = Array.isArray(r) ? r : r && typeof r === 'object' ? [r.id, r.title, r.artist, r.dur ?? r.duration_ms, r.bpm, r.cv ?? r.chart_v, r.counts] : null;
+  const a = Array.isArray(r) ? r : r && typeof r === 'object' ? [r.id, r.title, r.artist, r.dur ?? r.duration_ms, r.bpm, r.cv ?? r.chart_v, r.counts, r.credit, null, null, r.adult === true || r.mature === true ? 1 : 0] : null;
   if (!a || typeof a[0] !== 'string' || !SONG_ID_RE.test(a[0])) return null;
   const cv = Number(a[5]);
   if (!Number.isInteger(cv) || cv < 1) return null;
@@ -108,7 +123,7 @@ function rowOf(r) {
   if (!title) return null;
   const bpm = Number(a[4]);
   const counts = Array.isArray(a[6]) ? a[6].slice(0, 4).map((x) => (Number.isInteger(x) && x >= 0 ? x : 0)) : [];
-  return Object.freeze({ id: a[0], title, artist: cleanText(a[2], ARTIST_MAX), dur: Number.isFinite(Number(a[3])) ? Math.max(0, Math.round(Number(a[3]))) : 0, bpm: Number.isFinite(bpm) ? Math.round(bpm) : 0, cv, counts: Object.freeze(counts) });
+  return Object.freeze({ id: a[0], title, artist: cleanText(a[2], ARTIST_MAX), dur: Number.isFinite(Number(a[3])) ? Math.max(0, Math.round(Number(a[3]))) : 0, bpm: Number.isFinite(bpm) ? Math.round(bpm) : 0, cv, counts: Object.freeze(counts), adult: a[10] === 1 || a[10] === true });
 }
 
 export function catalog() {
@@ -121,6 +136,14 @@ export function catalogTried() {
 
 export function songRow(id) {
   return cat.list.find((r) => r.id === id) || null;
+}
+
+export function songAdult(id) {
+  if (typeof id !== 'string') return false;
+  const r = songRow(id);
+  if (r) return r.adult === true;
+  for (const e of charts.values()) if (e.id === id) return e.adult === true;
+  return false;
 }
 
 export function readCatalog(body) {
@@ -287,7 +310,7 @@ export function readSong(body, id, cv) {
   const chart = validateChart(body.charts, end - start);
   const at = Number(body.preview);
   const pre = Number.isInteger(at) && at >= start && at < end ? at - start : 0;
-  return Object.freeze({ id, cv, title: cleanText(body.title, TITLE_MAX) || 'Song', artist: cleanText(body.artist, ARTIST_MAX), credit: cleanText(body.credit, CREDIT_MAX), url: body.url, dur: Number(body.dur) || 0, start, end, off, pre, ...chart });
+  return Object.freeze({ id, cv, title: cleanText(body.title, TITLE_MAX) || 'Song', artist: cleanText(body.artist, ARTIST_MAX), credit: cleanText(body.credit, CREDIT_MAX), url: body.url, dur: Number(body.dur) || 0, start, end, off, pre, adult: body.adult === true, ...chart });
 }
 
 export function chartKey(id, cv) {
@@ -300,9 +323,9 @@ export function chartEntry(id, cv) {
 
 export function songMeta(id, cv) {
   const e = chartEntry(id, cv);
-  if (e) return { title: e.title, artist: e.artist, credit: e.credit, bpm: Math.round(e.bpm) };
+  if (e) return { title: e.title, artist: e.artist, credit: e.credit, bpm: Math.round(e.bpm), adult: songAdult(id) };
   const r = songRow(id);
-  return r ? { title: r.title, artist: r.artist, credit: '', bpm: r.bpm } : null;
+  return r ? { title: r.title, artist: r.artist, credit: '', bpm: r.bpm, adult: r.adult === true } : null;
 }
 
 export function putChart(entry) {

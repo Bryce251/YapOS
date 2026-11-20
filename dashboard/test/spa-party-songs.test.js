@@ -348,6 +348,30 @@ test('delete asks first, and only the uploader or owner sees it', async () => {
   assert.ok(api.calls.some((c) => c[0] === 'DELETE' && c[1] === '/api/party/songs/s-00000000000000aa'));
 });
 
+test('18+ songs get a shelf badge and any staff member can turn 18+ on or off in Edit', async () => {
+  state.partyAdmin = true;
+  state.user = { id: ME };
+  const api = fakeApi({ songs: [song({ mature: true }), song({ id: 's-00000000000000bb', title: 'Not mine', uploader: OTHER })], usage: { count: 2, bytes: 4000000, capCount: 40, capBytes: 200 * 1048576 }, role: 'admin' });
+  const { main } = mount(api);
+  await flush();
+  const rows = main.querySelectorAll('li').filter((li) => li.dataset.song);
+  const badge = (row) => row.querySelector('.song-item-badge');
+  assert.equal(badge(rows[0]).textContent, '18+');
+  assert.equal(badge(rows[1]), null);
+  click(buttons(rows[1], /^Edit$/)[0]);
+  await flush();
+  const box = rows[1].querySelector('.song-mature');
+  assert.ok(box, 'the edit form has the 18+ toggle even for a song someone else uploaded');
+  assert.equal(box.checked, false);
+  box.checked = true;
+  click(buttons(rows[1], /^Save$/)[0]);
+  await flush();
+  const patch = api.calls.find((c) => c[0] === 'PATCH');
+  assert.equal(patch[1], '/api/party/songs/s-00000000000000bb');
+  assert.equal(patch[2].mature, true);
+  assert.equal(readSongs({ songs: [song({ mature: 'yes' })] }).songs[0].mature, false, 'only a real true counts as 18+');
+});
+
 test('song rows read safely', () => {
   const v = readSongs({ songs: [song({ url: 'https://evil.example/x.mp3' }), { nope: 1 }], role: 'owner' });
   assert.equal(v.songs.length, 1);

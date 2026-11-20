@@ -54,6 +54,18 @@
   overflow-wrap: anywhere;
 }
 
+.bd-adult {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--danger);
+  border-radius: 999px;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  vertical-align: middle;
+}
+
 .bd-songhead {
   display: grid;
   gap: 2px;

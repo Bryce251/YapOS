@@ -355,6 +355,10 @@ test('the lobby settings panel works for every game', async () => {
     assert.match(text(pill), new RegExp(escapeRe(g.name)));
     assert.equal(byKey(el, `pick-${g.id}`).getAttribute('aria-checked'), 'true');
     for (const spec of g.settings || []) {
+      if (spec.staffHost) {
+        assert.equal(all(el).some((n) => n.dataset && (n.dataset.key || '') === `set-${spec.id}`), false, `${g.id} hides ${spec.id} from hosts who are not Party admins`);
+        continue;
+      }
       assert.ok(all(el).some((n) => n.dataset && (n.dataset.key || '').startsWith(`set-${spec.id}`)), `${g.id} shows ${spec.id}`);
       if (spec.type === 'multi' || spec.type === 'toggle' || spec.type === 'song') continue;
       const other = spec.options.find((o) => JSON.stringify(o.value) !== JSON.stringify(host.snapshot().settings[spec.id]));

@@ -931,6 +931,9 @@ export function createEngine(opts) {
       now: sharedNow,
       random,
       settings: settingsFor(game, room),
+      get hostAdmin() {
+        return adminOk(meId());
+      },
       memory: memory[game.id],
       players: activePlayers,
       nameOf(slot) {
@@ -2231,6 +2234,7 @@ export function createEngine(opts) {
       host: h,
       hostName: (list.find((p) => p.id === h) || {}).name || 'the host',
       isHost: isHost(),
+      hostAdmin: adminOk(h),
       room,
       scores,
       players: list,

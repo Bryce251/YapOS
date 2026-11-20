@@ -186,6 +186,18 @@
   color: var(--accent-text);
 }
 
+.song-item-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
 .song-item-actions {
   display: flex;
   flex-wrap: wrap;

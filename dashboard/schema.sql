@@ -845,3 +845,8 @@ CREATE TABLE IF NOT EXISTS party_song_gone (
   chart_v INTEGER NOT NULL,
   gone_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS party_song_flags (
+  id TEXT PRIMARY KEY,
+  mature INTEGER NOT NULL DEFAULT 0
+);

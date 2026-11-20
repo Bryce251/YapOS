@@ -1,5 +1,5 @@
 import { DIFFS, diffIdx, diffOf, firstNoteAt, objectsBefore, countOf, scoreOf, accOf, gradeOf, tierOf } from './beatchart.js';
-import { catalog, catalogTried, songRow, songMeta, chartSong, loadChart, loadCatalog, songLength, lengthLabel, LENGTH_CHOICES, DEFAULT_LENGTH, SONG_ID_RE } from './beatsongs.js';
+import { catalog, catalogTried, songRow, songMeta, songAdult, chartSong, loadChart, loadCatalog, songLength, lengthLabel, LENGTH_CHOICES, DEFAULT_LENGTH, SONG_ID_RE } from './beatsongs.js';
 import { shuffle } from '../engine.js';
 import { face } from './trivia.js';
 import { PLACE_POINTS } from './typerace.js';
@@ -42,6 +42,10 @@ export const FLAG_LEFT = 2;
 export const SKIP_LOAD = 1;
 export const SKIP_NONE = 2;
 export const SKIP_WAIT = 3;
+export const SKIP_ADULT = 4;
+export const DROPPED = 0;
+export const ADULT_LABEL = '18+';
+export const ADULT_SKIP_TEXT = 'That song is 18+ and only Party admins can play it when they host, so it was skipped.';
 export const WAIT_TRIES = 3;
 export const SONG_EMOJI = '🎵';
 export const GOAL = 'Tap each note as it lands on its ring. Hold the long notes until they end. Keep your streak alive and out-groove the room.';
@@ -82,13 +86,19 @@ export function pointsFor(place, acc, fc, df = 1) {
   return base + Math.round(ACC_POINTS * a * a * DIFF_PAY[diffIdx(df)]) + (fc ? FULL_BONUS : 0);
 }
 
-export function lineup(settings, count, random, cat = catalog()) {
-  const songs = usableSongs(cat);
-  if (!songs.length || !(count > 0)) return [];
+export function allowedSongs(cat = catalog(), adult = false) {
+  return usableSongs(cat).filter((r) => adult || r.adult !== true);
+}
+
+export function lineup(settings, count, random, cat = catalog(), adult = false) {
+  const allowed = allowedSongs(cat, adult);
+  if (!allowed.length || !(count > 0)) return [];
   const o = settings && typeof settings === 'object' ? settings : {};
   const pick = typeof o.song === 'string' && SONG_RE.test(o.song) ? o.song : RANDOM;
-  const fixed = songs.find((r) => r.id === pick);
+  const fixed = allowed.find((r) => r.id === pick);
   if (fixed) return Array.from({ length: count }, () => [fixed.id, fixed.cv]);
+  const songs = allowed.filter((r) => r.adult !== true || o.mature === true);
+  if (!songs.length) return [];
   const out = [];
   while (out.length < count) {
     const round = shuffle(songs, random);
@@ -98,8 +108,27 @@ export function lineup(settings, count, random, cat = catalog()) {
   return out.slice(0, count);
 }
 
-export function songChoices(cat = catalog()) {
-  return [{ value: RANDOM, label: 'Random song' }].concat(usableSongs(cat).map((r) => ({ value: r.id, label: r.artist ? `${r.title} - ${r.artist}` : r.title })));
+export function songChoices(cat = catalog(), { adult = false } = {}) {
+  return [{ value: RANDOM, label: 'Random song' }].concat(
+    allowedSongs(cat, adult).map((r) => {
+      const label = r.artist ? `${r.title} - ${r.artist}` : r.title;
+      return r.adult === true ? { value: r.id, label: `${label} (${ADULT_LABEL})`, adult: true } : { value: r.id, label };
+    }),
+  );
+}
+
+export function cleanLineup(list, from, adult, random, cat = catalog()) {
+  const src = arr(list);
+  if (adult) return src.slice();
+  const safe = allowedSongs(cat, false);
+  let bag = [];
+  return src.map((pair, i) => {
+    if (i < from || !pairOk(pair) || !songAdult(pair[0])) return pair;
+    if (!safe.length) return DROPPED;
+    if (!bag.length) bag = shuffle(safe, random);
+    const r = bag.shift();
+    return [r.id, r.cv];
+  });
 }
 
 function int(v) {
@@ -201,7 +230,7 @@ export function startState(api) {
   const want = Math.max(1, Math.min(3, Number(set.songs) || 1));
   const df = diffIdx(set.difficulty);
   const len = songLength(set.length);
-  const songs = lineup(set, want, api.random);
+  const songs = lineup(set, want, api.random, catalog(), Boolean(api.hostAdmin));
   return { n: 0, total: songs.length ? want : 1, want, df, len, lineup: songs, in: [], w: [], so: {} };
 }
 
@@ -226,7 +255,10 @@ function skip(api, st, why) {
 function ready(api, prev, i) {
   const here = present(api);
   const now = api.now();
-  const pair = arr(prev.lineup)[i];
+  const adult = Boolean(api.hostAdmin);
+  const songs = cleanLineup(prev.lineup, i, adult, api.random);
+  const pair = songs[i];
+  const dropped = pair === DROPPED;
   const st = {
     v: V,
     n: (prev.n || 0) + 1,
@@ -235,7 +267,7 @@ function ready(api, prev, i) {
     total: prev.total,
     want: prev.want,
     wt: prev.wt || 0,
-    lineup: arr(prev.lineup),
+    lineup: songs,
     df: prev.df,
     len: prev.len,
     at: null,
@@ -258,7 +290,7 @@ function ready(api, prev, i) {
     res: null,
   };
   roundAt(api, i + 1, st.total);
-  if (!pairOk(pair)) return skip(api, st, emptyWhy(st));
+  if (!pairOk(pair)) return skip(api, st, dropped ? SKIP_ADULT : emptyWhy(st));
   st.sid = pair[0];
   st.cv = pair[1];
   api.put(KEY, st);
@@ -405,7 +437,7 @@ export function standings(st, song, mem, here) {
 export function trackOf(st) {
   const id = st && typeof st.sid === 'string' ? st.sid : '';
   const meta = id ? songMeta(id, st.cv) : null;
-  return { id, title: meta ? meta.title : 'Song', artist: meta ? meta.artist : '', credit: meta ? meta.credit : '', emoji: SONG_EMOJI, bpm: meta ? meta.bpm : 0 };
+  return { id, title: meta ? meta.title : 'Song', artist: meta ? meta.artist : '', credit: meta ? meta.credit : '', emoji: SONG_EMOJI, bpm: meta ? meta.bpm : 0, adult: Boolean(id) && songAdult(id) };
 }
 
 function reveal(api, st) {
@@ -438,7 +470,7 @@ function reveal(api, st) {
   if (best && best.b >= STREAK_PRIZE) keep(api, `🔥 ${nameOf(api, best.s)} strung together a ${best.b} note streak`, best.s, 2 + best.b / 100);
   const now = api.now();
   const ends = now + SHOW_MS;
-  const out = { ...st, phase: 'show', res, so, sc: {}, f: {}, ev: [], idle: [], rd: [], starts: now, ends, tt: [track.title, track.artist] };
+  const out = { ...st, phase: 'show', res, so, sc: {}, f: {}, ev: [], idle: [], rd: [], starts: now, ends, tt: track.adult ? [track.title, track.artist, 1] : [track.title, track.artist] };
   api.put(KEY, out);
   api.memory.bd = null;
   api.setDeadline(ends);
@@ -448,7 +480,7 @@ function reveal(api, st) {
 function next(api, st) {
   if (st.sk && !arr(st.lineup).length && api.players().length) {
     const want = Math.max(1, Math.min(3, Number(st.want) || 1));
-    const songs = lineup(api.settings || {}, want, api.random);
+    const songs = lineup(api.settings || {}, want, api.random, catalog(), Boolean(api.hostAdmin));
     if (songs.length) return ready(api, { ...st, lineup: songs, total: want }, 0);
     if (st.sk === SKIP_WAIT && (st.wt || 0) < WAIT_TRIES) return skip(api, { ...st, wt: (st.wt || 0) + 1 }, emptyWhy(st));
   }
@@ -579,8 +611,9 @@ const beatdrop = {
       get options() {
         return songChoices();
       },
-      list: () => songChoices(),
+      list: (ctx) => songChoices(catalog(), { adult: Boolean(ctx && ctx.hostAdmin) }),
     },
+    { id: 'mature', label: 'Include 18+ songs', type: 'toggle', default: false, staffHost: true },
     { id: 'length', label: 'Song length', type: 'choice', options: LENGTH_CHOICES.map((v) => ({ value: v, label: lengthLabel(v) })), default: DEFAULT_LENGTH },
     { id: 'songs', label: 'Songs', type: 'choice', options: [1, 2, 3].map((v) => ({ value: v, label: String(v) })), default: 2 },
   ],
@@ -638,7 +671,7 @@ const beatdrop = {
       .filter(([, r]) => Array.isArray(r) && r[10] === FLAG_PLAYED && r[8] === 0 && r[5] + r[6] + r[7] > 0)
       .map(([k]) => Number(k));
     const extra = fc.length ? { fullCombo: fc } : {};
-    if (st && Array.isArray(st.tt)) extra.song = { t: String(st.tt[0] || ''), a: String(st.tt[1] || '') };
+    if (st && Array.isArray(st.tt)) extra.song = st.tt[2] === 1 ? { t: String(st.tt[0] || ''), a: String(st.tt[1] || ''), x: 1 } : { t: String(st.tt[0] || ''), a: String(st.tt[1] || '') };
     return { extra };
   },
 
@@ -695,6 +728,15 @@ const beatdrop = {
   resume(api) {
     const st = api.get(KEY);
     if (!st || st.v !== V) return beatdrop.start(api);
+    if (!api.hostAdmin) {
+      if (st.phase === 'ready' && pairOk(arr(st.lineup)[st.i]) && songAdult(st.lineup[st.i][0])) return ready(api, st, st.i);
+      const from = Number.isInteger(st.i) ? st.i + 1 : 0;
+      const safe = cleanLineup(st.lineup, from, false, api.random);
+      if (JSON.stringify(safe) !== JSON.stringify(arr(st.lineup))) {
+        st.lineup = safe;
+        api.put(KEY, st);
+      }
+    }
     requestChart(st);
     if (api.deadline === null) api.setDeadline(Math.max(api.now(), Math.min(st.ends || api.now(), api.now() + CHECK_MS)));
     return undefined;
@@ -791,7 +833,7 @@ const beatdrop = {
       cv: Number.isInteger(st.cv) ? st.cv : null,
       chart: Boolean(song),
       track: { id: track.id, name: track.title, emoji: track.emoji, bpm },
-      song: { title: track.title, artist: track.artist, credit: track.credit },
+      song: { title: track.title, artist: track.artist, credit: track.credit, adult: track.adult },
       faster: prevBpm !== null && bpm !== null && bpm > prevBpm,
       df: diffIdx(st.df),
       diffName: d.name,
@@ -805,7 +847,7 @@ const beatdrop = {
       waiting,
       watching: !playing,
       noLoad: mine !== null && arr(st.nl).includes(mine),
-      skipped: st.phase === 'show' && st.sk ? (st.sk === SKIP_NONE ? NEED_TEXT : st.sk === SKIP_WAIT ? WAIT_TEXT : SKIP_TEXT) : '',
+      skipped: st.phase === 'show' && st.sk ? (st.sk === SKIP_NONE ? NEED_TEXT : st.sk === SKIP_WAIT ? WAIT_TEXT : st.sk === SKIP_ADULT ? ADULT_SKIP_TEXT : SKIP_TEXT) : '',
       iReady: mine !== null && arr(st.rd).includes(mine),
       loading: st.phase === 'ready' ? { mine: ld.includes(mine) ? 'ok' : lf.includes(mine) ? 'fail' : 'wait', done: ins.filter((s) => ld.includes(s)).length, of: ins.length } : null,
       readyBy,

@@ -17,6 +17,7 @@ import { tourStatus } from './tournament.js';
 import { createParty, createBoardLink } from './party.js';
 import { createProfileCard } from './profilecard.js';
 import { createSignin } from './signin.js';
+import { setSongAuth } from '../games/beatsongs.js';
 import { startFxMode, mountBackdrop, fxLevel } from './fxmode.js';
 import { createModTray } from './modhold.js';
 
@@ -185,6 +186,13 @@ export function spectateModel(snap) {
   return out;
 }
 
+export function gateToken(gate) {
+  return () => {
+    const s = gate && typeof gate.state === 'function' ? gate.state() : null;
+    return s && s.status === 'in' && typeof s.token === 'string' ? s.token : null;
+  };
+}
+
 export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, juice = null, leaderboard = null, signin = null }) {
   const alone = !win.parent || win.parent === win;
   let account = alone ? { state: 'loading', name: '' } : null;
@@ -230,6 +238,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
   const offProfileCard = profileCard.bind(root);
   const gate = signin ? createSignin({ win, engine, toast, dev: Boolean(signin.dev), alone, host: root, onChange: () => repaintHead() }) : null;
   if (gate) root.append(gate.el);
+  if (gate) setSongAuth(gateToken(gate));
   let inboxSeen = null;
   const warnings = gate ? createWarnings({ win, gate, onInbox: (n) => {
     const note = inboxNotice(inboxSeen, n);
@@ -979,6 +988,7 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       juiceMod = null;
       panel.destroy();
       trolls.destroy();
+      if (gate) setSongAuth(null);
       if (gate) gate.destroy();
       if (warnings) warnings.destroy();
       if (typeof win.removeEventListener === 'function') win.removeEventListener(PROFILES_EVENT, onProfiles);

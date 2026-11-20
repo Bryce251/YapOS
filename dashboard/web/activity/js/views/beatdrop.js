@@ -1,4 +1,4 @@
-import beatdrop, { GOAL, SCORE_LINE, FLAG_SAT, FLAG_LEFT, LOAD_FAIL_TEXT, LATE_LOAD_TEXT, LATE_LOAD_LAST } from '../games/beatdrop.js';
+import beatdrop, { GOAL, SCORE_LINE, FLAG_SAT, FLAG_LEFT, LOAD_FAIL_TEXT, LATE_LOAD_TEXT, LATE_LOAD_LAST, ADULT_LABEL } from '../games/beatdrop.js';
 import { createJudge, lookFor, scoreOf, accOf, tierOf, lastNoteAt, sectionMarks, countOf, TIERS, LANES } from '../games/beatchart.js';
 import { loadChart, loadCatalog, chartSong, lengthLabel } from '../games/beatsongs.js';
 import { h, memo, timer, plural, button, profileButton } from '../ui/dom.js';
@@ -180,6 +180,10 @@ export function loadText(state) {
 export function songLine(song) {
   if (!song || !song.title) return '';
   return song.artist ? `${song.title} - ${song.artist}` : song.title;
+}
+
+export function adultTag(song) {
+  return song && song.adult === true ? h('span', { class: 'bd-adult', text: ADULT_LABEL, attrs: { title: 'This song is for adults (18+)' } }) : null;
 }
 
 function median(list) {
@@ -1376,7 +1380,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       'div',
       { class: 'bd-ready' },
       h('p', { class: 'bd-upnum', text: `Song ${r.number} of ${r.total} - NEXT UP` }),
-      h('h2', { class: 'question beatdrop-title fx-display', text: `Song: ${songLine(r.song)}` }),
+      h('h2', { class: 'question beatdrop-title fx-display' }, `Song: ${songLine(r.song)}`, adultTag(r.song)),
       r.song.credit ? h('p', { class: 'bd-credit muted', text: `Credit: ${r.song.credit}` }) : null,
       h('p', { class: 'bd-goal', text: GOAL }),
       h(
@@ -1558,7 +1562,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     } else if (me) card = h('div', { class: 'bd-me card' }, h('p', { class: 'bd-me-line', text: 'You sat this song out. Tap the notes next time to score!' }));
     const played = r.rows.filter((x) => x.flag !== FLAG_SAT);
     const songHead = r.song
-      ? h('div', { class: 'bd-songhead' }, h('h3', { class: 'bd-songline', text: songLine(r.song) }), r.song.credit ? h('p', { class: 'bd-credit muted', text: `Credit: ${r.song.credit}` }) : null)
+      ? h('div', { class: 'bd-songhead' }, h('h3', { class: 'bd-songline' }, songLine(r.song), adultTag(r.song)), r.song.credit ? h('p', { class: 'bd-credit muted', text: `Credit: ${r.song.credit}` }) : null)
       : null;
     if (r.skipped) {
       return h(

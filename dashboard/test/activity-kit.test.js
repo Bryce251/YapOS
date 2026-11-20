@@ -195,7 +195,7 @@ export function room(count = 3, opts = {}) {
   const engines = [];
   const add = (n) => {
     const t = hub.join(person(n));
-    const e = createEngine({ transport: t, games: opts.games || GAMES, now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, random });
+    const e = createEngine({ transport: t, games: opts.games || GAMES, now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, random, ...(opts.admins ? { admins: opts.admins } : {}) });
     if (opts.join !== false) e.join();
     engines.push(e);
     return e;

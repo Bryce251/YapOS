@@ -1,6 +1,7 @@
 import { HOUR, json, fail, readJson, readBytes, clientIp } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { getSession } from './sessions.js';
+import { getActivityUser } from './activity-auth.js';
 import { partyRole } from './reports.js';
 import { logModAction, actorName, personName } from './party-mod.js';
 import { toBytes } from './custom-badges.js';
@@ -15,6 +16,8 @@ import {
 export const SONG_AUDIO_PREFIX = '/song-audio/';
 export const SONG_AUDIO_CACHE = 'public, max-age=31536000, immutable';
 export const SONG_LIST_CACHE = 'public, max-age=60';
+export const SONG_PRIVATE_CACHE = 'private, no-store';
+export const MATURE_SIGNED_OUT = 'Sign in to YapOS Party to play this song.';
 export const UPLOAD_TTL = HOUR;
 export const PENDING_MAX = 2;
 export const FINISH_BODY_LIMIT = CHART_MAX_BYTES + 64 * 1024;
@@ -34,10 +37,12 @@ const NOT_AUDIO = 'That file is not an MP3, OGG or M4A song.';
 const MISSING_SONG = 'That song is not on the shelf any more.';
 const MISSING_UPLOAD = 'That upload has run out of time. Start it again.';
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
-const EDIT_FIELDS = new Set(['title', 'artist', 'credit', 'hidden', 'offset_ms', 'start_ms', 'end_ms', 'preview_ms', 'bpm', 'charts']);
+const EDIT_FIELDS = new Set(['title', 'artist', 'credit', 'hidden', 'mature', 'offset_ms', 'start_ms', 'end_ms', 'preview_ms', 'bpm', 'charts']);
 const FINISH_FIELDS = new Set(['title', 'artist', 'credit', 'rights', 'duration_ms', 'bpm', 'offset_ms', 'start_ms', 'end_ms', 'preview_ms', 'charts']);
 const M4A_BRANDS = new Set(['M4A ', 'M4B ', 'mp42', 'isom', 'iso2']);
 const SONG_COLUMNS = 'id, hash, mime, ext, bytes, parts, duration_ms, title, artist, credit, bpm, offset_ms, start_ms, end_ms, preview_ms, charts, chart_v, counts, hidden, uploader, rights_confirmed_at, created, updated';
+const MATURE_COLUMN = 'COALESCE((SELECT f.mature FROM party_song_flags f WHERE f.id = party_songs.id), 0) AS mature';
+const SONG_SELECT = `${SONG_COLUMNS}, ${MATURE_COLUMN}`;
 
 class SongError extends Error {
   constructor(status, code, message) {
@@ -186,12 +191,17 @@ function songOut(row, names = new Map()) {
     cv: Number(row.chart_v),
     counts: parseCounts(row.counts),
     hidden: Number(row.hidden) === 1,
+    mature: isMature(row),
     uploader: row.uploader,
     uploaderName: names.get(row.uploader) || null,
     url: songAudioUrl(row),
     created: Number(row.created),
     updated: Number(row.updated),
   };
+}
+
+export function isMature(row) {
+  return Boolean(row) && Number(row.mature) === 1;
 }
 
 export async function songUsage(db) {
@@ -209,7 +219,7 @@ function usageOut(env, used) {
 }
 
 async function listSongs(env, role, t) {
-  const res = await env.DB.prepare(`SELECT ${SONG_COLUMNS} FROM party_songs ORDER BY created DESC, id ASC`).all();
+  const res = await env.DB.prepare(`SELECT ${SONG_SELECT} FROM party_songs ORDER BY created DESC, id ASC`).all();
   const rows = (res && res.results) || [];
   const names = new Map();
   for (const id of new Set(rows.map((r) => r.uploader))) names.set(id, await personName(env.DB, id));
@@ -219,7 +229,7 @@ async function listSongs(env, role, t) {
 
 async function getSong(db, id) {
   if (!SONG_ID_RE.test(id)) return null;
-  return db.prepare(`SELECT ${SONG_COLUMNS} FROM party_songs WHERE id = ?`).bind(id).first();
+  return db.prepare(`SELECT ${SONG_SELECT} FROM party_songs WHERE id = ?`).bind(id).first();
 }
 
 async function songDetail(env, id) {
@@ -356,6 +366,21 @@ async function cancelUpload(env, me, uid, t) {
   return json({ ok: true });
 }
 
+const SONG_SUMMARY = {
+  song_hide: (title) => `Hid the Beat Drop song "${title}"`,
+  song_show: (title) => `Showed the Beat Drop song "${title}"`,
+  song_mature: (title) => `Marked the Beat Drop song "${title}" as 18+`,
+  song_all_ages: (title) => `Marked the Beat Drop song "${title}" as fine for everyone`,
+  song_edit: (title) => `Edited the Beat Drop song "${title}"`,
+};
+
+function songAction(changed, next) {
+  if (changed.length !== 1) return 'song_edit';
+  if (changed[0] === 'hidden' || changed[0] === 'shown') return next.hidden ? 'song_hide' : 'song_show';
+  if (changed[0] === 'mature' || changed[0] === 'all_ages') return next.mature ? 'song_mature' : 'song_all_ages';
+  return 'song_edit';
+}
+
 async function patchSong(request, env, session, role, me, id, t, url) {
   const row = await getSong(env.DB, id);
   if (!row) return fail(404, 'not_found', MISSING_SONG);
@@ -367,13 +392,16 @@ async function patchSong(request, env, session, role, me, id, t, url) {
   }
   if (('start_ms' in body || 'end_ms' in body) && !('charts' in body)) throw badReq('Send new notes when you move the part of the song that plays.', 'bad_chart');
   if ('hidden' in body && typeof body.hidden !== 'boolean') throw badReq('Hidden must be on or off.');
+  if ('mature' in body && typeof body.mature !== 'boolean') throw badReq('18+ must be on or off.');
   if ('bpm' in body && (typeof body.bpm !== 'number' || !Number.isFinite(body.bpm))) throw badReq('The tempo must be a number.');
   const next = {
     title: 'title' in body ? cleanSongText(body.title, TITLE_MAX, 'song title', { required: true }) : row.title,
     artist: 'artist' in body ? cleanSongText(body.artist, ARTIST_MAX, 'artist name', { required: true }) : row.artist,
     credit: 'credit' in body ? cleanSongText(body.credit, CREDIT_MAX, 'credit') : row.credit,
     hidden: 'hidden' in body ? (body.hidden ? 1 : 0) : Number(row.hidden),
+    mature: 'mature' in body ? (body.mature ? 1 : 0) : isMature(row) ? 1 : 0,
   };
+  const wasMature = isMature(row) ? 1 : 0;
   const timing = {
     duration_ms: Number(row.duration_ms),
     start_ms: 'start_ms' in body ? body.start_ms : Number(row.start_ms),
@@ -390,16 +418,18 @@ async function patchSong(request, env, session, role, me, id, t, url) {
   const changed = [];
   for (const k of ['title', 'artist', 'credit']) if (next[k] !== row[k]) changed.push(k);
   if (next.hidden !== Number(row.hidden)) changed.push(next.hidden ? 'hidden' : 'shown');
+  if (next.mature !== wasMature) changed.push(next.mature ? 'mature' : 'all_ages');
   if (bump) changed.push('notes');
-  const action = changed.length === 1 && (changed[0] === 'hidden' || changed[0] === 'shown') ? (next.hidden ? 'song_hide' : 'song_show') : 'song_edit';
-  const summary = action === 'song_hide' ? `Hid the Beat Drop song "${next.title}"` : action === 'song_show' ? `Showed the Beat Drop song "${next.title}"` : `Edited the Beat Drop song "${next.title}"`;
+  const action = songAction(changed, next);
+  const summary = SONG_SUMMARY[action](next.title);
   const stmts = [
     env.DB.prepare('UPDATE party_songs SET title = ?, artist = ?, credit = ?, hidden = ?, bpm = ?, offset_ms = ?, start_ms = ?, end_ms = ?, preview_ms = ?, charts = ?, chart_v = ?, counts = ?, updated = ? WHERE id = ?')
       .bind(next.title, next.artist, next.credit, next.hidden, charts.bpm, timing.offset_ms, timing.start_ms, timing.end_ms, timing.preview_ms, chartText, cv, JSON.stringify(chartCounts(charts)), t, id),
   ];
+  if (next.mature !== wasMature) stmts.push(env.DB.prepare('INSERT INTO party_song_flags (id, mature) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET mature = excluded.mature').bind(id, next.mature));
   if (changed.length) stmts.push(logModAction(env.DB, { actorId: me, actorName: actorName(session), action, detail: { song: id, title: next.title, changed, summary }, t }));
   await env.DB.batch(stmts);
-  if (next.hidden === 1 && Number(row.hidden) !== 1) await dropAudioCache(url, row);
+  if ((next.hidden === 1 && Number(row.hidden) !== 1) || (next.mature === 1 && wasMature !== 1)) await dropAudioCache(url, row);
   return json({ song: songOut(await getSong(env.DB, id)) });
 }
 
@@ -411,6 +441,7 @@ async function deleteSong(env, session, role, me, id, t, url) {
     env.DB.prepare('INSERT INTO party_song_gone (id, chart_v, gone_at) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET chart_v = MAX(party_song_gone.chart_v, excluded.chart_v), gone_at = excluded.gone_at').bind(id, Number(row.chart_v) || 1, t),
     env.DB.prepare('DELETE FROM party_song_chunks WHERE owner = ?').bind(id),
     env.DB.prepare('DELETE FROM party_songs WHERE id = ?').bind(id),
+    env.DB.prepare('DELETE FROM party_song_flags WHERE id = ?').bind(id),
     logModAction(env.DB, { actorId: me, actorName: actorName(session), action: 'song_delete', detail: { song: id, title: row.title, artist: row.artist, summary: `Deleted the Beat Drop song "${row.title}"` }, t }),
   ]);
   await dropAudioCache(url, row);
@@ -486,21 +517,23 @@ export async function activitySongsRoute(request, env, segs, url, t) {
   if (!limit.ok) return tooMany(limit.retryAfter);
   const n = segs.length;
   if (n === 3) {
-    const res = await env.DB.prepare('SELECT id, title, artist, credit, duration_ms, bpm, chart_v, counts, start_ms, end_ms, preview_ms FROM party_songs WHERE hidden = 0 ORDER BY created DESC, id ASC LIMIT ?').bind(SONG_CAP_COUNT).all();
-    const songs = ((res && res.results) || []).map((r) => [r.id, r.title, r.artist, Number(r.duration_ms), Number(r.bpm), Number(r.chart_v), parseCounts(r.counts), r.credit, Number(r.end_ms) - Number(r.start_ms), Math.max(0, Number(r.preview_ms) - Number(r.start_ms))]);
+    const res = await env.DB.prepare(`SELECT id, title, artist, credit, duration_ms, bpm, chart_v, counts, start_ms, end_ms, preview_ms, ${MATURE_COLUMN} FROM party_songs WHERE hidden = 0 ORDER BY created DESC, id ASC LIMIT ?`).bind(SONG_CAP_COUNT).all();
+    const songs = ((res && res.results) || []).map((r) => [r.id, r.title, r.artist, Number(r.duration_ms), Number(r.bpm), Number(r.chart_v), parseCounts(r.counts), r.credit, Number(r.end_ms) - Number(r.start_ms), Math.max(0, Number(r.preview_ms) - Number(r.start_ms)), isMature(r) ? 1 : 0]);
     return json({ songs, diffs: DIFF_IDS }, 200, { 'Cache-Control': SONG_LIST_CACHE });
   }
   const id = segs[3];
   if (!SONG_ID_RE.test(id) || n > 5 || (n === 5 && segs[4] !== 'chart')) return fail(404, 'not_found', MISSING_SONG);
   const row = await getSong(env.DB, id);
   if (!row || hiddenGone(row, t)) return fail(404, 'not_found', MISSING_SONG, null, { 'Cache-Control': SONG_LIST_CACHE });
+  const mature = isMature(row);
+  if (mature && !(await getActivityUser(env.DB, request, t))) return fail(401, 'signed_out', MATURE_SIGNED_OUT, null, { 'Cache-Control': SONG_PRIVATE_CACHE, Vary: 'Authorization, Cookie' });
   const charts = parseCharts(row.charts);
   const cv = Number(row.chart_v);
-  const headers = { 'Cache-Control': publicCache(url, cv) };
+  const headers = mature ? { 'Cache-Control': SONG_PRIVATE_CACHE, Vary: 'Authorization, Cookie' } : { 'Cache-Control': publicCache(url, cv) };
   if (n === 5) {
     const d = url.searchParams.get('d') || 'normal';
     if (!DIFF_IDS.includes(d)) return fail(400, 'bad_difficulty', 'That difficulty does not exist.');
-    return json({ id, cv, d, bpm: charts.bpm, b0: charts.b0, len: charts.len, marks: charts.marks, notes: charts.d[d], off: Number(row.offset_ms), start: Number(row.start_ms), end: Number(row.end_ms), preview: Number(row.preview_ms), url: songAudioUrl(row) }, 200, headers);
+    return json({ id, cv, d, bpm: charts.bpm, b0: charts.b0, len: charts.len, marks: charts.marks, notes: charts.d[d], off: Number(row.offset_ms), start: Number(row.start_ms), end: Number(row.end_ms), preview: Number(row.preview_ms), url: songAudioUrl(row), adult: mature }, 200, headers);
   }
   return json({
     id,
@@ -515,6 +548,7 @@ export async function activitySongsRoute(request, env, segs, url, t) {
     end: Number(row.end_ms),
     preview: Number(row.preview_ms),
     cv,
+    adult: mature,
     charts,
   }, 200, headers);
 }
@@ -579,15 +613,21 @@ export async function serveSongAudio(request, env, url, ctx, t = Date.now()) {
   const base = { ETag: etag, 'Cache-Control': SONG_AUDIO_CACHE, 'Accept-Ranges': 'bytes', 'Cross-Origin-Resource-Policy': 'same-origin', 'Content-Disposition': 'inline' };
   const match = request.headers.get('If-None-Match');
   const rangeHeader = request.headers.get('Range');
-  const cache = globalThis.caches && globalThis.caches.default ? globalThis.caches.default : null;
+  const row = await env.DB.prepare(`SELECT mime, ext, bytes, parts, hidden, updated, ${MATURE_COLUMN} FROM party_songs WHERE id = ?`).bind(id).first().catch(() => null);
+  if (!row || row.ext !== m[2] || hiddenGone(row, t)) return plain(404, 'Song not found');
+  const mature = isMature(row);
+  if (mature) {
+    base['Cache-Control'] = SONG_PRIVATE_CACHE;
+    base.Vary = 'Authorization, Cookie';
+    if (!(await getActivityUser(env.DB, request, t))) return plain(401, MATURE_SIGNED_OUT, { 'Cache-Control': SONG_PRIVATE_CACHE, Vary: 'Authorization, Cookie' });
+  }
+  const cache = !mature && globalThis.caches && globalThis.caches.default ? globalThis.caches.default : null;
   const cacheKey = new Request(`${url.origin}${url.pathname}`, { method: 'GET' });
   const plainGet = request.method === 'GET' && !rangeHeader;
   if (cache && plainGet && !match) {
     const hitRes = await cache.match(cacheKey).catch(() => null);
     if (hitRes) return hitRes;
   }
-  const row = await env.DB.prepare('SELECT mime, ext, bytes, parts, hidden, updated FROM party_songs WHERE id = ?').bind(id).first().catch(() => null);
-  if (!row || row.ext !== m[2] || hiddenGone(row, t)) return plain(404, 'Song not found');
   if (match && match.split(',').some((x) => x.trim().replace(/^W\//, '') === etag)) {
     return new Response(null, { status: 304, headers: base });
   }

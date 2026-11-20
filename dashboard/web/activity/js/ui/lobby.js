@@ -32,6 +32,7 @@ export function lobbyModel(snap, games) {
   const staff = Boolean(snap.admin && snap.admin.me);
   return {
     isHost: snap.isHost,
+    hostAdmin: Boolean(snap.hostAdmin),
     staff,
     hostName: snap.hostName,
     pick,
@@ -220,17 +221,21 @@ function twistBlock(specs, values, isHost, onSet) {
   );
 }
 
-export function songOptions(spec) {
+export function songOptions(spec, ctx = {}) {
   try {
-    const list = spec && typeof spec.list === 'function' ? spec.list() : [];
+    const list = spec && typeof spec.list === 'function' ? spec.list({ hostAdmin: Boolean(ctx && ctx.hostAdmin) }) : [];
     return Array.isArray(list) ? list.filter((o) => o && typeof o.value === 'string' && typeof o.label === 'string') : [];
   } catch {
     return [];
   }
 }
 
-function songControl(spec, value, isHost, onSet) {
-  const opts = songOptions(spec);
+export function staffHostOk(spec, m) {
+  return !(spec && spec.staffHost) || Boolean(m && m.isHost && m.hostAdmin);
+}
+
+function songControl(spec, value, isHost, onSet, ctx) {
+  const opts = songOptions(spec, ctx);
   const cur = opts.find((o) => o.value === value) || opts[0] || { value: '', label: '' };
   if (!isHost) return h('span', { class: 'code-value', text: cur.label });
   return h(
@@ -256,10 +261,10 @@ export function offText(note, staff) {
   return cut > 0 ? note.slice(0, cut + 1) : note;
 }
 
-function settingControl(spec, value, isHost, onSet, drafts) {
+function settingControl(spec, value, isHost, onSet, drafts, ctx) {
   const opts = spec.options || [];
   if (spec.type === 'code') return codeControl(spec, value, isHost, onSet, drafts);
-  if (spec.type === 'song') return songControl(spec, value, isHost, onSet);
+  if (spec.type === 'song') return songControl(spec, value, isHost, onSet, ctx);
   if (spec.type === 'multi') {
     const picked = Array.isArray(value) ? value : [];
     return h(
@@ -382,7 +387,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
   let lastSnap = null;
 
   function view() {
-    const ext = songSpecs(games, last.pick).map((s) => songOptions(s).map((o) => `${o.value}=${o.label}`).join('|'));
+    const ext = songSpecs(games, last.pick).map((s) => songOptions(s, last).map((o) => `${o.value}=${o.label}`).join('|'));
     return { ...last, tab, presets, ext };
   }
 
@@ -644,8 +649,8 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     const settings = h(
       'div',
       { class: 'settings' },
-      (game.settings || []).filter((spec) => !isTwist(spec)).map((spec) =>
-        h('div', { class: ['setting', spec.type === 'code' || spec.type === 'song' ? 'is-code' : null, `is-${spec.type || 'choice'}`] }, h('span', { class: 'setting-label', text: spec.label }), settingControl(spec, m.settings[spec.id], m.isHost, setSetting, drafts)),
+      (game.settings || []).filter((spec) => !isTwist(spec) && staffHostOk(spec, m)).map((spec) =>
+        h('div', { class: ['setting', spec.type === 'code' || spec.type === 'song' ? 'is-code' : null, `is-${spec.type || 'choice'}`] }, h('span', { class: 'setting-label', text: spec.label }), settingControl(spec, m.settings[spec.id], m.isHost, setSetting, drafts, m)),
       ),
       twistBlock((game.settings || []).filter(isTwist), m.settings, m.isHost, setSetting),
     );

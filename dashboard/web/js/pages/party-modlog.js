@@ -64,6 +64,8 @@ export const ACTION_LABELS = Object.freeze({
   song_edit: ['\u{1F3B5}', 'Beat Drop songs edited'],
   song_hide: ['\u{1F648}', 'Beat Drop songs hidden'],
   song_show: ['\u{1F3B5}', 'Beat Drop songs shown again'],
+  song_mature: ['\u{1F51E}', 'Beat Drop songs marked 18+'],
+  song_all_ages: ['\u{1F3B5}', 'Beat Drop songs marked fine for everyone'],
   song_delete: ['\u{1F5D1}️', 'Beat Drop songs deleted'],
 });
 export const CHEAT_LABELS = Object.freeze({
