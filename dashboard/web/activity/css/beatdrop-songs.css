@@ -47,8 +47,7 @@
   background: var(--danger);
 }
 
-.bd-credit,
-.bd-hint {
+.bd-credit {
   margin: 0;
   font-size: var(--text-xs);
   text-align: center;

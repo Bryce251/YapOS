@@ -194,7 +194,7 @@ export function renderPartySongs(ctx, deps = {}) {
     } });
     const editBtn = button({ label: 'Edit', size: 'sm', onClick: () => replace(body, editForm(s, body)) });
     const delBtn = canChangeNotes(s, view.role, me) ? button({ label: 'Delete', icon: 'trash', variant: 'danger', size: 'sm', onClick: async () => {
-      const ok = await confirmDialog({ title: `Delete ${s.title}?`, body: 'Games already using it will switch to built-in beats.', confirmLabel: 'Delete song' });
+      const ok = await confirmDialog({ title: `Delete ${s.title}?`, body: 'Games already using it will skip it. If it was the last song, Beat Drop cannot be played until you upload another.', confirmLabel: 'Delete song' });
       if (!ok) return;
       setBusy(delBtn, true);
       try {
@@ -284,7 +284,7 @@ export function renderPartySongs(ctx, deps = {}) {
     meterText.textContent = usageText(view.usage);
     meter.value = view.usage.capBytes ? Math.min(1, Math.max(view.usage.bytes / view.usage.capBytes, view.usage.count / view.usage.capCount)) : 0;
     if (!view.songs.length) {
-      replace(listBox, emptyState({ icon: 'volume', title: 'No songs yet', body: 'Beat Drop plays built-in beats until you upload a song.', compact: true }));
+      replace(listBox, emptyState({ icon: 'volume', title: 'No songs yet', body: 'Beat Drop cannot be played until you upload a song.', compact: true }));
       return;
     }
     replace(listBox, h('ul', { class: 'song-list' }, ...view.songs.map(songRow)));

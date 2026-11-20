@@ -196,7 +196,8 @@ test('delete asks first, and only the uploader or owner sees it', async () => {
   const dialog = document.body.querySelector('.dialog-panel');
   assert.ok(dialog);
   assert.match(dialog.textContent, /Delete Night Tone\?/);
-  assert.match(dialog.textContent, /switch to built-in beats/);
+  assert.match(dialog.textContent, /will skip it/);
+  assert.doesNotMatch(dialog.textContent, /built-in/);
   click(buttons(dialog, /Cancel/)[0]);
   await flush();
   assert.equal(api.calls.some((c) => c[0] === 'DELETE'), false);

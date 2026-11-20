@@ -1,16 +1,14 @@
-import { STYLES, DIFFS, SEED_MAX, styleById, diffIdx, diffOf, bpmFor, songFor, firstNoteAt, objectsBefore, countOf, scoreOf, accOf, gradeOf, tierOf } from './beatchart.js';
-import { catalog, songRow, songMeta, chartSong, loadChart, loadCatalog, SONG_ID_RE } from './beatsongs.js';
+import { DIFFS, diffIdx, diffOf, firstNoteAt, objectsBefore, countOf, scoreOf, accOf, gradeOf, tierOf } from './beatchart.js';
+import { catalog, catalogTried, songRow, songMeta, chartSong, loadChart, loadCatalog, SONG_ID_RE } from './beatsongs.js';
 import { shuffle } from '../engine.js';
 import { face } from './trivia.js';
 import { PLACE_POINTS } from './typerace.js';
 import { award, roundAt, say, bump, prize, keep, reel, list, nameOf, funMem } from './funkit.js';
 
 export const KEY = 'beatdrop';
-export const V = 3;
-export const MIX = 'mix';
+export const V = 4;
 export const RANDOM = 'random';
-export const BEATS = 'beats';
-export const SONG_RE = /^(random|beats|s-[0-9a-f]{16})$/;
+export const SONG_RE = /^(random|s-[0-9a-f]{16})$/;
 export const READY_MS = 20000;
 export const READY_NEXT_MS = 8000;
 export const READY_LEARN_MS = 40000;
@@ -20,6 +18,7 @@ export const HOLD_POLL_MS = 1000;
 export const LEAD_MS = 3000;
 export const END_GRACE_MS = 3000;
 export const SHOW_MS = 9000;
+export const SKIP_MS = 5000;
 export const PROG_SLACK = 1.5;
 export const PROG_GAP_MS = 900;
 export const SPAM_MS = 500;
@@ -40,23 +39,39 @@ export const SAT_SKIP = 2;
 export const FLAG_PLAYED = 0;
 export const FLAG_SAT = 1;
 export const FLAG_LEFT = 2;
+export const SKIP_LOAD = 1;
+export const SKIP_NONE = 2;
+export const SKIP_WAIT = 3;
+export const WAIT_TRIES = 3;
 export const SONG_EMOJI = '🎵';
 export const GOAL = 'Tap each note as it lands on its ring. Hold the long notes until they end. Keep your streak alive and out-groove the room.';
 export const BLURB = 'Tap notes on the beat. Long streaks score big.';
 export const SCORE_LINE = 'Hits score, Perfects score most, your longest streak adds a bonus. Max 1000.';
-export const FALLBACK_TEXT = 'That song would not load, playing built-in beats.';
-export const HINT_TEXT = 'No songs uploaded yet. Add songs on yapos.dev/party/songs.';
-export const EMPTY_TEXT = 'No songs yet, playing built-in beats';
+export const NEED_TEXT = 'Needs a song. Party staff can add one at yapos.dev/party/songs';
+export const WAIT_TEXT = 'Checking for songs...';
+export const SKIP_TEXT = "That song wouldn't load, so it was skipped.";
+export const LOAD_FAIL_TEXT = "That song wouldn't load for you, you'll join the next one";
+
+export function usableSongs(cat = catalog()) {
+  return (Array.isArray(cat) ? cat : []).filter((r) => r && typeof r.id === 'string' && SONG_ID_RE.test(r.id) && Number.isInteger(r.cv));
+}
+
+export function songsNote(cat = catalog(), tried = catalogTried()) {
+  if (usableSongs(cat).length) return '';
+  return tried ? NEED_TEXT : WAIT_TEXT;
+}
+
+function pairOk(pair) {
+  return Array.isArray(pair) && typeof pair[0] === 'string' && SONG_ID_RE.test(pair[0]) && Number.isInteger(pair[1]);
+}
 
 export function songOfState(st) {
-  if (!st || st.v !== V) return null;
-  if (st.src === 'u') return typeof st.sid === 'string' && SONG_ID_RE.test(st.sid) && Number.isInteger(st.cv) ? chartSong(st.sid, st.cv, st.df, st.len) : null;
-  if (!Number.isInteger(st.seed)) return null;
-  return songFor(st.seed, st.sty, st.df, st.len, st.bpm);
+  if (!st || st.v !== V || typeof st.sid !== 'string' || !SONG_ID_RE.test(st.sid) || !Number.isInteger(st.cv)) return null;
+  return chartSong(st.sid, st.cv, st.df, st.len);
 }
 
 function requestChart(st) {
-  if (st && st.src === 'u') loadChart(st.sid, st.cv).catch(() => null);
+  if (st && typeof st.sid === 'string' && SONG_ID_RE.test(st.sid) && Number.isInteger(st.cv)) loadChart(st.sid, st.cv).catch(() => null);
 }
 
 export function pointsFor(place, acc, fc, df = 1) {
@@ -65,39 +80,24 @@ export function pointsFor(place, acc, fc, df = 1) {
   return base + Math.round(ACC_POINTS * a * a * DIFF_PAY[diffIdx(df)]) + (fc ? FULL_BONUS : 0);
 }
 
-export function synthLineup(style, count, random, df = 1) {
-  const ids = STYLES.map((s) => s.id);
-  let picked;
-  if (style && style !== MIX && ids.includes(style)) picked = Array.from({ length: count }, () => style);
-  else {
-    picked = [];
-    while (picked.length < count) picked.push(...shuffle(ids, random));
-    picked = picked.slice(0, count);
-  }
-  const out = picked.map((id) => ['s', id, bpmFor(id, df)]);
-  if (out.length >= 2) out.sort((a, b) => a[2] - b[2]);
-  return out;
-}
-
-export function lineup(settings, count, random, df = 1, cat = catalog()) {
-  const o = settings && typeof settings === 'object' ? settings : { style: settings };
+export function lineup(settings, count, random, cat = catalog()) {
+  const songs = usableSongs(cat);
+  if (!songs.length || !(count > 0)) return [];
+  const o = settings && typeof settings === 'object' ? settings : {};
   const pick = typeof o.song === 'string' && SONG_RE.test(o.song) ? o.song : RANDOM;
-  const songs = (Array.isArray(cat) ? cat : []).filter((r) => r && typeof r.id === 'string' && SONG_ID_RE.test(r.id) && Number.isInteger(r.cv));
-  if (pick === BEATS || !songs.length) return synthLineup(o.style, count, random, df);
   const fixed = songs.find((r) => r.id === pick);
-  if (fixed) return Array.from({ length: count }, () => ['u', fixed.id, fixed.cv]);
-  const out = shuffle(songs, random).slice(0, count).map((r) => ['u', r.id, r.cv]);
-  if (out.length < count) out.push(...synthLineup(o.style, count - out.length, random, df));
-  return out;
+  if (fixed) return Array.from({ length: count }, () => [fixed.id, fixed.cv]);
+  const out = [];
+  while (out.length < count) {
+    const round = shuffle(songs, random);
+    if (out.length && round.length > 1 && round[0].id === out[out.length - 1][0]) round.push(round.shift());
+    out.push(...round.map((r) => [r.id, r.cv]));
+  }
+  return out.slice(0, count);
 }
 
 export function songChoices(cat = catalog()) {
-  const songs = Array.isArray(cat) ? cat : [];
-  return [{ value: RANDOM, label: songs.length ? 'Random song' : EMPTY_TEXT }, { value: BEATS, label: 'Built-in beats' }].concat(songs.map((r) => ({ value: r.id, label: r.artist ? `${r.title} - ${r.artist}` : r.title })));
-}
-
-function seedOf(random) {
-  return 1 + Math.floor(random() * (SEED_MAX - 1));
+  return [{ value: RANDOM, label: 'Random song' }].concat(usableSongs(cat).map((r) => ({ value: r.id, label: r.artist ? `${r.title} - ${r.artist}` : r.title })));
 }
 
 function int(v) {
@@ -196,35 +196,46 @@ function flush(api, st, mem, force = false) {
 
 export function startState(api) {
   const set = api.settings || {};
-  const total = Math.max(1, Math.min(3, Number(set.songs) || 1));
+  const want = Math.max(1, Math.min(3, Number(set.songs) || 1));
   const df = diffIdx(set.difficulty);
   const len = [45, 60, 90].includes(Number(set.length)) ? Number(set.length) : 60;
-  const cat = catalog();
-  const pick = typeof set.song === 'string' && SONG_RE.test(set.song) ? set.song : RANDOM;
-  return { n: 0, total, df, len, lineup: lineup(set, total, api.random, df, cat), hint: pick !== BEATS && !cat.length ? 1 : 0, in: [], w: [], so: {} };
+  const songs = lineup(set, want, api.random);
+  return { n: 0, total: songs.length ? want : 1, want, df, len, lineup: songs, in: [], w: [], so: {} };
+}
+
+function emptyWhy(st) {
+  if (arr(st.lineup).length || catalogTried()) return SKIP_NONE;
+  loadCatalog().catch(() => null);
+  return SKIP_WAIT;
+}
+
+function skip(api, st, why) {
+  const now = api.now();
+  const ends = now + SKIP_MS;
+  const out = { ...st, phase: 'show', sk: why, res: {}, sc: {}, f: {}, ev: [], evn: 0, idle: [], rd: [], starts: now, ends };
+  delete out.tt;
+  api.put(KEY, out);
+  api.memory.bd = null;
+  api.memory.bdHold = null;
+  api.setDeadline(ends);
+  return true;
 }
 
 function ready(api, prev, i) {
   const here = present(api);
   const now = api.now();
-  const pair = prev.lineup[i] || prev.lineup[0];
-  const seed = seedOf(api.random);
-  const up = pair[0] === 'u' && SONG_ID_RE.test(pair[1]) && Number.isInteger(pair[2]);
-  const sty = up ? STYLES[seed % STYLES.length].id : pair[1];
+  const pair = arr(prev.lineup)[i];
   const st = {
     v: V,
     n: (prev.n || 0) + 1,
     phase: 'ready',
     i,
     total: prev.total,
-    lineup: prev.lineup,
-    seed,
-    src: up ? 'u' : 's',
-    sty,
-    bpm: up ? bpmFor(sty, prev.df) : pair[2],
+    want: prev.want,
+    wt: prev.wt || 0,
+    lineup: arr(prev.lineup),
     df: prev.df,
     len: prev.len,
-    hint: prev.hint ? 1 : 0,
     at: null,
     starts: now,
     ends: now + (i === 0 ? READY_MS : READY_NEXT_MS),
@@ -235,6 +246,7 @@ function ready(api, prev, i) {
     ld: [],
     lf: [],
     lw: 0,
+    nl: [],
     idle: [],
     so: prev.so && typeof prev.so === 'object' ? { ...prev.so } : {},
     sc: {},
@@ -243,14 +255,14 @@ function ready(api, prev, i) {
     evn: 0,
     res: null,
   };
-  if (up) {
-    st.sid = pair[1];
-    st.cv = pair[2];
-  }
   roundAt(api, i + 1, st.total);
+  if (!pairOk(pair)) return skip(api, st, emptyWhy(st));
+  st.sid = pair[0];
+  st.cv = pair[1];
   api.put(KEY, st);
   api.setDeadline(st.ends);
   requestChart(st);
+  return undefined;
 }
 
 function readyDone(api, st) {
@@ -260,12 +272,11 @@ function readyDone(api, st) {
   const set = waited.length ? waited : live.filter((s) => arr(st.rd).includes(s));
   if (!set.length) return false;
   if (!set.every((s) => st.rd.includes(s))) return false;
-  if (st.src !== 'u') return true;
   return set.every((s) => arr(st.ld).includes(s) || arr(st.lf).includes(s));
 }
 
 function readyDeadline(api, st) {
-  if (st.src === 'u' && !st.lw) {
+  if (!st.lw) {
     const here = present(api);
     const missing = arr(st.in).filter((s) => here.includes(s) && !arr(st.ld).includes(s) && !arr(st.lf).includes(s));
     const now = api.now();
@@ -281,42 +292,28 @@ function readyDeadline(api, st) {
   return play(api, st);
 }
 
-function toSynth(st) {
-  const out = { ...st, src: 's', fb: 1 };
-  delete out.sid;
-  delete out.cv;
-  return out;
-}
-
 function play(api, st) {
   const now = api.now();
   const here = present(api);
-  let cur = st;
-  let song = songOfState(cur);
-  if (cur.src === 'u') {
-    if (!song) {
-      const m = api.memory;
-      if (!m.bdHold || m.bdHold.n !== cur.n) m.bdHold = { n: cur.n, until: now + LOAD_WAIT_MS };
-      if (now < m.bdHold.until) {
-        requestChart(cur);
-        api.put(KEY, cur);
-        api.setDeadline(Math.min(m.bdHold.until, now + HOLD_POLL_MS));
-        return undefined;
-      }
+  const song = songOfState(st);
+  if (!song) {
+    const m = api.memory;
+    if (!m.bdHold || m.bdHold.n !== st.n) m.bdHold = { n: st.n, until: now + LOAD_WAIT_MS };
+    if (now < m.bdHold.until) {
+      requestChart(st);
+      api.put(KEY, st);
+      api.setDeadline(Math.min(m.bdHold.until, now + HOLD_POLL_MS));
+      return undefined;
     }
-    const loaded = arr(cur.in).filter((s) => here.includes(s) && arr(cur.ld).includes(s));
-    if (!song || !loaded.length) {
-      cur = toSynth(cur);
-      song = songOfState(cur);
-    } else {
-      const out = arr(cur.in).filter((s) => !loaded.includes(s));
-      cur = { ...cur, in: loaded, w: uniq(arr(cur.w).concat(out)) };
-    }
+    return skip(api, st, SKIP_LOAD);
   }
+  const loaded = uniq(arr(st.in)).filter((s) => here.includes(s) && arr(st.ld).includes(s));
+  if (!loaded.length) return skip(api, st, SKIP_LOAD);
+  const out = arr(st.in).filter((s) => !loaded.includes(s));
   const at = now + LEAD_MS;
   const du = Math.round(song.dur * 1000);
   const ends = at + du + END_GRACE_MS;
-  const next = { ...cur, phase: 'play', in: uniq(arr(cur.in)).filter((s) => here.includes(s)), rd: [], lr: [], ld: [], lf: [], sc: {}, f: {}, ev: [], evn: 0, idle: [], at, starts: now, ends, on: countOf(song), du };
+  const next = { ...st, phase: 'play', in: loaded, w: uniq(arr(st.w).concat(out)), nl: out.filter((s) => here.includes(s)), rd: [], lr: [], ld: [], lf: [], sc: {}, f: {}, ev: [], evn: 0, idle: [], at, starts: now, ends, on: countOf(song), du };
   api.put(KEY, next);
   api.memory.bd = null;
   api.memory.bdHold = null;
@@ -404,12 +401,9 @@ export function standings(st, song, mem, here) {
 }
 
 export function trackOf(st) {
-  if (st && st.src === 'u') {
-    const meta = songMeta(st.sid, st.cv);
-    return { kind: 'u', id: st.sid, title: meta ? meta.title : 'Song', artist: meta ? meta.artist : '', credit: meta ? meta.credit : '', emoji: SONG_EMOJI, bpm: meta ? meta.bpm : 0 };
-  }
-  const sty = styleById(st && st.sty) || STYLES[0];
-  return { kind: 's', id: sty.id, title: sty.name, artist: '', credit: '', emoji: sty.emoji, bpm: st && Number.isFinite(st.bpm) ? st.bpm : sty.bpm };
+  const id = st && typeof st.sid === 'string' ? st.sid : '';
+  const meta = id ? songMeta(id, st.cv) : null;
+  return { id, title: meta ? meta.title : 'Song', artist: meta ? meta.artist : '', credit: meta ? meta.credit : '', emoji: SONG_EMOJI, bpm: meta ? meta.bpm : 0 };
 }
 
 function reveal(api, st) {
@@ -442,8 +436,7 @@ function reveal(api, st) {
   if (best && best.b >= STREAK_PRIZE) keep(api, `🔥 ${nameOf(api, best.s)} strung together a ${best.b} note streak`, best.s, 2 + best.b / 100);
   const now = api.now();
   const ends = now + SHOW_MS;
-  const out = { ...st, phase: 'show', res, so, sc: {}, f: {}, ev: [], idle: [], rd: [], starts: now, ends };
-  if (track.kind === 'u') out.tt = [track.title, track.artist];
+  const out = { ...st, phase: 'show', res, so, sc: {}, f: {}, ev: [], idle: [], rd: [], starts: now, ends, tt: [track.title, track.artist] };
   api.put(KEY, out);
   api.memory.bd = null;
   api.setDeadline(ends);
@@ -451,6 +444,12 @@ function reveal(api, st) {
 }
 
 function next(api, st) {
+  if (st.sk && !arr(st.lineup).length && api.players().length) {
+    const want = Math.max(1, Math.min(3, Number(st.want) || 1));
+    const songs = lineup(api.settings || {}, want, api.random);
+    if (songs.length) return ready(api, { ...st, lineup: songs, total: want }, 0);
+    if (st.sk === SKIP_WAIT && (st.wt || 0) < WAIT_TRIES) return skip(api, { ...st, wt: (st.wt || 0) + 1 }, emptyWhy(st));
+  }
   if (st.i + 1 < st.total && api.players().length) return ready(api, st, st.i + 1);
   return api.finish();
 }
@@ -543,7 +542,7 @@ function handleDone(api, st, slot, v) {
 }
 
 function loadIntent(api, st, slot, ok) {
-  if (st.phase !== 'ready' || st.src !== 'u' || !arr(st.in).includes(slot)) return undefined;
+  if (st.phase !== 'ready' || !arr(st.in).includes(slot)) return undefined;
   st.ld = arr(st.ld);
   st.lf = arr(st.lf);
   if (ok) {
@@ -559,10 +558,6 @@ function loadIntent(api, st, slot, ok) {
   return undefined;
 }
 
-function diffLabel(d) {
-  return d.name;
-}
-
 const beatdrop = {
   id: 'beatdrop',
   name: 'Beat Drop',
@@ -573,7 +568,7 @@ const beatdrop = {
   keys: [KEY],
   cards: ['swap', 'double'],
   settings: [
-    { id: 'difficulty', label: 'Difficulty', type: 'choice', options: DIFFS.map((d) => ({ value: d.id, label: diffLabel(d) })), default: 'normal' },
+    { id: 'difficulty', label: 'Difficulty', type: 'choice', options: DIFFS.map((d) => ({ value: d.id, label: d.name })), default: 'normal' },
     {
       id: 'song',
       label: 'Song',
@@ -583,12 +578,18 @@ const beatdrop = {
         return songChoices();
       },
       list: () => songChoices(),
-      load: () => loadCatalog(),
     },
     { id: 'length', label: 'Song length', type: 'choice', options: [45, 60, 90].map((v) => ({ value: v, label: `${v} s` })), default: 60 },
     { id: 'songs', label: 'Songs', type: 'choice', options: [1, 2, 3].map((v) => ({ value: v, label: String(v) })), default: 2 },
-    { id: 'style', label: 'Built-in beat', type: 'choice', options: [{ value: MIX, label: 'Shuffle' }].concat(STYLES.map((s) => ({ value: s.id, label: s.name }))), default: MIX },
   ],
+
+  blocked() {
+    return songsNote();
+  },
+
+  warm() {
+    return loadCatalog();
+  },
 
   start(api) {
     ready(api, startState(api), 0);
@@ -726,10 +727,7 @@ const beatdrop = {
   model(snap) {
     const st = snap.state[KEY];
     if (!st || st.v !== V) return null;
-    const up = st.src === 'u';
-    if (!up && !Number.isInteger(st.seed)) return null;
     const song = songOfState(st);
-    if (!song && !up) return null;
     const mine = snap.meSlot;
     const bySlot = new Map(snap.players.filter((p) => p.slot !== null).map((p) => [p.slot, p]));
     const track = trackOf(st);
@@ -771,14 +769,11 @@ const beatdrop = {
     }
     const lineupOk = Array.isArray(st.lineup);
     const nx = st.i + 1 < st.total && lineupOk ? st.lineup[st.i + 1] : null;
-    const entryBpm = (e) => (!Array.isArray(e) ? null : e[0] === 'u' ? (songRow(e[1]) || { bpm: null }).bpm : e[2]);
+    const entryBpm = (e) => (pairOk(e) ? (songRow(e[0]) || { bpm: null }).bpm || null : null);
     let nextInfo = null;
-    if (nx && nx[0] === 'u') {
-      const meta = songMeta(nx[1], nx[2]);
+    if (pairOk(nx)) {
+      const meta = songMeta(nx[0], nx[1]);
       nextInfo = { name: meta ? meta.title : 'A new song', emoji: SONG_EMOJI, bpm: meta && meta.bpm ? meta.bpm : null, diffName: d.name, title: meta ? meta.title : 'A new song' };
-    } else if (nx) {
-      const sty = styleById(nx[1]) || STYLES[0];
-      nextInfo = { name: sty.name, emoji: sty.emoji, bpm: nx[2], diffName: d.name, title: sty.name };
     }
     const prevBpm = st.i > 0 && lineupOk ? entryBpm(st.lineup[st.i - 1]) : null;
     const bpm = song ? Math.round(song.bpm) : track.bpm || null;
@@ -790,12 +785,11 @@ const beatdrop = {
       phase: st.phase,
       number: st.i + 1,
       total: st.total,
-      src: up ? 'u' : 's',
-      sid: up ? st.sid : null,
-      cv: up ? st.cv : null,
+      sid: track.id || null,
+      cv: Number.isInteger(st.cv) ? st.cv : null,
       chart: Boolean(song),
-      style: { id: track.id, name: track.title, emoji: track.emoji, bpm },
-      song: { kind: track.kind, title: track.title, artist: track.artist, credit: track.credit },
+      track: { id: track.id, name: track.title, emoji: track.emoji, bpm },
+      song: { title: track.title, artist: track.artist, credit: track.credit },
       faster: prevBpm !== null && bpm !== null && bpm > prevBpm,
       df: diffIdx(st.df),
       diffName: d.name,
@@ -808,10 +802,10 @@ const beatdrop = {
       playing,
       waiting,
       watching: !playing,
+      noLoad: mine !== null && arr(st.nl).includes(mine),
+      skipped: st.phase === 'show' && st.sk ? (st.sk === SKIP_NONE ? NEED_TEXT : st.sk === SKIP_WAIT ? WAIT_TEXT : SKIP_TEXT) : '',
       iReady: mine !== null && arr(st.rd).includes(mine),
-      loading: up && st.phase === 'ready' ? { mine: ld.includes(mine) ? 'ok' : lf.includes(mine) ? 'fail' : 'wait', done: ins.filter((s) => ld.includes(s)).length, of: ins.length } : null,
-      hint: st.hint === 1 && !up && st.fb !== 1,
-      fellBack: st.fb === 1,
+      loading: st.phase === 'ready' ? { mine: ld.includes(mine) ? 'ok' : lf.includes(mine) ? 'fail' : 'wait', done: ins.filter((s) => ld.includes(s)).length, of: ins.length } : null,
       readyBy,
       dots,
       readyCount: readyBy.length,

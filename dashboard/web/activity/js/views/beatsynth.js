@@ -1,16 +1,16 @@
-import { stepAt, STEPS, styleById, STYLES, chordRoot, PENTA } from '../games/beatchart.js';
 import { sfx as defaultSfx } from '../ui/sfx.js';
 
 export const MUSIC_GAIN = 0.6;
 export const SFX_GAIN = 0.18;
-export const LOOKAHEAD = 0.35;
-export const PUMP_MS = 90;
 export const CLICK_HZ = 1320;
 export const OPEN_HZ = 18000;
 export const DIP_HZ = 900;
 export const DUCK = 0.708;
+export const DUCK_SECS = 0.8;
+export const TAP_ROOT = 57;
+export const TAP_SCALE = Object.freeze([0, 3, 5, 7, 10]);
 
-export function midiHz(midi) {
+function midiHz(midi) {
   return 440 * 2 ** ((midi - 69) / 12);
 }
 
@@ -18,16 +18,6 @@ export function soundNote(state) {
   if (state === 'off') return 'Sound is off. Turn sound on to play to the music. You can still play by watching the notes.';
   if (state === 'none') return "Music can't play on this device, but you can still play by watching the notes.";
   return null;
-}
-
-function later(w, fn, ms) {
-  const set = typeof w.setTimeout === 'function' ? w.setTimeout.bind(w) : globalThis.setTimeout;
-  return set(fn, ms);
-}
-
-function cancel(w, id) {
-  const clear = typeof w.clearTimeout === 'function' ? w.clearTimeout.bind(w) : globalThis.clearTimeout;
-  clear(id);
 }
 
 function noiseSeed() {
@@ -59,10 +49,6 @@ export function createBeatPlayer({ sfx, win } = {}) {
   let music = null;
   let fxBus = null;
   let noise = null;
-  let pump = null;
-  let song = null;
-  let zero = 0;
-  let k = 0;
   let voices = 0;
   let musicOn = true;
   let tapsOn = true;
@@ -191,23 +177,15 @@ export function createBeatPlayer({ sfx, win } = {}) {
     g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
   }
 
-  function osc(c, out, { type, hz, to = null, at, dur, peak, attack = 0.005, cut = null }) {
+  function osc(c, out, { type, hz, to = null, at, dur, peak, attack = 0.005 }) {
     const o = c.createOscillator();
     const g = c.createGain();
     o.type = type;
     o.frequency.setValueAtTime(hz, at);
     if (to) o.frequency.exponentialRampToValueAtTime(to, at + dur * 0.6);
     env(g, at, peak, attack, dur);
-    let tail = g;
-    if (cut && typeof c.createBiquadFilter === 'function') {
-      const f = c.createBiquadFilter();
-      f.type = 'lowpass';
-      f.frequency.setValueAtTime(cut, at);
-      g.connect(f);
-      tail = f;
-    }
     o.connect(g);
-    tail.connect(out);
+    g.connect(out);
     o.start(at);
     o.stop(at + dur + 0.03);
     voices += 1;
@@ -231,102 +209,6 @@ export function createBeatPlayer({ sfx, win } = {}) {
     voices += 1;
   }
 
-  function voice(c, ev, at) {
-    const st = styleById(song.style) || STYLES[0];
-    const stepLen = song.step;
-    if (ev.kick) osc(c, music, { type: 'sine', hz: 150, to: 44, at, dur: 0.28, peak: 0.95, attack: 0.002 });
-    if (ev.snare) {
-      const soft = ev.roll ? 0.5 : 1;
-      hiss(c, music, { at, dur: ev.roll ? 0.08 : 0.16, peak: 0.42 * soft, type: 'bandpass', hz: 1900 });
-      osc(c, music, { type: 'triangle', hz: 210, to: 160, at, dur: 0.1, peak: 0.3 * soft });
-    }
-    if (ev.hat) hiss(c, music, { at, dur: 0.045, peak: 0.16, type: 'highpass', hz: 7200 });
-    if (ev.crash) hiss(c, music, { at, dur: 1.1, peak: 0.16, type: 'highpass', hz: 4800 });
-    if (ev.bass !== null) osc(c, music, { type: st.wave, hz: midiHz(ev.bass), at, dur: Math.max(0.12, stepLen * 1.8), peak: 0.36, attack: 0.006, cut: st.cut });
-    if (ev.chord) {
-      const long = ev.sec === 'outro' ? 2.2 : (ev.sec === 'drop' ? 0.5 : 1) * song.bar * 0.95;
-      for (const m of ev.chord) osc(c, music, { type: 'triangle', hz: midiHz(m), at, dur: long, peak: ev.sec === 'drop' ? 0.1 : 0.075, attack: 0.04 });
-    }
-    if (ev.arp !== null) osc(c, music, { type: 'square', hz: midiHz(ev.arp), at, dur: stepLen * 1.6, peak: 0.05, attack: 0.004, cut: 2600 });
-  }
-
-  function stopPump() {
-    if (pump !== null) cancel(w, pump);
-    pump = null;
-  }
-
-  function freshMusic() {
-    if (!ctx || !filter) return;
-    try {
-      if (music) music.disconnect();
-    } catch {
-      music = null;
-    }
-    try {
-      music = ctx.createGain();
-      music.gain.value = musicLevel();
-      music.connect(filter);
-    } catch {
-      music = null;
-    }
-  }
-
-  function stop() {
-    stopPump();
-    if (song) freshMusic();
-    song = null;
-  }
-
-  function tick() {
-    pump = null;
-    if (!song || !music || !ctx) return;
-    const total = song.bars * STEPS;
-    const cur = now();
-    const horizon = cur + LOOKAHEAD;
-    try {
-      while (k < total) {
-        const ev = stepAt(song, k);
-        const at = zero + ev.t;
-        if (at > horizon) break;
-        if (at >= cur - 0.02) voice(ctx, ev, Math.max(at, cur));
-        k += 1;
-      }
-    } catch {
-      stop();
-      return;
-    }
-    if (k < total) pump = later(w, tick, PUMP_MS);
-  }
-
-  function seek(songT) {
-    if (!song) return false;
-    stopPump();
-    freshMusic();
-    k = Math.max(0, Math.ceil((Number(songT) || 0) / song.step - 1e-6));
-    tick();
-    return true;
-  }
-
-  function start(next, zeroCtx) {
-    stop();
-    if (!next || next.kind === 'u' || !enabled()) return false;
-    const c = graph();
-    if (!c) return false;
-    try {
-      ensure();
-      song = next;
-      zero = Number(zeroCtx) || 0;
-      return seek(Math.max(0, now() - zero));
-    } catch {
-      stop();
-      return false;
-    }
-  }
-
-  function setZero(z) {
-    zero = Number(z) || 0;
-  }
-
   function setMix({ music: m, taps } = {}) {
     if (typeof m === 'boolean') musicOn = m;
     if (typeof taps === 'boolean') tapsOn = taps;
@@ -345,14 +227,12 @@ export function createBeatPlayer({ sfx, win } = {}) {
     return c;
   }
 
-  function hit(laneIdx, kind, songT) {
+  function hit(laneIdx, kind) {
     const c = fx();
     if (!c) return false;
     try {
       const at = now();
-      const r = song ? chordRoot(song, Math.max(0, songT || 0)) : { root: 57, mode: 'minor' };
-      const scale = PENTA[r.mode] || PENTA.minor;
-      const m = r.root + 24 + scale[Math.max(0, laneIdx) % scale.length] + (kind === 'p' ? 12 : 0);
+      const m = TAP_ROOT + 24 + TAP_SCALE[Math.max(0, laneIdx) % TAP_SCALE.length] + (kind === 'p' ? 12 : 0);
       hiss(c, fxBus, { at, dur: 0.03, peak: 0.5, type: 'bandpass', hz: 3200 });
       osc(c, fxBus, { type: 'triangle', hz: midiHz(m), at, dur: 0.07, peak: 0.55, attack: 0.002 });
       if (kind === 'p') osc(c, fxBus, { type: 'sine', hz: midiHz(m) * 3, at, dur: 0.12, peak: 0.08, attack: 0.002 });
@@ -391,43 +271,36 @@ export function createBeatPlayer({ sfx, win } = {}) {
     }
   }
 
-  function arp(notes, gap, peak) {
+  function tierUp() {
     const c = fx();
     if (!c) return false;
     try {
       const at = now();
-      notes.forEach((m, i) => osc(c, fxBus, { type: 'triangle', hz: midiHz(m), at: at + i * gap, dur: 0.16, peak, attack: 0.004 }));
+      [TAP_ROOT + 24, TAP_ROOT + 27, TAP_ROOT + 31].forEach((m, i) => osc(c, fxBus, { type: 'triangle', hz: midiHz(m), at: at + i * 0.07, dur: 0.16, peak: 0.4, attack: 0.004 }));
       return true;
     } catch {
       return false;
     }
   }
 
-  function tierUp(songT) {
-    const r = song ? chordRoot(song, Math.max(0, songT || 0)) : { root: 57, mode: 'minor' };
-    const third = r.mode === 'major' ? 4 : 3;
-    return arp([r.root + 24, r.root + 24 + third, r.root + 31], 0.07, 0.4);
-  }
-
-  function swell(songT) {
-    const r = song ? chordRoot(song, Math.max(0, songT || 0)) : { root: 57, mode: 'major' };
+  function swell() {
     const c = fx();
     if (!c) return false;
     try {
       const at = now();
-      for (const m of [0, 4, 7, 12]) osc(c, fxBus, { type: 'triangle', hz: midiHz(r.root + 24 + m), at, dur: 1.4, peak: 0.22, attack: 0.25 });
+      for (const m of [0, 4, 7, 12]) osc(c, fxBus, { type: 'triangle', hz: midiHz(TAP_ROOT + 24 + m), at, dur: 1.4, peak: 0.22, attack: 0.25 });
       return true;
     } catch {
       return false;
     }
   }
 
-  function duck(beats = 2) {
-    if (!music || !ctx || !song) return false;
+  function duck(secs = DUCK_SECS) {
+    if (!music || !ctx) return false;
     try {
       const at = now();
       setAt(music.gain, musicLevel() * DUCK, at);
-      music.gain.linearRampToValueAtTime(musicLevel(), at + song.beat * beats);
+      music.gain.linearRampToValueAtTime(musicLevel(), at + secs);
       return true;
     } catch {
       return false;
@@ -454,16 +327,11 @@ export function createBeatPlayer({ sfx, win } = {}) {
 
   const off = typeof s.on === 'function'
     ? s.on('change', () => {
-        if (!enabled()) stop();
         if (master && ctx) setAt(master.gain, level(), now());
       })
     : null;
 
   return {
-    start,
-    seek,
-    stop,
-    setZero,
     setMix,
     mute,
     ensure,
@@ -479,9 +347,6 @@ export function createBeatPlayer({ sfx, win } = {}) {
     status,
     context,
     bus,
-    get playing() {
-      return Boolean(song && music);
-    },
     get voices() {
       return voices;
     },
@@ -492,8 +357,6 @@ export function createBeatPlayer({ sfx, win } = {}) {
       return { music: musicOn, taps: tapsOn };
     },
     destroy() {
-      stopPump();
-      song = null;
       dead = true;
       if (typeof off === 'function') off();
       for (const n of [music, fxBus, filter, master]) {

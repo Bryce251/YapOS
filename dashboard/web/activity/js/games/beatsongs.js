@@ -3,6 +3,7 @@ import { DIFFS, TAIL_SECS, LANES, diffIdx, prepSong } from './beatchart.js';
 export const CATALOG_URL = '/api/activity/songs';
 export const SONG_URL = '/api/activity/songs/';
 export const CATALOG_TTL_MS = 60000;
+export const CATALOG_RETRY_MS = 10000;
 export const CHART_TIMEOUT_MS = 10000;
 export const CHART_MAX_BYTES = 98304;
 export const CATALOG_MAX = 100;
@@ -27,7 +28,7 @@ export const CUT_LEAD_MS = 1000;
 export const HOLD_MIN_MS = 200;
 
 const env = { fetch: null, now: () => Date.now(), timer: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id) };
-const cat = { at: -Infinity, list: [], ok: false, pending: null };
+const cat = { at: -Infinity, failAt: -Infinity, list: [], ok: false, tried: false, pending: null };
 const charts = new Map();
 const pending = new Map();
 const built = new Map();
@@ -47,8 +48,10 @@ export function setSongFetch(fn, { now, timer, clear } = {}) {
 
 export function resetSongs() {
   cat.at = -Infinity;
+  cat.failAt = -Infinity;
   cat.list = [];
   cat.ok = false;
+  cat.tried = false;
   cat.pending = null;
   charts.clear();
   pending.clear();
@@ -97,8 +100,8 @@ export function catalog() {
   return cat.list;
 }
 
-export function catalogReady() {
-  return cat.ok;
+export function catalogTried() {
+  return cat.tried;
 }
 
 export function songRow(id) {
@@ -122,6 +125,7 @@ export function readCatalog(body) {
 export function loadCatalog({ force = false } = {}) {
   if (cat.pending) return cat.pending;
   if (!force && cat.ok && env.now() - cat.at < CATALOG_TTL_MS) return Promise.resolve(cat.list);
+  if (!force && !cat.ok && cat.tried && env.now() - cat.failAt < CATALOG_RETRY_MS) return Promise.resolve(cat.list);
   const p = songFetch(CATALOG_URL, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
     .then((res) => (res && res.ok ? res.json() : null))
     .then((body) => {
@@ -131,6 +135,7 @@ export function loadCatalog({ force = false } = {}) {
         cat.list = list;
         cat.ok = true;
         cat.at = env.now();
+        cat.tried = true;
         if (changed) tell();
       }
       return cat.list;
@@ -138,6 +143,11 @@ export function loadCatalog({ force = false } = {}) {
     .catch(() => cat.list)
     .then((list) => {
       cat.pending = null;
+      if (!cat.ok) cat.failAt = env.now();
+      if (!cat.tried) {
+        cat.tried = true;
+        tell();
+      }
       return list;
     });
   cat.pending = p;
@@ -341,18 +351,13 @@ export function chartSong(id, cv, df, len) {
   }
   const bpm = e.bpm;
   const song = prepSong({
-    kind: 'u',
     id,
     cv,
     df: di,
     lanes: LANES,
     bpm,
     beat: 60 / bpm,
-    step: 15 / bpm,
-    bar: 240 / bpm,
-    bars: 0,
     b0: e.b0 / 1000,
-    plan: [],
     marks: e.marks.filter((m) => m[0] < cut).map((m) => ({ t: m[0] / 1000, sec: m[1] })),
     look: d.look,
     notes,

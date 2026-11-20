@@ -1,4 +1,4 @@
-import beatdrop, { GOAL, SCORE_LINE, FLAG_SAT, FLAG_LEFT, FALLBACK_TEXT, HINT_TEXT } from '../games/beatdrop.js';
+import beatdrop, { GOAL, SCORE_LINE, FLAG_SAT, FLAG_LEFT, LOAD_FAIL_TEXT } from '../games/beatdrop.js';
 import { createJudge, lookFor, scoreOf, accOf, tierOf, lastNoteAt, sectionMarks, countOf, TIERS, LANES } from '../games/beatchart.js';
 import { loadChart, loadCatalog, chartSong } from '../games/beatsongs.js';
 import { h, memo, timer, plural, button, profileButton } from '../ui/dom.js';
@@ -16,7 +16,6 @@ export const OFFSET_KEY = 'yapos.party.beatdrop.offset';
 export const PLAY_SHEET = '/activity/css/beatdrop-play.css';
 export const SONG_SHEET = '/activity/css/beatdrop-songs.css';
 export const LOAD_MS = 20000;
-export const FALLBACK_MS = 4000;
 export const PROG_MS = 1500;
 export const ANCHOR_SAMPLES = 5;
 export const ANCHOR_SPAN_MS = 500;
@@ -135,14 +134,13 @@ export function widthFor(lanes = LANES) {
 
 export function loadText(state) {
   if (state === 'ok') return 'Song loaded.';
-  if (state === 'fail') return 'This song would not load on your device. You will watch this one.';
+  if (state === 'fail') return `${LOAD_FAIL_TEXT}.`;
   return 'Loading the song...';
 }
 
 export function songLine(song) {
-  if (!song) return '';
-  if (song.kind === 'u') return song.artist ? `${song.title} - ${song.artist}` : song.title;
-  return `Built-in beat: ${song.title}`;
+  if (!song || !song.title) return '';
+  return song.artist ? `${song.title} - ${song.artist}` : song.title;
 }
 
 function median(list) {
@@ -201,6 +199,7 @@ export function footText(m) {
     if (m.watching) return `Watching. ${done} of ${plural(m.players, 'player', 'players')} finished`;
     return `${done} of ${plural(m.players, 'player', 'players')} finished`;
   }
+  if (m.skipped) return m.last ? '' : 'Moving on to the next song.';
   const top = m.results.find((r) => r.flag === 0);
   if (!top) return 'Nobody played this song.';
   return `${top.isMe ? 'You' : top.name} topped the song with ${top.score} / 1000!`;
@@ -483,10 +482,8 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     hostNow,
     audio: () => (local.audioOn ? player.context() : null),
     outLat: () => player.outLat(),
-    onShift: (zero, kind) => {
-      player.setZero(zero);
+    onShift: (zero) => {
       if (local.songOn) audio.resync(zero);
-      if (kind === 'jump') player.seek(Math.max(0, clock.songT()));
     },
   });
   clock.offset = prefs.tapOffset;
@@ -625,14 +622,13 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     }
     player.setMix({ music: prefs.music, taps: prefs.taps });
     if (clock.songT() > local.song.dur) return true;
-    if (local.song.kind === 'u') startSong(zero);
-    else player.start(local.song, zero);
+    startSong(zero);
     show(audioChip, false);
     return true;
   }
 
   function startSong(zero) {
-    if (local.songOn || !local.song || local.song.kind !== 'u' || zero === null) return false;
+    if (local.songOn || !local.song || zero === null) return false;
     const span = songSpan(local.song);
     if (!span) return false;
     const entry = audio.ready(span.url, span.from, span.len);
@@ -688,7 +684,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   }
 
   function wantSong(m) {
-    if (!m || m.src !== 'u' || (m.phase !== 'ready' && m.phase !== 'play')) return;
+    if (!m || !m.sid || (m.phase !== 'ready' && m.phase !== 'play')) return;
     if (load.n === m.n) return;
     fetchSong(m);
   }
@@ -745,7 +741,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     if (!model || model.phase !== 'play' || local.n === model.n) return;
     const song = beatdrop.songOf(snap);
     if (!song) {
-      if (model.src === 'u') {
+      if (model.sid) {
         const n = model.n;
         loadChart(model.sid, model.cv).then(() => {
           if (!gone && model && model.n === n && snap) update(snap);
@@ -793,13 +789,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     buildPads();
     stage.classList.add('bd-live');
     layout(true);
-    if (song.kind === 'u') wantSong(model);
-    if (model.fellBack) {
-      toastAt = perf();
-      toastUntil = toastAt + FALLBACK_MS;
-      ticker.textContent = FALLBACK_TEXT;
-      ticker.className = 'bd-ticker is-toast';
-    }
+    wantSong(model);
     const s = ensureAudio();
     if (!startAudio()) show(audioChip, s === 'blocked');
   }
@@ -809,7 +799,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     if (!(local.judge.holding[lane] >= 0)) return false;
     const now = perf();
     const t = clock.judgeT(eventTime(ts, now));
-    handle(local.judge.release(lane, t * 1000), now, clock.songT());
+    handle(local.judge.release(lane, t * 1000), now);
     paintHud();
     return true;
   }
@@ -835,7 +825,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     local.sent = true;
     engine.act({ type: 'done', n: local.n, v: j.final() });
     announce(`Song over, you scored ${j.score}`);
-    if (j.full && j.stats.j > 0) player.swell(clock.songT());
+    if (j.full && j.stats.j > 0) player.swell();
     cue.play(j.full ? 'correct' : 'send');
     paintSpec();
   }
@@ -847,7 +837,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     local.bannerAt = perf();
   }
 
-  function handle(evs, now, songT) {
+  function handle(evs, now) {
     const pal = laneStyle(local.lanes);
     for (const ev of evs) {
       if (ev.k === 'm') {
@@ -859,7 +849,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
           lostEl.textContent = `Streak lost (${ev.lost})`;
           lostEl.classList.add('is-on');
           local.lostAt = now;
-          player.duck(2);
+          player.duck();
         }
         continue;
       }
@@ -880,10 +870,10 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       local.flash[ev.lane] = { k: ev.k, at: now };
       local.judgeFx[ev.lane] = { k: ev.k, at: now, tag: ev.k !== 'p' && a > 30 ? (ev.dt < 0 ? 'early' : 'late') : '' };
       draw.burst(ev.lane, now, still() ? 0 : lite ? 3 : 6);
-      player.hit(pal[ev.lane], ev.k, songT);
+      player.hit(pal[ev.lane], ev.k);
       if (ev.up) {
         showBanner(`${TIERS[ev.up - 1]} streak!`);
-        player.tierUp(songT);
+        player.tierUp();
       }
     }
   }
@@ -900,7 +890,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     if (!local.judge || local.sent) return false;
     const t = clock.judgeT(eventTime(ts, now));
     if (t < -1) return false;
-    handle(local.judge.press(lane, t * 1000), now, clock.songT());
+    handle(local.judge.press(lane, t * 1000), now);
     paintHud();
     return true;
   }
@@ -1015,7 +1005,9 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     const watching = local.demo;
     show(specBox, watching);
     stage.classList.toggle('bd-demo', watching);
-    if (watching) specText.textContent = model.last ? 'Watching - game ends after this song' : "Watching - you're in next song";
+    if (!watching) return;
+    if (model.noLoad) specText.textContent = model.last ? "That song wouldn't load for you. Watching this one." : LOAD_FAIL_TEXT;
+    else specText.textContent = model.last ? 'Watching - game ends after this song' : "Watching - you're in next song";
   }
 
   function frame(ts, dtFrame) {
@@ -1034,7 +1026,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     const dropSoon = local.drops.some((t) => sT >= t - DROP_HOLD_S && sT < t);
     clock.step({ hold: dropSoon });
     if (local.audioWant && !local.audioOn && player.status() === 'ok') startAudio();
-    if (local.audioOn && !local.songOn && song.kind === 'u' && sT < song.dur - 1) startSong(clock.zero);
+    if (local.audioOn && !local.songOn && sT < song.dur - 1) startSong(clock.zero);
     if (Number.isFinite(dtFrame) && !lite) {
       local.frames.push(dtFrame);
       if (now - local.spanStart >= LITE_SPAN_MS) {
@@ -1050,10 +1042,10 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     }
     const t = clock.gameT();
     if (local.judge && !local.sent) {
-      handle(local.judge.sweep(t * 1000 - MISS_GRACE_MS), now, sT);
+      handle(local.judge.sweep(t * 1000 - MISS_GRACE_MS), now);
       if (now - local.lastProg >= PROG_MS && sT > 0) sendProg(now);
       if (t > lastNoteAt(song) + local.judge.win.o / 1000 + 0.25) {
-        handle(local.judge.sweep(t * 1000 + 1e7), now, sT);
+        handle(local.judge.sweep(t * 1000 + 1e7), now);
         sendDone();
       }
     }
@@ -1277,10 +1269,9 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     if (!model || model.phase !== 'play' || !local.song) return;
     local.hiddenMs += away;
     clock.reanchor();
-    if (local.audioOn) player.seek(Math.max(0, clock.songT()));
     if (away > 1000 && local.judge && !local.sent) showBanner('You were away - notes kept falling', true);
     if (local.judge && !local.sent && local.hiddenMs > local.song.dur * 500) {
-      handle(local.judge.sweep(clock.gameT() * 1000), perf(), clock.songT());
+      handle(local.judge.sweep(clock.gameT() * 1000), perf());
       sendDone();
     }
     if (looping) loop.add(tick);
@@ -1316,21 +1307,12 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
 
   function readyModel(m) {
     if (!m || m.phase !== 'ready') return null;
-    const up = m.src === 'u';
-    const mine = up ? (load.n === m.n && load.state !== 'idle' ? load.state : m.loading ? m.loading.mine : 'wait') : null;
-    return { n: m.n, number: m.number, total: m.total, style: m.style, song: m.song, up, faster: m.faster, diffName: m.diffName, len: m.len, notes: m.notes, iReady: m.iReady, watching: m.watching, dots: m.dots, starts: m.starts, ends: m.ends, slow: slow(), calm: prefs.calm, offset: prefs.tapOffset, tut: Boolean(tut), load: up ? { mine, pct: mine === 'ok' ? 1 : load.n === m.n ? load.pct : 0, done: m.loading ? m.loading.done : 0, of: m.loading ? m.loading.of : 0 } : null, hint: Boolean(m.hint && isStaff()) };
-  }
-
-  function isStaff() {
-    try {
-      return Boolean(engine.admin && typeof engine.admin.me === 'function' && engine.admin.me());
-    } catch {
-      return false;
-    }
+    const mine = load.n === m.n && load.state !== 'idle' ? load.state : m.loading ? m.loading.mine : 'wait';
+    return { n: m.n, number: m.number, total: m.total, track: m.track, song: m.song, faster: m.faster, diffName: m.diffName, len: m.len, notes: m.notes, iReady: m.iReady, watching: m.watching, dots: m.dots, starts: m.starts, ends: m.ends, slow: slow(), calm: prefs.calm, offset: prefs.tapOffset, tut: Boolean(tut), load: { mine, pct: mine === 'ok' ? 1 : load.n === m.n ? load.pct : 0, done: m.loading ? m.loading.done : 0, of: m.loading ? m.loading.of : 0 } };
   }
 
   function retryLoad() {
-    if (!model || model.phase !== 'ready' || model.src !== 'u') return;
+    if (!model || model.phase !== 'ready' || !model.sid) return;
     fetchSong(model);
     repaintReady();
   }
@@ -1354,13 +1336,13 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       'div',
       { class: 'bd-ready' },
       h('p', { class: 'bd-upnum', text: `Song ${r.number} of ${r.total} - NEXT UP` }),
-      h('h2', { class: 'question beatdrop-title fx-display', text: r.up ? `Song: ${songLine(r.song)}` : `${r.style.emoji} ${r.style.name}` }),
-      r.up && r.song.credit ? h('p', { class: 'bd-credit muted', text: `Credit: ${r.song.credit}` }) : null,
+      h('h2', { class: 'question beatdrop-title fx-display', text: `Song: ${songLine(r.song)}` }),
+      r.song.credit ? h('p', { class: 'bd-credit muted', text: `Credit: ${r.song.credit}` }) : null,
       h('p', { class: 'bd-goal', text: GOAL }),
       h(
         'ul',
         { class: 'beatdrop-facts' },
-        r.style.bpm ? h('li', { text: `${r.style.bpm} BPM` }) : null,
+        r.track.bpm ? h('li', { text: `${r.track.bpm} BPM` }) : null,
         r.faster ? h('li', { class: 'is-faster', text: 'Faster!' }) : null,
         h('li', { text: r.diffName }),
         h('li', { text: `4 lanes ${icons}` }),
@@ -1368,7 +1350,6 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
         r.notes ? h('li', { text: `${r.notes} notes` }) : null,
       ),
       loadBox(r),
-      r.hint ? h('p', { class: 'bd-hint muted', text: HINT_TEXT }) : null,
       h('p', { class: 'bd-scoreline muted', text: SCORE_LINE }),
       h(
         'div',
@@ -1389,7 +1370,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       ),
       r.offset ? h('p', { class: 'bd-offset muted', text: `Timing offset: ${r.offset > 0 ? '+' : ''}${r.offset} ms` }) : null,
       timer(r.starts, r.ends, 'Song starts in'),
-      r.dots.length ? h('div', { class: 'bd-dots', attrs: { 'aria-label': `${r.dots.filter((x) => x.on).length} of ${r.dots.length} ready` } }, r.dots.map((x) => h('span', { class: ['bd-dot', x.on ? 'is-on' : null, r.up && x.ld ? 'is-loaded' : null, r.up && x.lf ? 'is-fail' : null, x.isMe ? 'is-me' : null] }))) : null,
+      r.dots.length ? h('div', { class: 'bd-dots', attrs: { 'aria-label': `${r.dots.filter((x) => x.on).length} of ${r.dots.length} ready` } }, r.dots.map((x) => h('span', { class: ['bd-dot', x.on ? 'is-on' : null, x.ld ? 'is-loaded' : null, x.lf ? 'is-fail' : null, x.isMe ? 'is-me' : null] }))) : null,
     );
   });
 
@@ -1403,7 +1384,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       { class: 'game-head' },
       h('span', { class: 'chip chip-static', text: '🥁 Beat Drop' }),
       h('span', { class: 'game-count', text: `Song ${m.number} of ${m.total}` }),
-      h('span', { class: 'beatdrop-tag', text: `${m.style.emoji} ${m.style.name} - ${m.diffName}` }),
+      h('span', { class: 'beatdrop-tag', text: `${m.track.emoji} ${m.track.name} - ${m.diffName}` }),
       m.phase === 'show' ? timer(m.starts, m.ends, m.last ? 'Results in' : 'Next song in') : null,
     ),
   );
@@ -1425,7 +1406,8 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       total: m.notes,
       fix: fixInfo,
       newBest: Boolean(bestInfo && bestInfo.isNew),
-      song: m.song,
+      song: m.sid ? m.song : null,
+      skipped: m.skipped,
       rows: m.results.map((r) => ({ id: r.id, name: r.name, initials: r.initials, hue: r.hue, avatar: r.avatar, isMe: r.isMe, slot: r.slot, place: r.place, grade: r.grade, score: r.score, acc: r.acc, best: r.best, pts: r.pts, flag: r.flag, badges: r.badges })),
       sat: m.satOut.map((r) => (r.isMe ? 'You' : r.name)),
       next: m.next,
@@ -1468,8 +1450,18 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     } else if (me) card = h('div', { class: 'bd-me card' }, h('p', { class: 'bd-me-line', text: 'You sat this song out. Tap the notes next time to score!' }));
     const played = r.rows.filter((x) => x.flag !== FLAG_SAT);
     const songHead = r.song
-      ? h('div', { class: 'bd-songhead' }, h('h3', { class: 'bd-songline', text: songLine(r.song) }), r.song.kind === 'u' && r.song.credit ? h('p', { class: 'bd-credit muted', text: `Credit: ${r.song.credit}` }) : null)
+      ? h('div', { class: 'bd-songhead' }, h('h3', { class: 'bd-songline', text: songLine(r.song) }), r.song.credit ? h('p', { class: 'bd-credit muted', text: `Credit: ${r.song.credit}` }) : null)
       : null;
+    if (r.skipped) {
+      return h(
+        'div',
+        { class: 'bd-res-wrap' },
+        songHead,
+        h('p', { class: 'bd-me-line bd-skip', attrs: { role: 'status' }, text: r.skipped }),
+        r.next ? h('div', { class: 'bd-upnext' }, h('span', { text: `Up next: ${r.next.emoji} ${r.next.name} - ${r.next.diffName}` }), timer(r.starts, r.ends, 'Next song in')) : null,
+        r.admin ? h('div', { class: 'beatdrop-ready-actions' }, button(r.last ? 'Finish' : 'Next', { variant: 'ghost', size: 'sm', key: 'bd-next', on: () => engine.admin.run({ type: 'skip' }) })) : null,
+      );
+    }
     return h(
       'div',
       { class: 'bd-res-wrap' },
@@ -1504,7 +1496,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       fixInfo = { ...tendencyOf(j.dts), fixed: false };
       const me = m.mine;
       if (me && me.flag === 0) {
-        const k = `${m.style.id}.${m.df}`;
+        const k = `${m.track.id}.${m.df}`;
         const prev = prefs.best[k];
         bestInfo = { isNew: prev === undefined ? me.score > 0 : me.score > prev };
         if (bestInfo.isNew) {
@@ -1533,7 +1525,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     heard = beat;
     if (fresh && m.phase === 'show') onShow(m);
     wantSong(m);
-    paintHead(head, { number: m.number, total: m.total, style: m.style, diffName: m.diffName, phase: m.phase, starts: m.starts, ends: m.ends, last: m.last });
+    paintHead(head, { number: m.number, total: m.total, track: m.track, diffName: m.diffName, phase: m.phase, starts: m.starts, ends: m.ends, last: m.last });
     el.dataset.phase = m.phase;
     repaintReady();
     show(readyBox, m.phase === 'ready');
@@ -1553,7 +1545,6 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       liveAt = 0;
     } else {
       stage.classList.remove('bd-live');
-      player.stop();
       stopSong();
       local.audioOn = false;
       if (m.phase === 'show' && tut && tut.el.parentNode === specBox) closeTut();

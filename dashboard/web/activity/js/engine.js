@@ -260,7 +260,7 @@ export function cleanCode(raw, max = CODE_MAX) {
 export function cleanSetting(spec, value) {
   if (!spec) return undefined;
   if (spec.type === 'code') return cleanCode(value, spec.max);
-  if (spec.type === 'song') return typeof value === 'string' && /^(random|beats|s-[0-9a-f]{16})$/.test(value) ? value : undefined;
+  if (spec.type === 'song') return typeof value === 'string' && /^(random|s-[0-9a-f]{16})$/.test(value) ? value : undefined;
   const values = (spec.options || []).map((o) => o.value);
   if (spec.type === 'toggle') return value === undefined || value === null ? undefined : Boolean(value);
   if (spec.type === 'multi') {
@@ -369,10 +369,19 @@ export function cleanTour(raw, games) {
   return { g };
 }
 
+export function blockedNote(game) {
+  try {
+    const v = game && typeof game.blocked === 'function' ? game.blocked() : '';
+    return typeof v === 'string' ? v : '';
+  } catch {
+    return '';
+  }
+}
+
 export function pickTourGames(list, chosen, players, random = Math.random) {
   const games = Array.isArray(list) ? list : [];
-  const fits = (g) => g && (g.minPlayers || 1) <= players;
-  const out = (Array.isArray(chosen) ? chosen : []).filter((id) => games.some((g) => g.id === id)).slice(0, TOUR_GAMES);
+  const fits = (g) => g && (g.minPlayers || 1) <= players && !blockedNote(g);
+  const out = (Array.isArray(chosen) ? chosen : []).filter((id) => games.some((g) => g.id === id && !blockedNote(g))).slice(0, TOUR_GAMES);
   const pool = shuffle(games.filter((g) => fits(g) && !out.includes(g.id)), random);
   while (out.length < TOUR_GAMES && pool.length) out.push(pool.shift().id);
   return out.length === TOUR_GAMES ? out : null;
@@ -705,7 +714,7 @@ export function createEngine(opts) {
     const room = read(ROOM);
     if (!room) return;
     const game = games.get(room.pick);
-    const spec = room.phase === 'lobby' ? autoOf(game) : null;
+    const spec = room.phase === 'lobby' && !blockedNote(game) ? autoOf(game) : null;
     if (!spec || activePlayers().length < spec.min) {
       if (room.auto) patchRoom({ auto: null });
       return;
@@ -1817,6 +1826,8 @@ export function createEngine(opts) {
     if (!game) return { ok: false, reason: 'no_game' };
     const min = game.minPlayers || 1;
     if (activePlayers().length < min) return { ok: false, reason: 'players', need: min };
+    const note = blockedNote(game);
+    if (note) return { ok: false, reason: 'blocked', note };
     try {
       for (const g of gameList) clearGameKeys(g);
       const s = clone(read(SCORES)) || newScores();
@@ -1842,8 +1853,8 @@ export function createEngine(opts) {
     const count = activePlayers().length;
     let game = games.get(trn.g[i]);
     const list = trn.g.slice();
-    if (game && (game.minPlayers || 1) > count) {
-      const spare = shuffle(gameList.filter((g) => g && (g.minPlayers || 1) <= count && !list.includes(g.id)), random)[0];
+    if (game && ((game.minPlayers || 1) > count || blockedNote(game))) {
+      const spare = shuffle(gameList.filter((g) => g && (g.minPlayers || 1) <= count && !blockedNote(g) && !list.includes(g.id)), random)[0];
       if (spare) {
         list[i] = spare.id;
         game = spare;

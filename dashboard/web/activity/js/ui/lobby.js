@@ -4,7 +4,7 @@ import { sfx as defaultSfx } from './sfx.js';
 import { burstFrom } from './juice.js';
 import { CATEGORIES } from '../games/index.js';
 import { createDailyBox } from './daily.js';
-import { cleanCode, CODE_MAX } from '../engine.js';
+import { cleanCode, CODE_MAX, blockedNote } from '../engine.js';
 import { tourSetupModel, tourSetup, togglePick } from './tournament.js';
 import { readPresets, savePreset, deletePreset, presetsBlock, lateLockChip } from './hosttools.js';
 import { partyBlock, boardButton } from './party.js';
@@ -29,8 +29,10 @@ export function lobbyModel(snap, games) {
   const spec = snap.autoStart || null;
   const pick = snap.pick ? snap.pick.id : null;
   const live = snap.room && snap.room.auto && spec && snap.room.auto.g === pick ? snap.room.auto : null;
+  const staff = Boolean(snap.admin && snap.admin.me);
   return {
     isHost: snap.isHost,
+    staff,
     hostName: snap.hostName,
     pick,
     settings: snap.settings,
@@ -42,7 +44,7 @@ export function lobbyModel(snap, games) {
     need: spec ? Math.max(0, spec.min - playing.length) : 0,
     countdown: live ? { from: live.from, at: live.at } : null,
     totals: standings(snap.players, 'total').map((p) => ({ id: p.id, name: p.name, username: p.username || null, initials: p.initials, hue: p.hue, avatar: p.avatar || null, pts: p.pts, place: p.place, isMe: p.isMe, present: p.present, slot: p.slot })),
-    games: games.map((g) => ({ id: g.id, name: g.name, emoji: g.emoji, blurb: g.blurb, min: g.minPlayers || 1, category: g.category || null })),
+    games: games.map((g) => ({ id: g.id, name: g.name, emoji: g.emoji, blurb: g.blurb, min: g.minPlayers || 1, category: g.category || null, off: offText(blockedNote(g), staff) })),
     rounds: snap.room.round || 0,
     tour: tourSetupModel(snap, games),
     lateLocked: Boolean(snap.hostTools && snap.hostTools.lateLocked),
@@ -248,6 +250,12 @@ function songSpecs(games, pick) {
   return ((game && game.settings) || []).filter((s) => s && s.type === 'song');
 }
 
+export function offText(note, staff) {
+  if (!note || staff) return note || '';
+  const cut = note.indexOf('. ');
+  return cut > 0 ? note.slice(0, cut + 1) : note;
+}
+
 function settingControl(spec, value, isHost, onSet, drafts) {
   const opts = spec.options || [];
   if (spec.type === 'code') return codeControl(spec, value, isHost, onSet, drafts);
@@ -370,7 +378,8 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
   let presets = readPresets(store);
   let presetDraft = '';
 
-  let songsBusy = false;
+  let warmBusy = false;
+  let lastSnap = null;
 
   function view() {
     const ext = songSpecs(games, last.pick).map((s) => songOptions(s).map((o) => `${o.value}=${o.label}`).join('|'));
@@ -381,14 +390,22 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     if (last) paint(el, view());
   }
 
-  function wantSongs(m) {
-    if (songsBusy || !m) return;
-    const specs = songSpecs(games, m.pick).filter((s) => typeof s.load === 'function');
-    if (!specs.length) return;
-    songsBusy = true;
-    Promise.all(specs.map((s) => Promise.resolve().then(() => s.load()).catch(() => null))).then(() => {
-      songsBusy = false;
-      repaint();
+  function remodel() {
+    if (!lastSnap || !last) return;
+    const lb = last.lb;
+    last = lobbyModel(lastSnap, games);
+    last.lb = lb;
+    paint(el, view());
+  }
+
+  function warmGames() {
+    if (warmBusy) return;
+    const fns = games.filter((g) => g && typeof g.warm === 'function');
+    if (!fns.length) return;
+    warmBusy = true;
+    Promise.all(fns.map((g) => Promise.resolve().then(() => g.warm()).catch(() => null))).then(() => {
+      warmBusy = false;
+      remodel();
     });
   }
 
@@ -510,6 +527,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     if (!res.ok && toast) {
       if (res.reason === 'players') toast(`This game needs at least ${plural(res.need, 'player', 'players')}. Ask people to tap Join game.`);
       else if (res.reason === 'tour') toast("There aren't enough games for this many players. Pick the games yourself.");
+      else if (res.reason === 'blocked') toast(offText(res.note, Boolean(last && last.staff)));
       else toast('That did not start. Try again in a moment.');
     }
   }
@@ -543,6 +561,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
   }
 
   function actionRow(m, gameMeta) {
+    if (gameMeta.off && !m.tour.on) return h('p', { class: ['waiting', 'start-off'], attrs: { role: 'status' } }, h('span', { class: 'waiting-text', text: gameMeta.off }));
     if (m.auto && m.countdown) {
       return h(
         'div',
@@ -604,13 +623,13 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
           {
             class: ['game-tile', 'spot', 'fx-shine', g.id === game.id ? 'is-on' : null, popped && g.id === game.id ? 'juice-pick' : null],
             type: 'button',
-            disabled: !m.isHost,
+            disabled: !m.isHost || Boolean(g.off),
             dataset: { key: `pick-${g.id}` },
-            attrs: { role: 'radio', 'aria-checked': g.id === game.id ? 'true' : 'false', title: g.blurb },
+            attrs: { role: 'radio', 'aria-checked': g.id === game.id ? 'true' : 'false', 'aria-disabled': g.off ? 'true' : null, title: g.off || g.blurb },
             on: { click: () => engine.lobby.pick(g.id) },
           },
           h('span', { class: 'game-emoji', text: g.emoji, attrs: { 'aria-hidden': 'true' } }),
-          h('span', { class: 'game-text' }, h('span', { class: 'game-name', text: g.name }), h('span', { class: 'game-blurb', text: g.blurb })),
+          h('span', { class: 'game-text' }, h('span', { class: 'game-name', text: g.name }), h('span', { class: 'game-blurb', text: g.off || g.blurb })),
         ),
       ),
     );
@@ -664,13 +683,14 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
   return {
     el,
     update(snap) {
+      lastSnap = snap;
       last = lobbyModel(snap, games);
       last.lb = Boolean(boardLink && typeof boardLink.ready === 'function' && boardLink.ready());
       if (draftPick !== last.pick || !last.isHost) drafts.clear();
       draftPick = last.pick;
       settleTab(last);
       paint(el, view());
-      wantSongs(last);
+      warmGames();
       if (!popPending) return;
       popPending = false;
       const tile = el.querySelector('.game-tile.juice-pick');
