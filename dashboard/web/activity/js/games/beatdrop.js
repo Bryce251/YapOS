@@ -13,7 +13,7 @@ export const READY_MS = 20000;
 export const READY_NEXT_MS = 8000;
 export const READY_LEARN_MS = 40000;
 export const READY_MAX_MS = 45000;
-export const LOAD_WAIT_MS = 10000;
+export const LOAD_WAIT_MS = 30000;
 export const HOLD_POLL_MS = 1000;
 export const LEAD_MS = 3000;
 export const END_GRACE_MS = 3000;
@@ -51,6 +51,8 @@ export const NEED_TEXT = 'Needs a song. Party staff can add one at yapos.dev/par
 export const WAIT_TEXT = 'Checking for songs...';
 export const SKIP_TEXT = "That song wouldn't load, so it was skipped.";
 export const LOAD_FAIL_TEXT = "That song wouldn't load for you, you'll join the next one";
+export const LATE_LOAD_TEXT = "Your song finished loading after the round started, so you're watching this one. You'll play the next one.";
+export const LATE_LOAD_LAST = "Your song finished loading after the round started, so you're watching this one.";
 
 export function usableSongs(cat = catalog()) {
   return (Array.isArray(cat) ? cat : []).filter((r) => r && typeof r.id === 'string' && SONG_ID_RE.test(r.id) && Number.isInteger(r.cv));

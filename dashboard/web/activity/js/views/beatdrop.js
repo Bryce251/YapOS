@@ -1,4 +1,4 @@
-import beatdrop, { GOAL, SCORE_LINE, FLAG_SAT, FLAG_LEFT, LOAD_FAIL_TEXT } from '../games/beatdrop.js';
+import beatdrop, { GOAL, SCORE_LINE, FLAG_SAT, FLAG_LEFT, LOAD_FAIL_TEXT, LATE_LOAD_TEXT, LATE_LOAD_LAST } from '../games/beatdrop.js';
 import { createJudge, lookFor, scoreOf, accOf, tierOf, lastNoteAt, sectionMarks, countOf, TIERS, LANES } from '../games/beatchart.js';
 import { loadChart, loadCatalog, chartSong, lengthLabel } from '../games/beatsongs.js';
 import { h, memo, timer, plural, button, profileButton } from '../ui/dom.js';
@@ -16,6 +16,7 @@ export const OFFSET_KEY = 'yapos.party.beatdrop.offset';
 export const PLAY_SHEET = '/activity/css/beatdrop-play.css';
 export const SONG_SHEET = '/activity/css/beatdrop-songs.css';
 export const LOAD_MS = 20000;
+export const LOAD_MAX_MS = 90000;
 export const PROG_MS = 1500;
 export const ANCHOR_SAMPLES = 5;
 export const ANCHOR_SPAN_MS = 500;
@@ -694,7 +695,18 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
         if (local.audioOn) startSong(clock.zero);
       }
     };
-    const timerId = typeof w.setTimeout === 'function' ? w.setTimeout(() => finish(false), LOAD_MS) : null;
+    const began = perf();
+    let moved = began;
+    let timerId = null;
+    const arm = () => {
+      if (typeof w.setTimeout !== 'function') return;
+      timerId = w.setTimeout(() => {
+        const now = perf();
+        if (!settled && now - moved < LOAD_MS && now - began < LOAD_MAX_MS) return arm();
+        finish(false);
+      }, LOAD_MS);
+    };
+    arm();
     loadChart(m.sid, m.cv)
       .then(() => {
         const song = chartSong(m.sid, m.cv, m.df, m.len);
@@ -706,6 +718,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
           onProgress: (p) => {
             const next = Math.round(Math.max(0, Math.min(1, p)) * 20) / 20;
             if (next === load.pct || load.n !== n) return;
+            moved = perf();
             load.pct = next;
             repaintReady();
           },
@@ -1031,7 +1044,8 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     show(specBox, watching);
     stage.classList.toggle('bd-demo', watching);
     if (!watching) return;
-    if (model.noLoad) specText.textContent = model.last ? "That song wouldn't load for you. Watching this one." : LOAD_FAIL_TEXT;
+    if (model.noLoad && load.n === model.n && load.state === 'ok') specText.textContent = model.last ? LATE_LOAD_LAST : LATE_LOAD_TEXT;
+    else if (model.noLoad) specText.textContent = model.last ? "That song wouldn't load for you. Watching this one." : LOAD_FAIL_TEXT;
     else specText.textContent = model.last ? 'Watching - game ends after this song' : "Watching - you're in next song";
   }
 
