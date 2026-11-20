@@ -222,18 +222,18 @@ test('embed: the form makes a draft with a live preview, colours, picture checks
   assert.equal(msg.embeds[0].description, 'Friday at 8 in voice');
   assert.equal(msg.embeds[0].color, 0x3498db);
   assert.equal(msg.embeds[0].footer.text, 'See you there');
-  for (const label of ['Edit', 'Colour', 'Image', 'Send to #channel', 'Discard']) assert.ok(h.findButton(label, preview), label);
+  for (const label of ['Edit', 'Color', 'Image', 'Send to #channel', 'Discard']) assert.ok(h.findButton(label, preview), label);
 
-  const colours = await h.clickButton('Colour', { user: IDS.admin, in: preview });
+  const colours = await h.clickButton('Color', { user: IDS.admin, in: preview });
   assert.ok(colours.length, 'answered');
   const panelMsg = h.fake.state.messages[G].find((m) => m.id === msg.message.id);
-  assert.match(panelMsg.content, /Pick a colour/);
+  assert.match(panelMsg.content, /Pick a color/);
   await h.click(customId('tools', 'ecolour', IDS.admin, 1, 'ed4245'), { user: IDS.admin, messageId: panelMsg.id });
   assert.equal(panelMsg.embeds[0].color, 0xed4245);
   assert.match(panelMsg.content, /Preview/);
 
   await h.submit(customId('tools', 'ecolsave'), { colour: 'not a colour' }, { user: IDS.admin, messageId: panelMsg.id });
-  assert.match(panelMsg.content, /Colours look like/);
+  assert.match(panelMsg.content, /Colors look like/);
   assert.equal(panelMsg.embeds[0].color, 0xed4245, 'a bad colour changes nothing');
 
   await h.click(customId('tools', 'eimage', IDS.admin, 1), { user: IDS.admin, messageId: panelMsg.id });
@@ -269,7 +269,7 @@ test('embed: a draft needs a title or text, and bad colour or picture in the for
   assert.match(last(h, empty), /title or some text/);
   const ans = await newDraft(h, { colour: 'bluish', image: 'https://example.org/a.png' });
   const msg = ans[ans.length - 1];
-  assert.match(msg.content, /Colours look like/);
+  assert.match(msg.content, /Colors look like/);
   assert.match(msg.content, /example\.org/);
   assert.equal(msg.embeds[0].title, 'Movie night', 'the rest is saved');
 });
@@ -476,7 +476,7 @@ test('schedule: pause, resume and cancel with Undo, from commands and list butto
   assert.equal(posts(h).length, 1);
 
   const cancelled = await h.slash('schedule', 'cancel 1', { user: IDS.admin });
-  assert.match(last(h, cancelled), /Post cancelled/);
+  assert.match(last(h, cancelled), /Post canceled/);
   assert.equal(posts(h).length, 0);
   assert.equal(jobs(h).length, 0);
   await h.clickButton('Undo', { user: IDS.admin, in: cancelled });

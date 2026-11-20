@@ -525,13 +525,13 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
   function mainView(who, card, model) {
     const fav = model.favourites.length
       ? h('ul', { class: 'pcard-favs' }, model.favourites.map((f) => h('li', { class: 'pcard-fav', attrs: { title: `${f.name}: ${num(f.played)} played` } }, h('span', { text: f.emoji, attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'pcard-fav-name', text: f.name }))))
-      : h('p', { class: 'pcard-none', text: 'No favourites yet.' });
+      : h('p', { class: 'pcard-none', text: 'No favorites yet.' });
     const all = model.all.length ? h('button', { class: 'pcard-more', type: 'button', dataset: { key: 'all-badges' }, attrs: { 'aria-label': `View all ${model.total} badges` }, on: { click: showAll } }, h('span', { text: `View all (${num(model.total)})` })) : null;
     return h(
       'div',
       { class: 'pcard-main' },
       h('ul', { class: 'pcard-stats', attrs: { 'aria-label': 'Party stats' } }, model.stats.map((s) => h('li', { class: ['pcard-stat', s.featured ? 'is-featured' : null], attrs: s.featured ? { title: `Featured: ${s.label}` } : null },h('span', { class: 'pcard-stat-value', text: s.value }), h('span', { class: 'pcard-stat-label', text: s.label })))),
-      section('Favourite games', 'pcard-favs-title', null, fav),
+      section('Favorite games', 'pcard-favs-title', null, fav),
       section('Badges', 'pcard-badges-title', all, badgeRow(model)),
     );
   }
@@ -542,7 +542,7 @@ export function createProfileCard({ win, h = defaultH, engine = null, me = null,
       'div',
       { class: 'pcard-main', attrs: { 'aria-hidden': 'true' } },
       h('ul', { class: 'pcard-stats' }, tiles(3, 'is-stat')),
-      section('Favourite games', 'pcard-favs-title', null, h('ul', { class: 'pcard-favs' }, tiles(3, 'is-fav'))),
+      section('Favorite games', 'pcard-favs-title', null, h('ul', { class: 'pcard-favs' }, tiles(3, 'is-fav'))),
       section('Badges', 'pcard-badges-title', null, h('ul', { class: 'pcard-row' }, tiles(5, 'is-badge'))),
     );
   }

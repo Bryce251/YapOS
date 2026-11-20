@@ -25,7 +25,7 @@ export function footText(m) {
     const count = `${m.voted} voted`;
     if (m.onlyMine) return `Every line is yours, so sit back. ${count}`;
     if (m.hasVoted) return `Vote in! ${count}`;
-    return `Tap your favourite line. You can't pick your own. ${count}`;
+    return `Tap your favorite line. You can't pick your own. ${count}`;
   }
   if (!m.lines.length) return 'Nobody added a line this time.';
   return m.myGain ? `The story is done! +${m.myGain} for your lines.` : 'The story is done!';

@@ -15,7 +15,9 @@ import { linkCleanupStatements } from './activity-auth.js';
 import { awardMonth, monthCleanup } from './party-leaderboard.js';
 import { banCleanupStatements, BAN_CLEANUP_NAMES } from './party-mod.js';
 import { avatarCleanupStatements } from './avatar-store.js';
+import { chunkCleanupStatements } from './image-chunks.js';
 import { likesCleanupStatements } from './profile-likes.js';
+import { songCleanupStatements } from './songs.js';
 
 export const PUBLIC_STALE = 2 * HOUR;
 export const SNAPSHOT_STALE = DAY;
@@ -61,9 +63,14 @@ export async function cleanup(db, t) {
   const avatarResults = await db.batch(avatarCleanupStatements(db, t));
   removed.profileAvatars = Number((avatarResults[0] && avatarResults[0].meta && avatarResults[0].meta.changes) || 0);
   removed.profileAvatarStills = Number((avatarResults[1] && avatarResults[1].meta && avatarResults[1].meta.changes) || 0);
+  const chunkResults = await db.batch(chunkCleanupStatements(db, t));
+  removed.imageChunks = chunkResults.reduce((s, r) => s + Number((r && r.meta && r.meta.changes) || 0), 0);
   const likeResults = await db.batch(likesCleanupStatements(db, t));
   removed.profileLikes = Number((likeResults[0] && likeResults[0].meta && likeResults[0].meta.changes) || 0);
   removed.profileLikePings = Number((likeResults[1] && likeResults[1].meta && likeResults[1].meta.changes) || 0);
+  const songResults = await db.batch(songCleanupStatements(db, t));
+  removed.songUploads = Number((songResults[1] && songResults[1].meta && songResults[1].meta.changes) || 0);
+  removed.songChunks = [0, 2, 3].reduce((s, i) => s + Number((songResults[i] && songResults[i].meta && songResults[i].meta.changes) || 0), 0);
   const season = await awardMonth(db, t).catch(() => ({ awarded: 0 }));
   removed.partySeasonAwards = season.awarded;
   removed.partyPointsMonth = await monthCleanup(db, t).catch(() => 0);

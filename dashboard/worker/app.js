@@ -1,5 +1,5 @@
 import { HttpError, fail, isLocalHttp, publicOrigin } from './util.js';
-import { withSecurityHeaders, isActivityPath, isAvatarImagePath } from './security.js';
+import { withSecurityHeaders, isActivityPath, isAvatarImagePath, isSongAudioPath } from './security.js';
 import { login, callback, logout } from './auth.js';
 import { handleApi } from './api.js';
 import { handleBot } from './bot.js';
@@ -9,8 +9,9 @@ import { isBannerImagePath, serveBannerImage } from './profile-custom.js';
 import { isProfileHidden } from './public-profiles.js';
 import { serveAvatarImage } from './avatars.js';
 import { useBoardOwner } from './board-owner.js';
+import { serveSongAudio } from './songs.js';
 
-const SPA_RE = /^\/(servers(\/.*)?|party(\/reports|\/leaderboard|\/modlog)?|packs(\/browse)?|p\/.+|u\/[^/]+|seasons|account|clans|inbox|link|owner(\/[0-9a-fA-F-]{36})?)$/;
+const SPA_RE = /^\/(servers(\/.*)?|party(\/reports|\/leaderboard|\/modlog|\/songs)?|packs(\/browse)?|p\/.+|u\/[^/]+|seasons|account|clans|inbox|link|owner(\/[0-9a-fA-F-]{36})?)$/;
 
 async function spa(request, env, url) {
   if (!env.ASSETS || typeof env.ASSETS.fetch !== 'function') {
@@ -40,7 +41,7 @@ async function activity(request, env, url) {
   return res;
 }
 
-async function route(request, env, deps) {
+async function route(request, env, deps, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
   if (!env.DB && (path.startsWith('/api/') || path.startsWith('/auth/') || path.startsWith('/bot/'))) {
@@ -50,6 +51,7 @@ async function route(request, env, deps) {
   if (isBadgeImagePath(path)) return serveBadgeImage(request, env, url);
   if (isBannerImagePath(path)) return serveBannerImage(request, env, url, isProfileHidden);
   if (isAvatarImagePath(path)) return serveAvatarImage(request, env, url, isProfileHidden);
+  if (isSongAudioPath(path)) return serveSongAudio(request, env, url, ctx, deps.now());
   if (path === '/api' || path.startsWith('/api/')) return handleApi(request, env, deps, url);
   if (path === '/bot' || path.startsWith('/bot/')) return handleBot(request, env, deps, url);
   if (path === '/auth/login') {
@@ -91,7 +93,7 @@ export function createWorker(options = {}) {
       let pathname = '';
       try {
         pathname = new URL(request.url).pathname;
-        response = await route(request, env, deps);
+        response = await route(request, env, deps, ctx);
       } catch (err) {
         if (err instanceof HttpError) {
           response = fail(err.status, err.code, err.message, err.extra);

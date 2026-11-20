@@ -764,6 +764,18 @@ CREATE TABLE IF NOT EXISTS profile_avatar_cutouts (
   updated INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS image_chunks (
+  kind TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  data BLOB NOT NULL,
+  bytes INTEGER NOT NULL,
+  hash TEXT NOT NULL,
+  updated INTEGER NOT NULL,
+  PRIMARY KEY (kind, owner_id, version, idx)
+);
+
 CREATE TABLE IF NOT EXISTS profile_likes (
   liker_id TEXT NOT NULL,
   target_id TEXT NOT NULL,
@@ -779,3 +791,57 @@ CREATE TABLE IF NOT EXISTS profile_like_pings (
   PRIMARY KEY (liker_id, target_id)
 );
 CREATE INDEX IF NOT EXISTS profile_like_pings_at ON profile_like_pings (at);
+
+CREATE TABLE IF NOT EXISTS party_songs (
+  id TEXT PRIMARY KEY,
+  hash TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  ext TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  parts INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  artist TEXT NOT NULL,
+  credit TEXT NOT NULL DEFAULT '',
+  bpm REAL NOT NULL,
+  offset_ms INTEGER NOT NULL DEFAULT 0,
+  start_ms INTEGER NOT NULL,
+  end_ms INTEGER NOT NULL,
+  preview_ms INTEGER NOT NULL DEFAULT 0,
+  charts TEXT NOT NULL,
+  chart_v INTEGER NOT NULL DEFAULT 1,
+  counts TEXT NOT NULL DEFAULT '[]',
+  hidden INTEGER NOT NULL DEFAULT 0,
+  uploader TEXT NOT NULL,
+  rights_confirmed_at INTEGER NOT NULL,
+  created INTEGER NOT NULL,
+  updated INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_songs_shown ON party_songs (hidden, created);
+
+CREATE TABLE IF NOT EXISTS party_song_chunks (
+  owner TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  data BLOB NOT NULL,
+  bytes INTEGER NOT NULL,
+  hash TEXT NOT NULL,
+  PRIMARY KEY (owner, idx)
+);
+
+CREATE TABLE IF NOT EXISTS party_song_uploads (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  parts INTEGER NOT NULL,
+  created INTEGER NOT NULL,
+  expires INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS party_song_uploads_exp ON party_song_uploads (expires);
+CREATE INDEX IF NOT EXISTS party_song_uploads_user ON party_song_uploads (user_id);
+
+CREATE TABLE IF NOT EXISTS party_song_gone (
+  id TEXT PRIMARY KEY,
+  chart_v INTEGER NOT NULL,
+  gone_at INTEGER NOT NULL
+);

@@ -89,7 +89,7 @@ const ROWS = [
   ['🥪', 'A sandwich filling'],
   ['💒', 'Something at a wedding'],
   ['🍟', 'A fast food'],
-  ['🍦', 'An ice cream flavour'],
+  ['🍦', 'An ice cream flavor'],
   ['🏥', 'Something in a hospital'],
   ['🏴‍☠️', 'Something a pirate has'],
   ['🛫', 'Something at an airport'],

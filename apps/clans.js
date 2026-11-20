@@ -334,7 +334,7 @@ const label = (c) => `**${c.name}** [${c.tag}]`;
 function upgradesText(c) {
   return [
     '👥 Members · no limit',
-    `🎨 Colour and banner ${c.style ? '· unlocked' : `· ${shards(STYLE_PRICE)}`}`,
+    `🎨 Color and banner ${c.style ? '· unlocked' : `· ${shards(STYLE_PRICE)}`}`,
     `⚡ +${Math.round(BOOST * 100)}% XP for every member ${c.boost ? '· unlocked' : `· ${shards(BOOST_PRICE)}`}`,
   ].join('\n');
 }
@@ -428,9 +428,9 @@ function upgradesView(engine, uid) {
   if (!c) return null;
   const lead = c.leader === uid;
   const btns = [];
-  if (lead && !c.style) btns.push(button(`Colour and banner · ${fmt(STYLE_PRICE)}`, cid('buy', uid, 'style'), c.bank >= STYLE_PRICE ? 'success' : 'secondary', '🎨'));
+  if (lead && !c.style) btns.push(button(`Color and banner · ${fmt(STYLE_PRICE)}`, cid('buy', uid, 'style'), c.bank >= STYLE_PRICE ? 'success' : 'secondary', '🎨'));
   if (lead && !c.boost) btns.push(button(`+${Math.round(BOOST * 100)}% XP · ${fmt(BOOST_PRICE)}`, cid('buy', uid, 'boost'), c.bank >= BOOST_PRICE ? 'success' : 'secondary', '⚡'));
-  const body = `Clan bank: **${shards(c.bank)}**\n\n${upgradesText(c)}\n\n-# ${lead ? 'Upgrades are paid from the clan bank and last forever.' : 'Only the clan leader can buy upgrades. Help by depositing with `/clan deposit 100`.'}${c.style && lead ? '\n-# Set the look with `/clan colour #ff8800` and `/clan banner Night owls never sleep`.' : ''}`;
+  const body = `Clan bank: **${shards(c.bank)}**\n\n${upgradesText(c)}\n\n-# ${lead ? 'Upgrades are paid from the clan bank and last forever.' : 'Only the clan leader can buy upgrades. Help by depositing with `/clan deposit 100`.'}${c.style && lead ? '\n-# Set the look with `/clan color #ff8800` and `/clan banner Night owls never sleep`.' : ''}`;
   return { embeds: [card({ title: `⬆️ ${c.name} upgrades`, body, color: Number.isInteger(c.colour) ? c.colour : COLOR })], components: btns.length ? [row(btns)] : [] };
 }
 
@@ -894,12 +894,12 @@ async function setLook(ctx, field, raw) {
     patch = { tag: tag.value };
     done = `Your clan tag is **[${tag.value}]** now.`;
   } else {
-    if (!c.style) return ctx.warn('Unlock it first', `Clan colours and banners are an upgrade (${shards(STYLE_PRICE)} from the clan bank). Open \`/clan upgrade\`.`);
+    if (!c.style) return ctx.warn('Unlock it first', `Clan colors and banners are an upgrade (${shards(STYLE_PRICE)} from the clan bank). Open \`/clan upgrade\`.`);
     if (field === 'colour') {
       const n = parseColour(raw);
-      if (n === null) return ctx.warn("That colour didn't work", `Use a hex code like \`#ff8800\` or a name: ${Object.keys(COLOURS).filter((k) => k !== 'gray').join(', ')}.`);
+      if (n === null) return ctx.warn("That color didn't work", `Use a hex code like \`#ff8800\` or a name: ${Object.keys(COLOURS).filter((k) => k !== 'grey').join(', ')}.`);
       patch = { colour: n };
-      done = `Your clan colour is **${hexOf(n)}** now.`;
+      done = `Your clan color is **${hexOf(n)}** now.`;
     } else {
       const text = clip(cleanText(raw), BANNER_MAX);
       if (!text) {
@@ -996,7 +996,7 @@ async function buyUpgrade(ctx, word, how = 'reply') {
   if (res.problem === 'changed') return ctx.warn('That changed', 'The clan changed a moment ago. Try again.');
   if (res.problem === 'owned') return ctx.info('Already unlocked', 'Your clan already has that upgrade.');
   if (res.problem === 'short') return ctx.warn('Not enough in the bank', `That upgrade costs ${shards(res.cost)} and the clan bank has ${shards(res.bank)}. Members can add more with \`/clan deposit 100\`.`);
-  const what = kind === 'style' ? 'a **custom colour and banner** (`/clan colour`, `/clan banner`)' : `**+${Math.round(BOOST * 100)}% XP** for every member`;
+  const what = kind === 'style' ? 'a **custom color and banner** (`/clan color`, `/clan banner`)' : `**+${Math.round(BOOST * 100)}% XP** for every member`;
   const embed = card({ title: '⬆️ Upgrade bought!', body: `${label(res.clan)} now has ${what}.\nPaid ${shards(res.cost)} from the clan bank · ${shards(res.clan.bank)} left.`, color: Number.isInteger(res.clan.colour) ? res.clan.colour : COLOR, footer: false });
   return how === 'update' ? ctx.update({ embeds: [embed], components: [] }) : ctx.reply({ embeds: [embed] });
 }
@@ -1055,7 +1055,7 @@ function splitCreate(tokens) {
   return { name: list.slice(0, -1).join(' '), tag: last };
 }
 
-const SUBS = ['create', 'invite', 'join', 'accept', 'decline', 'leave', 'kick', 'leader', 'tag', 'colour', 'banner', 'privacy', 'open', 'invite-only', 'deposit', 'upgrade', 'top', 'info', 'disband', 'cost'];
+const SUBS = ['create', 'invite', 'join', 'accept', 'decline', 'leave', 'kick', 'leader', 'tag', 'color', 'colour', 'banner', 'privacy', 'open', 'invite-only', 'deposit', 'upgrade', 'top', 'info', 'disband', 'cost'];
 
 async function runClan(ctx) {
   const tokens = ctx.argv.length ? ctx.argv : tokenize(ctx.args);
@@ -1202,7 +1202,7 @@ export async function webAction(engine, user, kind, clanId, payload = {}) {
     const which = p.upgrade === 'boost' ? 'boost' : 'style';
     await buyUpgrade(ctx, which);
     ok = !mineBefore[which] && after().clans[cid0]?.[which] === true;
-    if (ok) done = which === 'style' ? 'Colour and banner unlocked!' : `+${Math.round(BOOST * 100)}% XP unlocked for every member!`;
+    if (ok) done = which === 'style' ? 'Color and banner unlocked!' : `+${Math.round(BOOST * 100)}% XP unlocked for every member!`;
   } else if (kind === 'disband') {
     await disband(ctx, cid0);
     ok = !after().clans[cid0];
@@ -1316,10 +1316,10 @@ export const { setup, teardown, check } = defineApp({
     `Start one with /clan create Night Owls OWL (costs ${CREATE_COST} ${CURRENCY.name} by default). The leader invites with /clan invite @sam or /clan invite followed by a Yapin' user id (works in DMs with me too). The invite arrives in their DMs with a Join button, or they type /clan accept TAG.`,
     `Leaders can send ${INVITE_RATE} invites an hour. Inviting the same person again within a day refreshes their invite without another DM. Someone who says No thanks isn't asked by that clan again for a week, and nobody gets more than 3 invite DMs a day.`,
     `The clan bank only goes one way: members deposit with /clan deposit 100 and the leader spends it on upgrades (/clan upgrade). Nobody can take ${CURRENCY.name} out.`,
-    `Upgrades: a custom colour and banner, and +${Math.round(BOOST * 100)}% XP for every member from chatting and voice.`,
-    'Leaders: /clan kick @sam · /clan leader @sam · /clan tag OWL · /clan privacy open or invite · /clan colour #ff8800 · /clan banner Night owls never sleep · /clan disband',
+    `Upgrades: a custom color and banner, and +${Math.round(BOOST * 100)}% XP for every member from chatting and voice.`,
+    'Leaders: /clan kick @sam · /clan leader @sam · /clan tag OWL · /clan privacy open or invite · /clan color #ff8800 · /clan banner Night owls never sleep · /clan disband',
     'See how clans compare with /clan top (total levels) or /clan top season.',
-    'You can also run your clan on the website at yapos.dev/clans: create, invite, change the tag, colour, banner and who can join, kick, hand over or close it. Invites and clan news show up in your inbox at yapos.dev/inbox.',
+    'You can also run your clan on the website at yapos.dev/clans: create, invite, change the tag, color, banner and who can join, kick, hand over or close it. Invites and clan news show up in your inbox at yapos.dev/inbox.',
   ],
 
   init: (engine) => {

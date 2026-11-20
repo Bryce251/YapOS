@@ -81,7 +81,7 @@ export function renderLanding(root, { user, search }) {
       h('span', { class: 'hero-eyebrow reveal' }, h('span', { class: 'hero-eyebrow-dot' }), 'An operating system for your server'),
       h('h1', { class: 'hero-title reveal', style: { '--i': '1' }, text: 'YapOS Dashboard' }),
       h('p', { class: 'hero-lead reveal', style: { '--i': '2' }, text: 'Manage apps, settings and moderation for every server you run, from one calm place. Changes go straight to YapOS and apply in seconds.' }),
-      cancelled ? h('p', { class: 'notice notice-info', attrs: { role: 'status' } }, icon('info', { size: 16 }), h('span', { text: 'Login was cancelled. You can try again whenever you like.' })) : null,
+      cancelled ? h('p', { class: 'notice notice-info', attrs: { role: 'status' } }, icon('info', { size: 16 }), h('span', { text: 'Login was canceled. You can try again whenever you like.' })) : null,
       h('div', { class: 'hero-actions reveal', style: { '--i': '3' } }, cta, linkButton({ label: 'Add to your server', href: ADD_BOT_URL, icon: 'plus', size: 'lg', external: true })),
       h('p', { class: 'hero-fine reveal', style: { '--i': '4' }, text: 'We only ask for your basic profile. You can manage servers where you are an admin or the owner.' })),
     osPreview());

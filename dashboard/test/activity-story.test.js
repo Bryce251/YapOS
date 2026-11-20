@@ -184,7 +184,7 @@ test('footer text and moments follow the phases', () => {
   const base = { run: 1, phase: 'write', turn: 0, lines: [], myTurn: false, writer: { name: 'Sam' }, upcoming: [], sent: false };
   assert.match(footText(base), /Sam is writing/);
   assert.match(footText({ ...base, myTurn: true }), /Your turn/);
-  assert.match(footText({ ...base, phase: 'vote', voted: 1, onlyMine: false, hasVoted: false }), /favourite/);
+  assert.match(footText({ ...base, phase: 'vote', voted: 1, onlyMine: false, hasVoted: false }), /favorite/);
   const was = storyMoment(null, base).now;
   assert.deepEqual(storyMoment(was, { ...base, myTurn: true }).cues, ['turn']);
   assert.deepEqual(storyMoment(was, { ...base, phase: 'vote' }).cues, ['whoosh']);

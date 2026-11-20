@@ -483,7 +483,7 @@ export async function personalCard(engine, sid, uid, key) {
     { name: '📅 Active days', value: `**${num(u.d.length)}** of ${num(soFar)}${streak > 1 ? ` · best streak ${plural(streak, 'day')}` : ''}`, inline: true },
     { name: '💖 Reactions', value: `${num(u.rg)} given · ${num(u.rr)} received`, inline: true },
     { name: '🎙️ Voice time', value: u.vs ? formatDuration(u.vs * 1000) : 'None', inline: true },
-    fav ? { name: '😍 Favourite reaction', value: `${fav[0]} × ${num(fav[1])}`, inline: true } : null,
+    fav ? { name: '😍 Favorite reaction', value: `${fav[0]} × ${num(fav[1])}`, inline: true } : null,
     stars ? { name: '⭐ Starboard', value: `${plural(stars, 'post')} made it`, inline: true } : null,
   ];
   return card({ title, body: `## ${p.icon} ${p.title}\n${p.line}`, fields, color: GREEN, footer: 'Yap Wrapped · counts only, never message text' });

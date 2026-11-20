@@ -4,9 +4,9 @@ import { avatar, button, confirmDialog, setBusy, switchControl, toast } from '..
 import { CUT_MIN_SIDE, CUT_STRENGTH_MAX, CUT_STRENGTH_MIN, CUT_STRENGTH_START, backdropColours, encodeCutout, fitSide, runCutOut, verdictText } from '../avatar-cutout.js';
 import { noteBackdrop, cleanColours } from '../avatar-backdrop.js';
 import { ApiError } from '../api.js';
-import { AnimError, animatedFrames, webpAnimated } from '../banner-anim.js';
+import { AnimError, animatedFrames, sizeText, webpAnimated } from '../banner-anim.js';
 import {
-  AVATAR_API, AVATAR_FILE_MAX, AVATAR_SIDE, AVATAR_MIN_SIDE, AVATAR_STILL_MAX, AVATAR_ANIM_MAX, AVATAR_STILL_SIDE,
+  AVATAR_API, AVATAR_FILE_MAX, AVATAR_SIDE, AVATAR_MIN_SIDE, AVATAR_STILL_MAX, AVATAR_FRAME_MAX, AVATAR_ANIM_MAX, AVATAR_STILL_SIDE,
   centreSquare, readAvatarAnim,
 } from '../avatar-rules.js';
 import { dataUrlBytes, loadPicture, sniffFile } from './owner-badges.js';
@@ -113,7 +113,7 @@ export function chooseAvatarCrop(src, { doc = document, moving = null } = {}) {
       : h('canvas', { class: 'av-crop-canvas', attrs: { width: String(AV_STAGE), height: String(AV_STAGE), 'aria-hidden': 'true' } });
     const stage = h('div', {
       class: ['av-crop-stage', moving ? 'is-moving' : ''],
-      attrs: { tabindex: '0', role: 'group', 'aria-label': moving ? 'Your moving picture, centred' : 'Your picture. Drag to move it.', 'aria-describedby': helpId },
+      attrs: { tabindex: '0', role: 'group', 'aria-label': moving ? 'Your moving picture, centered' : 'Your picture. Drag to move it.', 'aria-describedby': helpId },
     }, stageBody, h('div', { class: 'av-crop-ring', attrs: { 'aria-hidden': 'true' } }));
     const previewOf = (size, label) => {
       const face = moving
@@ -227,7 +227,7 @@ export function chooseAvatarCrop(src, { doc = document, moving = null } = {}) {
     const cancel = button({ label: 'Cancel', className: 'av-crop-cancel', onClick: () => finish(null) });
     const ok = button({ label: 'Use this picture', icon: 'check', variant: 'primary', className: 'av-crop-ok', onClick: () => finish(avatarRect(width, height, view)) });
     const help = moving
-      ? 'Moving pictures are centred and cut to a circle. Your GIF keeps moving on your profile, the header and your Party card. Lists and people who prefer less motion see its first frame.'
+      ? 'Moving pictures are centered and cut to a circle. Your GIF keeps moving on your profile, the header and your Party card. Lists and people who prefer less motion see its first frame.'
       : 'Drag the picture to move it, and zoom with the slider, your mouse wheel or a pinch. On a keyboard, the arrow keys move it and + and - zoom.';
     const panel = h('div', { class: ['dialog-panel', 'av-crop-panel'], attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId } },
       h('h2', { class: 'dialog-title', id: titleId, text: moving ? 'Your moving picture' : 'Position your picture' }),
@@ -256,11 +256,11 @@ function readDataUrl(file) {
 }
 
 export function mbText(bytes) {
-  return `${(Math.max(0, Number(bytes) || 0) / 1024 / 1024).toFixed(1)} MB`;
+  return `${(Math.max(0, Number(bytes) || 0) / 1024 / 1024).toFixed(2)} MB`;
 }
 
 export async function processMovingAvatar(file, bytes, { choose = chooseAvatarCrop, readUrl = readDataUrl, doc = document } = {}) {
-  if (bytes.length > AVATAR_ANIM_MAX) throw new Error(`Moving profile pictures must be under ${Math.round(AVATAR_ANIM_MAX / 1024)} KB, and this one is ${mbText(bytes.length)}. Try a shorter or smaller GIF.`);
+  if (bytes.length > AVATAR_ANIM_MAX) throw new Error(`Moving profile pictures can be up to ${sizeText(AVATAR_ANIM_MAX)}, and this one is ${mbText(bytes.length)}. Try a shorter or smaller GIF.`);
   let info;
   try {
     info = readAvatarAnim(bytes);
@@ -272,7 +272,7 @@ export async function processMovingAvatar(file, bytes, { choose = chooseAvatarCr
   try {
     if (choose && !(await choose(src, { doc, moving: url }))) return null;
     const rect = centreSquare(info.width, info.height);
-    return { image: url, still: encodeAvatar(src, rect, { doc, side: Math.min(AVATAR_STILL_SIDE, Math.max(AVATAR_MIN_SIDE, rect.sw)) }), frames: info.frames, width: info.width, height: info.height };
+    return { image: url, still: encodeAvatar(src, rect, { doc, max: AVATAR_FRAME_MAX, side: Math.min(AVATAR_STILL_SIDE, Math.max(AVATAR_MIN_SIDE, rect.sw)) }), frames: info.frames, width: info.width, height: info.height };
   } finally {
     if (typeof src.close === 'function') src.close();
   }
@@ -280,7 +280,7 @@ export async function processMovingAvatar(file, bytes, { choose = chooseAvatarCr
 
 export async function processAvatar(file, { choose = chooseAvatarCrop, readUrl = readDataUrl, doc = document } = {}) {
   if (!file) throw new Error('Pick a picture first.');
-  if (Number(file.size) > AVATAR_FILE_MAX) throw new Error(`That file is bigger than ${Math.round(AVATAR_FILE_MAX / 1024 / 1024)} MB. Pick a smaller picture.`);
+  if (Number(file.size) > AVATAR_FILE_MAX) throw new Error(`That file is bigger than ${sizeText(AVATAR_FILE_MAX)}. Pick a smaller picture.`);
   const head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
   const kind = sniffFile(head, file.type, file.name);
   if (kind === 'svg') throw new Error("SVG files can't be used for profile pictures. Save it as a PNG first.");
@@ -428,7 +428,7 @@ export function chooseCutout(src, { doc = document, colours = null, run = runCut
     };
     const panel = h('div', { class: ['dialog-panel', 'av-cut-panel'], attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, 'aria-describedby': helpId } },
       h('h2', { class: 'dialog-title', id: titleId, text: 'Remove background' }),
-      h('p', { class: 'dialog-body', id: helpId, text: 'YapOS looks at the colours around the edge of your picture and makes them see-through. Your profile colours then show behind you. Raise the strength if some background stays, lower it if parts of you vanish.' }),
+      h('p', { class: 'dialog-body', id: helpId, text: 'YapOS looks at the colors around the edge of your picture and makes them see-through. Your profile colors then show behind you. Raise the strength if some background stays, lower it if parts of you vanish.' }),
       h('div', { class: 'av-cut-views' }, view('Before', before, false), view('After', after, true)),
       h('div', { class: 'av-cut-strength' }, h('span', { class: 'field-label', text: 'Strength' }), range, out),
       note,
@@ -457,7 +457,7 @@ export function cutSourcePlan(state) {
 export function cutBlocked(state) {
   const s = state || {};
   if (!s.canUpload) return 'Your public profile is not set up yet, so the background cannot be removed.';
-  if (s.custom && s.custom.animated) return 'Moving pictures keep their background. They get a ring in your profile colours instead.';
+  if (s.custom && s.custom.animated) return 'Moving pictures keep their background. They get a ring in your profile colors instead.';
   if (!cutSourcePlan(s)) return 'Upload a picture first, then remove its background.';
   return '';
 }
@@ -508,8 +508,8 @@ export function avatarControls({ api, signal = null, profile, onChange = null, p
   const cutSwitch = switchControl({ id: cutId, label: 'Remove background', onChange: (on) => (on ? startCut() : stopCut()) });
   const adjustBtn = button({ label: 'Adjust', icon: 'sliders', size: 'sm', variant: 'ghost', className: 'av-cut-adjust', onClick: () => startCut() });
   const bdId = nextId('av-bd-switch');
-  const bdSwitch = switchControl({ id: bdId, label: 'Show my profile colours behind it', onChange: (on) => setBackdrop(on) });
-  const bdRow = h('div', { class: 'av-cut-row' }, bdSwitch.el, h('label', { class: 'field-label', htmlFor: bdId, text: 'Show my profile colours behind it' }));
+  const bdSwitch = switchControl({ id: bdId, label: 'Show my profile colors behind it', onChange: (on) => setBackdrop(on) });
+  const bdRow = h('div', { class: 'av-cut-row' }, bdSwitch.el, h('label', { class: 'field-label', htmlFor: bdId, text: 'Show my profile colors behind it' }));
   const cutRow = h('div', { class: 'av-cut-row' }, cutSwitch.el, h('label', { class: 'field-label', htmlFor: cutId, text: 'Remove background' }), adjustBtn);
 
   function markBackdrop() {
@@ -534,8 +534,8 @@ export function avatarControls({ api, signal = null, profile, onChange = null, p
     cutNote.textContent = on
       ? state.cutout.backdrop === 'clear'
         ? 'Your background is removed and nothing is drawn behind you.'
-        : 'Your background is removed and your profile colours show behind you. They follow your theme.'
-      : blocked || 'Removes a plain background and puts your profile colours behind you.';
+        : 'Your background is removed and your profile colors show behind you. They follow your theme.'
+      : blocked || 'Removes a plain background and puts your profile colors behind you.';
   }
 
   async function startCut() {
@@ -706,6 +706,6 @@ export function avatarControls({ api, signal = null, profile, onChange = null, p
       cutRow,
       bdRow,
       cutNote,
-      h('p', { class: 'field-help', text: `PNG, JPG, WebP or GIF up to ${Math.round(AVATAR_FILE_MAX / 1024 / 1024)} MB. You can drag and zoom to pick the part that shows. Moving GIFs and animated WebPs up to ${Math.round(AVATAR_ANIM_MAX / 1024)} KB keep moving. Uploads are saved straight away and everyone can see them, so keep it friendly.` })));
+      h('p', { class: 'field-help', text: `PNG, JPG, WebP or GIF up to ${sizeText(AVATAR_FILE_MAX)}. You can drag and zoom to pick the part that shows. Moving GIFs and animated WebPs up to ${sizeText(AVATAR_ANIM_MAX)} keep moving. Uploads are saved straight away and everyone can see them, so keep it friendly.` })));
   return { el, get state() { return state; }, refresh: draw };
 }

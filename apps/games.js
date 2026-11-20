@@ -71,7 +71,7 @@ export const QUESTIONS = {
     ['How many minutes are in a full day?', '1,440', '1,240', '1,340', '1,540'],
     ['How many hours are in a week?', '168', '144', '172', '186'],
     ['At sea level, water freezes at how many degrees Celsius?', '0', '32', '10', '-10'],
-    ['Which colour do you get by mixing blue and yellow paint?', 'Green', 'Purple', 'Orange', 'Brown'],
+    ['Which color do you get by mixing blue and yellow paint?', 'Green', 'Purple', 'Orange', 'Brown'],
     ['How many legs does a spider have?', '8', '6', '10', '12'],
     ['Which month has the fewest days?', 'February', 'April', 'June', 'November'],
     ['How many zeros are in one million?', '6', '5', '7', '9'],
@@ -113,7 +113,7 @@ export const QUESTIONS = {
     ['What is the chemical symbol for iron?', 'Fe', 'Ir', 'In', 'I'],
     ['Which planet is best known for its bright, wide rings?', 'Saturn', 'Jupiter', 'Uranus', 'Neptune'],
     ['Which blood cells carry oxygen around the body?', 'Red blood cells', 'White blood cells', 'Platelets', 'Nerve cells'],
-    ['What is the centre of an atom called?', 'Nucleus', 'Electron', 'Orbit', 'Molecule'],
+    ['What is the center of an atom called?', 'Nucleus', 'Electron', 'Orbit', 'Molecule'],
     ['How many planets are in our solar system?', '8', '7', '9', '10'],
     ['What is the largest organ of the human body?', 'Skin', 'Liver', 'Brain', 'Lungs'],
     ['Which unit is electrical resistance measured in?', 'Ohm', 'Volt', 'Watt', 'Ampere'],
@@ -538,7 +538,7 @@ function resultText(engine, g) {
   else if (r.kind === 'declined') line = `${mention(r.by)} said no thanks.`;
   else if (r.kind === 'expired') line = g.target ? `${mention(g.target)} didn't answer in time.` : 'Nobody accepted in time.';
   else if (r.kind === 'withdrawn') line = `${mention(g.challenger)} called it off.`;
-  else line = `🚫 Cancelled: ${r.reason || 'the game stopped'}.`;
+  else line = `🚫 Canceled: ${r.reason || 'the game stopped'}.`;
   const p = g.payout;
   if (p?.pot) line += `\n💰 ${mention(p.winnerId)} takes ${money(engine, g.sid, p.pot)}.`;
   else if (p?.refunded) line += `\n💰 ${p.players.length > 1 ? 'Both bets went back.' : `${mention(p.players[0])} got their bet back.`}`;
@@ -628,8 +628,8 @@ function gameView(engine, g) {
 function lostView(what) {
   const body = what === 'trivia'
     ? 'I restarted, so this trivia stopped early.\nStart a new one with **/trivia**.'
-    : 'I restarted, so this game was cancelled. Any bets went back to the players.\nStart a new one with **/game**.';
-  return { content: '', embeds: [card({ title: what === 'trivia' ? '🧠 Trivia stopped' : '🎮 Game cancelled', body, color: 'muted', footer: false })], components: [] };
+    : 'I restarted, so this game was canceled. Any bets went back to the players.\nStart a new one with **/game**.';
+  return { content: '', embeds: [card({ title: what === 'trivia' ? '🧠 Trivia stopped' : '🎮 Game canceled', body, color: 'muted', footer: false })], components: [] };
 }
 
 function notInGame(g) {
@@ -991,7 +991,7 @@ async function endCommand(ctx, tokens) {
   else if (g.phase === 'playing') view = await endGame(engine, g, { kind: 'gaveup', winner: g.players.find((u) => u !== uid) });
   else return ctx.info('One moment', 'That game is starting right now. Try again in a second.');
   editMessage(engine, g.channelId, g.messageId, view);
-  return ctx.ok('Game ended', byMod ? `${mention(uid)}'s game was cancelled and any bets went back.` : 'You left the game.');
+  return ctx.ok('Game ended', byMod ? `${mention(uid)}'s game was canceled and any bets went back.` : 'You left the game.');
 }
 
 function shuffle(list) {

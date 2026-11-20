@@ -88,7 +88,7 @@ export function createPixelView({ engine, fx, cues, toast, win }) {
   for (let i = 0; i < CELLS; i += 1) cells.push(h('span', { class: 'pixel-cell pixel-c0', dataset: { i } }));
   const grid = h('div', { class: 'pixel-grid', attrs: { role: 'img', 'aria-label': 'Shared pixel canvas' } }, cells);
   const frame = h('div', { class: 'pixel-frame' }, grid);
-  const tools = h('div', { class: 'pixel-tools', attrs: { role: 'toolbar', 'aria-label': 'Colours' } });
+  const tools = h('div', { class: 'pixel-tools', attrs: { role: 'toolbar', 'aria-label': 'Colors' } });
   const actions = h('div', { class: 'pixel-actions' });
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
   el.append(head, title, frame, tools, actions, foot);

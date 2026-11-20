@@ -656,7 +656,7 @@ test('restart: clicking an old hand cancels it and gives the bet back once', asy
   withEco(b, eco);
   const res = await b.click(hit, { user: A, messageId: hand.msg.id });
   assert.equal(res[0].type, 'update');
-  assert.match(b.textOf(res[0]), /I restarted, so this game was cancelled. Your bet went back to you/);
+  assert.match(b.textOf(res[0]), /I restarted, so this game was canceled. Your bet went back to you/);
   assert.equal(res[0].components.length, 0);
   assert.equal(eco.bal[A], 1000);
   assert.deepEqual(b.engine.store.get('casino', S).open, {});
@@ -686,7 +686,7 @@ test('restart: the safety check refunds crash rounds and hands nobody clicks', a
   assert.equal(eco.bal[A], 1000);
   assert.equal(eco.bal[B], 1000);
   for (const m of [round.msg, hand.msg]) {
-    assert.match(b.textOf(live(b, m.id)), /Game cancelled/);
+    assert.match(b.textOf(live(b, m.id)), /Game canceled/);
     assert.equal(live(b, m.id).components.length, 0);
   }
   assert.deepEqual(b.engine.store.get('casino', S).open, {});
@@ -703,7 +703,7 @@ test('uninstalling Casino mid-game ends it and refunds the bet', async () => {
   assert.match(lastText(h, blocked), /Casino isn't installed here/);
   await settle();
   await h.advance(1000);
-  assert.match(h.textOf(live(h, hand.msg.id)), /Cancelled: Casino was uninstalled here/);
+  assert.match(h.textOf(live(h, hand.msg.id)), /Canceled: Casino was uninstalled here/);
   assert.equal(live(h, hand.msg.id).components.length, 0);
   assert.equal(eco.bal[A], 1000);
   assert.equal(svc(h).isPlaying(S, A), false);
@@ -760,7 +760,7 @@ test('/casino end stands your own hand or cashes out your round; only a mod endi
 
   rolls(h, 1);
   const stuck = await play(h, 'crash', '100', B);
-  assert.match((await play(h, 'casino', `end <@${B}>`, IDS.mod)).text, /game was cancelled and their bet went back/);
+  assert.match((await play(h, 'casino', `end <@${B}>`, IDS.mod)).text, /game was canceled and their bet went back/);
   await settle();
   assert.match(h.textOf(live(h, stuck.msg.id)), /a moderator ended it/);
   assert.equal(eco.bal[B], 1100);

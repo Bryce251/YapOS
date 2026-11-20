@@ -61,7 +61,7 @@ export function renderAccount(ctx) {
     const publicSwitch = switchControl({ id: publicId, checked: !current.hidden, label: 'Show my profile', onChange: (on) => save({ hidden: !on }, publicSwitch) });
     const shardsSwitch = switchControl({ id: shardsId, checked: current.showShards, disabled: current.hidden, label: 'Show my Shards balance', onChange: (on) => save({ showShards: on }, shardsSwitch) });
     const setNote = (v) => {
-      note.textContent = v.pending ? 'Saved. YapOS updates your public page within a minute or two.' : (v.hidden ? 'Your profile is private. Its link shows "not available" to everyone.' : 'Your profile shows your name, level, badges, favourite games and season placings. Never your servers.');
+      note.textContent = v.pending ? 'Saved. YapOS updates your public page within a minute or two.' : (v.hidden ? 'Your profile is private. Its link shows "not available" to everyone.' : 'Your profile shows your name, level, badges, favorite games and season placings. Never your servers.');
     };
     setNote(current);
 

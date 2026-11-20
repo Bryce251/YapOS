@@ -44,13 +44,13 @@ test('banners can be 1500 by 500 up to 3000 by 1000, older 4:1 banners still pas
   bad(640, 160);
 });
 
-test('banner pictures can be up to 800 KB, well under the database row limit, and bigger ones are refused', async () => {
-  assert.equal(BANNER_MAX, 800 * 1024);
-  assert.ok(BANNER_MAX < 900 * 1024, 'a stored banner stays well under the 1 MB row limit');
+test('banner pictures can be up to 1.5 MB, still under the database row limit, and bigger ones are refused', async () => {
+  assert.equal(BANNER_MAX, 1536 * 1024);
+  assert.ok(BANNER_MAX <= 1536 * 1024, 'a stored still banner stays in one row, under the 2 MB row limit');
   assert.ok(BANNER_BODY_LIMIT >= Math.ceil((BANNER_MAX * 4) / 3) + 1024, 'the request body fits a full size picture as base64');
   assert.ok(BANNER_BODY_LIMIT >= Math.ceil(((ANIM_MAX_BYTES + STILL_MAX) * 4) / 3) + 1024, 'the request body fits a full size moving banner and its still as base64');
-  assert.ok(BANNER_BODY_LIMIT < 2 * 1024 * 1024);
-  assert.ok(ANIM_MAX_BYTES < 1000 * 1024, 'a stored moving banner stays under the 1 MB row limit');
+  assert.ok(BANNER_BODY_LIMIT < 15 * 1024 * 1024);
+  assert.equal(ANIM_MAX_BYTES, 10 * 1024 * 1024, 'moving banners can be up to 10 MB, stored in parts');
   const huge = new Uint8Array(BANNER_MAX + 1);
   huge.set(devBannerPng(1500, 500));
   assert.throws(() => decodeBanner(b64(huge)), (e) => e.status === 413);

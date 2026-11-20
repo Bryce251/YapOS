@@ -32,7 +32,7 @@ export const IDEAS = Object.freeze([
   'The most unusual job you have done',
   'A sport or game you invented',
   'Something you can do with your eyes closed',
-  'Your favourite weather',
+  'Your favorite weather',
   'A thing you broke by accident',
   'A language you can say a few words in',
   'A season you love or dislike',

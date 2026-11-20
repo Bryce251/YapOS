@@ -309,7 +309,7 @@ export function createBeatPlayer({ sfx, win } = {}) {
 
   function start(next, zeroCtx) {
     stop();
-    if (!next || !enabled()) return false;
+    if (!next || next.kind === 'u' || !enabled()) return false;
     const c = graph();
     if (!c) return false;
     try {
@@ -446,6 +446,12 @@ export function createBeatPlayer({ sfx, win } = {}) {
     }
   }
 
+  function bus() {
+    if (!enabled()) return null;
+    const c = graph();
+    return c && music ? music : null;
+  }
+
   const off = typeof s.on === 'function'
     ? s.on('change', () => {
         if (!enabled()) stop();
@@ -472,6 +478,7 @@ export function createBeatPlayer({ sfx, win } = {}) {
     click,
     status,
     context,
+    bus,
     get playing() {
       return Boolean(song && music);
     },

@@ -137,6 +137,34 @@ export async function readBody(request, limit) {
   }
 }
 
+export async function readBytes(request, limit) {
+  const declared = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(declared) && declared > limit) {
+    throw new HttpError(413, 'too_large', 'That request is too big.');
+  }
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      try { await reader.cancel(); } catch {}
+      throw new HttpError(413, 'too_large', 'That request is too big.');
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    all.set(c, offset);
+    offset += c.byteLength;
+  }
+  return all;
+}
+
 export async function readJson(request, limit) {
   const type = (request.headers.get('Content-Type') || '').toLowerCase();
   if (!type.startsWith('application/json')) {

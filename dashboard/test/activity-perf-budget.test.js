@@ -11,7 +11,7 @@ const jsDir = path.join(activity, 'js');
 
 const TOTAL_CSS_BUDGET = 455000;
 const FX_CSS_BUDGET = 20000;
-const LAZY_SHEETS = Object.freeze({ 'profilecard-look.css': { cap: 12000, loader: 'ui/cardlook.js' }, 'profilecard-fonts.css': { cap: 26000, loader: 'ui/cardlook.js' }, 'avatar-backdrop.css': { cap: 2000, loader: 'ui/cardlook.js' }, 'beatdrop-play.css': { cap: 11000, loader: 'views/beatdrop.js' } });
+const LAZY_SHEETS = Object.freeze({ 'profilecard-look.css': { cap: 12000, loader: 'ui/cardlook.js' }, 'profilecard-fonts.css': { cap: 26000, loader: 'ui/cardlook.js' }, 'avatar-backdrop.css': { cap: 2000, loader: 'ui/cardlook.js' }, 'beatdrop-play.css': { cap: 11000, loader: 'views/beatdrop.js' }, 'beatdrop-songs.css': { cap: 2500, loader: 'views/beatdrop.js' } });
 
 const CHEAP_PROPS = new Set(['transform', 'opacity', 'translate', 'scale', 'rotate', 'visibility', 'animation-timing-function']);
 const LAYOUT_PROPS = /(^|[\s,])(all|width|height|min-width|min-height|max-width|max-height|top|left|right|bottom|inset|margin[\w-]*|padding[\w-]*|flex[\w-]*|gap|font-size|line-height|grid[\w-]*|border-width)(?=[\s,]|$)/;

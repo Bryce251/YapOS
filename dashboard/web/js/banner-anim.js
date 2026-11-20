@@ -1,4 +1,4 @@
-export const ANIM_MAX_BYTES = 900 * 1024;
+export const ANIM_MAX_BYTES = 10 * 1024 * 1024;
 export const ANIM_MAX_FRAMES = 600;
 export const ANIM_MIN_W = 300;
 export const ANIM_MAX_W = 3000;
@@ -13,6 +13,13 @@ export class AnimError extends Error {
     super(message);
     this.code = code;
   }
+}
+
+export function sizeText(bytes) {
+  const n = Math.max(0, Number(bytes) || 0);
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  const mb = n / 1024 / 1024;
+  return `${Number.isInteger(mb) ? mb : Number(mb.toFixed(1))} MB`;
 }
 
 const BROKEN = "That moving picture couldn't be read. It may be damaged. Try saving it again.";

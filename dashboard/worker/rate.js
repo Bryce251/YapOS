@@ -40,6 +40,11 @@ export const LIMITS = {
   clanActions: 20,
   clanActionsIp: 60,
   clanPeople: 60,
+  songParts: 40,
+  songEdit: 20,
+  songsStaff: 60,
+  songsPublic: 120,
+  songAudio: 60,
 };
 
 export async function hit(db, key, limit, t, weight = 1) {

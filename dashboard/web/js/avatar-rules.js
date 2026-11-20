@@ -1,13 +1,14 @@
-import { AnimError, readAnimated, ANIM_MAX_BYTES } from './banner-anim.js';
+import { AnimError, readAnimated } from './banner-anim.js';
 
 export const AVATAR_API = '/api/me/profile-avatar';
 export const AVATAR_REFRESH_API = '/api/avatars/refresh';
 export const AVATAR_PREFIX = '/avatar-img/';
-export const AVATAR_FILE_MAX = 2 * 1024 * 1024;
+export const AVATAR_FILE_MAX = 5 * 1024 * 1024;
 export const AVATAR_SIDE = 512;
 export const AVATAR_MIN_SIDE = 64;
-export const AVATAR_STILL_MAX = 200 * 1024;
-export const AVATAR_ANIM_MAX = ANIM_MAX_BYTES;
+export const AVATAR_STILL_MAX = 600 * 1024;
+export const AVATAR_FRAME_MAX = 200 * 1024;
+export const AVATAR_ANIM_MAX = 5 * 1024 * 1024;
 export const AVATAR_ANIM_MIN_SIDE = 32;
 export const AVATAR_ANIM_MAX_SIDE = 1024;
 export const AVATAR_ANIM_MAX_RATIO = 2;

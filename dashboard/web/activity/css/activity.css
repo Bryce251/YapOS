@@ -3443,9 +3443,8 @@ img {
     display: none;
   }
 
-  .setting {
-    flex-direction: column;
-    align-items: flex-start;
+  .setting-label {
+    flex-basis: 100%;
   }
 
   .lobby-hero {

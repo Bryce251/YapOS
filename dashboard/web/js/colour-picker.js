@@ -210,7 +210,7 @@ function eyeDropperOf(win) {
   }
 }
 
-export function createColourPicker({ value = FALLBACK, label = 'Colour', palette = NAME_PALETTE, onInput = null, onCommit = null, storage = defaultStorage(), doc = globalThis.document, win = globalThis.window, frame = null } = {}) {
+export function createColourPicker({ value = FALLBACK, label = 'Color', palette = NAME_PALETTE, onInput = null, onCommit = null, storage = defaultStorage(), doc = globalThis.document, win = globalThis.window, frame = null } = {}) {
   let hex = parseColour(value) || FALLBACK;
   let hsv = hexToHsv(hex);
   let opened = false;
@@ -224,7 +224,7 @@ export function createColourPicker({ value = FALLBACK, label = 'Colour', palette
   const schedule = frame || (win && typeof win.requestAnimationFrame === 'function' ? (fn) => win.requestAnimationFrame(fn) : null);
 
   const swatch = h('span', { class: 'cp-swatch', attrs: { 'aria-hidden': 'true' } });
-  const button = h('button', { type: 'button', class: 'cp-trigger', title: `Pick the ${lower}`, attrs: { 'aria-label': `Open the colour picker for the ${lower}`, 'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'aria-controls': id } }, swatch);
+  const button = h('button', { type: 'button', class: 'cp-trigger', title: `Pick the ${lower}`, attrs: { 'aria-label': `Open the color picker for the ${lower}`, 'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'aria-controls': id } }, swatch);
   const areaThumb = h('span', { class: 'cp-area-thumb', attrs: { 'aria-hidden': 'true' } });
   const area = h('div', { class: 'cp-area', attrs: { role: 'slider', tabindex: '0', 'aria-label': `${label} shade`, 'aria-valuemin': '0', 'aria-valuemax': '100' } }, areaThumb);
   const hueThumb = h('span', { class: 'cp-hue-thumb', attrs: { 'aria-hidden': 'true' } });
@@ -234,18 +234,18 @@ export function createColourPicker({ value = FALLBACK, label = 'Colour', palette
   const note = h('p', { class: 'cp-note', attrs: { 'aria-live': 'polite' } });
   const chipText = h('span', { class: 'cp-chip-text' });
   const chip = h('span', { class: 'cp-chip' }, h('span', { class: 'cp-chip-dot', attrs: { 'aria-hidden': 'true' } }), chipText);
-  const recentBox = h('div', { class: 'cp-swatches cp-recent', attrs: { role: 'group', 'aria-label': 'Recent colours' } });
+  const recentBox = h('div', { class: 'cp-swatches cp-recent', attrs: { role: 'group', 'aria-label': 'Recent colors' } });
   const recentWrap = h('div', { class: 'cp-group' }, h('p', { class: 'cp-label', text: 'Recent' }), recentBox);
-  const paletteBox = h('div', { class: 'cp-swatches cp-palette', attrs: { role: 'group', 'aria-label': 'Colour ideas' } });
+  const paletteBox = h('div', { class: 'cp-swatches cp-palette', attrs: { role: 'group', 'aria-label': 'Color ideas' } });
   const Dropper = eyeDropperOf(win);
   const dropBtn = Dropper ? h('button', { type: 'button', class: 'btn btn-secondary btn-sm cp-drop', text: 'Pick from screen' }) : null;
   const doneBtn = h('button', { type: 'button', class: 'btn btn-primary btn-sm cp-done', text: 'Done' });
-  const panel = h('div', { class: 'cp-pop', id, hidden: true, attrs: { role: 'dialog', 'aria-label': `${label} colour picker` } },
+  const panel = h('div', { class: 'cp-pop', id, hidden: true, attrs: { role: 'dialog', 'aria-label': `${label} color picker` } },
     area,
     hue,
     h('div', { class: 'cp-row' },
       chip,
-      h('label', { class: 'sr-only', htmlFor: hexId, text: `${label} hex code or colour name` }),
+      h('label', { class: 'sr-only', htmlFor: hexId, text: `${label} hex code or color name` }),
       hexInput),
     note,
     recentWrap,
@@ -269,7 +269,7 @@ export function createColourPicker({ value = FALLBACK, label = 'Colour', palette
 
   function drawRecent() {
     const list = readRecent(storage);
-    recentBox.replaceChildren(...list.map((c) => swatchButton(c, `Recent colour ${c}`, 'is-recent')));
+    recentBox.replaceChildren(...list.map((c) => swatchButton(c, `Recent color ${c}`, 'is-recent')));
     recentWrap.hidden = !list.length;
   }
 
@@ -397,7 +397,7 @@ export function createColourPicker({ value = FALLBACK, label = 'Colour', palette
       return true;
     }
     if (strict) {
-      note.textContent = 'Try a code like #7c5cff or a colour name like teal.';
+      note.textContent = 'Try a code like #7c5cff or a color name like teal.';
       hexInput.classList.add('is-invalid');
     }
     return false;

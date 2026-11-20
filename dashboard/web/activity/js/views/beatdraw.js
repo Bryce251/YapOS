@@ -5,7 +5,10 @@ export const PALETTE = Object.freeze([
   Object.freeze({ color: '#33d6f5', rgb: '51,214,245', shape: 'square' }),
   Object.freeze({ color: '#b48cff', rgb: '180,140,255', shape: 'triangle' }),
 ]);
-export const LANE_SETS = Object.freeze({ 2: Object.freeze([0, 2]), 3: Object.freeze([0, 1, 2]), 4: Object.freeze([0, 1, 2, 3]) });
+export const LANE_SETS = Object.freeze({ 4: Object.freeze([0, 1, 2, 3]) });
+export const HOLD_W = 0.35;
+export const HOLD_ALPHA = 0.55;
+export const HOLD_BACK_S = 4.5;
 export const JUDGE_COLORS = Object.freeze({ p: '#ffe066', g: '#5eead4', o: '#93c5fd', m: '#f87171' });
 export const JUDGE_TEXT = Object.freeze({ p: 'Perfect', g: 'Great', o: 'Good', m: 'Miss' });
 export const MISS_GREY = '#6b7280';
@@ -19,8 +22,8 @@ export const JUDGE_FADE_MS = 150;
 export const TINT_MS = 120;
 export const GLOW = Object.freeze([0.25, 0.45, 0.65, 0.85, 1]);
 
-export function laneStyle(lanes) {
-  return LANE_SETS[lanes] || LANE_SETS[4];
+export function laneStyle() {
+  return LANE_SETS[4];
 }
 
 export function noteY(noteMs, t, look, hitY) {
@@ -254,6 +257,24 @@ export function createBeatDraw(canvas, { doc } = {}) {
     g.fillText(str, x, y);
   }
 
+  function drawHold(lane, yHead, yEnd, held, missed) {
+    const s = sprites[lane];
+    if (!s) return false;
+    const top = clamp(Math.min(yHead, yEnd), 0, view.H);
+    const bottom = clamp(Math.max(yHead, yEnd), 0, view.H);
+    if (bottom - top < 1) return false;
+    const w = Math.max(4 * view.dpr, view.gem * HOLD_W);
+    g.globalAlpha = missed ? 0.3 : held ? 1 : HOLD_ALPHA;
+    g.fillStyle = missed ? MISS_GREY : s.pal.color;
+    g.fillRect(laneX(lane) - w / 2, top, w, bottom - top);
+    if (held) {
+      g.fillStyle = 'rgba(255,255,255,0.55)';
+      g.fillRect(laneX(lane) - w / 6, top, w / 3, bottom - top);
+    }
+    g.globalAlpha = 1;
+    return true;
+  }
+
   function firstIdx(notes, ms) {
     let lo = 0;
     let hi = notes.length;
@@ -297,11 +318,12 @@ export function createBeatDraw(canvas, { doc } = {}) {
     }
     if (song && song.beat > 0) {
       const beat = song.beat;
-      const b0 = Math.max(0, Math.floor((t - 0.5) / beat));
-      for (let b = b0; b * beat <= t + look; b += 1) {
+      const zero = Number.isFinite(song.b0) ? song.b0 : 0;
+      const b0 = Math.max(0, Math.floor((t - 0.5 - zero) / beat));
+      for (let b = b0; zero + b * beat <= t + look; b += 1) {
         const bar = b % 4 === 0;
         if (lite && !bar) continue;
-        const y = noteY(b * beat * 1000, t, look, hitY);
+        const y = noteY((zero + b * beat) * 1000, t, look, hitY);
         if (y < 0 || y > H) continue;
         g.fillStyle = bar ? 'rgba(255,255,255,0.24)' : 'rgba(255,255,255,0.10)';
         const h = (bar ? 2 : 1) * dpr;
@@ -371,6 +393,17 @@ export function createBeatDraw(canvas, { doc } = {}) {
         const b = Math.max(laneX(n.l), laneX(notes[i - 1].l));
         g.fillStyle = 'rgba(255,255,255,0.85)';
         g.fillRect(a, y - 2 * dpr, b - a, 4 * dpr);
+      }
+      const hs = f.hold || null;
+      for (let i = firstIdx(notes, (t - HOLD_BACK_S) * 1000); i < notes.length && notes[i].t <= until; i += 1) {
+        const n = notes[i];
+        if (!(n.e > n.t) || n.e / 1000 < t - 0.1) continue;
+        const m = mark ? mark[i] : 0;
+        const ts = hs ? hs[i] : 0;
+        if (ts >= 1 && ts <= 4) continue;
+        const held = ts === 9 || (m === 5 && n.e / 1000 > t);
+        if (!held && m >= 1 && m <= 3) continue;
+        drawHold(n.l, held ? hitY : noteY(n.t, t, look, hitY), noteY(n.e, t, look, hitY), held, m === 4);
       }
       const gs = gemScale(laneGapMs(notes), look, hitY, view.gem);
       for (let i = from; i < notes.length && notes[i].t <= until; i += 1) {

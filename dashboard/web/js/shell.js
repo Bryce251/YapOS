@@ -411,7 +411,7 @@ export function createSiteBar({ onLogout = defaultLogout } = {}) {
     const parts = [navGroup, sep('bar-only-phone')];
     if (user) {
       const who = h('div', { class: 'bar-who', attrs: { 'aria-hidden': 'true' } },
-        avatar({ name, url: user.avatar_url, still: user.avatar_still, id: user.id, size: 'sm' }),
+        avatar({ name, url: user.avatar_url, still: user.avatar_still, animate: true, id: user.id, size: 'sm' }),
         h('span', { class: 'bar-who-text' },
           h('span', { class: 'bar-who-name', text: name }),
           user.username && user.username !== name ? h('span', { class: 'bar-who-handle', text: `@${user.username}` }) : null));
@@ -433,7 +433,7 @@ export function createSiteBar({ onLogout = defaultLogout } = {}) {
 
     if (user) {
       replace(accountBtn,
-        avatar({ name, url: user.avatar_url, still: user.avatar_still, id: user.id, size: 'sm' }),
+        avatar({ name, url: user.avatar_url, still: user.avatar_still, animate: true, id: user.id, size: 'sm' }),
         h('span', { class: 'bar-account-name', text: name }),
         icon('chevron-down', { size: 14, className: 'bar-account-caret' }));
       accountBtn.setAttribute('aria-label', `Account menu for ${name}`);

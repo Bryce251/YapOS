@@ -27,6 +27,7 @@ import { likesRoute, likedByRoute } from './profile-likes.js';
 import { activityWarningsRoute } from './party-mod.js';
 import { getBlockedPublic, blockedWordsRoute, blockedPatternsRoute } from './party-blocked.js';
 import { parseDays, readStats } from './server-stats.js';
+import { songsRoute, activitySongsRoute } from './songs.js';
 import { enqueue, freshGrant, recentDenial, expireJobs, JOB_TIMEOUT, SERVER_JOB_TYPES } from './jobs.js';
 
 const SERVERS_TTL = 2 * MINUTE;
@@ -464,6 +465,7 @@ export async function handleApi(request, env, deps, url) {
     if (segs.length === 3 && segs[2] === 'results') return postResults(request, env, t);
     if (segs.length === 3 && segs[2] === 'leaderboard') return getLeaderboard(request, env, url, t);
     if (segs.length === 3 && segs[2] === 'blocked') return getBlockedPublic(request, env, t);
+    if (segs[2] === 'songs') return activitySongsRoute(request, env, segs, url, t);
     if (segs[2] === 'warnings') return activityWarningsRoute(request, env, segs, url, t);
     if (segs[2] === 'daily') return dailyRoute(request, env, segs, url, t);
     if (segs.length === 4 && segs[2] === 'pack') return getPublicPack(request, env, segs[3], t);
@@ -471,6 +473,8 @@ export async function handleApi(request, env, deps, url) {
     if (isActivityAuthPath(segs)) return activityAuthRoute(request, env, segs, t) || fail(404, 'not_found', "That page of the dashboard doesn't exist.");
     return profileRoute(request, env, segs, url, t);
   }
+
+  if (segs[1] === 'party' && segs[2] === 'songs') return songsRoute(request, env, segs, url, t, { csrf: csrfOk(request, env) });
 
   if (segs[1] === 'likes') return likesRoute(request, env, segs, t, { csrf: csrfOk(request, env) });
 

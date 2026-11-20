@@ -819,7 +819,7 @@ function ownQuestion(ctx, s, kind) {
 }
 
 function cancelled(ctx) {
-  return ctx.update({ embeds: [dialog.info('Cancelled', 'Nothing changed.')], components: [] });
+  return ctx.update({ embeds: [dialog.info('Canceled', 'Nothing changed.')], components: [] });
 }
 
 async function runAction(ctx, kind, tokens) {

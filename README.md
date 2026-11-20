@@ -1,6 +1,6 @@
 # YapOS
 
-The all-in-one operating system for your Yapin' server. Moderation, automod, welcomes, role menus and more, organised as **apps** that each server installs or uninstalls with `/apps`.
+The all-in-one operating system for your Yapin' server. Moderation, automod, welcomes, role menus and more, organized as **apps** that each server installs or uninstalls with `/apps`.
 
 **YapOS 1.0 "Boot"** · System, Mod, Automod, Welcome, Roles, Levels, Tickets, Studio, Economy, Engage, Starboard, Wrapped, Tools, Voice, Games, Casino, Pocket.
 

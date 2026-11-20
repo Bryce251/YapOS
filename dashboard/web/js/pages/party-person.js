@@ -421,11 +421,11 @@ export const RESET_PARTS = Object.freeze([
   Object.freeze({ part: 'bio', label: 'Clear about me', icon: 'x', done: 'About me cleared.', ask: 'Their about me is emptied straight away.' }),
   Object.freeze({ part: 'status', label: 'Clear status', icon: 'x', done: 'Status cleared.', ask: 'Their status and status emoji are emptied straight away.' }),
   Object.freeze({ part: 'pronouns', label: 'Clear pronouns', icon: 'x', done: 'Pronouns cleared.', ask: 'Their pronouns are emptied straight away.' }),
-  Object.freeze({ part: 'name-style', label: 'Reset name colour and style', icon: 'palette', done: 'Name colour and style reset.', ask: 'Their name goes back to the default colour, no gradient and the default font.' }),
+  Object.freeze({ part: 'name-style', label: 'Reset name color and style', icon: 'palette', done: 'Name color and style reset.', ask: 'Their name goes back to the default color, no gradient and the default font.' }),
   Object.freeze({ part: 'pins', label: 'Clear pinned badges', icon: 'x', done: 'Pinned badges cleared.', ask: 'Their pinned badges are unpinned. They keep the badges themselves.' }),
-  Object.freeze({ part: 'theme', label: 'Reset profile theme', icon: 'sun', done: 'Profile theme reset.', ask: 'Their profile page goes back to the normal YapOS colours.' }),
+  Object.freeze({ part: 'theme', label: 'Reset profile theme', icon: 'sun', done: 'Profile theme reset.', ask: 'Their profile page goes back to the normal YapOS colors.' }),
   Object.freeze({ part: 'effect', label: 'Turn off profile effect', icon: 'sparkles', done: 'Profile effect turned off.', ask: 'The effect that plays over their profile page is switched off.' }),
-  Object.freeze({ part: 'all', label: 'Reset everything', icon: 'refresh', done: 'Their profile look is back to the default.', ask: 'Their banner picture, uploaded profile picture, about me, status, pronouns, name style, pins, theme, effect, colours and layout all go back to the default.' }),
+  Object.freeze({ part: 'all', label: 'Reset everything', icon: 'refresh', done: 'Their profile look is back to the default.', ask: 'Their banner picture, uploaded profile picture, about me, status, pronouns, name style, pins, theme, effect, colors and layout all go back to the default.' }),
 ]);
 
 export const HIDE_KINDS = Object.freeze([
@@ -494,7 +494,7 @@ export function canReset(look, part) {
 
 export function nameStyleText(look) {
   const parts = [];
-  if (look.nameColour) parts.push(`colour ${look.nameColour}`);
+  if (look.nameColour) parts.push(`color ${look.nameColour}`);
   if (look.nameGradient) parts.push(`${look.nameGradient} gradient`);
   if (look.nameGradientCustom) {
     const g = look.nameGradientCustom;

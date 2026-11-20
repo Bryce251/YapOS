@@ -124,7 +124,7 @@ export function createEngine({ bot, config = {}, store = createMemoryStore(), lo
         await budget.send({ serverId: ctx.serverId, channelId: ctx.channelId, content: `<@${ctx.userId}> ${q}`, priority: 'high' });
         const r = await prompts.ask(ctx.channelId, ctx.userId);
         if (r.cancelled || r.timedOut) {
-          await budget.send({ serverId: ctx.serverId, channelId: ctx.channelId, content: r.timedOut ? 'Form timed out. Run the command again when you are ready.' : 'Cancelled.', priority: 'high' });
+          await budget.send({ serverId: ctx.serverId, channelId: ctx.channelId, content: r.timedOut ? 'Form timed out. Run the command again when you are ready.' : 'Canceled.', priority: 'high' });
           return 'cancelled';
         }
         values[f.id] = f.required === false && /^skip$/i.test(r.text) ? '' : r.text.slice(0, f.max || 4000);

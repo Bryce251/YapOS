@@ -96,7 +96,7 @@ test('timeout length buttons belong to the asker and keep every check', async ()
   assert.match(lastText(h, member), /Only moderators/);
   assert.equal(h.fake.state.timeouts[tkey(IDS.member)], undefined);
   const cancel = await h.clickButton('Cancel', { user: IDS.mod, in: asked });
-  assert.match(lastText(h, cancel), /Cancelled/);
+  assert.match(lastText(h, cancel), /Canceled/);
   assert.equal(h.fake.callsTo('POST', /timeouts/).length, 0);
   const admin = await h.slash('timeout', '@alex', { user: IDS.mod });
   assert.match(lastText(h, admin), /above|admin/);

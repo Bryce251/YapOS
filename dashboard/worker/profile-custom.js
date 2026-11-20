@@ -1,7 +1,7 @@
 import { HttpError, json, fail, readJson, isPlainObject, parseJsonSafe } from './util.js';
 import { hit, tooMany, LIMITS } from './rate.js';
 import { badgesFor, partySeasonBadges } from './party-badges.js';
-import { liveBadges, base64Bytes, imageHash, sniffImage, toBytes, IMAGE_EXT, BADGE_IMG_CACHE } from './custom-badges.js';
+import { liveBadges, base64Bytes, fromBase64, imageHash, sniffImage, IMAGE_EXT } from './custom-badges.js';
 import { readCatalog } from './owner.js';
 import { blockedIn } from './party-blocked.js';
 import { logModAction, personName } from './party-mod.js';
@@ -10,13 +10,14 @@ import { clearLeaderboardCache } from './party-leaderboard.js';
 import { isBannerImagePath } from './security.js';
 import { customAvatars, removeAvatarStatements } from './avatar-store.js';
 import { cleanLook, defaultLook, isDefaultLook, lookTexts, readCrop, readGradientCustom, gradientStops, themeColours, themePalette, LookError, LOOK_VERSION, LOOK_BODY_MAX, ACH_PREFIX, PIN_MAX, BIO_MAX, PRONOUNS_MAX, STATUS_MAX, THEME_IDS, EFFECT_IDS } from '../web/js/profile-look.js';
-import { AnimError, readAnimated, checkAnimSize, isGif, isWebp, webpAnimated, pngAnimated, ANIM_MAX_BYTES, ANIM_MAX_FRAMES, ANIM_MIN_W, ANIM_MAX_W, ANIM_MIN_H, ANIM_MAX_H } from '../web/js/banner-anim.js';
+import { AnimError, readAnimated, checkAnimSize, isGif, isWebp, webpAnimated, pngAnimated, sizeText, ANIM_MAX_BYTES, ANIM_MAX_FRAMES, ANIM_MIN_W, ANIM_MAX_W, ANIM_MIN_H, ANIM_MAX_H } from '../web/js/banner-anim.js';
+import { chunkStatements, clearChunksStatement, commitChunked, storedImageResponse } from './image-chunks.js';
 
-export const BANNER_MAX = 800 * 1024;
+export const BANNER_MAX = 1536 * 1024;
 export const STILL_MAX = 300 * 1024;
 export const STILL_MAX_W = 1500;
 export const STILL_MIN_W = 100;
-export const BANNER_BODY_LIMIT = 1800 * 1024;
+export const BANNER_BODY_LIMIT = Math.ceil(((ANIM_MAX_BYTES + STILL_MAX) * 4) / 3) + 64 * 1024;
 export const BANNER_EXT = Object.freeze({ ...IMAGE_EXT, 'image/gif': 'gif' });
 export const DEFAULT_CROP = Object.freeze({ zoom: 1, x: 0.5, y: 0.5 });
 export { ANIM_MAX_BYTES, ANIM_MAX_FRAMES };
@@ -229,18 +230,12 @@ function bad(code, message) {
 
 export function rawBytes(raw, max, missing = 'Pick a picture for your banner.') {
   if (typeof raw !== 'string' || !raw) throw bad('bad_image', missing);
-  const tooBig = () => new HttpError(413, 'image_too_big', `The picture is too big. Keep it under ${Math.round(max / 1024)} KB.`);
+  const tooBig = () => new HttpError(413, 'image_too_big', `The picture is too big. Keep it under ${sizeText(max)}.`);
   const text = raw.replace(DATA_URL_RE, '').replace(/\s+/g, '');
   if (text.length > Math.ceil((max * 4) / 3) + 8) throw tooBig();
   if (!B64_RE.test(text) || text.length % 4 !== 0) throw bad('bad_image', "That picture couldn't be read. Pick it again.");
-  let bin;
-  try {
-    bin = atob(text);
-  } catch {
-    throw bad('bad_image', "That picture couldn't be read. Pick it again.");
-  }
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const bytes = fromBase64(text);
+  if (!bytes) throw bad('bad_image', "That picture couldn't be read. Pick it again.");
   if (bytes.length > max) throw tooBig();
   return bytes;
 }
@@ -333,9 +328,12 @@ async function uploadBanner(request, env, userId, t) {
   for (let i = 0; !old && i < 4 && (await db.prepare('SELECT 1 AS x FROM profile_banners WHERE id = ?').bind(id).first()); i++) id = newBannerId();
   const { look } = await readCustom(db, userId);
   const next = { ...look, banner: 'image', bannerCrop: crop };
-  await db.batch([
-    db.prepare('INSERT INTO profile_banners (user_id, id, image, mime, hash, width, height, bytes, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET image = excluded.image, mime = excluded.mime, hash = excluded.hash, width = excluded.width, height = excluded.height, bytes = excluded.bytes, updated = excluded.updated')
-      .bind(userId, id, img.bytes, img.mime, hash, img.width, img.height, img.bytes.length, t),
+  const parts = await chunkStatements(db, 'banner', userId, hash, img.bytes, t);
+  const head = [userId, id, ...(parts.chunked ? [] : [img.bytes])];
+  await commitChunked(db, parts, 'banner', userId, hash, [
+    ...parts.stmts,
+    db.prepare(`INSERT INTO profile_banners (user_id, id, image, mime, hash, width, height, bytes, updated) VALUES (?, ?, ${parts.chunked ? 'zeroblob(0)' : '?'}, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET image = excluded.image, mime = excluded.mime, hash = excluded.hash, width = excluded.width, height = excluded.height, bytes = excluded.bytes, updated = excluded.updated`)
+      .bind(...head, img.mime, hash, img.width, img.height, img.bytes.length, t),
     still
       ? db.prepare('INSERT INTO profile_banner_stills (user_id, banner_hash, image, mime, hash, width, height, bytes, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET banner_hash = excluded.banner_hash, image = excluded.image, mime = excluded.mime, hash = excluded.hash, width = excluded.width, height = excluded.height, bytes = excluded.bytes, updated = excluded.updated')
         .bind(userId, hash, still.bytes, still.mime, stillHash, still.width, still.height, still.bytes.length, t)
@@ -352,7 +350,7 @@ async function uploadBanner(request, env, userId, t) {
 }
 
 export function removeBannerStatements(db, userId, look, t) {
-  const stmts = [db.prepare('DELETE FROM profile_banners WHERE user_id = ?').bind(userId), db.prepare('DELETE FROM profile_banner_stills WHERE user_id = ?').bind(userId)];
+  const stmts = [db.prepare('DELETE FROM profile_banners WHERE user_id = ?').bind(userId), db.prepare('DELETE FROM profile_banner_stills WHERE user_id = ?').bind(userId), clearChunksStatement(db, 'banner', userId)];
   if (look && (look.banner === 'image' || look.bannerCrop)) {
     const next = { ...look, banner: look.banner === 'image' ? 'none' : look.banner, bannerCrop: null };
     stmts.push(isDefaultLook(next) ? db.prepare('DELETE FROM profile_custom WHERE user_id = ?').bind(userId) : saveStatement(db, userId, next, t));
@@ -453,7 +451,7 @@ export function resetPlan(db, id, part, current, name, t) {
   }
   if (part === 'name-style') {
     if (!hasNameStyle(look)) return null;
-    return { action: 'profile_name_style_reset', stmts: [store({ ...look, nameColour: null, nameGradient: null, nameGradientCustom: null, nameFont: 'default' })], detail: { part, summary: `Reset ${who} name colour and style` } };
+    return { action: 'profile_name_style_reset', stmts: [store({ ...look, nameColour: null, nameGradient: null, nameGradientCustom: null, nameFont: 'default' })], detail: { part, summary: `Reset ${who} name color and style` } };
   }
   if (part === 'pins') {
     if (!look.pins.length) return null;
@@ -471,7 +469,7 @@ export function resetPlan(db, id, part, current, name, t) {
     if (!banner && !avatar && isDefaultLook(look)) return null;
     return {
       action: 'profile_reset',
-      stmts: [db.prepare('DELETE FROM profile_custom WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_banners WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_banner_stills WHERE user_id = ?').bind(id), ...(avatar ? removeAvatarStatements(db, id) : [])],
+      stmts: [db.prepare('DELETE FROM profile_custom WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_banners WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_banner_stills WHERE user_id = ?').bind(id), clearChunksStatement(db, 'banner', id), ...(avatar ? removeAvatarStatements(db, id) : [])],
       detail: { part, banner: Boolean(banner) || undefined, avatar: avatar || undefined, bio: look.bio || undefined, status: look.status || undefined, theme: look.theme !== 'none' ? look.theme : undefined, effect: look.effect !== 'none' ? look.effect : undefined, summary: `Reset ${who} whole profile look` },
     };
   }
@@ -485,7 +483,7 @@ export const NOTHING_TO_RESET = Object.freeze({
   status: 'There is no status to clear.',
   pronouns: 'There are no pronouns to clear.',
   text: 'There is no profile text to clear.',
-  'name-style': 'Their name already uses the default colour and style.',
+  'name-style': 'Their name already uses the default color and style.',
   pins: 'They have no pinned badges.',
   theme: 'Their profile already uses the default theme.',
   effect: 'They have no profile effect.',
@@ -517,24 +515,24 @@ export async function serveBannerImage(request, env, url, isHidden) {
   const isStill = Boolean(m[3]);
   const row = isStill
     ? await env.DB.prepare('SELECT s.user_id, s.image, s.mime, s.hash, s.banner_hash, b.hash AS banner FROM profile_banner_stills s JOIN profile_banners b ON b.user_id = s.user_id WHERE b.id = ?').bind(m[1]).first().catch(() => null)
-    : await env.DB.prepare('SELECT user_id, image, mime, hash FROM profile_banners WHERE id = ?').bind(m[1]).first().catch(() => null);
+    : await env.DB.prepare('SELECT user_id, image, mime, hash, bytes FROM profile_banners WHERE id = ?').bind(m[1]).first().catch(() => null);
   if (!row || row.hash !== m[2]) return missingImage();
   if (isStill ? row.banner_hash !== row.banner || IMAGE_EXT[row.mime] !== m[4] : BANNER_EXT[row.mime] !== m[4]) return missingImage();
   if (isHidden && (await isHidden(env.DB, row.user_id))) return missingImage();
-  const bytes = toBytes(row.image);
-  const kind = row.mime === 'image/gif' ? (isGif(bytes) ? { mime: 'image/gif' } : null) : sniffImage(bytes);
-  const cap = isStill ? STILL_MAX : row.mime === 'image/gif' || webpAnimated(bytes) ? ANIM_MAX_BYTES : BANNER_MAX;
-  if (!kind || kind.mime !== row.mime || bytes.length > cap) return missingImage();
-  return new Response(request.method === 'HEAD' ? null : bytes, {
-    status: 200,
-    headers: {
-      'Content-Type': kind.mime,
-      'Content-Length': String(bytes.length),
-      'Cache-Control': BADGE_IMG_CACHE,
-      'Content-Disposition': 'inline',
-      'Cross-Origin-Resource-Policy': 'same-origin',
-    },
-  });
+  if (isStill) {
+    const res = await storedImageResponse(request, env.DB, { kind: null, ownerId: row.user_id, version: row.hash, image: row.image, mime: row.mime, size: 0, cap: () => STILL_MAX, sniff: sniffMime });
+    return res || missingImage();
+  }
+  const cap = (head) => (row.mime === 'image/gif' || webpAnimated(head) ? ANIM_MAX_BYTES : BANNER_MAX);
+  const res = await storedImageResponse(request, env.DB, { kind: 'banner', ownerId: row.user_id, version: row.hash, image: row.image, mime: row.mime, size: row.bytes, cap, sniff: sniffMime });
+  return res || missingImage();
+}
+
+export function sniffMime(bytes) {
+  if (isGif(bytes)) return 'image/gif';
+  const kind = sniffImage(bytes);
+  if (kind) return kind.mime;
+  return isWebp(bytes) && webpAnimated(bytes) ? 'image/webp' : null;
 }
 
 export function cardLook(look, owned, banner = null, still = null) {

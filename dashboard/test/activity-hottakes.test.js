@@ -489,7 +489,7 @@ test('the view walks through writing, voting and the reveal with cues and no inl
   await r.clock.advance(500);
   assert.equal(st(r).phase, 'vote');
   for (const v of views) {
-    assert.match(text(v.el), /Tap your favourite/);
+    assert.match(text(v.el), /Tap your favorite/);
     noInlineStyle(v.el);
   }
   assert.ok(played[1].includes('pop'));

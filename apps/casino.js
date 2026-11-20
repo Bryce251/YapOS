@@ -968,7 +968,7 @@ function bjResultText(engine, g) {
     case 'bust': return `💥 Bust! You lost ${m(g.held)}.`;
     case 'dealerbj': return `The dealer has blackjack. You lost ${m(g.held)}.`;
     case 'lose': return `The dealer wins. You lost ${m(g.held)}.`;
-    case 'cancel': return `🚫 Cancelled: ${r.reason}. Your bet of ${m(g.held)} went back.`;
+    case 'cancel': return `🚫 Canceled: ${r.reason}. Your bet of ${m(g.held)} went back.`;
     default: return '';
   }
 }
@@ -1068,7 +1068,7 @@ async function lostGame(ctx, gid) {
 }
 
 function lostView() {
-  return { content: '', embeds: [card({ title: '🎰 Game cancelled', body: 'I restarted, so this game was cancelled. Your bet went back to you.\nStart a new one with **/casino**.', color: 'muted', footer: false })], components: [] };
+  return { content: '', embeds: [card({ title: '🎰 Game canceled', body: 'I restarted, so this game was canceled. Your bet went back to you.\nStart a new one with **/casino**.', color: 'muted', footer: false })], components: [] };
 }
 
 function messageInUse(engine, messageId) {
@@ -1142,7 +1142,7 @@ function crashResultText(engine, g) {
   if (r.kind === 'cashout') return `💰 Cashed out at **${fmtX(r.atX100)}** · you won ${m(r.payout)}\nIt crashed at ${fmtX(g.crashX100)}.`;
   if (r.kind === 'cap') return `💰 Reached the top of **${fmtX(r.atX100)}** and cashed out · you won ${m(r.payout)}`;
   if (r.kind === 'bust') return `💥 Crashed at **${fmtX(g.crashX100)}**. You lost ${m(g.held)}.`;
-  if (r.kind === 'cancel') return `🚫 Cancelled: ${r.reason}. Your bet of ${m(g.held)} went back.`;
+  if (r.kind === 'cancel') return `🚫 Canceled: ${r.reason}. Your bet of ${m(g.held)} went back.`;
   return '';
 }
 
@@ -1317,7 +1317,7 @@ async function endCommand(ctx, tokens) {
   if (byMod) {
     const view = await endGame(engine, g, { kind: 'cancel', reason: 'a moderator ended it' });
     editMessage(engine, g.channelId, g.messageId, view);
-    return ctx.ok('Game ended', `${mention(uid)}'s game was cancelled and their bet went back.`);
+    return ctx.ok('Game ended', `${mention(uid)}'s game was canceled and their bet went back.`);
   }
   if (g.kind === 'blackjack') {
     const view = await standHand(engine, g);

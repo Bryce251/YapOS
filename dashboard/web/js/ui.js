@@ -12,7 +12,8 @@ export function badgeArt(b, emojiClass = '', imgClass = 'badge-art') {
   return h('span', { class: emojiClass, attrs: { 'aria-hidden': 'true' }, text: (b && b.emoji) || '\u{1F3C5}' });
 }
 
-export function avatar({ name = '', url = '', still = '', animate = true, id = '', healName = '', size = 'md', shape = 'circle' } = {}) {
+export function avatar({ name = '', url = '', still = '', animate: wanted = null, id = '', healName = '', size = 'md', shape = 'circle' } = {}) {
+  const animate = wanted === null ? size === 'lg' || size === 'xl' : wanted;
   const el = h('span', { class: ['avatar', `avatar-${size}`, shape === 'square' ? 'avatar-square' : ''], attrs: { 'aria-hidden': 'true' } });
   el.style.setProperty('--avatar-hue', String(hueFrom(id || name)));
   const fallback = h('span', { class: 'avatar-initials', text: initials(name) });

@@ -16,8 +16,8 @@ export const TIMING_SMALL = 10;
 export const TUT_WIN = Object.freeze({ p: 50, g: 100, o: TIMING_WIN });
 export const CAPTIONS = Object.freeze([
   'Notes fall down their lane. Tap when one touches the ring.',
-  'Each lane has its own key, shape and colour.',
-  'Hit them in a row to build a streak. Extra random taps break it.',
+  'Each lane has its own key, shape and color.',
+  'Hit them in a row to build a streak. Extra random taps break it. Hold long notes until they end.',
 ]);
 
 export function clampOffset(ms) {
@@ -49,13 +49,16 @@ export function firstBeat() {
   return Math.ceil((TUT_LEAD_BEATS * TUT_BEAT + TUT_LOOK) / TUT_BEAT - 1e-9);
 }
 
-export function tutorialNotes(lanes) {
-  const order = lanes === 2 ? [0, 1, 0, 1, 1, 0, 1, 0] : lanes === 3 ? [0, 1, 2, 1, 0, 2, 1, 0] : [0, 1, 2, 3, 2, 1, 0, 3];
+export const TUT_LANES = 4;
+
+export function tutorialNotes() {
+  const order = [0, 1, 2, 3, 2, 1, 0, 3];
   const first = firstBeat();
   return order.slice(0, TUT_NOTES).map((l, i) => ({ t: Math.round((first + i) * TUT_BEAT * 1000), l }));
 }
 
-export function createTutorial({ lanes = 3, perf, loop, synth = null, still = () => false, labels = () => null, touch = () => false, offset = () => 0, onOffset = () => {}, onDone = () => {}, mode = 'full', doc } = {}) {
+export function createTutorial({ perf, loop, synth = null, still = () => false, labels = () => null, touch = () => false, offset = () => 0, onOffset = () => {}, onDone = () => {}, mode = 'full', doc } = {}) {
+  const lanes = TUT_LANES;
   const now = typeof perf === 'function' ? perf : () => Date.now();
   const canvas = h('canvas', { class: 'bd-tut-canvas', attrs: { role: 'application', 'aria-label': 'Practice lanes. Use the lane keys or tap a lane.' } });
   const title = h('h3', { class: 'bd-tut-title', text: mode === 'timing' ? 'Timing check' : 'How to play' });
@@ -86,7 +89,7 @@ export function createTutorial({ lanes = 3, perf, loop, synth = null, still = ()
       glyph.style.setProperty('--bd-x', `${(((lane + 0.5) / lanes) * 100).toFixed(2)}%`);
       streakEl.textContent = '';
     } else if (n === 3) {
-      st.notes = tutorialNotes(lanes);
+      st.notes = tutorialNotes();
       st.mark = new Uint8Array(st.notes.length);
       st.dts = [];
       st.streak = 0;

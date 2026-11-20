@@ -55,7 +55,7 @@ const SWATCHES = [
   { name: 'Orange', hex: 'e67e22', emoji: '🟠' },
   { name: 'Yellow', hex: 'fee75c', emoji: '🟡' },
   { name: 'Green', hex: '57f287', emoji: '💚' },
-  { name: 'Grey', hex: '95a5a6', emoji: '⚪' },
+  { name: 'Gray', hex: '95a5a6', emoji: '⚪' },
   { name: 'Black', hex: '23272a', emoji: '⚫' },
 ];
 const COLOUR_NAMES = {
@@ -484,7 +484,7 @@ export function parseColour(text) {
   if (!t) return { ok: true, value: null };
   if (COLOUR_NAMES[t]) return { ok: true, value: parseInt(COLOUR_NAMES[t], 16) };
   const m = /^#?([0-9a-f]{6}|[0-9a-f]{3})$/.exec(t);
-  if (!m) return { ok: false, reason: 'Colours look like **#ff8800** or a name like red, blue, green, purple, pink, orange, yellow, teal or gold.' };
+  if (!m) return { ok: false, reason: 'Colors look like **#ff8800** or a name like red, blue, green, purple, pink, orange, yellow, teal or gold.' };
   const hex = m[1].length === 3 ? m[1].split('').map((c) => c + c).join('') : m[1];
   return { ok: true, value: parseInt(hex, 16) };
 }
@@ -563,7 +563,7 @@ async function previewView(ctx, draft, notes = []) {
     components: [
       row(
         button('Edit', cid('eedit', uid, draft.n), 'primary', '✏️'),
-        button('Colour', cid('ecolours', uid, draft.n), 'secondary', '🎨'),
+        button('Color', cid('ecolours', uid, draft.n), 'secondary', '🎨'),
         button('Image', cid('eimage', uid, draft.n), 'secondary', '🖼️'),
         button('Send to #channel', cid('esend', uid, draft.n), 'success', '📤'),
         button('Discard', cid('ediscard', uid, draft.n), 'danger', '🗑️'),
@@ -608,7 +608,7 @@ function draftForm(ctx, draft) {
     fields: [
       { id: 'title', label: 'Title', style: 'short', required: false, value: draft?.title || '', max: MAX_TITLE, placeholder: 'Movie night this Friday!' },
       { id: 'text', label: 'Text', style: 'paragraph', required: false, value: draft?.text || '', max: MAX_TEXT, placeholder: 'Join us in voice at 8 pm.' },
-      { id: 'colour', label: 'Colour (#ff8800 or a name like blue)', style: 'short', required: false, value: Number.isInteger(draft?.color) ? hexOf(draft.color) : '', max: 16 },
+      { id: 'colour', label: 'Color (#ff8800 or a name like blue)', style: 'short', required: false, value: Number.isInteger(draft?.color) ? hexOf(draft.color) : '', max: 16 },
       { id: 'image', label: 'Picture link (optional)', style: 'short', required: false, value: draft?.image || '', max: MAX_IMAGE, placeholder: 'https://i.imgur.com/abc.png' },
       { id: 'footer', label: 'Footer (small text at the bottom)', style: 'short', required: false, value: draft?.footer || '', max: MAX_FOOTER },
     ],
@@ -629,7 +629,7 @@ async function saveFromForm(ctx) {
   const patch = { title, text, footer: String(v.footer ?? '').trim().slice(0, MAX_FOOTER) };
   const colour = parseColour(v.colour);
   if (colour.ok) patch.color = colour.value;
-  else notes.push(`⚠️ ${colour.reason} I kept the old colour.`);
+  else notes.push(`⚠️ ${colour.reason} I kept the old color.`);
   const rawImage = String(v.image ?? '').trim();
   if (/^(none|off|remove|clear)$/i.test(rawImage)) patch.image = null;
   else {
@@ -679,7 +679,7 @@ async function draftOr(ctx, n, fn) {
 function colourView(draft, uid) {
   const swatches = SWATCHES.map((s) => button(s.name, cid('ecolour', uid, draft.n, s.hex), Number(draft.color) === parseInt(s.hex, 16) ? 'primary' : 'secondary', s.emoji));
   return {
-    content: `🎨 Pick a colour for draft #${draft.n}. Now: **${hexOf(draft.color)}**`,
+    content: `🎨 Pick a color for draft #${draft.n}. Now: **${hexOf(draft.color)}**`,
     embeds: [draftEmbed(draft)],
     components: [...rows(swatches), row(button('Custom…', cid('ecustom', uid, draft.n), 'secondary', '🖌️'), button('Back', cid('eopen', uid, draft.n), 'secondary', '⬅️'))],
   };
@@ -1242,9 +1242,9 @@ async function cancelPost(ctx, id, { fromList = false } = {}) {
   });
   const text = `Post **#${id}** (${p.repeat ? repeatText(p.repeat) : 'once'} in <#${p.channelId}>) won't go out.`;
   if (fromList) {
-    return ctx.update(postsView(engine, sid, `🗑️ Cancelled #${id}.`, undo.button));
+    return ctx.update(postsView(engine, sid, `🗑️ Canceled #${id}.`, undo.button));
   }
-  return ctx.ok('Post cancelled', text, { components: [row(undo.button)] });
+  return ctx.ok('Post canceled', text, { components: [row(undo.button)] });
 }
 
 function scheduleForm(ctx) {
@@ -1588,7 +1588,7 @@ export const { setup, teardown, check } = defineApp({
     })),
     ecustom: ownDraft((ctx) => draftOr(ctx, draftArg(ctx), (d) => {
       stateOf(ctx.engine).editing.set(editKey(ctx), { n: d.n });
-      return ctx.form({ title: `Colour for draft #${d.n}`, action: 'ecolsave', fields: [{ id: 'colour', label: 'Colour (#ff8800 or a name like blue)', style: 'short', value: hexOf(d.color), max: 16 }] });
+      return ctx.form({ title: `Color for draft #${d.n}`, action: 'ecolsave', fields: [{ id: 'colour', label: 'Color (#ff8800 or a name like blue)', style: 'short', value: hexOf(d.color), max: 16 }] });
     })),
     esend: ownDraft((ctx) => draftOr(ctx, draftArg(ctx), (d) => channelPicker(ctx, d))),
     epick: ownDraft((ctx) => draftOr(ctx, draftArg(ctx), (d) => postDraft(ctx, d, Array.isArray(ctx.values) ? ctx.values[0] : null))),
@@ -1627,7 +1627,7 @@ export const { setup, teardown, check } = defineApp({
 
   help: [
     'Tags: anyone types **!rules** or **/tag rules**. Mods: /tag add rules Be nice to {user}! · /tag edit · /tag delete · /tag info rules · /tag list',
-    'Announcements (admins): /embed opens a form with a live preview; change colour, picture or ping, then send it anywhere. Your last 5 drafts are kept: /embed list · /embed send 2 #news',
+    'Announcements (admins): /embed opens a form with a live preview; change color, picture or ping, then send it anywhere. Your last 5 drafts are kept: /embed list · /embed send 2 #news',
     "Scheduled posts (admins): /schedule #news every monday 9:00 Meeting! · daily 18:00 · in 2h · on 2026-12-25 10:00 · add tz Europe/London or embed 2. Uses the server's time zone by default.",
     '/schedule list shows the next times · /schedule pause 3 · /schedule resume 3 · /schedule cancel 3. A post whose channel was deleted pauses itself and tells the log channel.',
     "Live counters (admins): /schedule stats on adds 👥 Members and 🟢 Online channels whose names update every 10 minutes. If Yapin's live counts are off here, I count members myself and leave Online out. /schedule stats off removes them.",

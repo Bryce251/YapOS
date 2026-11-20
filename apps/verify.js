@@ -1335,9 +1335,9 @@ export const { setup, teardown, check } = defineApp({
       run: (ctx) => wizardAction(ctx, async (d) => {
         ctx.engine.router.dropSession(d.id);
         const made = d.created.roles.length + d.created.channels.length;
-        if (made) await ctx.update({ embeds: [dialog.info('Cancelling', 'Removing what I made during setup.')], components: [] });
+        if (made) await ctx.update({ embeds: [dialog.info('Canceling', 'Removing what I made during setup.')], components: [] });
         const gone = await cleanupCreated(ctx.engine, d.sid, d.created);
-        return ctx.update({ embeds: [dialog.info('Setup cancelled', `Nothing was changed.${gone.length ? ` I removed the ${gone.length === 1 ? gone[0] : 'role and channel'} I made.` : ''}`)], components: [] });
+        return ctx.update({ embeds: [dialog.info('Setup canceled', `Nothing was changed.${gone.length ? ` I removed the ${gone.length === 1 ? gone[0] : 'role and channel'} I made.` : ''}`)], components: [] });
       }),
     },
   },

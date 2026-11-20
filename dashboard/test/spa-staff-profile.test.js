@@ -51,7 +51,7 @@ test('staff profile data is read safely and only offers resets that would change
   assert.deepEqual(s.look.pins, ['vip']);
   const full = readStaffProfile(staffData());
   assert.deepEqual(RESET_PARTS.filter((r) => canReset(full.look, r.part)).map((r) => r.part), ['banner', 'bio', 'status', 'name-style', 'pins', 'all']);
-  assert.equal(nameStyleText(full.look), 'colour #ff3366, Serif font');
+  assert.equal(nameStyleText(full.look), 'color #ff3366, Serif font');
   assert.equal(nameStyleText({ nameFont: 'default' }), 'Default');
   assert.equal(staffProfileUrl(REX, 'look', 'name-style'), `/api/party/profile/${REX}/look/name-style`);
   assert.equal(readStaffProfile(null).canAct, false);
@@ -127,7 +127,7 @@ test('profile resets and name hiding read as plain sentences in the mod log, wit
   assert.equal(modLogSentence(e('profile_banner_remove')), "Juno removed Sam's profile banner picture");
   assert.equal(modLogSentence(e('profile_text_clear', { fields: ['bio'] })), "Juno cleared Sam's about me");
   assert.equal(modLogSentence(e('profile_text_clear', { fields: ['bio', 'status', 'pronouns'] })), "Juno cleared Sam's about me, status and pronouns");
-  assert.equal(modLogSentence(e('profile_name_style_reset')), "Juno reset Sam's name colour and style");
+  assert.equal(modLogSentence(e('profile_name_style_reset')), "Juno reset Sam's name color and style");
   assert.equal(modLogSentence(e('profile_pins_clear')), "Juno cleared Sam's pinned badges");
   assert.equal(modLogSentence(e('profile_reset')), "Juno reset Sam's whole profile look");
   assert.equal(modLogSentence(e('name_hide', { what: 'name', reason: 'Rude' })), "Juno hid Sam's display name on YapOS: Rude");

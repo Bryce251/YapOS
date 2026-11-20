@@ -260,6 +260,7 @@ export function cleanCode(raw, max = CODE_MAX) {
 export function cleanSetting(spec, value) {
   if (!spec) return undefined;
   if (spec.type === 'code') return cleanCode(value, spec.max);
+  if (spec.type === 'song') return typeof value === 'string' && /^(random|beats|s-[0-9a-f]{16})$/.test(value) ? value : undefined;
   const values = (spec.options || []).map((o) => o.value);
   if (spec.type === 'toggle') return value === undefined || value === null ? undefined : Boolean(value);
   if (spec.type === 'multi') {

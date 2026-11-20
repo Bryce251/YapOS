@@ -126,7 +126,7 @@ function privacyView(engine, uid, username) {
     `**Public profile on yapos.dev:** ${p.hidden ? '🔒 hidden' : '🌐 shown'}`,
     `**${CURRENCY.name} on it:** ${p.showShards ? 'shown' : 'hidden'}`,
     '',
-    'Your public page shows your name, level, badges, favourite games and season placings. It never shows which servers you are in.',
+    'Your public page shows your name, level, badges, favorite games and season placings. It never shows which servers you are in.',
     `-# ${CURRENCY.name} only show if you turn them on. Changes reach yapos.dev within a few minutes.`,
   ].join('\n');
   return {

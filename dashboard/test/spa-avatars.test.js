@@ -124,7 +124,7 @@ test('the picture is encoded square, WebP first, and stays under the server cap'
   assert.match(url, /^data:image\/webp;base64,/);
   assert.deepEqual(log[0], ['draw', 512, 10, 20, 800, 800, 0, 0, 512, 512]);
   const heavy = [];
-  const out = av.encodeAvatar({}, { sx: 0, sy: 0, sw: 512, sh: 512 }, { doc: fakeDoc(heavy, { webp: false, bytes: (w, type) => (type === 'image/png' && w > 256 ? 400 * 1024 : 50 * 1024) }) });
+  const out = av.encodeAvatar({}, { sx: 0, sy: 0, sw: 512, sh: 512 }, { doc: fakeDoc(heavy, { webp: false, bytes: (w, type) => (type === 'image/png' && w > 256 ? rules.AVATAR_STILL_MAX + 100 * 1024 : 50 * 1024) }) });
   assert.match(out, /^data:image\/jpeg;base64,/, 'without WebP, a PNG that is too big falls back to JPEG at the same size');
   assert.ok(heavy.filter((x) => x[0] === 'encode').every((x) => x[1] === 512), 'it tries every format before shrinking');
   const alpha = av.encodeAvatar({}, { sx: 0, sy: 0, sw: 300, sh: 300 }, { doc: fakeDoc([], { webp: false }) });
@@ -138,7 +138,7 @@ function fakeFile(bytes, { type = 'image/png', name = 'a.png', size = bytes.leng
 
 test('picking a file checks size and kind, opens the cropper, and a moving GIF gets a centred still first frame', async () => {
   const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]);
-  await assert.rejects(av.processAvatar(fakeFile(PNG, { size: rules.AVATAR_FILE_MAX + 1 })), /bigger than 2 MB/);
+  await assert.rejects(av.processAvatar(fakeFile(PNG, { size: rules.AVATAR_FILE_MAX + 1 })), /bigger than 5 MB/);
   await assert.rejects(av.processAvatar(fakeFile(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>'), { type: 'image/svg+xml', name: 'a.svg' })), /SVG/);
   await assert.rejects(av.processAvatar(fakeFile(new TextEncoder().encode('hello there friend'), { type: 'text/plain', name: 'a.txt' })), /isn't a picture/);
   globalThis.createImageBitmap = async () => ({ width: 800, height: 600, close() {} });
@@ -160,7 +160,13 @@ test('picking a file checks size and kind, opens the cropper, and a moving GIF g
     assert.equal(moving.frames, 3);
     assert.deepEqual(glog[0].slice(0, 6), ['draw', 200, 50, 0, 200, 200], 'the still is the centred square of the first frame');
     const tooBig = makeGif({ width: 200, height: 200, frames: 3, comment: 'x'.repeat(rules.AVATAR_ANIM_MAX) });
-    await assert.rejects(av.processAvatar(fakeFile(tooBig, { type: 'image/gif', name: 'a.gif' }), { choose: async () => true, readUrl: async () => '' }), /KB/);
+    assert.ok(tooBig.length > rules.AVATAR_ANIM_MAX && tooBig.length < rules.AVATAR_ANIM_MAX + 64 * 1024);
+    await assert.rejects(av.processAvatar(fakeFile(tooBig, { type: 'image/gif', name: 'a.gif' }), { choose: async () => true, readUrl: async () => '' }), /bigger than 5 MB/);
+    await assert.rejects(av.processAvatar(fakeFile(tooBig, { type: 'image/gif', name: 'a.gif', size: rules.AVATAR_FILE_MAX }), { choose: async () => true, readUrl: async () => '' }), /Moving profile pictures can be up to 5 MB, and this one is 5\.0\d MB/);
+    const under = makeGif({ width: 200, height: 200, frames: 3, comment: 'x'.repeat(rules.AVATAR_ANIM_MAX - 64 * 1024) });
+    assert.ok(under.length < rules.AVATAR_ANIM_MAX && under.length > rules.AVATAR_ANIM_MAX - 100 * 1024);
+    const near = await av.processAvatar(fakeFile(under, { type: 'image/gif', name: 'a.gif' }), { choose: async () => true, readUrl: async () => 'data:image/gif;base64,R0lG', doc: fakeDoc([]) });
+    assert.equal(near.frames, 3, 'a moving picture just under 5 MB is accepted');
     await assert.rejects(av.processAvatar(fakeFile(makeGif({ width: 900, height: 200, frames: 3 }), { type: 'image/gif', name: 'a.gif' }), { choose: async () => true, readUrl: async () => '' }), /close to square/);
   } finally {
     delete globalThis.createImageBitmap;

@@ -60,6 +60,11 @@ export const ACTION_LABELS = Object.freeze({
   owner_pattern_add: ['\u{1F6E1}️', 'Owner: blocked patterns added'],
   owner_pattern_edit: ['\u{1F6E1}️', 'Owner: blocked patterns changed'],
   owner_pattern_remove: ['\u{1F6E1}️', 'Owner: blocked patterns removed'],
+  song_add: ['\u{1F3B5}', 'Beat Drop songs added'],
+  song_edit: ['\u{1F3B5}', 'Beat Drop songs edited'],
+  song_hide: ['\u{1F648}', 'Beat Drop songs hidden'],
+  song_show: ['\u{1F3B5}', 'Beat Drop songs shown again'],
+  song_delete: ['\u{1F5D1}️', 'Beat Drop songs deleted'],
 });
 export const CHEAT_LABELS = Object.freeze({
   daily_points: 'Daily points cap',
@@ -231,7 +236,7 @@ export function modLogSentence(e) {
       return `${who} cleared ${them}'s ${what}`;
     }
     case 'profile_name_style_reset':
-      return `${who} reset ${them}'s name colour and style`;
+      return `${who} reset ${them}'s name color and style`;
     case 'profile_pins_clear':
       return `${who} cleared ${them}'s pinned badges`;
     case 'profile_theme_reset':

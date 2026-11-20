@@ -19,7 +19,7 @@ export function headline(m) {
   }
   if (m.phase === 'vote') return m.duel && m.duel.mySide ? 'The judges are looking at your drawing…' : 'Which drawing is better?';
   if (m.phase === 'result') return m.duel && m.duel.none ? 'Nobody was left to judge this one.' : 'The judges have spoken!';
-  if (m.phase === 'lost') return 'Not enough players to keep duelling.';
+  if (m.phase === 'lost') return 'Not enough players to keep dueling.';
   return '';
 }
 

@@ -16,7 +16,7 @@ export const SECTIONS = Object.freeze([
   Object.freeze({ id: 'stats', label: 'Level and stats', icon: 'chart' }),
   Object.freeze({ id: 'badges', label: 'Badges', icon: 'star' }),
   Object.freeze({ id: 'achievements', label: 'Achievements', icon: 'trophy' }),
-  Object.freeze({ id: 'favourites', label: 'Favourite games', icon: 'smile' }),
+  Object.freeze({ id: 'favourites', label: 'Favorite games', icon: 'smile' }),
   Object.freeze({ id: 'placings', label: 'Season placings', icon: 'activity' }),
 ]);
 export const SECTION_IDS = Object.freeze(SECTIONS.map((s) => s.id));
@@ -495,13 +495,13 @@ export function cleanLook(raw, { owned = null, strict = false } = {}) {
   look.pins = readPins(src.pins, owned, strict);
   look.order = readOrder(src.order, strict);
   look.hidden = readHidden(src.hidden, strict);
-  look.nameColour = readColour(src.nameColour, strict, 'bad_colour', 'Pick a name colour like #f2613f.');
+  look.nameColour = readColour(src.nameColour, strict, 'bad_colour', 'Pick a name color like #f2613f.');
   look.nameGradient = src.nameGradient === null || src.nameGradient === '' ? null : pick(GRADIENT_IDS, src.nameGradient, null, strict, 'bad_gradient', "That name gradient doesn't exist.");
   look.nameGradientCustom = readGradientCustom(src.nameGradientCustom, strict);
   if (look.nameGradientCustom) look.nameGradient = null;
   if (look.nameGradient || look.nameGradientCustom) look.nameColour = null;
   look.nameFont = pick(FONT_IDS, src.nameFont, 'default', strict, 'bad_font', "That name style doesn't exist.");
-  look.accent = readColour(src.accent, strict, 'bad_accent', 'Pick an accent colour like #7c5cff.');
+  look.accent = readColour(src.accent, strict, 'bad_accent', 'Pick an accent color like #7c5cff.');
   look.banner = pick(BANNER_IDS, src.banner, 'none', strict, 'bad_banner', "That banner doesn't exist.");
   look.bio = readText(src.bio, BIO_MAX, strict, 'bad_bio', 'about me', cleanBio);
   look.pronouns = readText(src.pronouns, PRONOUNS_MAX, strict, 'bad_pronouns', 'pronouns');
@@ -515,7 +515,7 @@ export function cleanLook(raw, { owned = null, strict = false } = {}) {
   look.theme = pick(THEME_SET, src.theme, 'none', strict, 'bad_theme', "That profile theme doesn't exist.");
   look.themeCustom = readThemeCustom(src.themeCustom, strict);
   if (look.theme === 'custom' && !look.themeCustom) {
-    fail(strict, 'bad_theme', 'Pick the colours for your custom theme.');
+    fail(strict, 'bad_theme', 'Pick the colors for your custom theme.');
     look.theme = 'none';
   }
   if (look.theme !== 'custom') look.themeCustom = null;
@@ -536,13 +536,13 @@ export function readGradientCustom(value, strict = false) {
     fail(strict, 'bad_gradient', message);
     return null;
   };
-  if (typeof value !== 'object' || Array.isArray(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) return bad('Pick two colours for your custom gradient, like #7c5cff.');
+  if (typeof value !== 'object' || Array.isArray(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) return bad('Pick two colors for your custom gradient, like #7c5cff.');
   const keys = Object.keys(value);
   if (keys.some((k) => !GRAD_KEYS.includes(k))) return bad('Your custom gradient has a setting that does not exist.');
   const hexOk = (v) => typeof v === 'string' && HEX_RE.test(v);
-  if (!hexOk(value.a) || !hexOk(value.b)) return bad('Gradient colours must look like #7c5cff.');
+  if (!hexOk(value.a) || !hexOk(value.b)) return bad('Gradient colors must look like #7c5cff.');
   const hasMiddle = value.c !== undefined && value.c !== null;
-  if (hasMiddle && !hexOk(value.c)) return bad('The middle gradient colour must look like #7c5cff.');
+  if (hasMiddle && !hexOk(value.c)) return bad('The middle gradient color must look like #7c5cff.');
   const angle = value.angle;
   if (typeof angle !== 'number' || !Number.isInteger(angle) || angle < 0 || angle > 360) return bad('The gradient angle must be a whole number from 0 to 360.');
   return hasMiddle ? { a: value.a, b: value.b, c: value.c, angle } : { a: value.a, b: value.b, angle };
@@ -594,13 +594,13 @@ export function nameContrast(look) {
 function readThemeCustom(value, strict) {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some((k) => !CUSTOM_KEYS.includes(k))) {
-    fail(strict, 'bad_theme', 'Pick three colours for your custom theme, like #7c5cff.');
+    fail(strict, 'bad_theme', 'Pick three colors for your custom theme, like #7c5cff.');
     return null;
   }
   const out = {};
   for (const k of CUSTOM_KEYS) {
     if (typeof value[k] !== 'string' || !HEX_RE.test(value[k])) {
-      fail(strict, 'bad_theme', 'Theme colours must look like #7c5cff.');
+      fail(strict, 'bad_theme', 'Theme colors must look like #7c5cff.');
       return null;
     }
     out[k] = value[k];

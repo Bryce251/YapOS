@@ -251,7 +251,7 @@ const story = {
       if (best < 60) wordy = null;
     }
     return list(
-      prize(api, 'votes', 'Fan favourite', '📖', (n) => (n === 1 ? 'Got 1 vote' : `Got ${n} votes`), 2),
+      prize(api, 'votes', 'Fan favorite', '📖', (n) => (n === 1 ? 'Got 1 vote' : `Got ${n} votes`), 2),
       Number.isInteger(wordy) ? { title: 'Novelist', emoji: '✍️', who: wordy, why: 'Wrote the longest lines' } : null,
     );
   },

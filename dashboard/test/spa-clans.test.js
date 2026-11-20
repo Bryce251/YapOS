@@ -97,7 +97,7 @@ test('the leader sees members, invites, settings and upgrades and every change i
   assert.match(t, /Dee/);
   assert.match(t, /2,000/);
   assert.equal(ctx.chrome[0].section, 'clans');
-  assert.ok(byText(ctx.main, 'Save colour').disabled, 'colour is locked until the upgrade');
+  assert.ok(byText(ctx.main, 'Save color').disabled, 'colour is locked until the upgrade');
   click(byText(ctx.main, 'Remove'));
   await confirmYes();
   assert.deepEqual(posts.at(-1), [CLAN_ACTIONS_API, { kind: 'kick', target: KIM }]);

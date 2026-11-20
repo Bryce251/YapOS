@@ -389,10 +389,10 @@ export async function validateClanAction(db, me, body, t, { owner = false } = {}
   }
   if (kind === 'colour' || kind === 'banner') {
     const detail = await db.prepare('SELECT style FROM clan_details WHERE clan_id = ?').bind(clanId).first();
-    if (detail && !Number(detail.style)) throw bad('locked', 'Clan colours and banners are an upgrade. Buy "Colour and banner" first.', 409);
+    if (detail && !Number(detail.style)) throw bad('locked', 'Clan colors and banners are an upgrade. Buy "Color and banner" first.', 409);
     if (kind === 'colour') {
       const n = parseClanColour(body.colour);
-      if (n === null) throw bad('bad_colour', 'Use a hex code like #ff8800 or a colour name like teal.');
+      if (n === null) throw bad('bad_colour', 'Use a hex code like #ff8800 or a color name like teal.');
       return { kind, clan: clanId, payload: { colour: colourHex(n) } };
     }
     const banner = checkClanBanner(body.text, { owner });

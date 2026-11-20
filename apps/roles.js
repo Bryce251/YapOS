@@ -19,7 +19,7 @@ const ROLES_COLOR = 0x9b59b6;
 const TYPES = { buttons: 'Buttons', dropdown: 'Dropdown', reactions: 'Reactions' };
 const MODES = { toggle: 'Toggle', unique: 'Pick one', add: 'Add only' };
 const MODE_HELP = { toggle: 'click again to remove', unique: 'only one role from this menu at a time', add: 'roles are only given, never taken back' };
-const STYLES = { primary: 'Blue', secondary: 'Grey', success: 'Green', danger: 'Red' };
+const STYLES = { primary: 'Blue', secondary: 'Gray', success: 'Green', danger: 'Red' };
 const TABS = { content: { label: 'Content', emoji: '📝' }, roles: { label: 'Roles', emoji: '🎭' }, style: { label: 'Style', emoji: '🎨' }, settings: { label: 'Settings', emoji: '⚙️' } };
 const TYPE_WORDS = { buttons: 'buttons', button: 'buttons', btn: 'buttons', dropdown: 'dropdown', select: 'dropdown', menu: 'dropdown', list: 'dropdown', reactions: 'reactions', reaction: 'reactions', react: 'reactions', emoji: 'reactions', emojis: 'reactions' };
 const MODE_WORDS = { toggle: 'toggle', normal: 'toggle', unique: 'unique', one: 'unique', single: 'unique', pickone: 'unique', add: 'add', addonly: 'add', verify: 'add', verification: 'add', give: 'add' };
@@ -607,9 +607,9 @@ function styleButtons(current, idFor) {
 
 function styleTab(mid, menu, live) {
   const fields = [
-    { name: 'Accent colour', value: menu.color === null ? 'Default (purple)' : hex(menu.color), inline: true },
+    { name: 'Accent color', value: menu.color === null ? 'Default (purple)' : hex(menu.color), inline: true },
     { name: 'Type', value: TYPES[menu.type], inline: true },
-    { name: 'Colour for new buttons', value: STYLES[menu.defaultStyle], inline: true },
+    { name: 'Color for new buttons', value: STYLES[menu.defaultStyle], inline: true },
   ];
   return {
     fields,
@@ -617,8 +617,8 @@ function styleTab(mid, menu, live) {
       row(Object.entries(TYPES).map(([t, label]) => button(label, cid('type', mid, t), menu.type === t ? 'success' : 'secondary'))),
       row(styleButtons(menu.defaultStyle, (s) => cid('defstyle', mid, s))),
       row(
-        button('Accent colour', cid('accform', mid), 'secondary', '🎨'),
-        button('Use this colour on every button', cid('allstyle', mid), 'secondary', '🖌️', { disabled: !live.length }),
+        button('Accent color', cid('accform', mid), 'secondary', '🎨'),
+        button('Use this color on every button', cid('allstyle', mid), 'secondary', '🖌️', { disabled: !live.length }),
       ),
     ],
     tip: `Typed: /roles set ${mid} accent blue · /roles type ${mid} dropdown`,
@@ -693,7 +693,7 @@ async function itemView(engine, sid, mid, idx, note) {
   const as = menu.type === 'reactions' ? 'reactions' : 'buttons';
   const fields = [
     { name: 'Gives', value: role ? `<@&${role.id}>` : `${ICONS.warn} a deleted role`, inline: true },
-    { name: 'Colour', value: STYLES[item.style], inline: true },
+    { name: 'Color', value: STYLES[item.style], inline: true },
     { name: 'Position', value: `${n + 1} of ${live.length}`, inline: true },
     { name: 'Emoji', value: item.emoji || 'None', inline: true },
     { name: 'Description', value: item.note || '*None*', inline: true },
@@ -933,7 +933,7 @@ function parseAccent(text) {
   const named = own(ACCENTS, t);
   if (named !== undefined) return { value: named };
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/.exec(t);
-  if (!m) return { bad: `I don't know the colour **${clip(String(text), 40)}**. Use a name like ${Object.keys(ACCENTS).filter((k) => k !== 'gray').join(', ')}, or a hex code like #ff8800.` };
+  if (!m) return { bad: `I don't know the color **${clip(String(text), 40)}**. Use a name like ${Object.keys(ACCENTS).filter((k) => k !== 'grey').join(', ')}, or a hex code like #ff8800.` };
   const h = m[1].length === 3 ? m[1].split('').map((c) => c + c).join('') : m[1];
   return { value: parseInt(h, 16) };
 }
@@ -976,7 +976,7 @@ function applyAccent(engine, sid, mid, raw) {
   const res = parseAccent(raw);
   if (res.bad) return res;
   changeMenu(engine, sid, mid, (m) => { m.color = res.value; });
-  return { note: `${ICONS.ok} Accent colour set to **${res.value === null ? 'default' : hex(res.value)}**.` };
+  return { note: `${ICONS.ok} Accent color set to **${res.value === null ? 'default' : hex(res.value)}**.` };
 }
 
 function applyMax(engine, sid, mid, raw) {
@@ -1026,9 +1026,9 @@ async function applyItem(ctx, mid, idx, what, value) {
   }
   if (['color', 'colour', 'style'].includes(w)) {
     const s = own(STYLE_WORDS, String(value || '').toLowerCase());
-    if (!s) return { bad: 'Pick **blue**, **grey**, **green** or **red**.' };
+    if (!s) return { bad: 'Pick **blue**, **gray**, **green** or **red**.' };
     changeMenu(engine, sid, mid, (m) => { m.items[idx].style = s; });
-    return { note: `${ICONS.ok} Button colour set to **${STYLES[s]}**.` };
+    return { note: `${ICONS.ok} Button color set to **${STYLES[s]}**.` };
   }
   if (['desc', 'description', 'note', 'about', 'info'].includes(w)) {
     const note = isOff(value) ? null : clip(value, MAX_NOTE);
@@ -1116,7 +1116,7 @@ async function runSet(ctx, mid, args) {
   }
   if (['default', 'buttons', 'newcolor', 'newcolour'].includes(what)) {
     const s = own(STYLE_WORDS, value.toLowerCase());
-    if (!s) return ctx.warn("That didn't work", 'Pick **blue**, **grey**, **green** or **red**.');
+    if (!s) return ctx.warn("That didn't work", 'Pick **blue**, **gray**, **green** or **red**.');
     changeMenu(engine, sid, mid, (m) => { m.defaultStyle = s; });
     return done({ note: `${ICONS.ok} New buttons will be **${STYLES[s]}**.` }, 'style');
   }
@@ -1359,7 +1359,7 @@ export const { setup, teardown, check } = defineApp({
       const idx = Number(idxS);
       const ok = own(STYLES, style) && Number.isInteger(idx) && getMenu(engine, sid, mid)?.items?.[idx];
       if (ok) changeMenu(engine, sid, mid, (m) => { if (m.items[idx].style === style) return false; m.items[idx].style = style; return true; });
-      return show(ctx, await itemView(engine, sid, mid, idx, ok ? `${ICONS.ok} Button colour set to **${STYLES[style]}**.` : null));
+      return show(ctx, await itemView(engine, sid, mid, idx, ok ? `${ICONS.ok} Button color set to **${STYLES[style]}**.` : null));
     }),
     itemmove: admin(async (ctx) => {
       const { engine, serverId: sid } = ctx;
@@ -1418,9 +1418,9 @@ export const { setup, teardown, check } = defineApp({
       return show(ctx, await editorView(ctx.engine, ctx.serverId, mid, on === null ? null : `${ICONS.ok} The role list is ${on ? 'shown' : 'hidden'} on the posted menu.`, { tab: 'content' }));
     }),
     accform: formOpener('acc', 'style', (menu) => ({
-      title: 'Accent colour',
+      title: 'Accent color',
       action: 'accsave',
-      fields: [{ id: 'color', label: 'Colour name or hex (empty = default)', required: false, value: menu.color === null ? '' : hex(menu.color), placeholder: 'blue or #ff8800', max: 20 }],
+      fields: [{ id: 'color', label: 'Color name or hex (empty = default)', required: false, value: menu.color === null ? '' : hex(menu.color), placeholder: 'blue or #ff8800', max: 20 }],
     })),
     accsave: formSaver('acc', async (ctx, p, v) => applyAccent(ctx.engine, ctx.serverId, p.mid, v.color)),
     defstyle: admin(async (ctx) => {
@@ -1540,7 +1540,7 @@ export const { setup, teardown, check } = defineApp({
 
   help: [
     'Role menus come in three types: buttons (up to 25), a dropdown, or reactions.',
-    'Each button can have its own text, emoji, colour and short description. The posted menu lists what every button gives.',
+    'Each button can have its own text, emoji, color and short description. The posted menu lists what every button gives.',
     'Modes: toggle (click again to remove), unique (one role from the menu at a time), add only. You can also cap how many roles one person takes, or only let people with a certain role use the menu.',
     "Reaction menus: **Tidy reactions** (in the menu settings) removes reactions that aren't one of the menu's emojis, and **Reset reactions** clears them all and adds mine back. People keep the roles they already have. Stray reactions are also taken off as people add them, when Yapin' lets me.",
     'I can only hand out roles below my own role. Drag my role higher in Server settings → Roles if a role is missing.',

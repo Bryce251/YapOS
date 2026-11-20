@@ -94,7 +94,7 @@ export const HIDDEN_HANDLE = 'hidden';
 const RESET_TEXT = Object.freeze({
   profile_banner_remove: 'your banner picture was removed',
   profile_avatar_remove: 'your uploaded profile picture was removed',
-  profile_name_style_reset: 'your name colour and style were reset',
+  profile_name_style_reset: 'your name color and style were reset',
   profile_pins_clear: 'your pinned badges were cleared',
   profile_theme_reset: 'your profile theme was reset',
   profile_effect_clear: 'your profile effect was turned off',
@@ -421,7 +421,7 @@ export function profileCard(p, opts = {}) {
       ? tileGrid(badgeItems.slice(0, BADGE_TILES), 'Badges', pinKeys)
       : h('p', { class: 'muted', text: 'No badges yet. They come from playing YapOS Party.' }), { wide: true, action: viewAll }),
     achievements: () => (achItems.length ? section('achievements', 'Achievements', 'trophy', tileGrid(achItems, 'Achievements', pinKeys)) : null),
-    favourites: () => section('favourites', 'Favourite games', 'smile', p.favourites.length
+    favourites: () => section('favourites', 'Favorite games', 'smile', p.favourites.length
       ? h('ul', { class: 'fav-list' }, ...p.favourites.map((g) => h('li', { class: 'fav-row' },
         h('span', { class: 'fav-emoji', attrs: { 'aria-hidden': 'true' }, text: g.emoji }),
         h('span', { class: 'fav-name', text: g.name }),

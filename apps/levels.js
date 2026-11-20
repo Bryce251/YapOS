@@ -647,7 +647,7 @@ export function partyBadgeName(id) {
 export function partyText(stats) {
   if (!stats || !(stats.games > 0)) return null;
   const lines = [`\`${num(stats.games)}\` ${stats.games === 1 ? 'game' : 'games'} · \`${num(stats.wins)}\` ${stats.wins === 1 ? 'win' : 'wins'}`];
-  if (stats.fav) lines.push(`Favourite: ${partyGameName(stats.fav)}`);
+  if (stats.fav) lines.push(`Favorite: ${partyGameName(stats.fav)}`);
   const badges = (stats.badges || []).map(partyBadgeName).filter(Boolean);
   if (badges.length) lines.push(badges.slice(0, PARTY_BADGES_SHOWN).join(' · ') + (badges.length > PARTY_BADGES_SHOWN ? ` · +${badges.length - PARTY_BADGES_SHOWN} more` : ''));
   return lines.join('\n');
@@ -1462,7 +1462,7 @@ export const { setup, teardown, check } = defineApp({
     }),
     resetall: xpOwner((ctx) => resetAllConfirm(ctx)),
     resetallyes: xpOwner((ctx) => resetAll(ctx)),
-    cancel: admin((ctx) => ctx.update({ embeds: [dialog.info('Cancelled', 'Nothing was reset.')], components: [] })),
+    cancel: admin((ctx) => ctx.update({ embeds: [dialog.info('Canceled', 'Nothing was reset.')], components: [] })),
   },
 
   events: {

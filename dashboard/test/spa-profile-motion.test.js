@@ -11,7 +11,7 @@ if (typeof globalThis.requestAnimationFrame !== 'function') globalThis.requestAn
 const profilePage = await import('../web/js/pages/profile.js');
 const { profileCard, applyTheme, cropVars, effectStage, tiltFor, resetText, noticeLines, THEME_VARS } = profilePage;
 const editor = await import('../web/js/pages/profile-editor.js');
-const { openProfileEditor, processBanner, stillPlan, encodeStill, themeTile, STILL_BYTES } = editor;
+const { openProfileEditor, processBanner, processMoving, stillPlan, encodeStill, themeTile, STILL_BYTES } = editor;
 const fx = await import('../web/js/profile-fx.js');
 const { normalizeProfile } = await import('../web/js/community-data.js');
 const { readLook, cropBox, THEME_KEYS, THEMES, EFFECT_IDS } = await import('../web/js/profile-look.js');
@@ -349,9 +349,16 @@ test('picking a moving GIF opens the moving cropper and sends the GIF, a still a
     assert.equal(out.frames, 3);
     assert.deepEqual(log.find((l) => l[0] === 'encode').slice(1, 3), [600, 200], 'the still keeps the GIF shape');
     assert.equal(await processBanner(file, { choose: async () => null, readUrl: async () => 'data:,', doc: fakeCanvasDoc() }), null, 'cancelling uploads nothing');
-    const huge = makeGif({ width: 600, height: 200, frames: 2, comment: 'x'.repeat(950 * 1024) });
+    const huge = makeGif({ width: 600, height: 200, frames: 2, comment: 'x'.repeat(10 * 1024 * 1024) });
+    assert.ok(huge.length > 10 * 1024 * 1024 && huge.length < 10 * 1024 * 1024 + 64 * 1024);
     const big = { ...file, size: huge.length, slice: (a, b) => ({ arrayBuffer: async () => huge.slice(a, b).buffer }), arrayBuffer: async () => huge.slice().buffer };
-    await assert.rejects(processBanner(big, { choose: async () => ({ zoom: 1, x: 0.5, y: 0.5 }) }), /under 900 KB/);
+    await assert.rejects(processBanner(big, { choose: async () => ({ zoom: 1, x: 0.5, y: 0.5 }) }), /bigger than 10 MB/);
+    await assert.rejects(processBanner({ ...big, size: 10 * 1024 * 1024 }, { choose: async () => ({ zoom: 1, x: 0.5, y: 0.5 }) }), /Moving banners can be up to 10 MB, and this one is 10\.0\d MB/);
+    const under = makeGif({ width: 600, height: 200, frames: 2, comment: 'x'.repeat(10 * 1024 * 1024 - 64 * 1024) });
+    assert.ok(under.length < 10 * 1024 * 1024 && under.length > 9.9 * 1024 * 1024);
+    const nearly = { ...file, size: under.length, slice: (a, b) => ({ arrayBuffer: async () => under.slice(a, b).buffer }), arrayBuffer: async () => under.slice().buffer };
+    const nearOut = await processBanner(nearly, { choose: async () => ({ zoom: 1, x: 0.5, y: 0.5 }), readUrl: async () => 'data:image/gif;base64,R0lGOD', doc: fakeCanvasDoc() });
+    assert.equal(nearOut.frames, 2, 'a moving banner just under 10 MB is accepted');
     const many = makeGif({ width: 3200, height: 1000, frames: 2 });
     const wide = { ...file, size: many.length, slice: (a, b) => ({ arrayBuffer: async () => many.slice(a, b).buffer }), arrayBuffer: async () => many.slice().buffer };
     await assert.rejects(processBanner(wide, { choose: async () => ({ zoom: 1, x: 0.5, y: 0.5 }) }), /3000 pixels wide/);

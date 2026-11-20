@@ -8,7 +8,7 @@ import {
   BANNERS, BIO_MAX, CUSTOM_GRADIENT_START, DENSITIES, EFFECTS, FEATURED, FONT_CATEGORIES, NAME_FONTS, NAME_GRADIENTS, NAME_PALETTE, PIN_MAX, PRONOUNS_MAX, RINGS, SECTIONS, STATUS_EMOJI_MAX, STATUS_MAX, GRADIENT_ANGLES, THEMES, THEME_MODES, THEME_PATTERNS,
   cleanStatusEmoji, defaultLook, fontById, lookBody, mixHex, moveItem, nameContrast, rawGradientCss, readCrop, readLook, readMotion, sameLook, textLength, themeById, themeColours, themeShades,
 } from '../profile-look.js';
-import { ANIM_MAX_BYTES, AnimError, animatedFrames, checkAnimSize, readAnimated, webpAnimated } from '../banner-anim.js';
+import { ANIM_MAX_BYTES, AnimError, animatedFrames, checkAnimSize, readAnimated, sizeText, webpAnimated } from '../banner-anim.js';
 import { effectThumb } from '../profile-fx.js';
 import { allBadges, cropVars, isSpecial, nameGradientClass, openAllBadges, paintNameGradient } from './profile.js';
 import { colourRow, createColourPicker, parseColour } from '../colour-picker.js';
@@ -22,8 +22,8 @@ export const BANNER_H = 500;
 export const BANNER_RATIO = 3;
 export const BANNER_MIN_OUT_W = 600;
 export const BANNER_MAX_OUT_W = 3000;
-export const BANNER_BYTES = 760 * 1024;
-export const BANNER_FILE_MAX = 15 * 1024 * 1024;
+export const BANNER_BYTES = 1400 * 1024;
+export const BANNER_FILE_MAX = 10 * 1024 * 1024;
 export const BANNER_STEP_WIDTHS = Object.freeze([2400, 1800, 1500]);
 export const TOP_QUALITIES = Object.freeze([0.92, 0.86, 0.8]);
 export const LOW_QUALITIES = Object.freeze([0.72, 0.64, 0.56]);
@@ -439,11 +439,11 @@ function readDataUrl(file) {
 }
 
 export function movingSizeText(bytes) {
-  return `${(Math.max(0, Number(bytes) || 0) / 1024 / 1024).toFixed(1)} MB`;
+  return `${(Math.max(0, Number(bytes) || 0) / 1024 / 1024).toFixed(2)} MB`;
 }
 
 export async function processMoving(file, bytes, { choose = chooseBannerCrop, readUrl = readDataUrl, doc = document } = {}) {
-  if (bytes.length > ANIM_MAX_BYTES) throw new Error(`Moving banners must be under ${Math.round(ANIM_MAX_BYTES / 1024)} KB, and this one is ${movingSizeText(bytes.length)}. Try a shorter or smaller GIF.`);
+  if (bytes.length > ANIM_MAX_BYTES) throw new Error(`Moving banners can be up to ${sizeText(ANIM_MAX_BYTES)}, and this one is ${movingSizeText(bytes.length)}. Try a shorter or smaller GIF.`);
   let info;
   try {
     info = readAnimated(bytes);
@@ -464,7 +464,7 @@ export async function processMoving(file, bytes, { choose = chooseBannerCrop, re
 
 export async function processBanner(file, { choose = chooseBannerCrop, readUrl = readDataUrl, doc = document } = {}) {
   if (!file) throw new Error('Pick a picture first.');
-  if (Number(file.size) > BANNER_FILE_MAX) throw new Error('That file is bigger than 15 MB. Pick a smaller picture.');
+  if (Number(file.size) > BANNER_FILE_MAX) throw new Error(`That file is bigger than ${sizeText(BANNER_FILE_MAX)}. Pick a smaller picture.`);
   const head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
   const kind = sniffFile(head, file.type, file.name);
   if (kind === 'svg') throw new Error("SVG files can't be used for banners. Save it as a PNG first.");
@@ -934,7 +934,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     syncName();
   };
   const nameGroup = choiceGroup({
-    label: 'Name colour',
+    label: 'Name color',
     options: nameOptions,
     value: nameValue(),
     className: 'pe-swatches',
@@ -949,10 +949,10 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   const customSwatch = [...nameGroup.el.querySelectorAll('.pe-choice')].find((b) => b.getAttribute('data-choice') === 'g:custom') || null;
   const nameField = trackColour({
     id: nameColourId,
-    label: 'Name colour',
+    label: 'Name color',
     placeholder: '#7c5cff',
     errorEl: nameHexError,
-    errorText: 'Use a colour like #7c5cff.',
+    errorText: 'Use a color like #7c5cff.',
     onSet: (hex) => {
       update({ nameColour: hex, nameGradient: null, nameGradientCustom: null });
       syncName();
@@ -967,15 +967,15 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
       label,
       placeholder: k === 'c' ? '#e5487f' : CUSTOM_GRADIENT_START[k],
       errorEl: gradError,
-      errorText: 'Use a colour like #7c5cff.',
+      errorText: 'Use a color like #7c5cff.',
       onSet: (hex) => useGradient({ ...gradMemo, [k]: hex }),
     });
     f.hexEl.classList.add('pe-grad-hex');
     return { k, f, el: h('div', { class: 'pe-custom pe-grad-stop', attrs: { 'data-stop': k } }, h('label', { class: 'field-label', htmlFor: id, text: label }), f.row) };
   };
-  const gradA = gradStop('a', 'Start colour');
-  const gradB = gradStop('b', 'End colour');
-  const gradC = gradStop('c', 'Middle colour');
+  const gradA = gradStop('a', 'Start color');
+  const gradB = gradStop('b', 'End color');
+  const gradC = gradStop('c', 'Middle color');
   const middleId = nextId('pe-grad-mid');
   const middleSwitch = h('input', { type: 'checkbox', id: middleId, class: 'pe-grad-mid' });
   middleSwitch.addEventListener('change', () => {
@@ -1001,7 +1001,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   });
   const gradBox = h('div', { class: 'pe-grad-custom' },
     h('div', { class: 'pe-grad-stops' }, gradA.el, gradB.el),
-    h('label', { class: 'pe-grad-toggle', htmlFor: middleId }, middleSwitch, h('span', { text: 'Add a middle colour' })),
+    h('label', { class: 'pe-grad-toggle', htmlFor: middleId }, middleSwitch, h('span', { text: 'Add a middle color' })),
     gradC.el,
     gradError,
     h('div', { class: 'pe-custom' },
@@ -1020,7 +1020,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     if (!list.length) return '';
     const where = list.length > 1 ? 'in light and dark mode' : `in ${list[0].mode} mode`;
     const on = draft.theme !== 'none' ? 'your profile theme' : 'the page';
-    return `Heads up: your name may be hard to read on ${on} ${where}. You can still keep it, or try a ${list[0].mode === 'dark' ? 'lighter' : 'darker'} colour.`;
+    return `Heads up: your name may be hard to read on ${on} ${where}. You can still keep it, or try a ${list[0].mode === 'dark' ? 'lighter' : 'darker'} color.`;
   }
 
   function syncName() {
@@ -1053,8 +1053,8 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
       el.classList.toggle('has-demo', Boolean(c));
     }
     contrastNote.textContent = c && c.adjusted
-      ? `Your colour is tweaked a little where it would be hard to read${c.light !== c.base && c.dark !== c.base ? ' in both themes' : c.light !== c.base ? ' on light mode' : ' on dark mode'}, so your name always stays clear.`
-      : draft.nameGradientCustom ? 'Custom gradients use a slightly lighter or darker shade where a colour would be hard to read.'
+      ? `Your color is tweaked a little where it would be hard to read${c.light !== c.base && c.dark !== c.base ? ' in both themes' : c.light !== c.base ? ' on light mode' : ' on dark mode'}, so your name always stays clear.`
+      : draft.nameGradientCustom ? 'Custom gradients use a slightly lighter or darker shade where a color would be hard to read.'
       : draft.nameGradient ? 'Gradients use lighter shades in dark mode so they stay easy to read.' : 'Your name is shown like this in light and dark mode.';
     const warn = contrastText(nameContrast(draft));
     contrastWarn.textContent = warn;
@@ -1072,10 +1072,10 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   });
 
   panels.name = h('div', { class: 'pe-panel' },
-    heading('Name colour'),
+    heading('Name color'),
     nameGroup.el,
     h('div', { class: 'pe-custom' },
-      h('label', { class: 'field-label', htmlFor: nameColourId, text: 'Custom colour' }),
+      h('label', { class: 'field-label', htmlFor: nameColourId, text: 'Custom color' }),
       nameField.row),
     nameHexError,
     gradBox,
@@ -1185,7 +1185,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   const accentError = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
   const accentValue = () => (!draft.accent ? 'default' : NAME_PALETTE.some((c) => c.hex === draft.accent) ? draft.accent : 'custom');
   const accentGroup = choiceGroup({
-    label: 'Accent colour',
+    label: 'Accent color',
     options: [
       { id: 'default', label: 'Default', className: 'pe-swatch is-default', body: h('span', { class: 'pe-swatch-text', text: 'Aa' }) },
       ...NAME_PALETTE.map((c) => ({ id: c.hex, label: c.label, className: 'pe-swatch', body: null, vars: { '--sw': c.hex } })),
@@ -1199,10 +1199,10 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   });
   const accentField = trackColour({
     id: accentId,
-    label: 'Accent colour',
+    label: 'Accent color',
     placeholder: '#f2613f',
     errorEl: accentError,
-    errorText: 'Use a colour like #f2613f.',
+    errorText: 'Use a color like #f2613f.',
     onSet: (hex) => {
       update({ accent: hex });
       syncAccent();
@@ -1230,14 +1230,14 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
     heading('Banner'),
     bannerWrap,
     h('div', { class: 'pe-actions-row' }, uploadBtn, moveBtn, removeBtn, fileInput),
-    h('p', { class: 'field-help', text: 'Best size 3000 x 1000, and at least 1500 x 500. PNG, JPG, WebP or GIF. Moving GIFs and animated WebPs up to 900 KB keep moving on your profile and Party card. After you pick a picture you can drag and zoom it to choose what shows. Uploads are saved straight away and everyone can see them, so keep it friendly.' }),
-    heading('Accent colour'),
+    h('p', { class: 'field-help', text: `Best size 3000 x 1000, and at least 1500 x 500. PNG, JPG, WebP or GIF up to ${sizeText(BANNER_FILE_MAX)}. Moving GIFs and animated WebPs up to ${sizeText(ANIM_MAX_BYTES)} keep moving on your profile and Party card. After you pick a picture you can drag and zoom it to choose what shows. Uploads are saved straight away and everyone can see them, so keep it friendly.` }),
+    heading('Accent color'),
     accentGroup.el,
     h('div', { class: 'pe-custom' },
       h('label', { class: 'field-label', htmlFor: accentId, text: 'Custom accent' }),
       accentField.row),
     accentError,
-    h('p', { class: 'field-help', text: 'Colours the level ring, icons and highlights on your card. It is tweaked where needed so it stays readable.' }),
+    h('p', { class: 'field-help', text: 'Colors the level ring, icons and highlights on your card. It is tweaked where needed so it stays readable.' }),
     heading('Avatar ring'),
     ringGroup.el,
     heading('Card layout'),
@@ -1280,13 +1280,13 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   const themeError = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
   const customFields = ['base', 'alt', 'accent'].map((k) => {
     const id = nextId(`pe-theme-${k}`);
-    const label = { base: 'Main colour', alt: 'Second colour', accent: 'Highlight' }[k];
+    const label = { base: 'Main color', alt: 'Second color', accent: 'Highlight' }[k];
     const f = trackColour({
       id,
       label: `Theme ${label.toLowerCase()}`,
       placeholder: CUSTOM_THEME_START[k],
       errorEl: themeError,
-      errorText: 'Use a colour like #7c5cff.',
+      errorText: 'Use a color like #7c5cff.',
       onSet: (hex) => {
         update({ theme: 'custom', themeCustom: { ...(draft.themeCustom || customStart()), [k]: hex } });
         syncTheme();
@@ -1330,7 +1330,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   }
   panels.theme = h('div', { class: 'pe-panel' },
     heading('Profile theme'),
-    h('p', { class: 'field-help', text: 'Colours your whole profile page: the background, cards, buttons and badges. Text is tuned so it always stays easy to read.' }),
+    h('p', { class: 'field-help', text: 'Colors your whole profile page: the background, cards, buttons and badges. Text is tuned so it always stays easy to read.' }),
     themeGroup.el,
     customBox,
     themeError,
@@ -1348,7 +1348,7 @@ export function openProfileEditor({ mount, profile, look, bannerImage = null, ba
   const emojiError = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
   const statusInput = h('input', { type: 'text', id: statusId, class: 'input', maxLength: STATUS_MAX, placeholder: 'What are you up to?', autocomplete: 'off' });
   const pronounsInput = h('input', { type: 'text', id: pronounsId, class: 'input', maxLength: PRONOUNS_MAX, placeholder: 'they/them', autocomplete: 'off' });
-  const bioInput = h('textarea', { id: bioId, class: 'input textarea pe-bio', rows: 4, maxLength: BIO_MAX, placeholder: 'Say hi, share your favourite game, or what you are into.' });
+  const bioInput = h('textarea', { id: bioId, class: 'input textarea pe-bio', rows: 4, maxLength: BIO_MAX, placeholder: 'Say hi, share your favorite game, or what you are into.' });
   const statusCount = counterFor(statusInput, STATUS_MAX);
   const pronounsCount = counterFor(pronounsInput, PRONOUNS_MAX);
   const bioCount = counterFor(bioInput, BIO_MAX);

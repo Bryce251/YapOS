@@ -133,7 +133,7 @@ test('the editor removes the background of an upload, saves it as a cut-out, and
   const sw = ctl.el.querySelector('.switch');
   assert.equal(sw.getAttribute('aria-checked'), 'false');
   assert.equal(sw.disabled, false);
-  assert.match(ctl.el.querySelector('.av-cut-state').textContent, /profile colours/);
+  assert.match(ctl.el.querySelector('.av-cut-state').textContent, /profile colors/);
   sw.click();
   await flush();
   assert.deepEqual(fetched, [PLAIN], 'the picture comes from the site so the canvas can read it');

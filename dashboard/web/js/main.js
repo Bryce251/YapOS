@@ -19,6 +19,7 @@ import { renderPublic } from './pages/public.js';
 import { renderParty } from './pages/party.js';
 import { renderPartyReports } from './pages/party-reports.js';
 import { renderPartyModLog } from './pages/party-modlog.js';
+import { renderPartySongs } from './pages/owner-songs.js';
 import { renderPacks } from './pages/packs.js';
 import { renderPacksBrowse } from './pages/packs-browse.js';
 import { renderProfile } from './pages/profile.js';
@@ -47,6 +48,7 @@ const TITLES = {
   party: 'Party admins',
   'party-reports': 'Party reports',
   'party-modlog': 'Party mod log',
+  'party-songs': 'Beat Drop songs',
   owner: 'Owner panel',
   'owner-user': 'Owner panel',
   packs: 'Word packs',
@@ -76,6 +78,7 @@ const PAGES = {
   party: renderParty,
   'party-reports': renderPartyReports,
   'party-modlog': renderPartyModLog,
+  'party-songs': renderPartySongs,
   owner: renderOwner,
   'owner-user': renderOwnerUser,
   packs: renderPacks,

@@ -98,7 +98,7 @@ const JOBS = [
   'You won the pub quiz on a technicality and earned {amount}.',
   'You babysat a very polite cat and earned {amount}.',
   'You busked in the town square and earned {amount}.',
-  'You watered the neighbour\'s plants (and talked to them) and earned {amount}.',
+  'You watered the neighbor\'s plants (and talked to them) and earned {amount}.',
   'You untangled a box of old cables and earned {amount}.',
   'You streamed for three loyal viewers and earned {amount}.',
   'You proofread a very long fan fiction and earned {amount}.',
@@ -1147,7 +1147,7 @@ async function completeBuy(ctx) {
   const { engine, serverId: sid } = ctx;
   const ticket = engine.router.getSession(ctx.argv[0]);
   if (!ticket || ticket.kind !== 'buy' || ticket.sid !== sid || ticket.uid !== ctx.userId) {
-    return ctx.update({ embeds: [dialog.info('Already handled', 'This purchase was already made, cancelled or expired, so nothing more was taken.\n-# Pick the item again in **/shop** to buy another.')], components: [] });
+    return ctx.update({ embeds: [dialog.info('Already handled', 'This purchase was already made, canceled or expired, so nothing more was taken.\n-# Pick the item again in **/shop** to buy another.')], components: [] });
   }
   engine.router.dropSession(ctx.argv[0]);
   const { itemId, price: priceArg } = ticket;
@@ -1949,17 +1949,17 @@ export const { setup, teardown, check } = defineApp({
     buyno: ownerOnly(1, (ctx) => {
       const ticket = ctx.engine.router.getSession(ctx.argv[0]);
       if (ticket?.kind === 'buy' && ticket.uid === ctx.userId) ctx.engine.router.dropSession(ctx.argv[0]);
-      return ctx.update({ embeds: [dialog.info('Cancelled', 'Nothing was bought.')], components: [] });
+      return ctx.update({ embeds: [dialog.info('Canceled', 'Nothing was bought.')], components: [] });
     }),
     payok: ownerOnly(1, async (ctx) => {
       const s = ctx.engine.router.getSession(ctx.argv[0]);
-      if (!s || s.sid !== ctx.serverId || s.from !== ctx.userId) return ctx.update({ embeds: [dialog.info('Already handled', 'This payment was already sent, cancelled or expired. Nothing more happened.')], components: [] });
+      if (!s || s.sid !== ctx.serverId || s.from !== ctx.userId) return ctx.update({ embeds: [dialog.info('Already handled', 'This payment was already sent, canceled or expired. Nothing more happened.')], components: [] });
       ctx.engine.router.dropSession(ctx.argv[0]);
       return finishPay(ctx, s, 'update');
     }),
     payno: ownerOnly(1, (ctx) => {
       ctx.engine.router.dropSession(ctx.argv[0]);
-      return ctx.update({ embeds: [dialog.info('Cancelled', `No ${CURRENCY.name} were sent.`)], components: [] });
+      return ctx.update({ embeds: [dialog.info('Canceled', `No ${CURRENCY.name} were sent.`)], components: [] });
     }),
     twork: admin(async (ctx) => {
       if (!(await needGiver(ctx, OWNER_ONLY_EARN))) return undefined;

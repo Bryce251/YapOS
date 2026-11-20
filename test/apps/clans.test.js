@@ -169,11 +169,17 @@ test('the bank only takes deposits and upgrades are bought from it', async () =>
   const noStyle = await h.slash('clan', 'colour #ff8800', { user: IDS.member });
   assert.match(lastText(h, noStyle), /Unlock it first/);
   const style = await h.slash('clan', 'upgrade style', { user: IDS.member });
-  assert.match(lastText(h, style), /colour and banner/);
+  assert.match(lastText(h, style), /color and banner/);
   assert.equal(c().bank, 2500 - STYLE_PRICE);
   const colour = await h.slash('clan', 'colour #ff8800', { user: IDS.member });
   assert.match(lastText(h, colour), /#ff8800/);
   assert.equal(clans(h).of(IDS.member).colour, '#ff8800');
+  const color = await h.slash('clan', 'color teal', { user: IDS.member });
+  assert.match(lastText(h, color), /Your clan color is/);
+  assert.equal(clans(h).of(IDS.member).colour, '#1abc9c');
+  const badColor = await h.slash('clan', 'color sparkly', { user: IDS.member });
+  assert.match(lastText(h, badColor), /gray/);
+  assert.doesNotMatch(lastText(h, badColor), /grey/);
   const banner = await h.slash('clan', 'banner Night owls never sleep', { user: IDS.member });
   assert.match(lastText(h, banner), /Night owls never sleep/);
 

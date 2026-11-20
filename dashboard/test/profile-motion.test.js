@@ -135,7 +135,7 @@ test('animated WebP is checked chunk by chunk and stripped of EXIF and XMP', () 
 
 test('the upload body fits a full moving banner and its still, and oversize ones are refused', () => {
   assert.ok(BANNER_BODY_LIMIT >= Math.ceil(((ANIM_MAX_BYTES + STILL_MAX) * 4) / 3));
-  assert.ok(ANIM_MAX_BYTES < 1000 * 1024, 'under the 1 MB database row limit');
+  assert.equal(ANIM_MAX_BYTES, 10 * 1024 * 1024, 'moving banners can be up to 10 MB');
   const big = new Uint8Array(ANIM_MAX_BYTES + 10);
   big.set(makeGif({ frames: 2 }));
   assert.throws(() => decodeAnimated(b64(big)), (e) => e.status === 413);

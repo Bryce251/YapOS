@@ -345,8 +345,8 @@ export function cutOut(rgbaIn, width, height, { strength = CUT_STRENGTH_START, f
 
 export function verdictText(verdict) {
   if (verdict === 'everything') return 'That removes almost the whole picture. Turn the strength down so the person or character stays.';
-  if (verdict === 'nothing') return 'Almost nothing was removed. The background may touch the same colours as the picture, so try a higher strength.';
-  if (verdict === 'busy') return 'The background has lots of colours, so some bits may stay behind. Pictures on a plain background work best.';
+  if (verdict === 'nothing') return 'Almost nothing was removed. The background may touch the same colors as the picture, so try a higher strength.';
+  if (verdict === 'busy') return 'The background has lots of colors, so some bits may stay behind. Pictures on a plain background work best.';
   return '';
 }
 

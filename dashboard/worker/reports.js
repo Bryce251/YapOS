@@ -162,7 +162,7 @@ function readReplay(value, game, drawerId) {
     used.add(a);
     if (kind === 'pixel') {
       if (!Number.isInteger(e[2]) || e[2] < 0 || e[2] >= PIXEL_CELLS) throw bad('bad_replay', 'A pixel in the replay is off the canvas.');
-      if (typeof e[3] !== 'string' || e[3].length !== 1 || !PIXEL_CODES.includes(e[3])) throw bad('bad_replay', 'A pixel in the replay has a colour that is not in the palette.');
+      if (typeof e[3] !== 'string' || e[3].length !== 1 || !PIXEL_CODES.includes(e[3])) throw bad('bad_replay', 'A pixel in the replay has a color that is not in the palette.');
       events.push([a, t, e[2], e[3]]);
     } else if (typeof e[2] === 'string') {
       if (!strokeOk(e[2])) throw bad('bad_replay', 'A line in the replay doesn\'t look right.');

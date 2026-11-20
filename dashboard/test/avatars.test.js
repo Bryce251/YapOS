@@ -7,7 +7,7 @@ import { cleanup } from '../worker/cron.js';
 import { BADGE_IMG_CSP } from '../worker/security.js';
 import { AVATAR_BODY_LIMIT, decodeAvatarImage, decodeAvatarMoving, decodeAvatarStill, isMovingUpload } from '../worker/avatars.js';
 import { avatarsFor } from '../worker/avatar-store.js';
-import { AVATAR_STILL_MAX, AVATAR_ANIM_MAX, AVATAR_ANIM_MAX_FRAMES, AVATAR_IMG_RE, checkAvatarAnim } from '../web/js/avatar-rules.js';
+import { AVATAR_STILL_MAX, AVATAR_FRAME_MAX, AVATAR_ANIM_MAX, AVATAR_ANIM_MAX_FRAMES, AVATAR_IMG_RE, checkAvatarAnim } from '../web/js/avatar-rules.js';
 import { PROFILE_KEEP, PROFILE_STALE } from '../worker/profiles.js';
 import { LIMITS } from '../worker/rate.js';
 
@@ -148,8 +148,10 @@ test('uploads are checked: square, sensible sizes, real pictures only, no SVG, a
   const big = new Uint8Array(AVATAR_STILL_MAX + 10);
   big.set(png(128));
   await code({ image: b64(big) }, 413, 'image_too_big');
-  assert.ok(AVATAR_BODY_LIMIT >= Math.ceil(((AVATAR_ANIM_MAX + AVATAR_STILL_MAX) * 4) / 3), 'a full moving picture and its still fit in one request');
-  assert.ok(AVATAR_ANIM_MAX < 1000 * 1024 && AVATAR_STILL_MAX < 1000 * 1024, 'each stored row stays under the 1 MB row limit');
+  assert.ok(AVATAR_BODY_LIMIT >= Math.ceil(((AVATAR_ANIM_MAX + AVATAR_FRAME_MAX) * 4) / 3), 'a full moving picture and its still fit in one request');
+  assert.equal(AVATAR_ANIM_MAX, 5 * 1024 * 1024, 'moving pictures can be up to 5 MB');
+  assert.equal(AVATAR_STILL_MAX, 600 * 1024, 'still pictures can be up to 600 KB');
+  assert.ok(AVATAR_STILL_MAX < 1500 * 1024 && AVATAR_FRAME_MAX < AVATAR_STILL_MAX, 'still pictures stay in one row and the still frame stays small for lists');
   assert.equal(h.db.raw.prepare('SELECT COUNT(*) AS n FROM profile_avatars').get().n, 0);
 });
 

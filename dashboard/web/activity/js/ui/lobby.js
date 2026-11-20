@@ -218,9 +218,40 @@ function twistBlock(specs, values, isHost, onSet) {
   );
 }
 
+export function songOptions(spec) {
+  try {
+    const list = spec && typeof spec.list === 'function' ? spec.list() : [];
+    return Array.isArray(list) ? list.filter((o) => o && typeof o.value === 'string' && typeof o.label === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function songControl(spec, value, isHost, onSet) {
+  const opts = songOptions(spec);
+  const cur = opts.find((o) => o.value === value) || opts[0] || { value: '', label: '' };
+  if (!isHost) return h('span', { class: 'code-value', text: cur.label });
+  return h(
+    'select',
+    {
+      class: ['code-input', 'preset-input'],
+      dataset: { key: `set-${spec.id}` },
+      attrs: { 'aria-label': spec.label },
+      on: { change: (e) => onSet(spec.id, e.currentTarget.value) },
+    },
+    opts.map((o) => h('option', { attrs: o.value === cur.value ? { value: o.value, selected: '' } : { value: o.value }, text: o.label })),
+  );
+}
+
+function songSpecs(games, pick) {
+  const game = (games || []).find((g) => g.id === pick);
+  return ((game && game.settings) || []).filter((s) => s && s.type === 'song');
+}
+
 function settingControl(spec, value, isHost, onSet, drafts) {
   const opts = spec.options || [];
   if (spec.type === 'code') return codeControl(spec, value, isHost, onSet, drafts);
+  if (spec.type === 'song') return songControl(spec, value, isHost, onSet);
   if (spec.type === 'multi') {
     const picked = Array.isArray(value) ? value : [];
     return h(
@@ -339,8 +370,26 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
   let presets = readPresets(store);
   let presetDraft = '';
 
+  let songsBusy = false;
+
+  function view() {
+    const ext = songSpecs(games, last.pick).map((s) => songOptions(s).map((o) => `${o.value}=${o.label}`).join('|'));
+    return { ...last, tab, presets, ext };
+  }
+
   function repaint() {
-    if (last) paint(el, { ...last, tab, presets });
+    if (last) paint(el, view());
+  }
+
+  function wantSongs(m) {
+    if (songsBusy || !m) return;
+    const specs = songSpecs(games, m.pick).filter((s) => typeof s.load === 'function');
+    if (!specs.length) return;
+    songsBusy = true;
+    Promise.all(specs.map((s) => Promise.resolve().then(() => s.load()).catch(() => null))).then(() => {
+      songsBusy = false;
+      repaint();
+    });
   }
 
   function onSavePreset(raw) {
@@ -403,7 +452,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
     tab = id;
     saveTab(store, id);
     cue(sfx, 'toggle');
-    paint(el, { ...last, tab, presets });
+    paint(el, view());
     if (focus) {
       const btn = el.querySelector(`[data-key="tab-${id}"]`);
       if (btn && typeof btn.focus === 'function') btn.focus();
@@ -577,7 +626,7 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       'div',
       { class: 'settings' },
       (game.settings || []).filter((spec) => !isTwist(spec)).map((spec) =>
-        h('div', { class: ['setting', spec.type === 'code' ? 'is-code' : null, `is-${spec.type || 'choice'}`] }, h('span', { class: 'setting-label', text: spec.label }), settingControl(spec, m.settings[spec.id], m.isHost, setSetting, drafts)),
+        h('div', { class: ['setting', spec.type === 'code' || spec.type === 'song' ? 'is-code' : null, `is-${spec.type || 'choice'}`] }, h('span', { class: 'setting-label', text: spec.label }), settingControl(spec, m.settings[spec.id], m.isHost, setSetting, drafts)),
       ),
       twistBlock((game.settings || []).filter(isTwist), m.settings, m.isHost, setSetting),
     );
@@ -620,7 +669,8 @@ export function createLobby({ engine, toast, sfx = defaultSfx, store = defaultSt
       if (draftPick !== last.pick || !last.isHost) drafts.clear();
       draftPick = last.pick;
       settleTab(last);
-      paint(el, { ...last, tab, presets });
+      paint(el, view());
+      wantSongs(last);
       if (!popPending) return;
       popPending = false;
       const tile = el.querySelector('.game-tile.juice-pick');

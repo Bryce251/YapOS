@@ -228,7 +228,7 @@ test('sections can be reordered and hidden from the Layout tab and the order is 
   assert.deepEqual(order().slice(0, 2), ['about', 'badges']);
   click(byLabel(root, 'Move Level and stats down'));
   assert.deepEqual(order(), ['about', 'badges', 'favourites', 'stats', 'achievements', 'placings']);
-  const show = walk(root).find((n) => n.getAttribute?.('aria-label') === 'Show Favourite games');
+  const show = walk(root).find((n) => n.getAttribute?.('aria-label') === 'Show Favorite games');
   click(show);
   assert.deepEqual(sectionsOf(root.querySelector('.pe-preview')), ['about', 'badges', 'stats', 'achievements']);
   click(root.querySelector('.pe-save'));
@@ -247,7 +247,7 @@ test('name colours, custom hex, gradients and fonts update the live preview', as
   const hex = root.querySelector('.pe-hex');
   hex.value = 'nope';
   fire(hex, 'change');
-  assert.match(root.textContent, /Use a colour like/);
+  assert.match(root.textContent, /Use a color like/);
   hex.value = 'FFF';
   fire(hex, 'change');
   assert.equal(preview().style.props['--nc-dark'], '#ffffff');

@@ -91,9 +91,9 @@ const PRESETS = {
     enabled: true,
     config: {
       join: true, leave: true, card: true,
-      joinText: '📜 A new traveller arrives... Welcome, {user}, to **{server}**. Read the lore and craft your character. You are the {count_ord} soul to find us.',
+      joinText: '📜 A new traveler arrives... Welcome, {user}, to **{server}**. Read the lore and craft your character. You are the {count_ord} soul to find us.',
       leaveText: '📜 **{username}** has left the realm. Their tale ends here, for now.',
-      cardTitle: '📜 A traveller arrives',
+      cardTitle: '📜 A traveler arrives',
       dmText: 'Greetings, {username}. The realm of **{server}** awaits. Read the lore before you begin.',
     },
   },

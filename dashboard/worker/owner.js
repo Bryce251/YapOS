@@ -46,7 +46,7 @@ const DIGITS_RE = /^[0-9][0-9,_ ]{0,24}$/;
 const INFINITE_RE = /^[+-]?(inf|infinity|∞)$/i;
 const BODY_FIELDS = new Set(['user', 'kind', 'value', 'id', 'note', 'notify']);
 const MISSING = "That page of the dashboard doesn't exist.";
-const GAVE_UP = "YapOS didn't pick this up within a week, so it was cancelled.";
+const GAVE_UP = "YapOS didn't pick this up within a week, so it was canceled.";
 
 export const OWNER_KINDS = Object.freeze({
   'shards.add': Object.freeze({ label: 'Give Shards', input: 'amount', min: 1, max: 1e12, gift: true }),

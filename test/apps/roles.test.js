@@ -1003,8 +1003,8 @@ test('each button gets its own text, emoji, colour, description and place, and t
   const opened = await h.pick(sel.custom_id, ['1'], admin);
   const view = last(opened);
   assert.match(h.textOf(view), /This is how the button looks/);
-  for (const label of ['Edit text & emoji', 'Up', 'Down', 'Remove', 'Blue', 'Grey', 'Green', 'Red', 'Back']) assert.ok(h.findButton(label, view), label);
-  assert.equal(h.findButton('Grey', view).emoji, '✅', 'the current colour is marked');
+  for (const label of ['Edit text & emoji', 'Up', 'Down', 'Remove', 'Blue', 'Gray', 'Green', 'Red', 'Back']) assert.ok(h.findButton(label, view), label);
+  assert.equal(h.findButton('Gray', view).emoji, '✅', 'the current colour is marked');
   assert.equal(h.findButton('Down', view).disabled, true, 'the last role cannot move down');
 
   const form = await h.click(`yo:roles:itemform:${mid}:1`, admin);
@@ -1113,11 +1113,11 @@ test('accent colour, picture and footer are set from the editor and show on the 
   const h = await createHarness({ apps: ['roles'] });
   const mid = await gamerVipMenu(h);
   const style = await h.click(`yo:roles:tab:${mid}:style`, admin);
-  assert.ok(h.findButton('Accent colour', last(style)));
+  assert.ok(h.findButton('Accent color', last(style)));
   const accForm = await h.click(`yo:roles:accform:${mid}`, admin);
   assert.equal(accForm[0].type, 'modal');
   const badColour = await h.submit('yo:roles:accsave', { color: 'sparkly' }, admin);
-  assert.match(h.textOf(last(badColour)), /don't know the colour/);
+  assert.match(h.textOf(last(badColour)), /don't know the color/);
   assert.equal(menus(h)[mid].color, null);
   await h.submit('yo:roles:accsave', { color: 'Blue' }, admin);
   assert.equal(menus(h)[mid].color, 0x3498db);
@@ -1245,7 +1245,7 @@ test('tabs switch on the same message, highlight the open tab and stay locked to
   const tabStyles = (comps) => comps[0].components.map((b) => [b.label, b.style]);
   assert.deepEqual(tabStyles(last(editor).components), [['Content', 'secondary'], ['Roles', 'primary'], ['Style', 'secondary'], ['Settings', 'secondary']]);
   const before = h.sent(CH.general).length;
-  for (const [tab, label, expect] of [['content', 'Content', /Title & text/], ['style', 'Style', /Accent colour/], ['settings', 'Settings', /Max roles/], ['roles', 'Roles', /Add roles/]]) {
+  for (const [tab, label, expect] of [['content', 'Content', /Title & text/], ['style', 'Style', /Accent color/], ['settings', 'Settings', /Max roles/], ['roles', 'Roles', /Add roles/]]) {
     const ans = await h.click(`yo:roles:tab:${mid}:${tab}`, { ...admin, messageId: panelId });
     assert.equal(ans.length, 1);
     assert.equal(ans[0].type, 'update', tab);

@@ -73,7 +73,7 @@ const OWNER_EFFECTS = Object.freeze(Object.fromEntries(EFFECTS.filter((e) => e.i
 const LOOK_ACTIONS = Object.freeze({
   banner: { part: 'banner', title: (who) => `Remove ${who}'s banner picture?`, body: 'It is deleted straight away and their card goes back to no banner. They can upload a new one. This is written to the mod log.', confirm: 'Remove picture', done: 'Banner picture removed.' },
   text: { part: 'text', title: (who) => `Clear ${who}'s about me and status?`, body: 'Their about me, pronouns and status are emptied straight away. This is written to the mod log.', confirm: 'Clear text', done: 'Profile text cleared.' },
-  theme: { part: 'theme', title: (who) => `Reset ${who}'s profile theme?`, body: 'Their profile page goes back to the normal YapOS colours straight away. This is written to the mod log.', confirm: 'Reset theme', done: 'Profile theme reset.' },
+  theme: { part: 'theme', title: (who) => `Reset ${who}'s profile theme?`, body: 'Their profile page goes back to the normal YapOS colors straight away. This is written to the mod log.', confirm: 'Reset theme', done: 'Profile theme reset.' },
   effect: { part: 'effect', title: (who) => `Turn off ${who}'s profile effect?`, body: 'The effect over their profile page stops straight away. This is written to the mod log.', confirm: 'Turn off effect', done: 'Profile effect turned off.' },
 });
 
@@ -285,7 +285,8 @@ function ownerOnlyView() {
 function staffLinks() {
   return h('div', { class: 'owner-links' },
     linkButton({ label: 'Party reports and bans', href: '/party/reports', icon: 'flag', size: 'sm' }),
-    linkButton({ label: 'Party admins', href: '/party', icon: 'crown', size: 'sm' }));
+    linkButton({ label: 'Party admins', href: '/party', icon: 'crown', size: 'sm' }),
+    linkButton({ label: 'Beat Drop songs', href: '/party/songs', icon: 'volume', size: 'sm' }));
 }
 
 function userRow(u) {

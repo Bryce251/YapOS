@@ -383,7 +383,7 @@ test('mods can end a stuck game; members cannot end someone else\'s', async () =
   const denied = await h.slash('game', `end <@${A}>`, { user: IDS.member2 });
   assert.match(lastText(h, denied), /Needs Mod|Only moderators/);
   const ok = await h.slash('game', `end <@${A}>`, { user: IDS.mod });
-  assert.match(lastText(h, ok), /cancelled and any bets went back/);
+  assert.match(lastText(h, ok), /canceled and any bets went back/);
   await settle();
   assert.match(h.textOf(live(h, msg.id)), /a moderator ended it/);
   assert.equal(eco.bal[A], 100);
@@ -413,7 +413,7 @@ test('restart: clicking an old board cancels it and gives bets back once', async
   withEco(b, eco);
   const res = await b.click(rock, { user: A, messageId: msg.id });
   assert.equal(res[0].type, 'update');
-  assert.match(b.textOf(res[0]), /I restarted, so this game was cancelled/);
+  assert.match(b.textOf(res[0]), /I restarted, so this game was canceled/);
   assert.equal(res[0].components.length, 0);
   assert.equal(eco.bal[A], 100);
   assert.equal(eco.bal[B], 100);
@@ -444,7 +444,7 @@ test('restart: the safety check tidies boards and trivia nobody clicks', async (
   await b.advance(3 * 60_000 + 1000);
   assert.equal(eco.bal[A], 100);
   assert.equal(eco.bal[B], 100);
-  assert.match(b.textOf(live(b, game.id)), /Game cancelled/);
+  assert.match(b.textOf(live(b, game.id)), /Game canceled/);
   assert.equal(live(b, game.id).components.length, 0);
   assert.match(b.textOf(live(b, quiz.id, IDS.channels.news)), /Trivia stopped/);
   assert.deepEqual(b.engine.store.get('games', S).open, {});

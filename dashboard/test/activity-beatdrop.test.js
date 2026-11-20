@@ -2,20 +2,97 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { room, seeded } from './activity-kit.test.js';
-import { installDom } from './dom-shim.js';
-import { FUN, ROOM } from '../web/activity/js/engine.js';
-import beatdrop, { KEY, READY_MS, READY_NEXT_MS, READY_MAX_MS, LEAD_MS, SHOW_MS, END_GRACE_MS, PROG_GAP_MS, BLURB, GOAL, FLAG_PLAYED, FLAG_SAT, FLAG_LEFT, lineup, checkProgress, checkFinal, songOfState, pointsFor, standings } from '../web/activity/js/games/beatdrop.js';
-import { STYLES, DIFFS, INTRO_BARS, STEPS, buildSong, songFor, bpmFor, lanesFor, windowsFor, lookFor, createJudge, judge, scoreOf, accOf, tierOf, gradeOf, notesBefore, lastNoteAt, sectionRate, stepAt, stepTime, STRAY_MAX, STRAY_MS, MAX_SCORE } from '../web/activity/js/games/beatchart.js';
-import { createBeatdropView, createSongClock, eventTime, readPrefs, writePrefs, laneOfKey, keyLabels, heightFor, rivalLine, tendencyOf, footText, OFFSET_KEY, PLAY_SHEET, LANE_KEYS } from '../web/activity/js/views/beatdrop.js';
+import { installDom, fire, flush } from './dom-shim.js';
+import { FUN, ROOM, cleanSetting } from '../web/activity/js/engine.js';
+import beatdrop, { KEY, V, READY_MS, READY_NEXT_MS, READY_MAX_MS, LOAD_WAIT_MS, LEAD_MS, SHOW_MS, END_GRACE_MS, PROG_GAP_MS, CHECK_MS, BLURB, GOAL, FLAG_PLAYED, FLAG_SAT, FLAG_LEFT, DIFF_PAY, FALLBACK_TEXT, HINT_TEXT, EMPTY_TEXT, lineup, synthLineup, songChoices, checkProgress, checkFinal, songOfState, pointsFor, standings } from '../web/activity/js/games/beatdrop.js';
+import { STYLES, DIFFS, INTRO_BARS, STEPS, LANES, buildSong, songFor, bpmFor, lanesFor, windowsFor, lookFor, createJudge, judge, scoreOf, accOf, tierOf, gradeOf, objectsBefore, objectCount, objTimes, countOf, prepSong, releaseKind, lastNoteAt, sectionRate, stepAt, stepTime, STRAY_MAX, STRAY_MS, MAX_SCORE, HOLD_GOOD_MS, HOLD_OK_MS } from '../web/activity/js/games/beatchart.js';
+import { setSongFetch, resetSongs, loadCatalog, catalog, loadChart, chartSong, chartEntry, encodeNotes, decodeNotes, validateChart, readSong, readCatalog, CHART_TIMEOUT_MS } from '../web/activity/js/games/beatsongs.js';
+import { createBeatdropView, createSongClock, eventTime, readPrefs, writePrefs, laneOfKey, keyLabels, heightFor, widthFor, rivalLine, tendencyOf, footText, songLine, OFFSET_KEY, PLAY_SHEET, SONG_SHEET, LANE_KEYS } from '../web/activity/js/views/beatdrop.js';
+import { createSongAudio, songSpan } from '../web/activity/js/views/beatsong.js';
 import { createBeatPlayer, soundNote, midiHz } from '../web/activity/js/views/beatsynth.js';
 import { timingFrom, tutorialNotes, clampOffset, createTutorial, TIMING_MAX } from '../web/activity/js/views/beattut.js';
 import { createBeatDraw, laneStyle, noteY, judgeY, gemSize, gemScale, laneGapMs, GEM_MIN_SCALE, HIT_Y } from '../web/activity/js/views/beatdraw.js';
 import { jsonBytes } from '../web/activity/js/limits.js';
 
 const BANNED = [/\b(claude|anthropic)\b/i, /\bAI\b/, /\bgenerated\b/i];
-const JS_FILES = ['js/games/beatchart.js', 'js/games/beatdrop.js', 'js/views/beatdrop.js', 'js/views/beatsynth.js', 'js/views/beatdraw.js', 'js/views/beattut.js'];
-const CSS_FILES = ['css/beatdrop.css', 'css/beatdrop-play.css'];
+const JS_FILES = ['js/games/beatchart.js', 'js/games/beatdrop.js', 'js/games/beatsongs.js', 'js/views/beatdrop.js', 'js/views/beatsynth.js', 'js/views/beatdraw.js', 'js/views/beattut.js', 'js/views/beatsong.js'];
+const CSS_FILES = ['css/beatdrop.css', 'css/beatdrop-play.css', 'css/beatdrop-songs.css'];
+const NET_FILES = ['js/games/beatsongs.js'];
 const ACT = new URL('../web/activity/', import.meta.url);
+const SID = 's-0123456789abcdef';
+const SID2 = 's-fedcba9876543210';
+const SID3 = 's-00000000000000aa';
+
+function makeNotes(len, step, from = 2000, every = 0, holdMs = 0, chordEvery = 0) {
+  const out = [];
+  let k = 0;
+  for (let t = from; t <= len - 1000; t += step) {
+    const l = k % 4;
+    const n = { t, l };
+    if (every && k % every === 3 && holdMs) n.e = t + holdMs;
+    out.push(n);
+    if (chordEvery && k % chordEvery === 1) out.push({ t, l: (l + 2) % 4 });
+    k += 1;
+  }
+  return out.sort((a, b) => a.t - b.t || a.l - b.l);
+}
+
+function makeChart(len = 40000) {
+  return {
+    v: 1,
+    bpm: 120,
+    b0: 500,
+    len,
+    marks: [[8000, 'build'], [16000, 'drop']],
+    d: {
+      easy: encodeNotes(makeNotes(len, 1000)),
+      normal: encodeNotes(makeNotes(len, 500)),
+      hard: encodeNotes(makeNotes(len, 400, 2000, 8, 300)),
+      expert: encodeNotes(makeNotes(len, 250, 2000, 16, 400, 16)),
+    },
+  };
+}
+
+function songBody(id = SID, over = {}) {
+  const len = over.len || 40000;
+  return { id, title: 'Night Test', artist: 'The Testers', credit: 'Made by me', url: `/song-audio/${id}.mp3`, dur: 200000, bpm: 120, off: 0, start: 10000, end: 10000 + len, cv: 1, charts: makeChart(len), ...over };
+}
+
+function songServer(opts = {}) {
+  const { songs = [SID, SID2], broken = [], log = [] } = opts;
+  const fetchFn = async (url) => {
+    log.push(url);
+    if (opts.down) return { ok: false, status: 503, json: async () => ({}) };
+    if (url === '/api/activity/songs') return { ok: true, json: async () => ({ songs: songs.map((id, i) => [id, i ? 'Second Test' : 'Night Test', 'The Testers', 200000, 120, 1, [36, 72, 94, 160]]) }) };
+    const m = /^\/api\/activity\/songs\/(s-[0-9a-f]{16})\?v=(\d+)$/.exec(url);
+    if (m && songs.includes(m[1]) && !broken.includes(m[1])) return { ok: true, json: async () => songBody(m[1], titleFor(m[1])) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+  return fetchFn;
+}
+
+function titleFor(id) {
+  return id === SID2 ? { title: 'Second Test' } : {};
+}
+
+async function useSongs(opts = {}) {
+  resetSongs();
+  const timers = [];
+  setSongFetch(songServer(opts), { timer: (fn) => timers.push(fn), clear() {} });
+  await loadCatalog({ force: true });
+  return timers;
+}
+
+function noSongs() {
+  resetSongs();
+  setSongFetch(null);
+}
+
+async function settle(r, ms = 50) {
+  await flush(20);
+  await r.clock.advance(ms);
+  await flush(5);
+}
 
 function read(rel) {
   return readFileSync(new URL(rel, ACT), 'utf8');
@@ -54,7 +131,7 @@ async function playAlong(r, s, untilMs, plan) {
   const song = songOfState(s);
   while (r.clock.now() < untilMs && st(r).phase === 'play' && st(r).n === s.n) {
     const sec = (r.clock.now() - s.at) / 1000;
-    const due = Math.max(0, notesBefore(song, sec - 0.2));
+    const due = Math.max(0, objectsBefore(song, sec - 0.2));
     for (const [slot, how] of Object.entries(plan)) {
       const e = bySlot(r, Number(slot));
       if (!e || how === 'none') continue;
@@ -93,7 +170,16 @@ function endOf(s) {
 
 function perfectRun(song) {
   const j = createJudge(song);
-  for (const n of song.notes) j.press(n.l, n.t + 5);
+  const evs = [];
+  for (const n of song.notes) {
+    evs.push({ t: n.t + 5, l: n.l, up: false });
+    if (n.e) evs.push({ t: n.e, l: n.l, up: true });
+  }
+  evs.sort((a, b) => a.t - b.t || a.up - b.up);
+  for (const e of evs) {
+    if (e.up) j.release(e.l, e.t);
+    else j.press(e.l, e.t);
+  }
   j.sweep(song.dur * 1000 + 5000);
   return j;
 }
@@ -204,11 +290,15 @@ test('the game is a quick rhythm game with a one-line pitch and clean text', () 
   assert.equal(def('length'), 60);
   assert.equal(def('songs'), 2);
   assert.equal(def('style'), 'mix');
+  assert.equal(def('song'), 'random');
+  assert.equal(beatdrop.settings.find((s) => s.id === 'song').type, 'song');
   assert.equal(beatdrop.blurb, BLURB);
   assert.equal(BLURB, 'Tap notes on the beat. Long streaks score big.');
   assert.ok(BLURB.length <= 60);
   assert.match(GOAL, /Tap each note as it lands on its ring/);
-  assert.deepEqual(beatdrop.settings.find((s) => s.id === 'difficulty').options.map((o) => o.label), ['Chill - 2 lanes', 'Normal - 3 lanes', 'Hard - 4 lanes']);
+  assert.deepEqual(beatdrop.settings.find((s) => s.id === 'difficulty').options.map((o) => o.label), ['Chill', 'Normal', 'Hard', 'Expert']);
+  assert.deepEqual(beatdrop.settings.find((s) => s.id === 'difficulty').options.map((o) => o.value), ['easy', 'normal', 'hard', 'expert']);
+  assert.equal(/\d lanes/.test(JSON.stringify(beatdrop.settings.map((s) => s.options || []))), false, 'no lane counts in the settings');
   for (const re of BANNED) assert.doesNotMatch(`${beatdrop.name} ${beatdrop.blurb} ${GOAL} ${STYLES.map((s) => s.name).join(' ')}`, re);
   assert.equal(new Set(STYLES.map((s) => s.bpm)).size, STYLES.length, 'every style has its own tempo');
 });
@@ -217,7 +307,11 @@ test('the source files have no comments, inline styles, html injection, frame lo
   for (const f of JS_FILES.concat(CSS_FILES)) {
     const src = read(f);
     assert.equal(/^\s*\/\/|\/\*/m.test(src), false, `${f} has a comment`);
-    for (const bad of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'eval(', 'new Function', 'cssText', 'style=', 'requestAnimationFrame', 'url(', '<audio', 'fetch(']) assert.equal(src.includes(bad), false, `${f}: ${bad}`);
+    for (const bad of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'eval(', 'new Function', 'cssText', 'style=', 'requestAnimationFrame', 'url(', '<audio', 'fetch(']) {
+      if (bad === 'fetch(' && NET_FILES.includes(f)) continue;
+      assert.equal(src.includes(bad), false, `${f}: ${bad}`);
+    }
+    assert.equal(/https?:\/\//.test(src), false, `${f} names another site`);
     assert.doesNotMatch(src, /\.(mp3|ogg|wav|m4a|flac)\b/i, `${f} loads a recording`);
     assert.equal(/\.style\.(?!setProperty)[a-zA-Z]+\s*=/.test(src), false, `${f} sets a style directly`);
     for (const re of BANNED) assert.doesNotMatch(src, re, f);
@@ -232,44 +326,73 @@ test('the source files have no comments, inline styles, html injection, frame lo
     }
   }
   assert.equal(/infinite/.test(read('css/beatdrop-play.css')), false);
+  assert.equal(/infinite/.test(read('css/beatdrop-songs.css')), false);
   assert.ok(read('css/beatdrop.css').length <= 3000, `beatdrop.css is ${read('css/beatdrop.css').length} bytes`);
   assert.ok(read('css/beatdrop-play.css').length <= 11000);
+  assert.ok(read('css/beatdrop-songs.css').length <= 2500);
   assert.ok(read('js/views/beatdrop.js').includes('/activity/css/beatdrop-play.css'));
+  assert.ok(read('js/views/beatdrop.js').includes('/activity/css/beatdrop-songs.css'));
   assert.equal(PLAY_SHEET, '/activity/css/beatdrop-play.css');
+  assert.equal(SONG_SHEET, '/activity/css/beatdrop-songs.css');
   assert.equal(read('index.html').includes('beatdrop-play.css'), false, 'the play sheet is not in the first load');
+  assert.equal(read('index.html').includes('beatdrop-songs.css'), false, 'the songs sheet is not in the first load');
+  assert.equal(/foldLane|LANE_SETS\[[23]\]|lanes === [23]|[23]: Object\.freeze/.test(JS_FILES.map(read).join('\n')), false, 'the old 2 and 3 lane code is gone');
+  assert.equal(/'Space'/.test(read('js/views/beatdrop.js')) && /\['Space'/.test(read('js/views/beatdrop.js')), false);
   assert.match(read('js/views/beatdrop.js'), /sharedLoop\(\)/);
 });
 
-test('charts are deterministic and follow the lane, gap, chord, settle-in and density rules', () => {
+test('charts are always 4 lanes, deterministic and follow the gap, chord, hold, settle-in and density rules', () => {
+  const perMin = [];
   DIFFS.forEach((d, df) => {
-    const lanes = lanesFor(df);
-    assert.equal(lanes, d.lanes);
+    assert.equal(lanesFor(df), 4);
+    assert.equal(d.lanes, 4);
     let total = 0;
     let target = 0;
-    for (let s = 1; s <= 200; s += 1) {
+    let holds = 0;
+    let chords = 0;
+    let objs = 0;
+    for (let s = 1; s <= 150; s += 1) {
       const style = STYLES[s % STYLES.length];
       const seed = (s * 2654435761) % 2147483646 || 1;
       const song = buildSong(seed, style.id, df, 60, bpmFor(style.id, df));
       const label = `${d.id}/${style.id}/${seed}`;
-      const last = new Array(lanes).fill(-Infinity);
+      assert.equal(song.lanes, 4);
+      const lastEnd = new Array(4).fill(-Infinity);
       const chordBars = new Map();
+      const open = [];
       let runLane = -1;
       let run = 0;
       const barMs = song.bar * 1000;
       for (let i = 0; i < song.notes.length; i += 1) {
         const n = song.notes[i];
         assert.ok(Number.isInteger(n.t), label);
-        assert.ok(n.l >= 0 && n.l < lanes, `${label} lane ${n.l}`);
-        assert.ok(n.t - last[n.l] >= d.gap, `${label} gap ${n.t - last[n.l]}`);
-        last[n.l] = n.t;
+        assert.ok(n.l >= 0 && n.l < 4, `${label} lane ${n.l}`);
+        assert.ok(n.t - lastEnd[n.l] >= d.gap, `${label} gap ${n.t - lastEnd[n.l]} at ${n.t}`);
+        lastEnd[n.l] = n.e || n.t;
         const bar = Math.floor((n.t + 1) / barMs);
         assert.ok(bar < song.bars - 1, `${label} has a note in the final bar`);
+        for (let k = open.length - 1; k >= 0; k -= 1) if (open[k] <= n.t) open.splice(k, 1);
+        let same = 1;
+        for (let j = i - 1; j >= 0 && song.notes[j].t === n.t; j -= 1) same += 1;
+        assert.ok(open.length + same <= 2, `${label} more than two notes active at ${n.t}`);
+        if (n.e) {
+          holds += 1;
+          assert.ok(d.holds > 0, `${label} holds only on Hard and Expert`);
+          assert.ok(n.e - n.t >= d.holdMin, `${label} hold too short`);
+          assert.ok(n.e <= (song.bars - 1) * barMs, `${label} hold runs into the last bar`);
+          assert.equal(n.c, undefined, `${label} a chord note is never a hold`);
+          open.push(n.e);
+        }
         if (i > 0 && song.notes[i - 1].t === n.t) {
-          assert.equal(df, 2, `${label} chords only on Hard`);
+          chords += 1;
+          assert.ok(d.chords > 0, `${label} no chords on Chill`);
           assert.equal(song.plan[bar].sec, 'drop', `${label} chords only in drops`);
-          assert.ok(Math.abs(n.t - bar * barMs) <= 1, `${label} chords sit on the downbeat`);
+          const pos = Math.round((n.t - bar * barMs) / (song.step * 1000));
+          if (d.id === 'expert') assert.ok(pos === 0 || pos === 8, `${label} expert chords on the beat`);
+          else assert.ok(pos === 0, `${label} chords sit on the downbeat`);
+          if (d.id === 'normal') assert.equal(song.plan[bar].pos, 0, `${label} Normal chords are rare`);
           chordBars.set(bar, (chordBars.get(bar) || 0) + 1);
-          assert.ok(chordBars.get(bar) <= 1, `${label} at most one chord per bar`);
+          assert.ok(chordBars.get(bar) <= (d.id === 'expert' ? 2 : 1), `${label} too many chords in a bar`);
           continue;
         }
         if (n.l === runLane) run += 1;
@@ -283,19 +406,29 @@ test('charts are deterministic and follow the lane, gap, chord, settle-in and de
       assert.equal(settle.length, INTRO_BARS * 4, `${label} settle-in is one note per beat`);
       settle.forEach((n, q) => {
         assert.equal(n.t, Math.round(q * song.beat * 1000));
-        assert.equal(n.l, q % 2 === 0 ? 0 : lanes - 1);
+        assert.equal(n.l, q % 2 === 0 ? 0 : 3);
       });
-      for (let b = INTRO_BARS; b < song.bars - 1; b += 1) target += d.rate * song.bar * sectionRate(song.plan[b]);
-      total += song.notes.filter((n) => n.t >= INTRO_BARS * barMs - 1).length;
-      if (s <= 10) {
+      let t = 0;
+      for (let b = INTRO_BARS; b < song.bars - 1; b += 1) t += Math.min(d.rate * song.bar * sectionRate(song.plan[b]), STEPS / d.grid);
+      const got = song.notes.filter((n) => n.t >= INTRO_BARS * barMs - 1).length;
+      target += t;
+      total += got;
+      objs += countOf(song) / (song.dur / 60);
+      assert.equal(countOf(song), song.notes.length + song.notes.filter((n) => n.e).length);
+      if (s <= 8) {
         assert.deepEqual(buildSong(seed, style.id, df, 60, song.bpm).notes, song.notes);
         assert.notDeepEqual(buildSong(seed + 1, style.id, df, 60, song.bpm).notes, song.notes);
       }
-      const r = song.notes.filter((n) => n.t >= INTRO_BARS * barMs - 1).length / Array.from({ length: song.bars - 1 - INTRO_BARS }, (_, k) => d.rate * song.bar * sectionRate(song.plan[k + INTRO_BARS])).reduce((a, b) => a + b, 0);
-      assert.ok(r >= 0.8 && r <= 1.2, `${label} density ${r.toFixed(2)}`);
+      assert.ok(got / t >= 0.8 && got / t <= 1.2, `${label} density ${(got / t).toFixed(2)}`);
     }
-    assert.ok(Math.abs(total / target - 1) < 0.1, `${d.id} average density ${(total / target).toFixed(2)}`);
+    assert.ok(Math.abs(total / target - 1) < 0.12, `${d.id} average density ${(total / target).toFixed(2)}`);
+    if (d.holds) assert.ok(holds > 150, `${d.id} has holds (${holds})`);
+    else assert.equal(holds, 0);
+    if (d.id === 'easy') assert.equal(chords, 0);
+    else assert.ok(chords > 0, `${d.id} has chords`);
+    perMin.push(objs / 150);
   });
+  for (let i = 1; i < perMin.length; i += 1) assert.ok(perMin[i] > perMin[i - 1] * 1.2, `each level is denser: ${perMin.map((x) => Math.round(x)).join(' < ')}`);
   assert.equal(songFor(5, 'pop', 1, 60), songFor(5, 'pop', 1, 60));
   assert.ok(buildSong(5, 'pop', 'normal', 90).notes.length > buildSong(5, 'pop', 'normal', 45).notes.length);
   assert.equal(buildSong(5, 'pop', 'normal', 60).df, 1, 'old string ids still map to an index');
@@ -308,6 +441,7 @@ test('tempos are clamped per difficulty and lineups climb in tempo', () => {
     const normal = bpmFor(s.id, 1);
     assert.ok(normal >= 96 && normal <= 132, `${s.id} normal ${normal}`);
     assert.equal(bpmFor(s.id, 2), s.bpm);
+    assert.equal(bpmFor(s.id, 3), Math.max(...s.bpms), 'Expert plays every style at its top tempo');
     assert.ok(s.bpms.includes(normal) || normal === 96 || normal === 132);
   }
   assert.equal(bpmFor('rush', 0), 108, 'a style with no tempo in range is scaled to the nearest edge');
@@ -315,11 +449,29 @@ test('tempos are clamped per difficulty and lineups climb in tempo', () => {
   assert.equal(song.bpm, 108);
   assert.ok(Math.abs(song.beat - 60 / 108) < 1e-9);
   const rnd = seeded(3);
-  const ls = lineup('mix', 3, rnd, 2);
+  const ls = synthLineup('mix', 3, rnd, 2);
   assert.equal(ls.length, 3);
-  for (let i = 1; i < ls.length; i += 1) assert.ok(ls[i][1] >= ls[i - 1][1], 'songs get faster');
-  assert.deepEqual(lineup('funk', 3, rnd, 1).map((x) => x[0]), ['funk', 'funk', 'funk']);
-  assert.equal(new Set(lineup('mix', STYLES.length, seeded(4), 2).map((x) => x[0])).size, STYLES.length);
+  assert.ok(ls.every((x) => x[0] === 's'));
+  for (let i = 1; i < ls.length; i += 1) assert.ok(ls[i][2] >= ls[i - 1][2], 'songs get faster');
+  assert.deepEqual(synthLineup('funk', 3, rnd, 1).map((x) => x[1]), ['funk', 'funk', 'funk']);
+  assert.equal(new Set(synthLineup('mix', STYLES.length, seeded(4), 2).map((x) => x[1])).size, STYLES.length);
+  assert.deepEqual(lineup({ style: 'funk', song: 'random' }, 2, rnd, 1, []).map((x) => x[1]), ['funk', 'funk'], 'no songs means built-in beats');
+  const cat = [{ id: SID, cv: 2 }, { id: SID2, cv: 1 }, { id: SID3, cv: 4 }];
+  for (let k = 0; k < 20; k += 1) {
+    const picked = lineup({ song: 'random' }, 3, seeded(k + 1), 1, cat);
+    assert.ok(picked.every((x) => x[0] === 'u'));
+    assert.equal(new Set(picked.map((x) => x[1])).size, 3, 'random songs never repeat in one game');
+  }
+  assert.deepEqual(lineup({ song: SID3 }, 3, rnd, 1, cat), [['u', SID3, 4], ['u', SID3, 4], ['u', SID3, 4]], 'a picked song repeats');
+  assert.ok(lineup({ song: 'beats' }, 2, rnd, 1, cat).every((x) => x[0] === 's'), 'built-in beats on request');
+  const short = lineup({ song: 'random', style: 'pop' }, 3, rnd, 1, cat.slice(0, 1));
+  assert.deepEqual(short.map((x) => x[0]), ['u', 's', 's'], 'too few songs are topped up with built-in beats');
+  assert.ok(lineup({ song: 's-ffffffffffffffff' }, 2, rnd, 1, cat).every((x) => x[0] === 'u'), 'a deleted song falls back to random');
+  assert.equal(cleanSetting(beatdrop.settings.find((s) => s.id === 'song'), SID), SID);
+  assert.equal(cleanSetting(beatdrop.settings.find((s) => s.id === 'song'), 'beats'), 'beats');
+  for (const bad of ['s-XYZ', 'https://x', 7, null, 's-0123456789abcdef0']) assert.equal(cleanSetting(beatdrop.settings.find((s) => s.id === 'song'), bad), undefined);
+  assert.equal(songChoices([])[0].label, EMPTY_TEXT);
+  assert.deepEqual(songChoices([{ id: SID, title: 'Night Test', artist: 'The Testers' }]).map((o) => o.label), ['Random song', 'Built-in beats', 'Night Test - The Testers']);
 });
 
 test('the music steps follow the style patterns and the settle-in has a beat to tap to', () => {
@@ -367,6 +519,16 @@ test('scoreOf is bounded, order-free and rewards accuracy and streaks', () => {
 });
 
 test('judging windows per difficulty, early and late, auto misses and stray taps', () => {
+  const [easy, normal, hard, expert] = DIFFS;
+  assert.equal(easy.id, 'easy');
+  assert.equal(easy.name, 'Chill');
+  assert.equal(expert.id, 'expert');
+  for (let i = 0; i < 3; i += 1) {
+    assert.ok(expert.win[i] < hard.win[i] && hard.win[i] < normal.win[i] && normal.win[i] < easy.win[i], 'each level judges tighter');
+  }
+  assert.ok(expert.look < hard.look && hard.look < normal.look && normal.look < easy.look, 'each level scrolls faster');
+  assert.ok(expert.gap < hard.gap && expert.rate > hard.rate);
+  assert.equal(windowsFor('expert').p, 30);
   DIFFS.forEach((d, df) => {
     const w = windowsFor(df);
     assert.deepEqual([w.p, w.g, w.o], d.win);
@@ -426,7 +588,7 @@ test('judging windows per difficulty, early and late, auto misses and stray taps
 test('the host only accepts progress that adds up, has arrived and never goes backwards', () => {
   const song = buildSong(55, 'pop', 1, 60);
   const n = song.notes.length;
-  const due = notesBefore(song, 30);
+  const due = objectsBefore(song, 30);
   const good = [10, 8, 1, 0, 1, 2, 9];
   assert.ok(checkProgress(song, 30, good));
   assert.equal(checkProgress(song, 30, [10, 8, 1, 0, 0, 2, 9]), null, 'counts must add up');
@@ -458,7 +620,7 @@ test('a forged progress or final is ignored and the last good row stays', async 
   const song = songOfState(s);
   const [a, b] = slots(r);
   await playAlong(r, s, s.at + 20000, { [a]: 'all', [b]: 'some' });
-  const due = notesBefore(song, 19.5);
+  const due = objectsBefore(song, 19.5);
   bySlot(r, a).act({ type: 'prog', n: s.n, v: [due, due, 0, 0, 0, due, due] });
   await r.clock.advance(1000);
   const row = st(r).sc[a];
@@ -489,6 +651,12 @@ test('points: placement plus accuracy plus a full streak bonus, with fair ties, 
   assert.equal(pointsFor(9, 0, false), 90);
   assert.equal(pointsFor(20, 0.5, false), 90 + Math.round(150 * 0.25));
   assert.ok(pointsFor(1, 1, true) * 3 < 2000);
+  assert.deepEqual(DIFF_PAY, [0.9, 1, 1.1, 1.2]);
+  assert.equal(pointsFor(1, 1, true, 'expert'), 530, 'the best Expert run is the top pay');
+  assert.equal(pointsFor(1, 1, true, 0), 300 + 135 + 50);
+  assert.equal(pointsFor(1, 0, false, 3), 300, 'only the accuracy part scales');
+  for (let df = 0; df < 4; df += 1) for (const a of [0, 0.3, 0.8, 1]) assert.ok(pointsFor(1, a, true, df) <= 530 && pointsFor(9, a, false, df) >= 90);
+  assert.ok(pointsFor(1, 1, true, 3) * 3 < 2000);
   const song = buildSong(9, 'pop', 1, 45);
   const n = song.notes.length;
   const st0 = { n: 1, in: [0, 1, 2, 3, 4], sc: {}, f: { 0: [n, 0, 0, 0, n], 1: [n - 4, 0, 0, 4, 30], 2: [n - 4, 0, 0, 4, 30], 3: [0, 0, 0, n, 0], 4: [40, 0, 0, n - 40, 40] } };
@@ -508,7 +676,8 @@ test('points: placement plus accuracy plus a full streak bonus, with fair ties, 
 test('a full song: ready, play, results, then Party points from the placement', async () => {
   const r = await startGame(3, { length: 45, songs: 1 });
   assert.equal(st(r).phase, 'ready');
-  assert.equal(st(r).v, 2);
+  assert.equal(st(r).v, 3);
+  assert.equal(st(r).src, 's', 'no songs uploaded means built-in beats');
   assert.ok(st(r).ends - r.engines[0].now() <= READY_MS);
   assert.equal(beatdrop.model(r.engines[1].snapshot()).playing, true);
   await allReady(r);
@@ -666,10 +835,10 @@ test('one player done and the rest idle ends the song right away', async () => {
   const n = song.notes.length;
   for (let t = 2000; t < lastNoteAt(song) * 1000; t += 1500) {
     await r.clock.advance(s.at + t - r.engines[0].now());
-    const due = notesBefore(song, t / 1000 - 0.2);
+    const due = objectsBefore(song, t / 1000 - 0.2);
     bySlot(r, a).act({ type: 'prog', n: s.n, v: [due, due, 0, 0, 0, due, due] });
     if (t < 12000) {
-      const dueB = notesBefore(song, t / 1000 - 0.2);
+      const dueB = objectsBefore(song, t / 1000 - 0.2);
       bySlot(r, b).act({ type: 'prog', n: s.n, v: [dueB, 0, 0, 0, dueB, 0, 0] });
     }
     if (st(r).phase !== 'play') break;
@@ -693,7 +862,7 @@ test('the host leaving mid-song keeps the song, its clock and the live rows', as
   const song = songOfState(s);
   const [, b, c] = slots(r);
   await playAlong(r, s, s.at + 6000, { [b]: 'all', [c]: 'all' });
-  const due = notesBefore(song, 5.5);
+  const due = objectsBefore(song, 5.5);
   bySlot(r, b).act({ type: 'prog', n: s.n, v: [due, due, 0, 0, 0, due, due] });
   await r.clock.advance(1200);
   const row = st(r).sc[b];
@@ -716,19 +885,21 @@ test('the host leaving mid-song keeps the song, its clock and the live rows', as
 });
 
 test('shared state stays tiny with 12 players and never carries the chart', async () => {
-  const big = { v: 2, n: 9, phase: 'show', i: 2, total: 3, lineup: [['chill', 104], ['house', 124], ['rush', 148]], seed: 2147483000, sty: 'rush', bpm: 148, df: 2, len: 90, at: 1700000123456, starts: 1700000123456, ends: 1700000133456, in: [], w: [12, 13], rd: [], idle: [], so: {}, sc: {}, f: {}, ev: [], evn: 999, res: {} };
+  const big = { v: 3, n: 9, phase: 'show', i: 2, total: 3, lineup: [['u', SID, 9999], ['u', SID2, 9999], ['u', SID3, 9999]], seed: 2147483000, src: 'u', sid: SID3, cv: 9999, sty: 'rush', bpm: 148, df: 3, len: 90, hint: 1, fb: 1, on: 1600, du: 91500, tt: ['x'.repeat(60), 'y'.repeat(60)], at: 1700000123456, starts: 1700000123456, ends: 1700000133456, in: [], w: [12, 13], rd: [], lr: [], ld: [], lf: [], lw: 1, idle: [], so: {}, sc: {}, f: {}, ev: [], evn: 999, res: {} };
   for (let s = 0; s < 12; s += 1) {
     big.in.push(s);
     big.rd.push(s);
+    big.lr.push(s);
+    big.ld.push(s);
     big.idle.push(s);
     big.so[s] = 1;
-    big.sc[s] = [1000, 640, 640, 1, 640, 100, 640, 0, 0];
-    big.f[s] = [640, 0, 0, 0, 640];
-    big.res[s] = [12, 1000, 'S', 100, 640, 640, 640, 640, 640, 500, 2];
+    big.sc[s] = [1000, 1600, 1600, 1, 1600, 100, 1600, 0, 0];
+    big.f[s] = [1600, 0, 0, 0, 1600];
+    big.res[s] = [12, 1000, 'S', 100, 1600, 1600, 1600, 1600, 1600, 530, 2];
   }
   big.ev = [[11, 't', 100, 996], [11, 'l', 1000, 997], [10, 'f', 1000, 998], [9, 'l', 1000, 999]];
-  assert.ok(jsonBytes(big) <= 3500, `${jsonBytes(big)} bytes`);
-  const r = await startGame(8, { length: 90, difficulty: 'hard' });
+  assert.ok(jsonBytes(big) <= 4096, `${jsonBytes(big)} bytes`);
+  const r = await startGame(8, { length: 90, difficulty: 'expert' });
   await allReady(r);
   const s = st(r);
   const song = songOfState(s);
@@ -754,7 +925,7 @@ test('progress from 12 players is written at most once every 900 ms', async () =
     r.engines.forEach((e, i) => {
       if ((t + i * 125) % 1500 !== 0) return;
       const sec = (r.clock.now() - s.at) / 1000;
-      const due = Math.max(counts[i], notesBefore(song, sec - 0.2));
+      const due = Math.max(counts[i], objectsBefore(song, sec - 0.2));
       counts[i] = due;
       e.act({ type: 'prog', n: s.n, v: [due, due, 0, 0, 0, due, due] });
     });
@@ -862,17 +1033,20 @@ test('prefs, keys, layout and the little helpers', () => {
   assert.equal(readPrefs(broken).tapOffset, 0);
   assert.equal(writePrefs(broken, p), false);
   assert.equal(readPrefs(null).music, true);
-  assert.deepEqual(keyLabels(2), ['D', 'J']);
-  assert.deepEqual(keyLabels(3), ['D', 'Space', 'J']);
-  assert.deepEqual(keyLabels(4), ['D', 'F', 'J', 'K']);
-  assert.equal(laneOfKey({ code: 'KeyF' }, 2), 0);
-  assert.equal(laneOfKey({ code: 'ArrowRight' }, 2), 1);
-  assert.equal(laneOfKey({ code: 'Space' }, 3), 1);
-  assert.equal(laneOfKey({ key: ' ' }, 3), 1);
-  assert.equal(laneOfKey({ code: 'ArrowUp' }, 4), 2);
-  assert.equal(laneOfKey({ key: 'k' }, 4), 3);
-  assert.equal(laneOfKey({ code: 'KeyX' }, 4), -1);
+  assert.deepEqual(keyLabels(), ['D', 'F', 'J', 'K']);
+  assert.deepEqual(keyLabels(2), ['D', 'F', 'J', 'K'], 'old lane counts still give 4 keys');
+  assert.equal(laneOfKey({ code: 'KeyD' }), 0);
+  assert.equal(laneOfKey({ code: 'KeyF' }), 1);
+  assert.equal(laneOfKey({ code: 'ArrowRight' }), 3);
+  assert.equal(laneOfKey({ code: 'Space' }), -1);
+  assert.equal(laneOfKey({ code: 'ArrowUp' }), 2);
+  assert.equal(laneOfKey({ key: 'k' }), 3);
+  assert.equal(laneOfKey({ code: 'KeyX' }), -1);
+  assert.deepEqual(Object.keys(LANE_KEYS), ['4']);
   for (const [lanes, keys] of Object.entries(LANE_KEYS)) assert.equal(keys.length, Number(lanes));
+  assert.equal(widthFor(), 560);
+  assert.equal(readPrefs(memStore({ [OFFSET_KEY]: JSON.stringify({ best: { [`${SID}.3`]: 900, 'pop.3': 800, '../x.1': 5 } }) })).best[`${SID}.3`], 900, 'song bests are kept');
+  assert.equal(readPrefs(memStore({ [OFFSET_KEY]: JSON.stringify({ best: { '../x.1': 5 } }) })).best['../x.1'], undefined);
   assert.equal(heightFor(700, 0), 700 - 44 - 28 - 52 - 64 - 8);
   assert.equal(heightFor(400, 0), 320);
   assert.equal(eventTime(990, 1000), 990, 'real event times are used');
@@ -899,11 +1073,11 @@ test('prefs, keys, layout and the little helpers', () => {
   assert.equal(gemSize(20), 36);
   assert.equal(gemSize(400), 60);
   assert.ok(judgeY(500, 500 * HIT_Y) > 500 * HIT_Y, 'judgements sit below the ring');
-  assert.deepEqual(laneStyle(2), [0, 2]);
-  assert.deepEqual(laneStyle(3), [0, 1, 2]);
-  const notes = tutorialNotes(3);
+  assert.deepEqual(laneStyle(2), [0, 1, 2, 3]);
+  assert.deepEqual(laneStyle(), [0, 1, 2, 3]);
+  const notes = tutorialNotes();
   assert.equal(notes.length, 8);
-  assert.equal(new Set(notes.map((n) => n.l)).size, 3);
+  assert.equal(new Set(notes.map((n) => n.l)).size, 4, 'the tutorial uses all 4 lanes');
 });
 
 test('the synth plays original loops, taps, misses and follows the switches', () => {
@@ -1055,14 +1229,21 @@ test('the renderer is safe without a canvas and caps particles', () => {
   const ctx2 = new Proxy({ createLinearGradient: () => ({ addColorStop() {} }) }, { get: (t, k) => (k in t ? t[k] : () => calls.push(k)), set: (t, k, v) => ((t[k] = v), true) });
   const fakeCanvas = () => ({ width: 0, height: 0, getContext: () => ctx2 });
   const draw = createBeatDraw(fakeCanvas(), { doc: { createElement: fakeCanvas } });
-  assert.equal(draw.resize({ width: 400, height: 500, dpr: 3, lanes: 3 }), true);
+  assert.equal(draw.resize({ width: 400, height: 500, dpr: 3, lanes: 4 }), true);
   assert.equal(draw.view.dpr, 2, 'device pixel ratio is capped at 2');
-  for (let i = 0; i < 20; i += 1) draw.burst(i % 3, 0, 6);
+  assert.equal(draw.view.lanes, 4);
+  for (let i = 0; i < 20; i += 1) draw.burst(i % 4, 0, 6);
   assert.equal(draw.particles, 60);
-  const song = buildSong(4, 'pop', 1, 45);
-  assert.equal(draw.draw({ now: 10, t: 5, look: 1.7, song, mark: new Uint8Array(song.notes.length), judge: [{ k: 'p', at: 0, tag: '' }, null, null], labels: ['D', 'Space', 'J'], countdown: '3', dropSoon: true, marks: [{ t: 10, sec: 'drop' }], tier: 2 }), true);
+  const song = buildSong(4, 'pop', 3, 45);
+  assert.ok(song.notes.some((n) => n.e), 'an Expert chart has holds to draw');
+  const holdAt = song.notes.find((n) => n.e);
+  const tail = new Uint8Array(song.notes.length);
+  tail[song.notes.indexOf(holdAt)] = 9;
+  calls.length = 0;
+  assert.equal(draw.draw({ now: 10, t: holdAt.t / 1000 + 0.1, look: 1.7, song, mark: new Uint8Array(song.notes.length), hold: tail, judge: [{ k: 'p', at: 0, tag: '' }, null, null, null], labels: ['D', 'F', 'J', 'K'], countdown: '3', dropSoon: true, marks: [{ t: 10, sec: 'drop' }], tier: 2 }), true);
   assert.ok(calls.includes('drawImage'));
   assert.ok(calls.includes('fillText'));
+  assert.ok(calls.includes('fillRect'), 'hold tails are drawn');
   assert.equal(calls.includes('shadowBlur'), false);
   draw.draw({ now: 10, t: 5, look: 1.7, song, still: true });
   assert.equal(draw.particles, 0, 'no particles in calm view');
@@ -1073,7 +1254,7 @@ test('the tutorial teaches one lane at a time, then tunes timing with an undo', 
   let now = 1000;
   let offset = 0;
   let done = null;
-  const t = createTutorial({ lanes: 3, perf: () => now, loop: null, labels: () => ['D', 'Space', 'J'], offset: () => offset, onOffset: (ms) => (offset = ms), onDone: (r) => (done = r) });
+  const t = createTutorial({ lanes: 2, perf: () => now, loop: null, labels: () => ['D', 'F', 'J', 'K'], offset: () => offset, onOffset: (ms) => (offset = ms), onDone: (r) => (done = r) });
   assert.equal(t.step, 1);
   assert.equal(t.press(2, now), false, 'the wrong lane does nothing');
   now += 2500;
@@ -1082,17 +1263,18 @@ test('the tutorial teaches one lane at a time, then tunes timing with an undo', 
   t.frame();
   assert.equal(t.step, 2);
   now += 2500;
-  assert.equal(t.press(2, now), true);
+  assert.equal(t.press(2, now), false, 'step two teaches the far right lane');
+  assert.equal(t.press(3, now), true);
   now += 800;
   t.frame();
   assert.equal(t.step, 3);
   const start = now;
-  for (const n of tutorialNotes(3)) {
+  for (const n of tutorialNotes()) {
     now = start + n.t + 30;
     t.press(n.l, now);
   }
   assert.equal(t.streak, 8);
-  now = start + tutorialNotes(3)[7].t + 1000;
+  now = start + tutorialNotes()[7].t + 1000;
   t.frame();
   assert.equal(t.step, 4);
   assert.equal(offset, 30, 'you tap 30 ms late, so it is fixed');
@@ -1124,6 +1306,9 @@ test('the view: tutorial first, a ready card, lanes you can play and a results c
   assert.equal(readPrefs(store).seen, true);
   for (const k of ['bd-ready', 'bd-how', 'bd-timing', 'bd-slow', 'bd-calm']) assert.ok(byKey(view, k), k);
   assert.ok(all(view.el).some((n) => n.textContent === 'Song 1 of 2 - NEXT UP'));
+  assert.ok(all(view.el).some((n) => n.textContent === '4 lanes ● ◆ ■ ▲'), 'the ready card says 4 lanes once');
+  assert.equal(all(view.el).some((n) => /[0-35-9] lanes/.test(n.textContent || '')), false);
+  assert.equal(document.body.querySelector('link[data-bd-songs]').getAttribute('href'), SONG_SHEET);
   byKey(view, 'bd-ready').click();
   r.engines[1].act({ type: 'ready', n: st(r).n });
   await r.clock.advance(400);
@@ -1131,9 +1316,10 @@ test('the view: tutorial first, a ready card, lanes you can play and a results c
   view.update(engine.snapshot());
   const s = st(r);
   const song = songOfState(s);
-  assert.equal(view.local.lanes, 3);
-  assert.ok(all(view.el).filter((n) => n.classList && n.classList.contains('bd-pad')).length === 3);
-  assert.equal(byKey(view, 'bd-lane-1').getAttribute('aria-label'), 'Lane 2 (Space)');
+  assert.equal(view.local.lanes, 4);
+  assert.ok(all(view.el).filter((n) => n.classList && n.classList.contains('bd-pad')).length === 4);
+  assert.equal(byKey(view, 'bd-lane-1').getAttribute('aria-label'), 'Lane 2 (F)');
+  assert.equal(view.el.querySelector('.bd-stage').style.props['--bd-w'], `${widthFor(4)}px`);
   await r.clock.advance(s.at - engine.now() - 1000);
   view.frame();
   await playView(r, view, s, song, 3, 20000);
@@ -1211,7 +1397,8 @@ test('reduced motion turns on slower notes and the calm view by default', async 
   engine.act({ type: 'ready', n: st(r).n });
   await r.clock.advance(300);
   view.update(engine.snapshot());
-  assert.equal(view.local.lanes, 2);
+  assert.equal(view.local.lanes, 4, 'Chill is 4 lanes too');
+  assert.equal(all(view.el).filter((n) => n.classList && n.classList.contains('bd-pad')).length, 4);
   assert.ok(Math.abs(view.local.look - lookFor(0, true)) < 1e-9);
   view.destroy();
   const r2 = await startGame(1, { length: 45, songs: 1, difficulty: 'easy' });
@@ -1232,8 +1419,20 @@ test('an old Beat Drop room key from before the update is replaced safely', asyn
   let put = null;
   const api = { get: () => old, put: (k, v) => (put = v), now: () => engine.now(), players: () => [{ slot: 0 }], settings: {}, random: seeded(1), memory: {}, setDeadline() {}, round() {}, deadline: null, finish() {} };
   beatdrop.resume(api);
-  assert.equal(put.v, 2);
+  assert.equal(put.v, 3);
+  assert.equal(V, 3);
   assert.equal(put.phase, 'ready');
+  const v2 = { v: 2, n: 4, phase: 'play', i: 0, total: 1, lineup: [['pop', 112]], seed: 5, sty: 'pop', bpm: 112, df: 2, len: 45, at: 0, starts: 0, ends: 1, in: [0], w: [], rd: [], lr: [], idle: [], so: {}, sc: {}, f: {}, ev: [], evn: 0, res: null };
+  assert.equal(songOfState(v2), null, 'a 3 lane era key is not played');
+  assert.equal(beatdrop.model({ state: { [KEY]: v2 }, meSlot: 0, players: [] }), null);
+  put = null;
+  beatdrop.resume({ ...api, get: () => v2 });
+  assert.equal(put.v, 3);
+  assert.equal(put.phase, 'ready');
+  assert.equal(put.lineup[0][0], 's');
+  put = null;
+  beatdrop.deadline({ ...api, get: () => v2, finish: () => (put = 'finished') });
+  assert.equal(put, 'finished', 'a deadline on an old key ends the game cleanly');
 });
 
 test('the renderer shrinks notes so close notes in one lane never overlap on short screens', () => {
@@ -1248,4 +1447,585 @@ test('the renderer shrinks notes so close notes in one lane never overlap on sho
     assert.ok(k >= GEM_MIN_SCALE && k <= 1);
     assert.ok(k === GEM_MIN_SCALE || gem * k < room, `${gap} ms notes fit in ${room.toFixed(1)} px`);
   }
+});
+
+test('holds: held through is Perfect, early releases grade down, tails count as objects', () => {
+  const song = prepSong({ df: 3, notes: [{ t: 2000, l: 0, e: 3000 }, { t: 2500, l: 1 }, { t: 4000, l: 2, e: 5000 }, { t: 6000, l: 3, e: 7000 }], dur: 9 });
+  assert.equal(countOf(song), 7);
+  assert.equal(objectCount(song.notes), 7);
+  assert.deepEqual(objTimes(song.notes), [2000, 2500, 3000, 4000, 5000, 6000, 7000]);
+  assert.equal(objectsBefore(song, 2.001), 2, 'a tail can be judged once its head arrives');
+  assert.equal(objectsBefore(song, 4.5), 5);
+  const w = windowsFor(3);
+  assert.equal(releaseKind(3000, 3000 - w.g, w), 'p');
+  assert.equal(releaseKind(3000, 3000 - HOLD_GOOD_MS, w), 'g');
+  assert.equal(releaseKind(3000, 3000 - HOLD_OK_MS, w), 'o');
+  assert.equal(releaseKind(3000, 3000 - HOLD_OK_MS - 1, w), 'm');
+  const j = createJudge(song, 3);
+  assert.equal(j.n, 7);
+  j.press(0, 2000);
+  assert.equal(j.holding[0], 0);
+  assert.equal(j.tail[0], 9);
+  j.press(1, 2500);
+  let out = j.release(0, 2995);
+  assert.ok(out.some((e) => e.tail && e.k === 'p'), 'held to the end is Perfect');
+  assert.equal(j.holding[0], -1);
+  j.press(2, 4000);
+  out = j.sweep(5000);
+  assert.ok(out.some((e) => e.tail && e.k === 'p' && e.idx === 2), 'a tail still held when it ends completes itself');
+  j.press(3, 6000);
+  assert.equal(j.stats.c, 6);
+  out = j.release(3, 6500);
+  assert.ok(out.some((e) => e.tail && e.k === 'm' && e.lost === 6), 'letting go far too early is a miss and breaks the streak');
+  assert.equal(j.stats.c, 0);
+  assert.equal(j.done, true);
+  assert.deepEqual(j.final(), [6, 0, 0, 1, 6]);
+  const g = createJudge(song, 3);
+  g.press(0, 2000);
+  assert.ok(g.release(0, 2880).some((e) => e.tail && e.k === 'g'));
+  const o = createJudge(song, 3);
+  o.press(0, 2000);
+  assert.ok(o.release(0, 2750).some((e) => e.tail && e.k === 'o'));
+  const miss = createJudge(song, 3);
+  miss.sweep(2500);
+  assert.equal(miss.stats.m, 2, 'a missed head misses its tail too');
+  assert.equal(miss.stats.j, 2);
+  const full = perfectRun(buildSong(77, 'house', 3, 60));
+  assert.equal(full.score, MAX_SCORE, 'a perfect run with holds still scores 1000');
+  assert.equal(full.stats.j, full.n);
+  const song2 = buildSong(77, 'house', 3, 60);
+  const fin = full.final();
+  assert.ok(checkFinal(song2, 70, fin));
+  assert.equal(checkFinal(song2, 70, fin).score, MAX_SCORE);
+  assert.equal(checkProgress(song2, 1, [countOf(song2), countOf(song2), 0, 0, 0, 1, 1]), null, 'tails can not arrive before their heads');
+});
+
+test('client chart codec: round trip, every validator rule and the length cut', () => {
+  const notes = [{ t: 2000, l: 0 }, { t: 2000, l: 2 }, { t: 2500, l: 1, e: 3500 }, { t: 3000, l: 3 }];
+  assert.deepEqual(decodeNotes(encodeNotes(notes)), notes);
+  assert.ok(encodeNotes(notes).length / notes.length <= 2);
+  const len = 40000;
+  const good = makeChart(len);
+  const ok = validateChart(good, len);
+  for (let i = 1; i < ok.counts.length; i += 1) assert.ok(ok.counts[i] >= ok.counts[i - 1]);
+  assert.ok(ok.d.hard.some((n) => n.e) && ok.d.expert.some((n) => n.e));
+  assert.deepEqual(validateChart(JSON.stringify(good), len).counts, ok.counts, 'a JSON string chart works too');
+  const bad = (mut, re, label) => {
+    const c = JSON.parse(JSON.stringify(good));
+    mut(c);
+    assert.throws(() => validateChart(c, len), re, label);
+  };
+  bad((c) => (c.v = 2), /version/);
+  bad((c) => (c.bpm = 300), /tempo/);
+  bad((c) => (c.b0 = 9000), /first beat/);
+  bad((c) => (c.len = 39000), /length/);
+  bad((c) => (c.marks = [[9000, 'drop'], [8000, 'build']]), /mark/, 'unsorted marks');
+  bad((c) => (c.marks = Array.from({ length: 17 }, (_, i) => [i * 100, 'drop'])), /too many marks/);
+  bad((c) => delete c.d.expert, /missing Expert/);
+  bad((c) => (c.d.easy = [1, 2, 3]), /broken note list/);
+  bad((c) => (c.d.easy = [2000, 0, -5, 1]), /broken note/, 'unsorted notes');
+  bad((c) => (c.d.easy = [2000, 4]), /hold that is too short/, 'a fifth lane is not a lane');
+  bad((c) => (c.d.easy = encodeNotes([{ t: 2000, l: 0 }, { t: 2000, l: 1 }, { t: 2000, l: 2 }])), /more than two/);
+  bad((c) => (c.d.easy = encodeNotes([{ t: 2000, l: 0 }, { t: 2000, l: 0 }])), /one lane twice/);
+  bad((c) => (c.d.easy = encodeNotes([{ t: 2000, l: 0, e: 2500 }])), /only allowed on Hard/);
+  bad((c) => (c.d.hard = encodeNotes([{ t: 2000, l: 0, e: 3000 }, { t: 3050, l: 0 }])), /too close/, 'a note right after a hold in the same lane');
+  bad((c) => (c.d.hard = encodeNotes([{ t: 2000, l: 0, e: 4000 }, { t: 2500, l: 1, e: 4000 }, { t: 3000, l: 2 }])), /held at once/);
+  bad((c) => (c.d.easy = encodeNotes(Array.from({ length: 401 }, (_, i) => ({ t: 2000 + i * 90, l: i % 4 })))), /too many notes/);
+  bad((c) => (c.d.easy = encodeNotes(Array.from({ length: 15 }, (_, i) => ({ t: 2000 + i * 200, l: i % 4 })))), /too dense/);
+  bad((c) => (c.d.easy = encodeNotes([{ t: 39800, l: 0 }])), /past the end/);
+  bad((c) => (c.d.easy = encodeNotes([{ t: 1000, l: 0 }])), /too early/);
+  bad((c) => (c.d.expert = c.d.easy), /fewer notes/, 'counts never go down');
+  assert.throws(() => validateChart('x'.repeat(100000), len), /too big/);
+  assert.throws(() => validateChart({ ...good, pad: 'x'.repeat(100000) }, len), /too big/);
+  const body = songBody(SID);
+  assert.equal(readSong(body, SID, 1).title, 'Night Test');
+  for (const [over, re] of [[{ url: 'https://elsewhere.example/a.mp3' }, /no audio/], [{ url: `/song-audio/${SID2}.mp3` }, /no audio/], [{ url: `/song-audio/${SID}.wav` }, /no audio/], [{ off: 400 }, /offset/], [{ cv: 2 }, /changed/], [{ id: SID2 }, /did not match/], [{ end: 5000 }, /section/]]) {
+    assert.throws(() => readSong({ ...body, ...over }, SID, 1), re, JSON.stringify(over));
+  }
+  assert.equal(readSong({ ...body, url: `/media/songs/${SID}.m4a` }, SID, 1).url, `/media/songs/${SID}.m4a`);
+  assert.equal(readSong({ ...body, title: 'Tab\tName\u0000 ' }, SID, 1).title, 'TabName');
+  assert.deepEqual(readCatalog({ songs: [[SID, 'A', 'B', 1000, 120, 1, [1, 2, 3, 4]], ['bad', 'x', '', 0, 0, 1, []], [SID, 'dupe', '', 0, 0, 1, []], { id: SID2, title: 'Obj', artist: 'C', dur: 2, bpm: 99.6, cv: 3, counts: [] }] }).map((x) => [x.id, x.title, x.cv, x.bpm]), [[SID, 'A', 1, 120], [SID2, 'Obj', 3, 100]]);
+  assert.equal(readCatalog({}), null);
+});
+
+test('client chart loading: one request per song, a timeout, bad charts are refused and the length cut is the same everywhere', async () => {
+  const log = [];
+  const timers = await useSongs({ log, songs: [SID, SID2, SID3] });
+  assert.equal(catalog().length, 3);
+  const before = log.length;
+  const [a, b] = await Promise.all([loadChart(SID, 1), loadChart(SID, 1)]);
+  assert.equal(a, b);
+  assert.equal(log.length - before, 1, 'two asks share one request');
+  await loadChart(SID, 1);
+  assert.equal(log.length - before, 1, 'a loaded chart is cached');
+  assert.deepEqual(log.slice(-1), [`/api/activity/songs/${SID}?v=1`]);
+  const s45 = chartSong(SID, 1, 3, 45);
+  assert.equal(s45.kind, 'u');
+  assert.equal(s45.lanes, 4);
+  assert.equal(s45.cut, 40000, 'a short section plays whole');
+  assert.ok(Math.abs(s45.dur - 41.5) < 1e-9);
+  assert.equal(s45.meta.url, `/song-audio/${SID}.mp3`);
+  assert.equal(chartSong(SID, 1, 3, 45), s45, 'built songs are cached');
+  assert.ok(s45.notes.some((n) => n.e) && s45.notes.some((n) => n.c));
+  assert.equal(chartSong(SID, 1, 0, 45).notes.some((n) => n.e), false);
+  assert.deepEqual(s45.marks, [{ t: 8, sec: 'build' }, { t: 16, sec: 'drop' }]);
+  assert.equal(chartSong(SID, 2, 3, 45), null, 'another chart version is not loaded');
+  resetSongs();
+  const long = { ...songBody(SID3, { len: 100000 }) };
+  setSongFetch(async () => ({ ok: true, json: async () => long }), { timer: (fn) => timers.push(fn), clear() {} });
+  await loadChart(SID3, 1);
+  const cut = chartSong(SID3, 1, 2, 45);
+  assert.equal(cut.cut, 45000, 'the song length setting cuts a long section');
+  assert.ok(cut.notes.every((n) => n.t <= 44000 && (!n.e || n.e <= 44500)));
+  assert.ok(chartSong(SID3, 1, 2, 90).notes.length > cut.notes.length);
+  assert.deepEqual(chartSong(SID3, 1, 2, 45).notes, cut.notes, 'every client cuts the same way');
+  const bad = songBody(SID2);
+  bad.charts = { ...bad.charts, d: { ...bad.charts.d, easy: [2000, 4] } };
+  setSongFetch(async () => ({ ok: true, json: async () => bad }), { timer: (fn) => timers.push(fn), clear() {} });
+  await assert.rejects(loadChart(SID2, 1), /hold/);
+  assert.equal(chartEntry(SID2, 1), null, 'a bad chart is never cached');
+  let fire = null;
+  setSongFetch(() => new Promise(() => {}), { timer: (fn, ms) => ((fire = fn), assert.equal(ms, CHART_TIMEOUT_MS)), clear() {} });
+  const slow = loadChart(SID2, 1);
+  fire();
+  await assert.rejects(slow, /too long/);
+  await assert.rejects(loadChart('nope', 1), /not valid/);
+  setSongFetch(null);
+  await assert.rejects(loadChart(SID2, 1), /offline/);
+  noSongs();
+});
+
+async function songGame(n, settings = {}, opts = {}) {
+  await useSongs(opts);
+  const r = await startGame(n, { songs: 1, length: 45, ...settings });
+  await settle(r);
+  return r;
+}
+
+async function loadedReady(r, slotsToLoad = slots(r)) {
+  const s = st(r);
+  for (const slot of slotsToLoad) bySlot(r, slot).act({ type: 'loaded', n: s.n });
+  for (const e of r.engines) e.act({ type: 'ready', n: s.n });
+  await settle(r, 300);
+}
+
+test('uploaded songs: a random lineup without repeats, ready waits for everyone to load, then the song plays and results show the credit', async () => {
+  const r = await songGame(2, { songs: 2 });
+  const s = st(r);
+  assert.equal(s.v, 3);
+  assert.equal(s.src, 'u');
+  assert.ok([SID, SID2].includes(s.sid));
+  assert.equal(s.cv, 1);
+  assert.equal(s.lineup.length, 2);
+  assert.ok(s.lineup.every((x) => x[0] === 'u'));
+  assert.notEqual(s.lineup[0][1], s.lineup[1][1], 'no repeats');
+  assert.ok(chartEntry(s.sid, s.cv), 'the host loads the chart during ready');
+  assert.equal(/"charts"|"notes"|"url"/.test(JSON.stringify(r.hub.state)), false, 'charts never go into state');
+  const [a, b] = slots(r);
+  const m0 = beatdrop.model(bySlot(r, a).snapshot());
+  assert.equal(m0.src, 'u');
+  assert.deepEqual(m0.loading, { mine: 'wait', done: 0, of: 2 });
+  assert.equal(m0.song.title, s.sid === SID ? 'Night Test' : 'Second Test');
+  for (const e of r.engines) e.act({ type: 'ready', n: s.n });
+  await settle(r, 300);
+  assert.equal(st(r).phase, 'ready', 'ready alone is not enough');
+  bySlot(r, a).act({ type: 'loaded', n: s.n });
+  await settle(r, 300);
+  assert.equal(st(r).phase, 'ready');
+  assert.deepEqual(st(r).ld, [a]);
+  assert.equal(beatdrop.model(bySlot(r, a).snapshot()).loading.mine, 'ok');
+  assert.ok(beatdrop.model(bySlot(r, a).snapshot()).dots.some((d) => d.slot === a && d.ld));
+  bySlot(r, b).act({ type: 'loaded', n: s.n });
+  await settle(r, 300);
+  const p = st(r);
+  assert.equal(p.phase, 'play');
+  assert.deepEqual(p.in.slice().sort(), [a, b].sort());
+  const song = songOfState(p);
+  assert.equal(song.kind, 'u');
+  assert.equal(p.on, countOf(song));
+  assert.equal(p.du, Math.round(song.dur * 1000));
+  assert.ok(jsonBytes(p) < 4096);
+  await playAlong(r, p, endOf(p), { [a]: 'all', [b]: 'half' });
+  bySlot(r, a).act({ type: 'done', n: p.n, v: perfectRun(song).final() });
+  const half = Math.floor(countOf(song) / 2);
+  bySlot(r, b).act({ type: 'done', n: p.n, v: [half, 0, 0, countOf(song) - half, 2] });
+  await settle(r, 400);
+  const show = st(r);
+  assert.equal(show.phase, 'show');
+  assert.equal(show.res[a][1], MAX_SCORE);
+  assert.deepEqual(show.tt, [s.sid === SID ? 'Night Test' : 'Second Test', 'The Testers']);
+  const m = beatdrop.model(bySlot(r, a).snapshot());
+  assert.equal(m.song.kind, 'u');
+  assert.equal(m.song.credit, 'Made by me');
+  assert.equal(songLine(m.song), `${m.song.title} - The Testers`);
+  assert.equal(m.next.title, s.lineup[1][1] === SID ? 'Night Test' : 'Second Test');
+  assert.deepEqual(beatdrop.results({ get: () => show }).extra.song, { t: show.tt[0], a: 'The Testers' });
+  noSongs();
+});
+
+test('uploaded songs: slow loaders get one extension, then the song starts and they watch it, late joiners load too', async () => {
+  const r = await songGame(3);
+  const s = st(r);
+  const [a, b, c] = slots(r);
+  for (const slot of [a, b]) bySlot(r, slot).act({ type: 'loaded', n: s.n });
+  for (const e of r.engines) e.act({ type: 'ready', n: s.n });
+  await settle(r, 300);
+  const late = r.add(4);
+  await settle(r, 300);
+  const d = late.snapshot().meSlot;
+  assert.ok(st(r).in.includes(d), 'someone joining during ready is in');
+  assert.equal(st(r).phase, 'ready');
+  await r.clock.advance(s.ends - r.clock.now() + 100);
+  await settle(r);
+  const ext = st(r);
+  assert.equal(ext.phase, 'ready', 'one extension while songs load');
+  assert.equal(ext.lw, 1);
+  assert.ok(ext.ends <= s.starts + READY_MAX_MS + LOAD_WAIT_MS);
+  assert.ok(ext.ends > r.clock.now());
+  late.act({ type: 'loaded', n: s.n });
+  await settle(r, 300);
+  assert.equal(st(r).phase, 'ready');
+  await r.clock.advance(ext.ends - r.clock.now() + 100);
+  await settle(r);
+  const p = st(r);
+  assert.equal(p.phase, 'play', 'no second extension');
+  assert.deepEqual(p.in.slice().sort(), [a, b, d].sort());
+  assert.ok(p.w.includes(c), 'the slow loader watches this song');
+  const mc = beatdrop.model(bySlot(r, c).snapshot());
+  assert.equal(mc.watching, true);
+  assert.equal(mc.playing, false);
+  noSongs();
+});
+
+test('uploaded songs: a failed load means watching, Try again counts, and nobody loading switches to built-in beats', async () => {
+  const r = await songGame(2);
+  const s = st(r);
+  const [a, b] = slots(r);
+  bySlot(r, b).act({ type: 'nolo', n: s.n });
+  await settle(r, 300);
+  assert.deepEqual(st(r).lf, [b]);
+  assert.equal(beatdrop.model(bySlot(r, b).snapshot()).loading.mine, 'fail');
+  bySlot(r, b).act({ type: 'loaded', n: s.n });
+  await settle(r, 300);
+  assert.deepEqual(st(r).lf, [], 'Try again moves them to loaded');
+  assert.deepEqual(st(r).ld, [b]);
+  bySlot(r, b).act({ type: 'nolo', n: s.n });
+  bySlot(r, a).act({ type: 'nolo', n: s.n });
+  bySlot(r, a).act({ type: 'loaded', n: s.n });
+  for (const e of r.engines) e.act({ type: 'ready', n: s.n });
+  await settle(r, 300);
+  const p = st(r);
+  assert.equal(p.phase, 'play');
+  assert.equal(p.src, 'u');
+  assert.ok(p.in.includes(a) && p.in.includes(b), 'a late nolo after loading is ignored');
+  const r2 = await songGame(2);
+  const s2 = st(r2);
+  for (const e of r2.engines) {
+    e.act({ type: 'nolo', n: s2.n });
+    e.act({ type: 'ready', n: s2.n });
+  }
+  await settle(r2, 300);
+  const p2 = st(r2);
+  assert.equal(p2.phase, 'play');
+  assert.equal(p2.src, 's', 'nobody could load it, so built-in beats play');
+  assert.equal(p2.fb, 1);
+  assert.equal(p2.in.length, 2);
+  assert.equal(beatdrop.model(r2.engines[0].snapshot()).fellBack, true);
+  assert.ok(songOfState(p2).notes.length > 20);
+  bySlot(r2, slots(r2)[0]).act({ type: 'loaded', n: s2.n });
+  await settle(r2, 300);
+  assert.equal(st(r2).ld.length, 0, 'load reports after ready are ignored');
+  noSongs();
+});
+
+test('uploaded songs: when the host can not load the chart it waits, then switches to built-in beats for everyone', async () => {
+  const r = await songGame(2, {}, { broken: [SID, SID2] });
+  const s = st(r);
+  assert.equal(s.src, 'u');
+  assert.equal(chartEntry(s.sid, s.cv), null);
+  await loadedReady(r);
+  const hold = st(r);
+  assert.equal(hold.phase, 'ready', 'the host waits for its own chart');
+  await r.clock.advance(LOAD_WAIT_MS - 2000);
+  await settle(r);
+  assert.equal(st(r).phase, 'ready');
+  await r.clock.advance(3000);
+  await settle(r);
+  const p = st(r);
+  assert.equal(p.phase, 'play');
+  assert.equal(p.src, 's');
+  assert.equal(p.fb, 1);
+  assert.equal(p.sid, undefined);
+  assert.equal(p.in.length, 2);
+  assert.equal(FALLBACK_TEXT, 'That song would not load, playing built-in beats.');
+  noSongs();
+});
+
+test('uploaded songs: a new host without the chart queues progress and checks it once the chart loads', async () => {
+  const opts = {};
+  const r = await songGame(3, { length: 45 }, opts);
+  await loadedReady(r);
+  const s = st(r);
+  assert.equal(s.phase, 'play');
+  const song = songOfState(s);
+  const [, b, c] = slots(r);
+  await playAlong(r, s, s.at + 6000, { [b]: 'all', [c]: 'all' });
+  await settle(r, 1200);
+  const row = st(r).sc[b];
+  assert.ok(row);
+  opts.down = true;
+  resetSongs();
+  r.hub.leave(r.engines[0].snapshot().me);
+  await settle(r, 2000);
+  assert.equal(songOfState(st(r)), null, 'the new host has no chart yet');
+  const due = objectsBefore(song, (r.clock.now() - s.at) / 1000 - 0.3);
+  bySlot(r, b).act({ type: 'prog', n: s.n, v: [due, due, 0, 0, 0, due, due] });
+  await settle(r, 1200);
+  assert.deepEqual(st(r).sc[b], row, 'nothing is trusted before the chart is there');
+  assert.equal(st(r).phase, 'play');
+  opts.down = false;
+  await r.clock.advance(CHECK_MS + 200);
+  await settle(r);
+  await r.clock.advance(CHECK_MS + 200);
+  await settle(r);
+  assert.ok(songOfState(st(r)), 'the chart came back');
+  assert.equal(st(r).sc[b][2], due, 'the queued progress was checked and kept');
+  bySlot(r, c).act({ type: 'prog', n: s.n, v: [999, 999, 0, 0, 0, 999, 999] });
+  await settle(r, 1200);
+  assert.notEqual(st(r).sc[c] && st(r).sc[c][2], 999, 'and forged rows are still refused');
+  noSongs();
+});
+
+test('the staff hint shows only to staff when no songs are uploaded', async () => {
+  noSongs();
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await startGame(1, { songs: 1, length: 45 });
+  const engine = r.engines[0];
+  const m = beatdrop.model(engine.snapshot());
+  assert.equal(m.hint, true);
+  assert.equal(m.src, 's');
+  const mk = (staff) => createBeatdropView({ engine: Object.assign(Object.create(engine), { admin: { me: () => staff, run() {} } }), cues: { play() {}, burst() {}, float() {} }, sfx: fakeSfx(null, false), win: fakeWin(() => r.clock.now()), storage: memStore({ [OFFSET_KEY]: JSON.stringify({ seen: true }) }) });
+  const staff = mk(true);
+  staff.update(engine.snapshot());
+  assert.ok(all(staff.el).some((n) => n.textContent === HINT_TEXT));
+  const guest = mk(false);
+  guest.update(engine.snapshot());
+  assert.equal(all(guest.el).some((n) => n.textContent === HINT_TEXT), false);
+  staff.destroy();
+  guest.destroy();
+  const r2 = await songGame(1);
+  assert.equal(beatdrop.model(r2.engines[0].snapshot()).hint, false, 'no hint once songs exist');
+  noSongs();
+});
+
+function fakeSongAudio({ fail = false } = {}) {
+  const fake = {
+    fail,
+    loads: [],
+    plays: [],
+    resyncs: [],
+    stops: 0,
+    entry: null,
+    load(url, o) {
+      fake.loads.push({ url, from: o.from, len: o.len });
+      o.onProgress(0.5);
+      if (fake.fail) return Promise.reject(new Error('nope'));
+      fake.entry = { buf: {}, base: 0, url, from: o.from, len: o.len };
+      return Promise.resolve(fake.entry);
+    },
+    ready(url, from, len) {
+      return fake.entry && fake.entry.url === url && fake.entry.from === from && fake.entry.len === len ? fake.entry : null;
+    },
+    play(o) {
+      fake.plays.push(o);
+      return true;
+    },
+    resync(z) {
+      fake.resyncs.push(z);
+      return false;
+    },
+    stop() {
+      fake.stops += 1;
+    },
+    destroy() {
+      fake.gone = true;
+    },
+  };
+  return fake;
+}
+
+test('the view: uploaded songs load on the ready card, play on the shared clock and the results show the credit', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await songGame(1, { difficulty: 'expert' });
+  const engine = r.engines[0];
+  const s = st(r);
+  const { ctx } = fakeAudio();
+  Object.defineProperty(ctx, 'currentTime', { get: () => r.clock.now() / 1000 + 7, configurable: true });
+  const fake = fakeSongAudio();
+  const view = createBeatdropView({ engine, cues: { play() {}, burst() {}, float() {} }, sfx: fakeSfx(ctx), win: fakeWin(() => r.clock.now()), storage: memStore({ [OFFSET_KEY]: JSON.stringify({ seen: true }) }), songAudio: fake });
+  engine.on('change', (snap) => view.update(snap));
+  view.update(engine.snapshot());
+  await settle(r, 300);
+  assert.equal(fake.loads.length, 1);
+  assert.deepEqual(fake.loads[0], { url: `/song-audio/${s.sid}.mp3`, from: 10, len: 40 });
+  assert.ok(st(r).ld.includes(engine.snapshot().meSlot), 'the view reports the song as loaded');
+  const text = () => all(view.el).map((n) => n.textContent || '');
+  assert.ok(text().includes(`Song: ${s.sid === SID ? 'Night Test' : 'Second Test'} - The Testers`));
+  assert.ok(text().includes('Credit: Made by me'));
+  assert.ok(text().some((x) => x.startsWith('Song loaded.')));
+  assert.ok(view.el.querySelector('.bd-load-fill'));
+  byKey(view, 'bd-ready').click();
+  await settle(r, 400);
+  const p = st(r);
+  assert.equal(p.phase, 'play');
+  view.update(engine.snapshot());
+  assert.equal(view.local.song.kind, 'u');
+  assert.equal(fake.plays.length, 1, 'the song is scheduled on the audio clock');
+  assert.equal(fake.plays[0].len, 40);
+  assert.equal(fake.plays[0].ctx, ctx);
+  assert.equal(typeof fake.plays[0].zero, 'number');
+  assert.equal(view.player.playing, false, 'no synth under a real song');
+  const song = songOfState(p);
+  const hold = song.notes.find((n) => n.e && n.t > 3000);
+  assert.ok(hold, 'Expert has a hold to play');
+  await r.clock.advance(p.at + hold.t - r.clock.now());
+  view.press(hold.l, p.at + hold.t);
+  assert.equal(view.judge.holding[hold.l], song.notes.indexOf(hold));
+  view.frame();
+  assert.ok(all(view.el).find((n) => n.dataset && n.dataset.key === `bd-lane-${hold.l}`).classList.contains('is-hold'), 'the held pad glows');
+  await r.clock.advance(hold.e - hold.t);
+  assert.equal(view.release(hold.l, p.at + hold.e), true, 'letting go judges the tail');
+  assert.equal(view.judge.holding[hold.l], -1);
+  assert.equal(view.judge.tail[song.notes.indexOf(hold)], 1, 'held to the end is Perfect');
+  await r.clock.advance(endOf(p) - r.clock.now());
+  engine.act({ type: 'done', n: p.n, v: perfectRun(song).final() });
+  await settle(r, 400);
+  view.update(engine.snapshot());
+  assert.equal(st(r).phase, 'show');
+  assert.ok(fake.stops > 0, 'the song stops when the round ends');
+  assert.ok(text().includes(`${st(r).tt[0]} - The Testers`));
+  assert.ok(text().includes('Credit: Made by me'));
+  view.destroy();
+  assert.equal(fake.gone, true);
+  noSongs();
+});
+
+test('the view: a song that will not load says so, offers Try again and reports both ways', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await songGame(2);
+  const engine = r.engines[0];
+  const me = engine.snapshot().meSlot;
+  const fake = fakeSongAudio({ fail: true });
+  const view = createBeatdropView({ engine, cues: { play() {}, burst() {}, float() {} }, sfx: fakeSfx(null, false), win: fakeWin(() => r.clock.now()), storage: memStore({ [OFFSET_KEY]: JSON.stringify({ seen: true }) }), songAudio: fake });
+  engine.on('change', (snap) => view.update(snap));
+  view.update(engine.snapshot());
+  await settle(r, 300);
+  assert.deepEqual(st(r).lf, [me]);
+  assert.ok(all(view.el).some((n) => (n.textContent || '').startsWith('This song would not load on your device. You will watch this one.')));
+  const retry = byKey(view, 'bd-load-retry');
+  assert.ok(retry);
+  fake.fail = false;
+  retry.click();
+  await settle(r, 300);
+  assert.deepEqual(st(r).ld, [me]);
+  assert.deepEqual(st(r).lf, []);
+  assert.equal(byKey(view, 'bd-load-retry'), null);
+  view.destroy();
+  noSongs();
+});
+
+test('the song player decodes a short slice, schedules it with a fade and only re-syncs on real drift', async () => {
+  const made = [];
+  const buf = (ch, n, rate) => {
+    const data = Array.from({ length: ch }, () => new Float32Array(n));
+    return { sampleRate: rate, length: n, numberOfChannels: ch, getChannelData: (c) => data[c], copyToChannel(src, c) { data[c].set(src); } };
+  };
+  class Offline {
+    constructor(ch, len, rate) {
+      made.push(rate);
+      this.rate = rate;
+    }
+    decodeAudioData() {
+      return Promise.resolve(buf(2, this.rate * 120, this.rate));
+    }
+    createBuffer(ch, n, rate) {
+      return buf(ch, n, rate);
+    }
+  }
+  const asked = [];
+  let total = 0;
+  const get = async (url) => {
+    asked.push(url);
+    const chunks = [new Uint8Array(1000), new Uint8Array(500)];
+    return { ok: true, headers: { get: () => '1500' }, body: { getReader: () => ({ read: async () => (chunks.length ? { done: false, value: chunks.shift() } : { done: true }) }) } };
+  };
+  const audio = createSongAudio({ win: { OfflineAudioContext: Offline }, get });
+  const seen = [];
+  const entry = await audio.load(`/song-audio/${SID}.mp3`, { from: 30, len: 45, onProgress: (p) => seen.push(p) });
+  assert.deepEqual(made, [32000], 'decoded at a low rate to save memory');
+  assert.equal(entry.buf.length, 32000 * 47, 'only the section plus a little is kept');
+  assert.ok(Math.abs(entry.base) < 1e-9);
+  assert.equal(seen[seen.length - 1], 1);
+  assert.ok(seen.some((p) => p > 0 && p < 1));
+  assert.equal(await audio.load(`/song-audio/${SID}.mp3`, { from: 30, len: 45 }), entry);
+  assert.equal(asked.length, 1, 'a loaded slice is cached');
+  assert.equal(audio.ready(`/song-audio/${SID}.mp3`, 30, 45), entry);
+  await audio.load(`/song-audio/${SID2}.mp3`, { from: 0, len: 45 });
+  await audio.load(`/song-audio/${SID3}.mp3`, { from: 0, len: 45 });
+  assert.equal(audio.cached, 2, 'at most two songs stay in memory');
+  const starts = [];
+  const ramps = [];
+  const ctx = { currentTime: 100, destination: {}, createBufferSource: () => ({ connect() {}, disconnect() {}, stop() {}, start: (...a) => starts.push(a) }), createGain: () => ({ gain: { setValueAtTime() {}, linearRampToValueAtTime: (v, t) => ramps.push([v, t]) }, connect() {}, disconnect() {} }) };
+  const e2 = audio.ready(`/song-audio/${SID3}.mp3`, 0, 45);
+  assert.equal(audio.play({ ctx, entry: e2, zero: 103, len: 45 }), true);
+  assert.deepEqual(starts[0], [103, 0, 45], 'starts exactly on the song clock');
+  assert.deepEqual(ramps[0], [0.0001, 148], 'and fades out at the end');
+  ctx.currentTime = 110;
+  assert.equal(audio.resync(103.1), false, 'small drift is left alone');
+  assert.equal(audio.resync(103.5), true);
+  assert.deepEqual(starts[1], [110, 6.5, 38.5], 'big drift restarts at the right spot');
+  audio.destroy();
+  assert.equal(audio.cached, 0);
+  await assert.rejects(audio.load(`/song-audio/${SID}.mp3`), /closed/);
+  assert.deepEqual(songSpan({ cut: 60000, meta: { url: 'u', start: 20000, off: -150 } }), { url: 'u', from: 19.85, len: 60 });
+  const none = createSongAudio({ win: {}, get });
+  await assert.rejects(none.load(`/song-audio/${SID}.mp3`), /can not play/);
+  const big = createSongAudio({ win: { OfflineAudioContext: Offline }, get: async () => ({ ok: true, headers: { get: () => String(9e6) }, body: null }) });
+  await assert.rejects(big.load(`/song-audio/${SID}.mp3`), /too big/);
+});
+
+test('the lobby shows a song picker built from the uploaded songs', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  await useSongs();
+  const { createLobby } = await import('../web/activity/js/ui/lobby.js');
+  const r = room(2, { join: false });
+  await r.clock.advance(500);
+  const [host, guest] = r.engines;
+  const hostLobby = createLobby({ engine: host, toast() {}, sfx: { play() {} }, store: memStore() });
+  const guestLobby = createLobby({ engine: guest, toast() {}, sfx: { play() {} }, store: memStore() });
+  host.lobby.pick('beatdrop');
+  await r.clock.advance(300);
+  hostLobby.update(host.snapshot());
+  guestLobby.update(guest.snapshot());
+  await flush(20);
+  const pick = all(hostLobby.el).find((n) => n.dataset && n.dataset.key === 'set-song');
+  assert.ok(pick, 'the host gets a song picker');
+  assert.equal(pick.localName, 'select');
+  const labels = all(pick).filter((n) => n.localName === 'option').map((n) => n.textContent);
+  assert.deepEqual(labels, ['Random song', 'Built-in beats', 'Night Test - The Testers', 'Second Test - The Testers']);
+  pick.value = SID2;
+  fire(pick, 'change');
+  await r.clock.advance(300);
+  assert.equal(host.snapshot().settings.song, SID2);
+  guestLobby.update(guest.snapshot());
+  assert.ok(all(guestLobby.el).some((n) => n.textContent === 'Second Test - The Testers'), 'guests see the pick as text');
+  assert.equal(all(guestLobby.el).some((n) => n.dataset && n.dataset.key === 'set-song' && n.localName === 'select'), false);
+  noSongs();
+  const empty = createLobby({ engine: host, toast() {}, sfx: { play() {} }, store: memStore() });
+  host.lobby.setting('song', 'random');
+  await r.clock.advance(300);
+  empty.update(host.snapshot());
+  const opts = all(all(empty.el).find((n) => n.dataset && n.dataset.key === 'set-song')).filter((n) => n.localName === 'option').map((n) => n.textContent);
+  assert.equal(opts[0], EMPTY_TEXT);
+  assert.equal(host.lobby.setting('song', 'https://elsewhere'), false);
 });

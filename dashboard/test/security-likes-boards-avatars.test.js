@@ -192,7 +192,7 @@ test('cut-out uploads still go through every picture check', async () => {
   assert.deepEqual(await post({ image: b64(devBannerPng(96, 96)), cutout: true, source: 'yapin' }), [400, 'bad_cutout'], 'opaque pictures are not cut-outs');
   assert.deepEqual(await post({ image: b64(wide), cutout: true, source: 'elsewhere' }), [400, 'bad_cutout']);
   assert.deepEqual(await post({ image: b64(wide), cutout: true, source: 'upload' }), [400, 'no_original'], 'an upload-source cut-out needs a kept original');
-  const huge = Buffer.concat([wide, Buffer.alloc(300 * 1024)]);
+  const huge = Buffer.concat([wide, Buffer.alloc(600 * 1024)]);
   assert.equal((await post({ image: b64(huge), cutout: true, source: 'yapin' }))[0], 413);
   advance(h, 61_000);
   const ok = await h.api('POST', '/api/me/profile-avatar', alice, { image: b64(wide), cutout: true, source: 'yapin', backdrop: 'clear' });
@@ -243,7 +243,7 @@ test('the Yapin picture copy is not an open proxy and has size and time limits',
   assert.equal(got.mime, 'image/png');
   assert.equal(calls[0].init.redirect, 'error');
   assert.ok(calls[0].init.signal, 'the fetch can be cut off');
-  const unsized = async () => new Response(streamOf(5 * 1024 * 1024), { status: 200 });
+  const unsized = async () => new Response(streamOf(5 * 1024 * 1024 + 1), { status: 200 });
   await assert.rejects(fetchYapinPicture('https://www.yapin.gg/a.png', unsized), (err) => err.status === 413, 'a body with no length is still capped');
   const hang = (url, init) => new Promise((resolve, reject) => {
     init.signal.addEventListener('abort', () => reject(new Error('aborted')));

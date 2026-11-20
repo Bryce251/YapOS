@@ -23,7 +23,7 @@ export const ACTION_LABELS = Object.freeze({
   kick: 'Remove a member',
   leader: 'Hand over leadership',
   tag: 'Change the tag',
-  colour: 'Change the colour',
+  colour: 'Change the color',
   banner: 'Change the banner',
   privacy: 'Change who can join',
   upgrade: 'Buy an upgrade',
@@ -305,7 +305,7 @@ export function renderClans(ctx) {
     const locked = !c.style;
     const colourInput = h('input', { type: 'text', class: 'input clan-draft', value: c.colour || '', placeholder: '#ff8800 or teal', maxLength: 16, disabled: locked, autocomplete: 'off', spellcheck: false, dataset: { draft: 'colour' } });
     const colourErr = h('p', { class: 'field-error', attrs: { role: 'alert' } });
-    const swatches = h('div', { class: 'clan-swatches', attrs: { role: 'group', 'aria-label': 'Colour names' } }, ...Object.keys(COLOURS).filter((k) => k !== 'gray').map((k) => {
+    const swatches = h('div', { class: 'clan-swatches', attrs: { role: 'group', 'aria-label': 'Color names' } }, ...Object.keys(COLOURS).filter((k) => k !== 'grey').map((k) => {
       const b = h('button', { type: 'button', class: 'clan-swatch', disabled: locked, title: k, attrs: { 'aria-label': k }, on: { click: () => { colourInput.value = k; } } });
       b.style.setProperty('--swatch', colourHex(COLOURS[k]));
       return b;
@@ -313,9 +313,9 @@ export function renderClans(ctx) {
     const colourForm = h('form', { class: 'clan-inline-form', on: { submit: (e) => {
       e.preventDefault();
       const n = parseClanColour(colourInput.value);
-      colourErr.textContent = n === null ? 'Use a hex code like #ff8800 or a colour name like teal.' : '';
+      colourErr.textContent = n === null ? 'Use a hex code like #ff8800 or a color name like teal.' : '';
       if (n !== null) send({ kind: 'colour', colour: colourHex(n) });
-    } } }, field({ label: 'Colour', input: colourInput, error: colourErr }), swatches, button({ label: 'Save colour', type: 'submit', icon: 'palette', disabled: locked }));
+    } } }, field({ label: 'Color', input: colourInput, error: colourErr }), swatches, button({ label: 'Save color', type: 'submit', icon: 'palette', disabled: locked }));
     const bannerInput = h('input', { type: 'text', class: 'input clan-draft', value: c.banner || '', placeholder: 'Night owls never sleep', maxLength: BANNER_MAX, disabled: locked, autocomplete: 'off', dataset: { draft: 'banner' } });
     const bannerErr = h('p', { class: 'field-error', attrs: { role: 'alert' } });
     const bannerForm = h('form', { class: 'clan-inline-form', on: { submit: (e) => {
@@ -327,7 +327,7 @@ export function renderClans(ctx) {
     return card({ title: 'Clan settings', icon: 'sliders' },
       tagForm,
       join,
-      locked ? h('p', { class: 'clan-locked' }, icon('lock', { size: 14 }), h('span', { text: 'Colour and banner unlock with the "Colour and banner" upgrade below.' })) : null,
+      locked ? h('p', { class: 'clan-locked' }, icon('lock', { size: 14 }), h('span', { text: 'Color and banner unlock with the "Color and banner" upgrade below.' })) : null,
       colourForm,
       bannerForm);
   }
@@ -335,7 +335,7 @@ export function renderClans(ctx) {
   function bankCard(c) {
     const s = view.settings;
     const ups = [
-      { key: 'style', label: 'Colour and banner', price: s.stylePrice, owned: c.style, icon: 'palette' },
+      { key: 'style', label: 'Color and banner', price: s.stylePrice, owned: c.style, icon: 'palette' },
       { key: 'boost', label: `+${Math.round(s.boost * 100)}% XP for every member`, price: s.boostPrice, owned: c.boost, icon: 'sparkles' },
     ];
     return card({ title: 'Clan bank and upgrades', icon: 'coins' },
@@ -390,7 +390,7 @@ export function renderClans(ctx) {
       h('form', { class: 'clan-create', on: { submit } },
         field({ label: 'Clan name', help: `3 to ${NAME_MAX} characters.`, input: name, error: nameErr }),
         field({ label: 'Tag', help: '3 or 4 letters or numbers, like OWL or GG42.', input: tag, error: tagErr }),
-        h('p', { class: 'field-help', text: `${cost ? `Costs ${formatNumber(cost)} 💎 Shards.` : 'Free right now.'} Colours and banners are an upgrade you buy later from the clan bank.` }),
+        h('p', { class: 'field-help', text: `${cost ? `Costs ${formatNumber(cost)} 💎 Shards.` : 'Free right now.'} Colors and banners are an upgrade you buy later from the clan bank.` }),
         button({ label: 'Create clan', icon: 'plus', variant: 'primary', type: 'submit' })));
   }
 

@@ -3,6 +3,7 @@ import { hit, tooMany } from './rate.js';
 import { cleanText } from './profiles.js';
 import { logModAction, actorName } from './party-mod.js';
 import { BADGE_IMG_CSP, isBadgeImagePath } from './security.js';
+import { sizeText } from '../web/js/banner-anim.js';
 
 export { BADGE_IMG_CSP, isBadgeImagePath };
 
@@ -29,7 +30,7 @@ const DATA_URL_RE = /^data:[a-z0-9.+/-]{0,40}(;[a-z0-9=.-]{0,40})*;base64,/i;
 const EMOJI_RE = /\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]️?⃣/u;
 const EMOJI_BAD_RE = /[\p{L}\s<>&"'`\\]/u;
 const COLUMNS = 'id, name, note, emoji, mime, hash, width, height, bytes, created, updated';
-const GONE = 'That badge was deleted, so this was cancelled.';
+const GONE = 'That badge was deleted, so this was canceled.';
 const MISSING_TEXT = 'Picture not found';
 
 function bad(code, message) {
@@ -103,20 +104,26 @@ export function toBytes(value) {
   return new Uint8Array(0);
 }
 
-export function base64Bytes(raw, max, { missing = 'Pick a picture for the badge.' } = {}) {
+export function fromBase64(text) {
+  try {
+    if (typeof Uint8Array.fromBase64 === 'function') return Uint8Array.fromBase64(text);
+    const bin = atob(text);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+export function base64Bytes(raw, max,{ missing = 'Pick a picture for the badge.' } = {}) {
   if (typeof raw !== 'string' || !raw) throw bad('bad_image', missing);
-  const tooBig = () => new HttpError(413, 'image_too_big', `The picture is too big. Keep it under ${Math.round(max / 1024)} KB.`);
+  const tooBig = () => new HttpError(413, 'image_too_big', `The picture is too big. Keep it under ${sizeText(max)}.`);
   const text = raw.replace(DATA_URL_RE, '').replace(/\s+/g, '');
   if (text.length > Math.ceil((max * 4) / 3) + 8) throw tooBig();
   if (!B64_RE.test(text) || text.length % 4 !== 0) throw bad('bad_image', "That picture couldn't be read. Pick it again.");
-  let bin;
-  try {
-    bin = atob(text);
-  } catch {
-    throw bad('bad_image', "That picture couldn't be read. Pick it again.");
-  }
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const bytes = fromBase64(text);
+  if (!bytes) throw bad('bad_image', "That picture couldn't be read. Pick it again.");
   if (bytes.length > max) throw tooBig();
   const kind = sniffImage(bytes);
   if (!kind) throw bad('bad_image', 'Use a PNG, JPG or WebP picture. Other kinds of files, like SVG, are not allowed.');

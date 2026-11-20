@@ -1,10 +1,11 @@
 import { ID_RE, MINUTE, HttpError, json, fail, readJson, isPlainObject, clientIp, parseJsonSafe } from './util.js';
 import { hit, ipKey, tooMany, LIMITS } from './rate.js';
 import { cleanAvatar, requestRefresh } from './profiles.js';
-import { base64Bytes, imageHash, sniffImage, toBytes, BADGE_IMG_CACHE } from './custom-badges.js';
-import { AnimError, isGif, isWebp, webpAnimated, pngAnimated } from '../web/js/banner-anim.js';
+import { base64Bytes, fromBase64, imageHash, sniffImage, toBytes } from './custom-badges.js';
+import { AnimError, isGif, isWebp, webpAnimated, pngAnimated, sizeText } from '../web/js/banner-anim.js';
+import { chunkStatements, clearChunksStatement, commitChunked, storedImageResponse } from './image-chunks.js';
 import {
-  AVATAR_PREFIX, AVATAR_SIDE, AVATAR_MIN_SIDE, AVATAR_STILL_MAX, AVATAR_ANIM_MAX, AVATAR_ANIM_MAX_FRAMES, AVATAR_ANIM_MIN_SIDE, AVATAR_ANIM_MAX_SIDE, AVATAR_ANIM_MAX_RATIO, AVATAR_REFRESH_MAX, AVATAR_FILE_MAX,
+  AVATAR_PREFIX, AVATAR_SIDE, AVATAR_MIN_SIDE, AVATAR_STILL_MAX, AVATAR_FRAME_MAX, AVATAR_ANIM_MAX, AVATAR_ANIM_MAX_FRAMES, AVATAR_ANIM_MIN_SIDE, AVATAR_ANIM_MAX_SIDE, AVATAR_ANIM_MAX_RATIO, AVATAR_REFRESH_MAX, AVATAR_FILE_MAX,
   isAvatarImagePath, readAvatarAnim, isYapinAvatar,
 } from '../web/js/avatar-rules.js';
 import { CUT_SOURCES, BACKDROP_MODES, imageHasAlpha, backdropColours, cleanBackdrop } from '../web/js/avatar-cutout.js';
@@ -15,8 +16,8 @@ import { clearPartyProfileCache } from './party-profile.js';
 import { applySettings } from './public-profiles.js';
 import { clearLeaderboardCache } from './party-leaderboard.js';
 
-export { AVATAR_PREFIX, AVATAR_STILL_MAX, AVATAR_ANIM_MAX, isAvatarImagePath, AVATAR_ID_RE, STILL_EXT, AVATAR_EXT, avatarImageUrl, avatarStillUrl, customAvatarOut, customAvatars, removeAvatarStatements, avatarsFor, staleIds, refreshStale, picOf, withAvatar };
-export const AVATAR_BODY_LIMIT = Math.ceil(((AVATAR_ANIM_MAX + AVATAR_STILL_MAX) * 4) / 3) + 4096;
+export { AVATAR_PREFIX, AVATAR_STILL_MAX, AVATAR_FRAME_MAX, AVATAR_ANIM_MAX, isAvatarImagePath, AVATAR_ID_RE, STILL_EXT, AVATAR_EXT, avatarImageUrl, avatarStillUrl, customAvatarOut, customAvatars, removeAvatarStatements, avatarsFor, staleIds, refreshStale, picOf, withAvatar };
+export const AVATAR_BODY_LIMIT = Math.ceil(((AVATAR_ANIM_MAX + AVATAR_FRAME_MAX) * 4) / 3) + 64 * 1024;
 export const REFRESH_GAP = 10 * MINUTE;
 
 const PATH_RE = /^\/avatar-img\/(a-[a-z0-9]{10})-([0-9a-f]{16})(-still)?\.(png|webp|jpg|gif)$/;
@@ -35,7 +36,7 @@ function bad(code, message) {
 }
 
 function tooBig(max) {
-  return new HttpError(413, 'image_too_big', `The picture is too big. Keep it under ${Math.round(max / 1024)} KB.`);
+  return new HttpError(413, 'image_too_big', `The picture is too big. Keep it under ${sizeText(max)}.`);
 }
 
 const NAME_RE = /^[^\s/\\?#]{1,64}$/;
@@ -76,14 +77,8 @@ function decodeRaw(raw, max, missing) {
   const text = raw.replace(DATA_URL_RE, '').replace(/\s+/g, '');
   if (text.length > Math.ceil((max * 4) / 3) + 8) throw tooBig(max);
   if (!B64_RE.test(text) || text.length % 4 !== 0) throw bad('bad_image', "That picture couldn't be read. Pick it again.");
-  let bin;
-  try {
-    bin = atob(text);
-  } catch {
-    throw bad('bad_image', "That picture couldn't be read. Pick it again.");
-  }
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const bytes = fromBase64(text);
+  if (!bytes) throw bad('bad_image', "That picture couldn't be read. Pick it again.");
   if (bytes.length > max) throw tooBig(max);
   return bytes;
 }
@@ -123,7 +118,7 @@ export function decodeAvatarMoving(raw) {
 }
 
 export function decodeAvatarStill(raw) {
-  const img = base64Bytes(raw, AVATAR_STILL_MAX, { missing: 'The still picture for your moving picture is missing. Pick the GIF again.' });
+  const img = base64Bytes(raw, AVATAR_FRAME_MAX, { missing: 'The still picture for your moving picture is missing. Pick the GIF again.' });
   if (pngAnimated(img.bytes) || webpAnimated(img.bytes)) throw bad('bad_still', 'The still picture must not move.');
   if (!squareOk(img.width, img.height) || img.width < AVATAR_ANIM_MIN_SIDE || img.width > AVATAR_SIDE) throw bad('bad_still', 'The still picture is the wrong size. Pick the GIF again.');
   return img;
@@ -153,7 +148,7 @@ export function clearAvatarCaches(db) {
 }
 
 function limitsOut() {
-  return { fileBytes: AVATAR_FILE_MAX, stillBytes: AVATAR_STILL_MAX, animBytes: AVATAR_ANIM_MAX, side: AVATAR_SIDE, minSide: AVATAR_MIN_SIDE, animMinSide: AVATAR_ANIM_MIN_SIDE, animMaxSide: AVATAR_ANIM_MAX_SIDE, animMaxRatio: AVATAR_ANIM_MAX_RATIO, animFrames: AVATAR_ANIM_MAX_FRAMES };
+  return { fileBytes: AVATAR_FILE_MAX, stillBytes: AVATAR_STILL_MAX, frameBytes: AVATAR_FRAME_MAX, animBytes: AVATAR_ANIM_MAX, side: AVATAR_SIDE, minSide: AVATAR_MIN_SIDE, animMinSide: AVATAR_ANIM_MIN_SIDE, animMaxSide: AVATAR_ANIM_MAX_SIDE, animMaxRatio: AVATAR_ANIM_MAX_RATIO, animFrames: AVATAR_ANIM_MAX_FRAMES };
 }
 
 async function stateOf(env, userId, session) {
@@ -207,9 +202,12 @@ async function uploadAvatar(request, env, session, userId, t) {
   const old = await db.prepare('SELECT id FROM profile_avatars WHERE user_id = ?').bind(userId).first();
   let id = old ? old.id : newAvatarId();
   for (let i = 0; !old && i < 4 && (await db.prepare('SELECT 1 AS x FROM profile_avatars WHERE id = ?').bind(id).first()); i++) id = newAvatarId();
-  await db.batch([
-    db.prepare('INSERT INTO profile_avatars (user_id, id, image, mime, hash, width, height, bytes, frames, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET image = excluded.image, mime = excluded.mime, hash = excluded.hash, width = excluded.width, height = excluded.height, bytes = excluded.bytes, frames = excluded.frames, updated = excluded.updated')
-      .bind(userId, id, img.bytes, img.mime, hash, img.width, img.height, img.bytes.length, moving ? img.frames : 1, t),
+  const parts = await chunkStatements(db, 'avatar', userId, hash, img.bytes, t);
+  const head = [userId, id, ...(parts.chunked ? [] : [img.bytes])];
+  await commitChunked(db, parts, 'avatar', userId, hash, [
+    ...parts.stmts,
+    db.prepare(`INSERT INTO profile_avatars (user_id, id, image, mime, hash, width, height, bytes, frames, updated) VALUES (?, ?, ${parts.chunked ? 'zeroblob(0)' : '?'}, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET image = excluded.image, mime = excluded.mime, hash = excluded.hash, width = excluded.width, height = excluded.height, bytes = excluded.bytes, frames = excluded.frames, updated = excluded.updated`)
+      .bind(...head, img.mime, hash, img.width, img.height, img.bytes.length, moving ? img.frames : 1, t),
     still
       ? db.prepare('INSERT INTO profile_avatar_stills (user_id, avatar_hash, image, mime, hash, width, height, bytes, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET avatar_hash = excluded.avatar_hash, image = excluded.image, mime = excluded.mime, hash = excluded.hash, width = excluded.width, height = excluded.height, bytes = excluded.bytes, updated = excluded.updated')
         .bind(userId, hash, still.bytes, still.mime, stillHash, still.width, still.height, still.bytes.length, t)
@@ -248,7 +246,7 @@ export function readCut(body, moving) {
     return null;
   }
   if (on !== true) throw bad('bad_cutout', 'Say if the background was removed with true or false.');
-  if (moving) throw bad('bad_cutout', 'Moving pictures keep their background. They get a ring in your colours instead.');
+  if (moving) throw bad('bad_cutout', 'Moving pictures keep their background. They get a ring in your colors instead.');
   if (!CUT_SOURCES.includes(body.source)) throw bad('bad_cutout', 'Say where the picture came from: your upload or your Yapin picture.');
   if (body.backdrop !== undefined && !BACKDROP_MODES.includes(body.backdrop)) throw bad('bad_backdrop', 'Pick a backdrop of theme or clear.');
   return { source: body.source, backdrop: cleanBackdrop(body.backdrop) };
@@ -316,6 +314,7 @@ async function patchAvatar(request, env, session, userId, t) {
         db.prepare('UPDATE profile_avatars SET image = ?, mime = ?, hash = ?, width = ?, height = ?, bytes = ?, frames = 1, updated = ? WHERE user_id = ?').bind(img.bytes, img.mime, hash, img.width, img.height, img.bytes.length, t, userId),
         db.prepare('DELETE FROM profile_avatar_stills WHERE user_id = ?').bind(userId),
         db.prepare('DELETE FROM profile_avatar_cutouts WHERE user_id = ?').bind(userId),
+        clearChunksStatement(db, 'avatar', userId),
       ]);
     } else await db.batch(removeAvatarStatements(db, userId));
   } else {
@@ -467,23 +466,19 @@ export async function serveAvatarImage(request, env, url, isHidden) {
   const isStill = Boolean(m[3]);
   const row = isStill
     ? await env.DB.prepare('SELECT s.user_id, s.image, s.mime, s.hash, s.avatar_hash, a.hash AS current, a.frames FROM profile_avatar_stills s JOIN profile_avatars a ON a.user_id = s.user_id WHERE a.id = ?').bind(m[1]).first().catch(() => null)
-    : await env.DB.prepare('SELECT user_id, image, mime, hash, frames FROM profile_avatars WHERE id = ?').bind(m[1]).first().catch(() => null);
+    : await env.DB.prepare('SELECT user_id, image, mime, hash, bytes, frames FROM profile_avatars WHERE id = ?').bind(m[1]).first().catch(() => null);
   if (!row || row.hash !== m[2]) return missingImage();
   if (isStill ? row.avatar_hash !== row.current || Number(row.frames) < 2 || STILL_EXT[row.mime] !== m[4] : AVATAR_EXT[row.mime] !== m[4]) return missingImage();
   if (isHidden && (await isHidden(env.DB, row.user_id))) return missingImage();
-  const bytes = toBytes(row.image);
-  const kind = row.mime === 'image/gif' ? (isGif(bytes) ? { mime: 'image/gif' } : null) : sniffImage(bytes);
-  const cap = !isStill && (row.mime === 'image/gif' || webpAnimated(bytes)) ? AVATAR_ANIM_MAX : AVATAR_STILL_MAX;
-  if (!kind || kind.mime !== row.mime || bytes.length > cap) return missingImage();
-  return new Response(request.method === 'HEAD' ? null : bytes, {
-    status: 200,
-    headers: {
-      'Content-Type': kind.mime,
-      'Content-Length': String(bytes.length),
-      'Cache-Control': BADGE_IMG_CACHE,
-      'Content-Disposition': 'inline',
-      'Cross-Origin-Resource-Policy': 'same-origin',
-    },
-  });
+  const cap = (head) => (!isStill && (row.mime === 'image/gif' || webpAnimated(head)) ? AVATAR_ANIM_MAX : AVATAR_STILL_MAX);
+  const res = await storedImageResponse(request, env.DB, { kind: isStill ? null : 'avatar', ownerId: row.user_id, version: row.hash, image: row.image, mime: row.mime, size: row.bytes, cap, sniff: avatarMime });
+  return res || missingImage();
+}
+
+function avatarMime(bytes) {
+  if (isGif(bytes)) return 'image/gif';
+  const kind = sniffImage(bytes);
+  if (kind) return kind.mime;
+  return webpAnimated(bytes) ? 'image/webp' : null;
 }
 

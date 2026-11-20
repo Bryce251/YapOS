@@ -36,7 +36,7 @@ export function footText(m) {
     if (m.watching) return `You're watching. ${count}`;
     if (m.onlyMine) return `Yours is the only answer, so sit back this time. ${count}`;
     if (m.hasVoted) return `Vote in! ${count}`;
-    return `Tap your favourite. You can't vote for your own. ${count}`;
+    return `Tap your favorite. You can't vote for your own. ${count}`;
   }
   if (m.lost) return 'The host changed mid-vote, so nobody scored this round. On to the next one!';
   if (!m.cards.length) return 'Nobody wrote an answer for this one.';

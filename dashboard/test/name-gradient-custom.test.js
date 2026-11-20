@@ -304,7 +304,7 @@ test('the custom gradient builder sets two or three colours and a direction and 
   stopHex('b').value = 'url(x)';
   fire(stopHex('b'), 'change');
   assert.equal(ed.draft.nameGradientCustom.b, CUSTOM_GRADIENT_START.b, 'bad colours are not taken');
-  assert.match(box.textContent, /Use a colour like/);
+  assert.match(box.textContent, /Use a color like/);
   const middle = box.querySelector('.pe-grad-mid');
   assert.equal(box.querySelector('.pe-grad-stop[data-stop="c"]').hidden, true);
   middle.checked = true;

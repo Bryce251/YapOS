@@ -410,7 +410,7 @@ test('cancelling setup removes what it made and changes nothing', async () => {
   await step(h, 'Make "Verified"');
   assert.ok(h.fake.state.roles[S].some((r) => r.name === 'Verified'));
   const out = await step(h, 'Cancel');
-  assert.match(lastText(h, out), /Setup cancelled/);
+  assert.match(lastText(h, out), /Setup canceled/);
   assert.ok(!h.fake.state.roles[S].some((r) => r.name === 'Verified'));
   assert.equal(cfgOf(h).enabled, false);
 });

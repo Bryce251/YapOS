@@ -201,7 +201,7 @@ test('/remind list, cancel by number, undo, cancel all', async () => {
   assert.match(text, /#1/);
   assert.match(text, /second/);
   const cancel = await h.slash('remind', 'cancel 1', { user: IDS.member });
-  assert.match(lastText(h, cancel), /Reminder #1 is cancelled/);
+  assert.match(lastText(h, cancel), /Reminder #1 is canceled/);
   assert.deepEqual(reminders(h).map((j) => j.data.n), [2]);
   const nope = await h.slash('remind', 'cancel 1', { user: IDS.member });
   assert.match(lastText(h, nope), /No reminder #1/);
@@ -406,7 +406,7 @@ test('reminders view: cancel button, undo, and forms for adding', async () => {
   assert.match(h.textOf(panel), /alpha/);
   const res = await h.clickButton('#1', { user: IDS.member, in: panel });
   const after = res[res.length - 1];
-  assert.match(h.textOf(after), /Cancelled #1/);
+  assert.match(h.textOf(after), /Canceled #1/);
   assert.equal(reminders(h).length, 0);
   await h.clickButton('Undo', { user: IDS.member, in: after });
   assert.equal(reminders(h).length, 1);

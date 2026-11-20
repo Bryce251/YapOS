@@ -77,7 +77,7 @@ test('the activity page works under the strict activity CSP', () => {
     }
     if (f.endsWith('.js')) {
       assert.equal(/\.style\.(?!setProperty)[a-zA-Z]+\s*=/.test(src), false, `${f} sets inline styles`);
-      const fetches = [path.join('ui', 'app.js'), path.join('js', 'dictionary.js'), path.join('js', 'profiles.js'), path.join('js', 'admin.js'), path.join('ui', 'leaderboard.js'), path.join('ui', 'profilecard.js'), path.join('js', 'account.js'), path.join('js', 'blocked.js'), path.join('ui', 'warning.js')].some((x) => f.endsWith(x));
+      const fetches = [path.join('ui', 'app.js'), path.join('js', 'dictionary.js'), path.join('js', 'profiles.js'), path.join('js', 'admin.js'), path.join('ui', 'leaderboard.js'), path.join('ui', 'profilecard.js'), path.join('js', 'account.js'), path.join('js', 'blocked.js'), path.join('ui', 'warning.js'), path.join('games', 'beatsongs.js')].some((x) => f.endsWith(x));
       const remembers = { [path.join('ui', 'sfx.js')]: 'SOUND_KEY', [path.join('ui', 'lobby.js')]: 'TAB_KEY', [path.join('views', 'palette.js')]: 'RECENT_KEY', [path.join('js', 'account.js')]: 'AUTH_KEY', [path.join('ui', 'fxmode.js')]: 'FX_STORE_KEY', [path.join('views', 'beatdrop.js')]: 'OFFSET_KEY' };
       const memoryKey = Object.entries(remembers).find(([x]) => f.endsWith(x));
       assert.equal(/sessionStorage|XMLHttpRequest|WebSocket/.test(src), false, f);
@@ -356,7 +356,7 @@ test('the lobby settings panel works for every game', async () => {
     assert.equal(byKey(el, `pick-${g.id}`).getAttribute('aria-checked'), 'true');
     for (const spec of g.settings || []) {
       assert.ok(all(el).some((n) => n.dataset && (n.dataset.key || '').startsWith(`set-${spec.id}`)), `${g.id} shows ${spec.id}`);
-      if (spec.type === 'multi' || spec.type === 'toggle') continue;
+      if (spec.type === 'multi' || spec.type === 'toggle' || spec.type === 'song') continue;
       const other = spec.options.find((o) => JSON.stringify(o.value) !== JSON.stringify(host.snapshot().settings[spec.id]));
       if (!other) continue;
       byKey(el, `set-${spec.id}-${other.value}`).click();

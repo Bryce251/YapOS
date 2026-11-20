@@ -419,7 +419,7 @@ test('the Yapin picture is copied through the site so the browser can cut it out
       seen.push({ url: String(url), init });
       if (mode === 'down') throw new Error('offline');
       if (mode === 'html') return new Response('<html>', { status: 200 });
-      if (mode === 'big') return new Response(new Uint8Array(10), { status: 200, headers: { 'Content-Length': String(3 * 1024 * 1024) } });
+      if (mode === 'big') return new Response(new Uint8Array(10), { status: 200, headers: { 'Content-Length': String(5 * 1024 * 1024 + 1) } });
       return new Response(png, { status: 200, headers: { 'Content-Type': 'image/png' } });
     },
   });

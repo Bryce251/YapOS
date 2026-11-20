@@ -282,7 +282,7 @@ function parseRepeat(words, tz, now) {
 
 export function parseWhen(input, { tz = 'UTC', now = Date.now() } = {}) {
   const words = stripLead(String(input ?? '').trim().split(/\s+/).filter(Boolean));
-  if (!words.length) throw timeError('When? Try `/remind in 2h stretch` or `/remind tomorrow 9:00 call mum`.');
+  if (!words.length) throw timeError('When? Try `/remind in 2h stretch` or `/remind tomorrow 9:00 call mom`.');
   const first = words[0].toLowerCase();
 
   if (first === 'every' || first === 'daily' || first === 'weekdays') {
@@ -382,7 +382,7 @@ function reminderLine(job, tz) {
 function remindExamples() {
   return [
     '`/remind in 2h stretch`',
-    '`/remind tomorrow 9:00 call mum`',
+    '`/remind tomorrow 9:00 call mom`',
     '`/remind friday 5pm pay rent`',
     '`/remind every day 8:00 water`',
     '`/remind list` · `/remind cancel 2`',
@@ -507,8 +507,8 @@ async function cancelReminder(ctx, token) {
     }
     return true;
   });
-  const what = gone.length === 1 ? `Reminder #${gone[0].data?.n} is cancelled:\n> ${clip(oneLine(plain(gone[0].data?.text)), 200)}` : `All ${gone.length} reminders are cancelled.`;
-  return ctx.ok('Cancelled', what, { components: [row(undo)] });
+  const what = gone.length === 1 ? `Reminder #${gone[0].data?.n} is canceled:\n> ${clip(oneLine(plain(gone[0].data?.text)), 200)}` : `All ${gone.length} reminders are canceled.`;
+  return ctx.ok('Canceled', what, { components: [row(undo)] });
 }
 
 async function runAfk(ctx, raw) {
@@ -1401,7 +1401,7 @@ async function runPocket(ctx, raw) {
 
 function helpCard(engine) {
   const lines = [
-    '⏰ `remind in 2h stretch` · `remind tomorrow 9:00 call mum`',
+    '⏰ `remind in 2h stretch` · `remind tomorrow 9:00 call mom`',
     '🔁 `remind every day 8:00 water` · `remind list` · `remind cancel 2`',
     '📝 `note buy milk` · `notes`',
     '☑️ `todo finish essay` · `todos` · `todo done 1`',
@@ -1464,7 +1464,7 @@ export const { setup, teardown, check } = defineApp({
   panelPerm: 'member',
 
   commands: {
-    remind: { description: 'Reminders by DM: /remind in 2h stretch, /remind tomorrow 9:00 call mum, /remind list', run: (ctx) => runRemind(ctx, ctx.args) },
+    remind: { description: 'Reminders by DM: /remind in 2h stretch, /remind tomorrow 9:00 call mom, /remind list', run: (ctx) => runRemind(ctx, ctx.args) },
     afk: { description: "Go AFK: /afk lunch. I'll tell people who mention you. /afk off to come back", run: (ctx) => runAfk(ctx, ctx.args) },
     pocket: { description: 'Your personal panel: /pocket note buy milk, /pocket todo finish essay, /pocket tz Europe/London', run: (ctx) => runPocket(ctx, ctx.args) },
     highlight: { description: 'DM me when someone says your words: /highlight add pizza, /highlight list', run: (ctx) => runHighlight(ctx, ctx.args) },
@@ -1500,9 +1500,9 @@ export const { setup, teardown, check } = defineApp({
       const uid = ctx.userId;
       const n = Number(ctx.argv[1]);
       const gone = cancelJobs(ctx.engine, uid, n);
-      if (!gone.length) return updateView(ctx, 'rems', ctx.argv[2], { notice: `Reminder #${n} has gone off or was cancelled already.` });
+      if (!gone.length) return updateView(ctx, 'rems', ctx.argv[2], { notice: `Reminder #${n} has gone off or was canceled already.` });
       const undo = undoButton(ctx.engine, ctx, `#${n}`, async () => restoreJobs(ctx.engine, uid, gone) > 0);
-      return updateView(ctx, 'rems', ctx.argv[2], { notice: `✖️ Cancelled #${n}: ${clip(oneLine(plain(gone[0].data?.text)), 80)}`, extra: [undo] });
+      return updateView(ctx, 'rems', ctx.argv[2], { notice: `✖️ Canceled #${n}: ${clip(oneLine(plain(gone[0].data?.text)), 80)}`, extra: [undo] });
     }),
     back: own(async (ctx) => {
       const had = ctx.engine.store.delete(ID, afkKey(ctx.userId));

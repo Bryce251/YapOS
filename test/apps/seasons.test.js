@@ -112,7 +112,7 @@ test('/rank shows season badges and the YapOS Party section', async () => {
   assert.match(text, /🥇 #1 XP · November 2026/);
   assert.match(text, /🎉 YapOS Party/);
   assert.match(text, /`7` games · `3` wins/);
-  assert.match(text, /Favourite: 🕵️ Odd One Out/);
+  assert.match(text, /Favorite: 🕵️ Odd One Out/);
   assert.match(text, /🕵️ Faker caught 10 times · 🐝 Pangram hunter · 🎖️ Some New Badge/);
 });
 

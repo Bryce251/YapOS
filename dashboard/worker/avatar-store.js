@@ -2,6 +2,7 @@ import { ID_RE, clientIp } from './util.js';
 import { AVATAR_PREFIX } from '../web/js/avatar-rules.js';
 import { cleanAvatar, requestRefresh, PROFILE_STALE } from './profiles.js';
 import { applySettings } from './public-profiles.js';
+import { clearChunksStatement } from './image-chunks.js';
 
 export const AVATAR_ID_RE = /^a-[a-z0-9]{10}$/;
 export const STILL_EXT = Object.freeze({ 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpg' });
@@ -58,7 +59,7 @@ export const AVATAR_ORPHAN_GRACE = 24 * 60 * 60 * 1000;
 
 export function removeAvatarStatements(db, userId) {
   const id = lower(userId);
-  return [db.prepare('DELETE FROM profile_avatars WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_avatar_stills WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_avatar_cutouts WHERE user_id = ?').bind(id)];
+  return [db.prepare('DELETE FROM profile_avatars WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_avatar_stills WHERE user_id = ?').bind(id), db.prepare('DELETE FROM profile_avatar_cutouts WHERE user_id = ?').bind(id), clearChunksStatement(db, 'avatar', id)];
 }
 
 export function avatarCleanupStatements(db, t) {
