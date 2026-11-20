@@ -1,6 +1,6 @@
 import beatdrop, { GOAL, SCORE_LINE, FLAG_SAT, FLAG_LEFT, LOAD_FAIL_TEXT } from '../games/beatdrop.js';
 import { createJudge, lookFor, scoreOf, accOf, tierOf, lastNoteAt, sectionMarks, countOf, TIERS, LANES } from '../games/beatchart.js';
-import { loadChart, loadCatalog, chartSong } from '../games/beatsongs.js';
+import { loadChart, loadCatalog, chartSong, lengthLabel } from '../games/beatsongs.js';
 import { h, memo, timer, plural, button, profileButton } from '../ui/dom.js';
 import { sharedLoop, fxLevel } from '../ui/fxmode.js';
 import { reducedMotion } from '../ui/fx.js';
@@ -33,7 +33,7 @@ export const LITE_SPAN_MS = 2000;
 export const HUD_H = 44;
 export const TICK_H = 28;
 export const PAD_H = 52;
-export const SAFE_H = 64;
+export const SAFE_H = 12;
 export const MIN_H = 320;
 export const MAX_H = 760;
 export const WIDE_PX = 900;
@@ -48,7 +48,7 @@ export const BANNER_MS = 1200;
 export const LANE_KEYS = Object.freeze({
   4: Object.freeze([Object.freeze(['KeyD', 'ArrowLeft']), Object.freeze(['KeyF', 'ArrowDown']), Object.freeze(['KeyJ', 'ArrowUp']), Object.freeze(['KeyK', 'ArrowRight'])]),
 });
-const DEFAULT_PREFS = Object.freeze({ tapOffset: 0, seen: false, slow: null, calm: false, music: true, taps: true });
+const DEFAULT_PREFS = Object.freeze({ tapOffset: 0, seen: false, slow: null, calm: false, music: true });
 
 function defaultStore() {
   try {
@@ -80,7 +80,6 @@ export function readPrefs(store) {
     out.slow = typeof v.slow === 'boolean' ? v.slow : null;
     out.calm = v.calm === true;
     out.music = v.music !== false;
-    out.taps = v.taps !== false;
     if (v.best && typeof v.best === 'object') {
       for (const [k, n] of Object.entries(v.best)) if (/^[a-z0-9-]{1,20}\.[0-3]$/.test(k) && Number.isInteger(n) && n >= 0 && n <= 1000) out.best[k] = n;
     }
@@ -91,7 +90,7 @@ export function readPrefs(store) {
 }
 
 export function writePrefs(store, prefs) {
-  const v = { tapOffset: clampOffset(prefs.tapOffset), seen: Boolean(prefs.seen), slow: typeof prefs.slow === 'boolean' ? prefs.slow : null, calm: Boolean(prefs.calm), music: prefs.music !== false, taps: prefs.taps !== false, best: prefs.best || {} };
+  const v = { tapOffset: clampOffset(prefs.tapOffset), seen: Boolean(prefs.seen), slow: typeof prefs.slow === 'boolean' ? prefs.slow : null, calm: Boolean(prefs.calm), music: prefs.music !== false, best: prefs.best || {} };
   try {
     if (store) store.setItem(OFFSET_KEY, JSON.stringify(v));
     return true;
@@ -122,9 +121,9 @@ export function keyLabels() {
   });
 }
 
-export function heightFor(innerHeight, top = 0, wide = false) {
+export function heightFor(innerHeight, top = 0, wide = false, pads = true) {
   const ih = Number(innerHeight) || 700;
-  const room = ih - Math.max(0, top) - HUD_H - (wide ? 0 : TICK_H) - PAD_H - SAFE_H - GAPS_H;
+  const room = ih - Math.max(0, top) - HUD_H - (wide ? 0 : TICK_H) - (pads ? PAD_H : 0) - SAFE_H - GAPS_H;
   return Math.round(Math.max(MIN_H, Math.min(MAX_H, room)));
 }
 
@@ -502,13 +501,12 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   const hudAcc = h('span', { class: 'bd-acc fx-num', text: '100%' });
   const liteChip = h('span', { class: 'bd-lite', text: 'lite' });
   const musicBtn = h('button', { class: 'bd-tg', type: 'button', dataset: { key: 'bd-music' }, text: 'Music' });
-  const tapsBtn = h('button', { class: 'bd-tg', type: 'button', dataset: { key: 'bd-taps' }, text: 'Taps' });
   const hud = h(
     'div',
     { class: 'bd-hud' },
     h('span', { class: 'bd-hud-l' }, hudScore, h('span', { class: 'bd-max', text: '/1000' })),
     h('span', { class: 'bd-hud-c' }, hudFlame, hudStreak, hudStreakL, hudPip),
-    h('span', { class: 'bd-hud-r' }, hudAcc, liteChip, musicBtn, tapsBtn),
+    h('span', { class: 'bd-hud-r' }, hudAcc, liteChip, musicBtn),
   );
   const lostEl = h('p', { class: 'bd-lost', attrs: { 'aria-hidden': 'true' } });
   const banner = h('p', { class: 'bd-banner', attrs: { 'aria-hidden': 'true' } });
@@ -548,19 +546,12 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
 
   function paintToggles() {
     musicBtn.setAttribute('aria-pressed', prefs.music ? 'true' : 'false');
-    tapsBtn.setAttribute('aria-pressed', prefs.taps ? 'true' : 'false');
     musicBtn.classList.toggle('is-on', prefs.music);
-    tapsBtn.classList.toggle('is-on', prefs.taps);
-    player.setMix({ music: prefs.music, taps: prefs.taps });
+    player.setMix({ music: prefs.music });
   }
 
   musicBtn.addEventListener('click', () => {
     prefs.music = !prefs.music;
-    save();
-    paintToggles();
-  });
-  tapsBtn.addEventListener('click', () => {
-    prefs.taps = !prefs.taps;
     save();
     paintToggles();
   });
@@ -620,7 +611,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       local.audioOn = false;
       return false;
     }
-    player.setMix({ music: prefs.music, taps: prefs.taps });
+    player.setMix({ music: prefs.music });
     if (clock.songT() > local.song.dur) return true;
     startSong(zero);
     show(audioChip, false);
@@ -716,9 +707,10 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       const r = stage.getBoundingClientRect();
       top = r && Number.isFinite(r.top) ? Math.max(head + 8, Math.min(240, r.top)) : top;
     }
-    const ht = heightFor(w.innerHeight, top, wide);
+    const padsOn = !stage.classList.contains('bd-keys');
+    const ht = heightFor(w.innerHeight, top, wide, padsOn);
     const wd = widthFor(LANES);
-    const sig = `${ht}|${wd}|${wide}`;
+    const sig = `${ht}|${wd}|${wide}|${padsOn}`;
     if (!force && sig === layoutSig) return;
     const moved = resized || (layoutSig !== '' && sig !== layoutSig);
     resized = false;
@@ -825,7 +817,6 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     local.sent = true;
     engine.act({ type: 'done', n: local.n, v: j.final() });
     announce(`Song over, you scored ${j.score}`);
-    if (j.full && j.stats.j > 0) player.swell();
     cue.play(j.full ? 'correct' : 'send');
     paintSpec();
   }
@@ -838,13 +829,11 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   }
 
   function handle(evs, now) {
-    const pal = laneStyle(local.lanes);
     for (const ev of evs) {
       if (ev.k === 'm') {
         local.missAt[ev.lane] = now;
         local.judgeFx[ev.lane] = { k: 'm', at: now, tag: '' };
         local.shakeAt = now;
-        player.miss();
         if (ev.lost >= LOST_MIN) {
           lostEl.textContent = `Streak lost (${ev.lost})`;
           lostEl.classList.add('is-on');
@@ -854,10 +843,8 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
         continue;
       }
       if (ev.k === 'x') {
-        player.stray();
         if (ev.reset) {
           showBanner('Too many extra taps - streak reset', true);
-          cue.play('error', { volume: 0.5 });
           if (ev.lost >= LOST_MIN) {
             lostEl.textContent = `Streak lost (${ev.lost})`;
             lostEl.classList.add('is-on');
@@ -870,10 +857,8 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       local.flash[ev.lane] = { k: ev.k, at: now };
       local.judgeFx[ev.lane] = { k: ev.k, at: now, tag: ev.k !== 'p' && a > 30 ? (ev.dt < 0 ? 'early' : 'late') : '' };
       draw.burst(ev.lane, now, still() ? 0 : lite ? 3 : 6);
-      player.hit(pal[ev.lane], ev.k);
       if (ev.up) {
         showBanner(`${TIERS[ev.up - 1]} streak!`);
-        player.tierUp();
       }
     }
   }
@@ -1063,10 +1048,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     else if (sT >= 0 && sT < 0.5) count = 'GO!';
     if (count !== local.count) {
       local.count = count;
-      if (count) {
-        announce(count === 'GO!' ? 'Song started' : count);
-        player.click(0, count === 'GO!');
-      }
+      if (count) announce(count === 'GO!' ? 'Song started' : count);
     }
     const wd = canvasW;
     const ht = canvasH;
@@ -1186,6 +1168,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     if (!keysSeen) {
       keysSeen = true;
       stage.classList.add('bd-keys');
+      layout();
     }
     if (typeof e.preventDefault === 'function') e.preventDefault();
     if (e.repeat || held.has(code)) return;
@@ -1260,6 +1243,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       letGo();
       local.hiddenAt = perf();
       player.mute(true);
+      stopSong();
       return;
     }
     player.mute(false);
@@ -1346,7 +1330,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
         r.faster ? h('li', { class: 'is-faster', text: 'Faster!' }) : null,
         h('li', { text: r.diffName }),
         h('li', { text: `4 lanes ${icons}` }),
-        h('li', { text: `${r.len} s` }),
+        h('li', { text: lengthLabel(r.len) }),
         r.notes ? h('li', { text: `${r.notes} notes` }) : null,
       ),
       loadBox(r),
@@ -1510,9 +1494,11 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   function update(next) {
     if (gone) return;
     snap = next;
-    const m = next ? beatdrop.model(next) : null;
+    const m = next && (!next.room || next.room.phase === 'game') ? beatdrop.model(next) : null;
     model = m;
     if (!m) {
+      stopSong();
+      local.audioOn = false;
       paintReady(cardBody, null);
       show(readyBox, false);
       show(stage, false);

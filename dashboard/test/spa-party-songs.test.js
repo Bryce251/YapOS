@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { installDom, flush, type, FakeEvent } from './dom-shim.js';
-import { clickTrack } from './song-synth.js';
+import { clickTrack, RATE } from './song-synth.js';
 
 const { document } = installDom({ url: 'https://dash.example.test/party/songs' });
 document.documentElement = document.createElement('html');
 if (typeof globalThis.requestAnimationFrame !== 'function') globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
 const { renderPartySongs, readSongs, canChangeNotes, RIGHTS_TEXT } = await import('../web/js/pages/owner-songs.js');
 const { uploadSong, hashParts, fileProblem, usageText, putPart, TOO_BIG } = await import('../web/js/song-upload.js');
-const { createSongEditor, clampOffset, defaultLength } = await import('../web/js/song-editor.js');
+const { createSongEditor, clampOffset, defaultLength, beatSummary, NO_BEAT } = await import('../web/js/song-editor.js');
+const { stripModel } = await import('../web/js/beat-grid.js');
 const { analyze } = await import('../web/js/beat-analyze.js');
 const { matchRoute } = await import('../web/js/router.js');
 const { state } = await import('../web/js/state.js');
@@ -20,7 +21,7 @@ const ME = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const digest = async (b) => createHash('sha256').update(b).digest().buffer;
 const noSleep = async () => {};
-const analysis = analyze(clickTrack(120, 40).pcm);
+const analysis = analyze(clickTrack(120, 40).pcm, RATE);
 
 function click(el) {
   el.dispatchEvent(new FakeEvent('click', { bubbles: true }));
@@ -82,7 +83,10 @@ test('the songs page is for Party staff only and is linked from the staff pages'
 test('the file is checked in the browser before anything is sent', () => {
   assert.equal(fileProblem(null), 'Pick a song file first.');
   assert.equal(fileProblem({ name: 'x.wav', size: 10 }), 'Pick an MP3, OGG or M4A song.');
-  assert.equal(fileProblem({ name: 'x.mp3', size: 9 * 1048576 }), TOO_BIG);
+  assert.equal(fileProblem({ name: 'x.mp3', size: 9 * 1048576 }), '');
+  assert.equal(fileProblem({ name: 'x.mp3', size: 10 * 1048576 }), '', 'a 10 MB song is fine');
+  assert.equal(fileProblem({ name: 'x.mp3', size: 10 * 1048576 + 1 }), TOO_BIG);
+  assert.equal(TOO_BIG, 'Songs can be up to 10 MB. Try a smaller MP3.');
   assert.equal(fileProblem({ name: 'x.MP3', size: 100 }), '');
   assert.equal(usageText({ count: 12, capCount: 40, bytes: 96 * 1048576, capBytes: 200 * 1048576 }), '12 of 40 songs, 96 MB of 200 MB');
 });
@@ -114,8 +118,9 @@ test('Upload stays off until the song is read, named and the rights box is ticke
   rights.checked = false;
   rights.dispatchEvent(new FakeEvent('change', { bubbles: true }));
   assert.equal(upload.disabled, true);
-  await page.openFile({ name: 'big.mp3', size: 9 * 1048576, arrayBuffer: async () => new ArrayBuffer(1) });
-  assert.match(main.textContent, /up to 8 MB/);
+  assert.match(main.textContent, /up to 10 MB and 30 seconds to 6 minutes long/);
+  await page.openFile({ name: 'big.mp3', size: 11 * 1048576, arrayBuffer: async () => new ArrayBuffer(1) });
+  assert.match(main.textContent, /Songs can be up to 10 MB/);
   assert.equal(page.editor, null);
 });
 
@@ -169,16 +174,151 @@ test('the offset clamps and the section chips follow the song length', () => {
   assert.equal(clampOffset(-999), -300);
   assert.equal(clampOffset('12.4'), 12);
   assert.equal(defaultLength(40000), 40000);
-  assert.equal(defaultLength(200000), 60000);
+  assert.equal(defaultLength(200000), 200000);
+  assert.equal(defaultLength(360000), 360000);
   const ed = createSongEditor({ analysis, buf: new ArrayBuffer(10) });
   for (let i = 0; i < 40; i++) ed.nudge(10);
   assert.equal(ed.state.offset, 300);
   assert.equal(ed.value().offset_ms, 300);
   const chips = ed.chips();
-  assert.deepEqual(chips.map((c) => c.textContent), ['45 s', '60 s', '90 s', '120 s']);
-  assert.ok(chips.every((c) => c.disabled), 'a 40 second song cannot pick longer parts');
-  assert.equal(ed.value().end_ms - ed.value().start_ms, 40000);
+  assert.deepEqual(chips.map((c) => c.textContent), ['45 s', '60 s', '90 s', '120 s', '150 s', 'Full song']);
+  assert.ok(chips.slice(0, 5).every((c) => c.disabled), 'a 40 second song cannot pick longer parts');
+  assert.equal(chips[5].disabled, false);
+  assert.equal(chips[5].getAttribute('aria-pressed'), 'true', 'Full song is picked for a new song');
+  assert.equal(ed.value().start_ms, 0);
+  assert.equal(ed.value().end_ms, 40000);
   ed.destroy();
+});
+
+const long = (() => {
+  let cached = null;
+  return () => {
+    cached = cached || analyze(clickTrack(120, 200).pcm, RATE);
+    return cached;
+  };
+})();
+
+test('Full song is the default, the best part sets where shorter games start and shorter parts work like before', () => {
+  const a = long();
+  const ed = createSongEditor({ analysis: a, buf: new ArrayBuffer(10) });
+  const chips = ed.chips();
+  assert.deepEqual(chips.map((c) => [c.textContent, c.disabled]), [['45 s', false], ['60 s', false], ['90 s', false], ['120 s', false], ['150 s', false], ['Full song', false]]);
+  let v = ed.value();
+  assert.equal(v.start_ms, 0);
+  assert.equal(v.end_ms, a.dur);
+  assert.equal(v.preview_ms, 0);
+  assert.equal(v.charts.len, a.dur);
+  assert.match(ed.el.textContent, /Plays the whole song \(3:20\)\. Shorter games start at 0:00\./);
+  const best = buttons(ed.el, /Find the best part/)[0];
+  click(best);
+  v = ed.value();
+  assert.equal(v.start_ms, 0, 'the whole song still plays');
+  assert.equal(v.end_ms, a.dur);
+  assert.ok(v.preview_ms >= 0 && v.preview_ms < a.dur);
+  assert.equal(v.preview_ms, ed.state.preview);
+  const range = ed.el.querySelectorAll('input').find((i) => i.type === 'range');
+  range.value = '90000';
+  range.dispatchEvent(new FakeEvent('change', { bubbles: true }));
+  v = ed.value();
+  assert.ok(Math.abs(v.preview_ms - 90000) <= 2000, `slider moves the best part ${v.preview_ms}`);
+  assert.equal(v.start_ms, 0);
+  const calls = [];
+  ed.strip.getContext = () => ({ fillRect: (...r) => calls.push(r), set fillStyle(c) { calls.push(['style', c]); } });
+  ed.state.view = v.preview_ms - 1000;
+  ed.redraw();
+  assert.ok(calls.some((c) => c[0] === 'style' && c[1] === '#34d399'), 'the best part shows on the waveform');
+  const at = v.preview_ms;
+  click(ed.chips()[1]);
+  v = ed.value();
+  assert.equal(v.start_ms, at, 'a shorter part starts at the best part');
+  assert.equal(v.end_ms - v.start_ms, 60000);
+  assert.equal(v.preview_ms, v.start_ms);
+  assert.equal(v.charts.len, 60000);
+  click(ed.chips()[4]);
+  assert.equal(ed.value().end_ms - ed.value().start_ms, 150000);
+  click(ed.chips()[5]);
+  v = ed.value();
+  assert.equal(v.start_ms, 0);
+  assert.equal(v.end_ms, a.dur);
+  ed.destroy();
+  const old = createSongEditor({ analysis: a, buf: new ArrayBuffer(10), initial: { start_ms: 20000, end_ms: 110000, offset_ms: 5, preview_ms: 20000 } });
+  assert.deepEqual([old.value().start_ms, old.value().end_ms, old.value().preview_ms], [20000, 110000, 20000]);
+  assert.equal(old.chips()[2].getAttribute('aria-pressed'), 'true');
+  old.destroy();
+  const whole = createSongEditor({ analysis: a, buf: new ArrayBuffer(10), initial: { start_ms: 0, end_ms: a.dur, offset_ms: 0, preview_ms: 30000 } });
+  assert.deepEqual([whole.value().start_ms, whole.value().end_ms, whole.value().preview_ms], [0, a.dur, 30000]);
+  assert.equal(whole.chips()[5].getAttribute('aria-pressed'), 'true');
+  whole.destroy();
+});
+
+test('the beat map shows beats, bar starts and hits, and half, double, shift and bar fix the grid', () => {
+  const ed = createSongEditor({ analysis, buf: new ArrayBuffer(10) });
+  assert.match(ed.el.textContent, /Beat map/);
+  assert.match(beatSummary(ed.analysis), /Tempo 120 BPM, 4 beats a bar, straight feel/);
+  const calls = [];
+  ed.strip.getContext = () => ({ fillRect: (...a) => calls.push(a), set fillStyle(v) { calls.push(['style', v]); } });
+  ed.redraw();
+  assert.ok(calls.filter((c) => c[0] === 'style' && c[1] === '#ffffff').length >= 2, 'bar lines drawn');
+  const m = stripModel(ed.analysis, 0, 8000);
+  assert.ok(m.beats.length >= 14 && m.beats.length <= 17);
+  assert.equal(m.beats.filter((b) => b.down).length, Math.round(m.beats.length / 4));
+  assert.ok(m.onsets.length >= 14 && m.env.length > 100);
+  const beats0 = ed.analysis.beats.slice();
+  click(ed.controls.half);
+  assert.ok(Math.abs(ed.analysis.bpm - 60) <= 0.5, `half ${ed.analysis.bpm}`);
+  assert.ok(Math.abs(ed.value().charts.bpm - 60) <= 0.5);
+  assert.match(beatSummary(ed.analysis), /found 120/);
+  click(ed.controls.double);
+  assert.ok(Math.abs(ed.analysis.bpm - 120) <= 0.5, `double ${ed.analysis.bpm}`);
+  const near = (t) => ed.analysis.beats.reduce((b, x) => (Math.abs(x - t) < Math.abs(b - t) ? x : b), Infinity);
+  for (const t of beats0.slice(4, 20)) assert.ok(Math.abs(near(t) - t) <= 10, `beat ${t} back in place`);
+  click(ed.controls.later);
+  for (const t of beats0.slice(4, 20)) assert.ok(Math.abs(near(t + 125) - (t + 125)) <= 10, `beat ${t} moved a quarter beat later`);
+  click(ed.controls.earlier);
+  for (const t of beats0.slice(4, 20)) assert.ok(Math.abs(near(t) - t) <= 10, `beat ${t} moved back`);
+  const down = ed.analysis.downbeat;
+  click(ed.controls.bar);
+  assert.equal(ed.analysis.downbeat, (down + 1) % 4);
+  assert.ok(ed.value().charts);
+  ed.destroy();
+});
+
+test('tap tempo sets the grid from the taps and Re-detect follows that tempo', async () => {
+  let clock = 1000;
+  const asked = [];
+  const fast = analyze(clickTrack(150, 40).pcm, RATE);
+  const ed = createSongEditor({ analysis, buf: new ArrayBuffer(10), now: () => clock, redetect: async (hint) => { asked.push(hint); return fast; } });
+  for (let i = 0; i < 3; i++) {
+    click(ed.controls.tap);
+    clock += 400;
+  }
+  assert.match(ed.el.textContent, /1 more/);
+  assert.ok(Math.abs(ed.analysis.bpm - 120) <= 0.5);
+  click(ed.controls.tap);
+  assert.ok(Math.abs(ed.analysis.bpm - 150) <= 0.5, `tapped ${ed.analysis.bpm}`);
+  assert.equal(ed.controls.tap.getAttribute('aria-pressed'), 'true');
+  clock += 5000;
+  click(ed.controls.tap);
+  assert.match(ed.el.textContent, /3 more/);
+  click(ed.controls.redetect);
+  await flush();
+  assert.deepEqual(asked, [150]);
+  assert.equal(ed.analysis, fast);
+  assert.ok(ed.value().charts);
+  ed.destroy();
+});
+
+test('a song with no beat stops before the editor opens', async () => {
+  state.partyAdmin = true;
+  state.user = { id: ME };
+  const api = fakeApi({ songs: [], usage: { count: 0, bytes: 0, capCount: 40, capBytes: 200 * 1048576 }, role: 'admin' });
+  const silent = analyze(new Float32Array(RATE * 31), RATE);
+  const { main, page } = mount(api, { decode: async () => ({ pcm: new Float32Array(10), sr: RATE, duration_ms: 40000 }), analyze: async () => silent });
+  await flush();
+  await page.openFile({ name: 'quiet.mp3', size: 3000, arrayBuffer: async () => new ArrayBuffer(3000) });
+  await flush();
+  assert.equal(page.editor, null);
+  assert.match(main.textContent, new RegExp(NO_BEAT.replace(/[.]/g, '\.')));
 });
 
 test('delete asks first, and only the uploader or owner sees it', async () => {

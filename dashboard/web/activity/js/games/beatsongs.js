@@ -1,11 +1,30 @@
 import { DIFFS, TAIL_SECS, LANES, diffIdx, prepSong } from './beatchart.js';
+import { CHART_MAX_BYTES, SECTION_MIN_MS, SECTION_MAX_MS, OBJECT_CAPS, NPS_CAPS } from './beatcodec.js';
+
+export { CHART_MAX_BYTES, SECTION_MIN_MS, SECTION_MAX_MS };
+export const CHART_CAPS = OBJECT_CAPS;
+export const CHART_PEAK = NPS_CAPS;
+export const FULL_SONG = 0;
+export const SONG_LENGTHS = Object.freeze([45, 60, 90, 120, 150]);
+export const LENGTH_CHOICES = Object.freeze([...SONG_LENGTHS, FULL_SONG]);
+export const DEFAULT_LENGTH = 60;
+
+export function songLength(v) {
+  if (v === FULL_SONG || v === String(FULL_SONG)) return FULL_SONG;
+  const n = Number(v);
+  return SONG_LENGTHS.includes(n) ? n : DEFAULT_LENGTH;
+}
+
+export function lengthLabel(v) {
+  const n = songLength(v);
+  return n === FULL_SONG ? 'Full song' : `${n} s`;
+}
 
 export const CATALOG_URL = '/api/activity/songs';
 export const SONG_URL = '/api/activity/songs/';
 export const CATALOG_TTL_MS = 60000;
 export const CATALOG_RETRY_MS = 10000;
 export const CHART_TIMEOUT_MS = 10000;
-export const CHART_MAX_BYTES = 98304;
 export const CATALOG_MAX = 100;
 export const SONG_ID_RE = /^s-[0-9a-f]{16}$/;
 export const AUDIO_RE = /^\/(?:song-audio|media\/songs)\/s-[0-9a-f]{16}\.(?:mp3|ogg|m4a)$/;
@@ -19,10 +38,6 @@ export const SAME_LANE_MS = 80;
 export const HOLD_CS_MIN = 20;
 export const HOLD_CS_MAX = 400;
 export const MARKS_MAX = 16;
-export const SECTION_MIN_MS = 30000;
-export const SECTION_MAX_MS = 120000;
-export const CHART_CAPS = Object.freeze({ easy: 400, normal: 700, hard: 1100, expert: 1600 });
-export const CHART_PEAK = Object.freeze({ easy: 4, normal: 6, hard: 9, expert: 13 });
 export const HOLD_DIFFS = Object.freeze(['hard', 'expert']);
 export const CUT_LEAD_MS = 1000;
 export const HOLD_MIN_MS = 200;
@@ -270,7 +285,9 @@ export function readSong(body, id, cv) {
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start) fail('The song section is broken.');
   if (!Number.isInteger(off) || Math.abs(off) > OFFSET_MAX) fail('The song offset is out of range.');
   const chart = validateChart(body.charts, end - start);
-  return Object.freeze({ id, cv, title: cleanText(body.title, TITLE_MAX) || 'Song', artist: cleanText(body.artist, ARTIST_MAX), credit: cleanText(body.credit, CREDIT_MAX), url: body.url, dur: Number(body.dur) || 0, start, end, off, ...chart });
+  const at = Number(body.preview);
+  const pre = Number.isInteger(at) && at >= start && at < end ? at - start : 0;
+  return Object.freeze({ id, cv, title: cleanText(body.title, TITLE_MAX) || 'Song', artist: cleanText(body.artist, ARTIST_MAX), credit: cleanText(body.credit, CREDIT_MAX), url: body.url, dur: Number(body.dur) || 0, start, end, off, pre, ...chart });
 }
 
 export function chartKey(id, cv) {
@@ -329,27 +346,40 @@ export function loadChart(id, cv) {
   return p;
 }
 
+export function songWindow(e, len) {
+  const total = Math.max(0, Number(e && e.len) || 0);
+  const secs = songLength(len);
+  const want = secs * 1000;
+  if (secs === FULL_SONG || want >= total) return { skip: 0, cut: total };
+  const pre = Math.max(0, Math.round(Number(e.pre) || 0));
+  return { skip: Math.min(pre, total - want), cut: want };
+}
+
 export function chartSong(id, cv, df, len) {
   const e = chartEntry(id, cv);
   if (!e) return null;
   const di = diffIdx(df);
-  const secs = [45, 60, 90, 120].includes(Number(len)) ? Number(len) : 60;
+  const secs = songLength(len);
   const key = `${chartKey(id, cv)}:${di}:${secs}`;
   if (built.has(key)) return built.get(key);
   const d = DIFFS[di];
-  const cut = Math.min(e.len, secs * 1000);
+  const { skip, cut } = songWindow(e, secs);
   const notes = [];
   for (const n of e.d[d.id]) {
-    if (n.t > cut - CUT_LEAD_MS) break;
-    const x = { t: n.t, l: n.l };
+    if (n.t < skip + (skip ? LEAD_MS : 0)) continue;
+    const t = n.t - skip;
+    if (t > cut - CUT_LEAD_MS) break;
+    const x = { t, l: n.l };
     if (n.e) {
-      const end = Math.min(n.e, cut - END_PAD_MS);
-      if (end - n.t >= HOLD_MIN_MS) x.e = end;
+      const end = Math.min(n.e - skip, cut - END_PAD_MS);
+      if (end - t >= HOLD_MIN_MS) x.e = end;
     }
-    if (notes.length && notes[notes.length - 1].t === n.t) x.c = 1;
+    if (notes.length && notes[notes.length - 1].t === t) x.c = 1;
     notes.push(x);
   }
   const bpm = e.bpm;
+  const beatMs = 60000 / bpm;
+  const b0 = skip ? Math.round((((e.b0 - skip) % beatMs) + beatMs) % beatMs) : e.b0;
   const song = prepSong({
     id,
     cv,
@@ -357,13 +387,15 @@ export function chartSong(id, cv, df, len) {
     lanes: LANES,
     bpm,
     beat: 60 / bpm,
-    b0: e.b0 / 1000,
-    marks: e.marks.filter((m) => m[0] < cut).map((m) => ({ t: m[0] / 1000, sec: m[1] })),
+    b0: b0 / 1000,
+    marks: e.marks.filter((m) => m[0] >= skip && m[0] - skip < cut).map((m) => ({ t: (m[0] - skip) / 1000, sec: m[1] })),
     look: d.look,
     notes,
     cut,
+    skip,
+    full: secs === FULL_SONG,
     dur: cut / 1000 + TAIL_SECS,
-    meta: Object.freeze({ title: e.title, artist: e.artist, credit: e.credit, url: e.url, start: e.start, off: e.off }),
+    meta: Object.freeze({ title: e.title, artist: e.artist, credit: e.credit, url: e.url, start: e.start + skip, off: e.off }),
   });
   built.set(key, song);
   while (built.size > 6) built.delete(built.keys().next().value);

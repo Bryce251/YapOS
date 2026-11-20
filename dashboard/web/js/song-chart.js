@@ -1,18 +1,23 @@
 import { encodeNotes, decodeNotes, validateCharts, objectCount, peakNps, DIFF_IDS, OBJECT_CAPS, NPS_CAPS, HOLD_DIFFS, LANES, LANE_REST_MS, FIRST_NOTE_MS, END_PAD_MS, HOLD_MIN_CS, HOLD_MAX_CS, MARKS_MAX, B0_MAX, BPM_MIN, BPM_MAX, MAX_CHORD, MAX_ACTIVE, CHART_V } from '../activity/js/games/beatcodec.js';
+import { bpmOf } from './beat-grid.js';
 
-export const SECTION_CHOICES = Object.freeze([45000, 60000, 90000, 120000]);
+export const SECTION_CHOICES = Object.freeze([45000, 60000, 90000, 120000, 150000]);
+export const FULL_SECTION = 0;
+export const BEST_PART_MS = 60000;
 export const CHART_DIFFS = Object.freeze({
-  easy: Object.freeze({ grid: 4, base: 1.4, space: 300, gap: 280, chord: null, hold: null, runs: false, trills: true }),
-  normal: Object.freeze({ grid: 2, base: 2.5, space: 180, gap: 200, chord: Object.freeze({ top: 0.03, bars: 2, per: 1, downbeat: true }), hold: null, runs: false, trills: true }),
-  hard: Object.freeze({ grid: 1, loud: 0.5, base: 3.8, space: 110, gap: 140, chord: Object.freeze({ top: 0.08, bars: 1, per: 1, downbeat: false }), hold: Object.freeze({ min: 600, bars: 2 }), runs: false, trills: false }),
-  expert: Object.freeze({ grid: 1, base: 5.4, space: 75, gap: 100, chord: Object.freeze({ top: 0.15, bars: 1, per: 2, downbeat: false, multi: true }), hold: Object.freeze({ min: 400, bars: 1 }), runs: true, trills: false }),
+  easy: Object.freeze({ q: 4, nps: 1.3, space: 380, jack: 700, chord: null, hold: null, runs: false, trills: true }),
+  normal: Object.freeze({ q: 2, nps: 2.4, space: 200, jack: 420, chord: Object.freeze({ top: 0.1, bars: 2, per: 1, down: true, loud: 0.5 }), hold: null, runs: false, trills: true }),
+  hard: Object.freeze({ q: 2, loud: 0.45, nps: 3.7, space: 115, jack: 240, chord: Object.freeze({ top: 0.18, bars: 1, per: 1, down: false, loud: 0 }), hold: Object.freeze({ min: 500, bars: 2 }), runs: false, trills: false }),
+  expert: Object.freeze({ q: 1, nps: 5.3, space: 80, jack: 150, chord: Object.freeze({ top: 0.3, bars: 1, per: 2, down: false, loud: 0, multi: true }), hold: Object.freeze({ min: 350, bars: 1 }), runs: true, trills: false }),
 });
+export const SECTION_SCALE = Object.freeze({ intro: 0.6, quiet: 0.7, build: 0.95, main: 1, drop: 1.2 });
 export const POS_BONUS = Object.freeze({ 4: 0.6, 2: 0.3, 1: 0.1 });
+export const KIND_HOME = Object.freeze({ kick: Object.freeze([0, 1]), snare: Object.freeze([2, 3]), hat: Object.freeze([3, 1]) });
+export const PHRASE_BARS = 4;
 export const RUN_MIN = 4;
 export const RUN_MAX = 8;
-export const CONTOUR_STEP = 0.15;
 export const HOLD_MAX_MS = 3000;
-export const BAND_PITCH = Object.freeze({ L: 6, M: 9, H: 12 });
+export const TONAL_MEMORY_MS = 2000;
 
 export function seeded(seed) {
   let a = (Number(seed) >>> 0) || 1;
@@ -25,47 +30,78 @@ export function seeded(seed) {
   };
 }
 
-function rankAt(energy, t) {
-  for (const w of energy) if (t >= w.t && t < w.end) return w.rank;
-  return energy.length ? energy[energy.length - 1].rank : 0.5;
+function windowAt(energy, t) {
+  for (const w of energy) if (t >= w.t && t < w.end) return w;
+  return energy.length ? energy[energy.length - 1] : { t: 0, end: Infinity, rank: 0.5, label: 'main' };
+}
+
+function leadKind(c) {
+  const k = c.kinds;
+  if (k.has('kick') && c.q === 4 && k.get('kick') >= 0.5 * c.s) return 'kick';
+  if (k.has('snare') && c.back && k.get('snare') >= 0.5 * c.s) return 'snare';
+  if (k.has('tonal') && k.get('tonal') >= 0.6 * c.s && c.pitch) return 'tonal';
+  let best = 'hat';
+  let bs = -1;
+  for (const [kind, s] of k) if (s > bs) { bs = s; best = kind; }
+  return best === 'tonal' && !c.pitch ? 'snare' : best;
 }
 
 export function candidates(analysis, start, end) {
   const lo = start + FIRST_NOTE_MS;
   const hi = end - END_PAD_MS;
+  const meter = analysis.meter || 4;
+  const db = analysis.downbeat || 0;
+  const energy = analysis.energy || [];
   const by = new Map();
   for (const o of analysis.onsets) {
     if (o.t < lo || o.t > hi) continue;
     let c = by.get(o.gi);
     if (!c) {
-      const g = analysis.grid[o.gi];
-      c = { t: o.t, gi: o.gi, q: o.q, beat: g ? g.beat : 0, bands: new Set(), s: 0, pitch: 0, pitchBand: '' };
+      const g = analysis.grid[o.gi] || {};
+      c = { t: o.t, gi: o.gi, q: o.q, beat: g.beat || 0, k: g.k || 0, kinds: new Map(), bands: new Set(), s: 0, pitch: 0, ts: 0, off: 1 };
       by.set(o.gi, c);
     }
+    const kind = o.kind || (o.band === 'L' ? 'kick' : o.band === 'H' ? 'hat' : 'snare');
+    c.kinds.set(kind, Math.max(c.kinds.get(kind) || 0, o.s));
     c.bands.add(o.band);
+    if (o.s > c.s) c.t = o.t;
     c.s = Math.max(c.s, o.s);
-    if (o.band === 'M' && o.pitch > 0) {
+    c.off = Math.min(c.off, o.off || 0);
+    if (o.pitch && (kind === 'tonal' || !c.pitch) && o.s >= c.ts) {
       c.pitch = o.pitch;
-      c.pitchBand = 'M';
-    } else if (!c.pitchBand) {
-      c.pitch = BAND_PITCH[o.band];
+      c.ts = o.s;
     }
   }
   const out = [...by.values()].sort((a, b) => a.t - b.t);
+  const slots = new Map();
   for (const c of out) {
-    c.rank = rankAt(analysis.energy, c.t);
-    c.bar = Math.floor((c.beat - (analysis.downbeat || 0)) / 4);
-    c.down = (c.beat - (analysis.downbeat || 0)) % 4 === 0 && c.q === 4;
-    c.score = c.s + POS_BONUS[c.q] + (c.bands.has('L') && c.q === 4 ? 0.2 : 0) + (c.bands.has('M') ? 0.15 : 0);
+    const rel = c.beat - db;
+    c.bar = Math.floor(rel / meter);
+    c.pos = rel - c.bar * meter;
+    c.down = c.pos === 0 && c.q === 4;
+    c.back = meter === 4 && (c.pos === 1 || c.pos === 3) && c.q === 4;
+    c.kind = leadKind(c);
+    const w = windowAt(energy, c.t);
+    c.rank = w.rank;
+    c.label = w.label || 'main';
+    c.slot = `${c.pos}.${c.k}.${c.kind}`;
+    const sl = slots.get(c.slot) || { n: 0, s: 0 };
+    sl.n += 1;
+    sl.s += c.s;
+    slots.set(c.slot, sl);
+  }
+  const bars = new Set(out.map((c) => c.bar)).size || 1;
+  for (const c of out) {
+    const sl = slots.get(c.slot);
+    const steady = (sl.s / sl.n) * Math.min(1, sl.n / bars);
+    c.score = 0.4 * c.s + 0.6 * steady + POS_BONUS[c.q] + (c.down ? 0.25 : 0) + (c.kind === 'kick' && c.q === 4 ? 0.2 : 0) + (c.kind === 'snare' && c.back ? 0.25 : 0) + (c.kinds.has('tonal') ? 0.15 : 0) + (c.kinds.size >= 2 ? 0.1 : 0) - 0.6 * c.off;
   }
   return out;
 }
 
 function allowed(c, cfg) {
-  if (cfg.grid === 4) return c.q === 4;
-  if (cfg.grid === 2) return c.q >= 2;
-  if (cfg.loud !== undefined) return c.q >= 2 || c.rank > cfg.loud;
-  return true;
+  if (c.q >= cfg.q) return true;
+  return cfg.loud !== undefined && c.rank > cfg.loud;
 }
 
 function fits(times, t, space) {
@@ -92,15 +128,20 @@ function insertSorted(times, t) {
   times.splice(lo, 0, t);
 }
 
+export function sectionTarget(cfg, w) {
+  const secs = (w.end - w.t) / 1000;
+  return Math.round(cfg.nps * (0.55 + 0.7 * w.rank) * (SECTION_SCALE[w.label] || 1) * secs);
+}
+
 function pickTimes(cands, prev, cfg, energy, rand) {
   const chosen = new Set(prev);
   const times = cands.filter((c) => chosen.has(c.gi)).map((c) => c.t).sort((a, b) => a - b);
   const jitter = new Map(cands.map((c) => [c.gi, rand() * 1e-3]));
-  for (const w of energy) {
+  const wins = energy.length ? energy : [{ t: 0, end: Infinity, rank: 0.5, label: 'main' }];
+  for (const w of wins) {
     const inWin = cands.filter((c) => c.t >= w.t && c.t < w.end);
     if (!inWin.length) continue;
-    const secs = (w.end - w.t) / 1000;
-    const target = Math.round(cfg.base * (0.6 + 0.8 * w.rank) * secs);
+    const target = sectionTarget(cfg, { ...w, end: Math.min(w.end, inWin[inWin.length - 1].t + 1000), t: Math.max(w.t, inWin[0].t - 1000) });
     let have = inWin.filter((c) => chosen.has(c.gi)).length;
     const pool = inWin.filter((c) => !chosen.has(c.gi) && allowed(c, cfg)).sort((a, b) => b.score + jitter.get(b.gi) - (a.score + jitter.get(a.gi)));
     for (const c of pool) {
@@ -114,23 +155,41 @@ function pickTimes(cands, prev, cfg, energy, rand) {
   return chosen;
 }
 
-function topScore(list, frac) {
+function addSustains(cands, chosen, analysis, cfg) {
+  const byGi = new Map(cands.map((c) => [c.gi, c]));
+  const times = cands.filter((c) => chosen.has(c.gi)).map((c) => c.t).sort((a, b) => a - b);
+  for (const s of analysis.sustains || []) {
+    const c = byGi.get(s.gi);
+    if (!c || chosen.has(c.gi) || s.end - s.t < cfg.hold.min || !fits(times, c.t, cfg.space)) continue;
+    chosen.add(c.gi);
+    insertSorted(times, c.t);
+  }
+}
+
+function cutoff(list, frac) {
   if (!list.length) return Infinity;
   const s = list.map((c) => c.score).sort((a, b) => b - a);
   return s[Math.min(s.length - 1, Math.max(0, Math.ceil(frac * s.length) - 1))];
 }
 
-function planChords(list, cfg) {
+function planChords(list, cfg, marks) {
   const out = new Set();
-  if (!cfg.chord) return out;
   const ch = cfg.chord;
-  const cut = topScore(list, ch.top);
+  if (!ch) return out;
+  const cut = cutoff(list, ch.top);
   const used = new Map();
+  const drops = (marks || []).filter((m) => m[1] === 'drop').map((m) => m[0]);
+  const atDrop = new Set();
+  for (const d of drops) {
+    const c = list.find((x) => x.t >= d - 30 && x.q === 4);
+    if (c) atDrop.add(c.gi);
+  }
   for (const c of list) {
-    const strong = c.score >= cut || (ch.multi && c.bands.size >= 2);
-    if (!strong) continue;
-    if (ch.downbeat && !c.down) continue;
-    if (!ch.downbeat && c.q < 2) continue;
+    const accent = atDrop.has(c.gi) || (c.score >= cut && (c.kinds.has('kick') || c.kinds.size >= 2 || c.down)) || (ch.multi && c.kinds.size >= 2 && c.s >= 0.6);
+    if (!accent) continue;
+    if (ch.down && !c.down) continue;
+    if (!ch.down && c.q < 2) continue;
+    if (c.rank < ch.loud && !atDrop.has(c.gi)) continue;
     const key = Math.floor(c.bar / ch.bars);
     const n = used.get(key) || 0;
     if (n >= ch.per) continue;
@@ -140,31 +199,21 @@ function planChords(list, cfg) {
   return out;
 }
 
-function addSustains(cands, chosen, analysis, cfg) {
-  const byGi = new Map(cands.map((c) => [c.gi, c]));
-  const times = cands.filter((c) => chosen.has(c.gi)).map((c) => c.t).sort((a, b) => a - b);
-  for (const s of analysis.sustains) {
-    const c = byGi.get(s.gi);
-    if (!c || chosen.has(c.gi) || s.end - s.t < cfg.hold.min || !fits(times, c.t, cfg.space)) continue;
-    chosen.add(c.gi);
-    insertSorted(times, c.t);
-  }
-}
-
 function planHolds(list, analysis, cfg, end) {
   const out = new Map();
   if (!cfg.hold) return out;
   const byGi = new Map(list.map((c) => [c.gi, c]));
-  const used = new Set();
   let busyUntil = -Infinity;
-  for (const s of analysis.sustains) {
+  const used = new Set();
+  for (const s of analysis.sustains || []) {
     const c = byGi.get(s.gi);
-    if (!c) continue;
-    const stop = Math.min(s.end, c.t + HOLD_MAX_MS, end - END_PAD_MS);
+    if (!c || c.t <= busyUntil) continue;
+    const key = Math.floor(c.bar / cfg.hold.bars);
+    if (used.has(key)) continue;
+    const next = list.find((x) => x.t > c.t + 200 && x.kinds.has('tonal') && x.pitch === s.pitch);
+    const stop = Math.min(s.end, c.t + HOLD_MAX_MS, end - END_PAD_MS, next ? next.t - LANE_REST_MS - 10 : Infinity);
     const len = Math.floor((stop - c.t) / 10) * 10;
     if (len < cfg.hold.min || len < HOLD_MIN_CS * 10 || len > HOLD_MAX_CS * 10) continue;
-    const key = Math.floor(c.bar / cfg.hold.bars);
-    if (used.has(key) || c.t <= busyUntil) continue;
     used.add(key);
     busyUntil = c.t + len;
     out.set(c.gi, c.t + len);
@@ -172,23 +221,24 @@ function planHolds(list, analysis, cfg, end) {
   return out;
 }
 
-function planRuns(list, rand) {
+function planRuns(list) {
   const out = new Map();
   let i = 0;
   let up = true;
+  const drum = (c) => c.kind === 'hat' || c.kind === 'snare';
   while (i < list.length) {
     let j = i;
-    while (j + 1 < list.length && list[j + 1].gi === list[j].gi + 1 && list[j + 1].bands.has('H')) j += 1;
+    while (j + 1 < list.length && list[j + 1].gi === list[j].gi + 1 && drum(list[j + 1])) j += 1;
     const len = j - i + 1;
-    if (len >= RUN_MIN && list[i].bands.has('H')) {
-      const trill = rand() < 0.25;
+    if (len >= RUN_MIN && drum(list[i])) {
       for (let k = 0; k < len; k++) {
         if (k >= RUN_MAX) {
           out.set(list[i + k].gi, -1);
           continue;
         }
-        const step = trill ? k % 2 : k % LANES;
-        out.set(list[i + k].gi, up ? step : (trill ? 1 - step : LANES - 1 - step));
+        const step = k % (2 * LANES - 2);
+        const lane = step < LANES ? step : 2 * LANES - 2 - step;
+        out.set(list[i + k].gi, up ? lane : LANES - 1 - lane);
       }
       up = !up;
     }
@@ -197,73 +247,139 @@ function planRuns(list, rand) {
   return out;
 }
 
-function quartileLane(pitches, p) {
-  const sorted = [...pitches].sort((a, b) => a - b);
+function registerLane(pitches, p) {
+  if (pitches.length < 2) return 1 + (p % 2);
   let below = 0;
-  for (const x of sorted) if (x < p) below += 1;
-  const rank = sorted.length > 1 ? below / (sorted.length - 1) : 0.5;
-  return Math.min(LANES - 1, Math.floor(rank * LANES));
+  for (const x of pitches) if (x < p) below += 1;
+  return Math.min(LANES - 1, Math.floor((below / pitches.length) * LANES));
 }
 
-function nearestFree(free, t, want, rand, avoid = new Set()) {
-  const order = [0, 1, 2, 3].filter((l) => !avoid.has(l) && t >= free[l]).sort((a, b) => Math.abs(a - want) - Math.abs(b - want) || rand() - 0.5);
-  return order.length ? order[0] : -1;
+function signature(notes) {
+  return notes.map((c) => `${c.pos}.${c.k}.${c.kind}${c.kind === 'tonal' ? c.pitch : ''}`).join('|');
+}
+
+function makeLaner(cfg, rand) {
+  const homes = {
+    kick: rand() < 0.5 ? KIND_HOME.kick : [KIND_HOME.kick[1], KIND_HOME.kick[0]],
+    snare: rand() < 0.5 ? KIND_HOME.snare : [KIND_HOME.snare[1], KIND_HOME.snare[0]],
+    hat: KIND_HOME.hat,
+  };
+  const free = [-Infinity, -Infinity, -Infinity, -Infinity];
+  const last = [-Infinity, -Infinity, -Infinity, -Infinity];
+  const recent = [];
+  let hatFlip = rand() < 0.5 ? 0 : 1;
+  let tonal = null;
+  let kickPrev = null;
+  const pitches = [];
+
+  function want(c, run) {
+    if (run !== undefined) return run;
+    if (c.kind === 'kick') {
+      const home = homes.kick;
+      const l = kickPrev && c.t - kickPrev.t < cfg.jack ? home[(home.indexOf(kickPrev.l) + 1) % 2] : home[0];
+      return l;
+    }
+    if (c.kind === 'snare') return homes.snare[c.t - last[homes.snare[0]] < cfg.jack ? 1 : 0];
+    if (c.kind === 'hat') {
+      hatFlip ^= 1;
+      return homes.hat[hatFlip];
+    }
+    pitches.push(c.pitch);
+    if (pitches.length > 16) pitches.shift();
+    const reg = registerLane(pitches, c.pitch);
+    if (!tonal || c.t - tonal.t > TONAL_MEMORY_MS) return reg;
+    const d = c.pitch - tonal.pitch;
+    let l = d > 0 ? tonal.l + 1 : d < 0 ? tonal.l - 1 : tonal.l;
+    if (l >= LANES) l = LANES - 2;
+    if (l < 0) l = 1;
+    if (Math.abs(l - reg) >= 2) l += Math.sign(reg - l);
+    return l;
+  }
+
+  function trillish(l) {
+    if (!cfg.trills || recent.length < 4) return false;
+    const [a, b, x, y] = recent.slice(-4);
+    return a === x && b === y && a !== b && l === a;
+  }
+
+  function settle(c, l, avoid = null) {
+    const order = [l, l ^ 1, ...[0, 1, 2, 3].sort((p, q) => Math.abs(p - l) - Math.abs(q - l) || rand() - 0.5)];
+    const seen = new Set();
+    let fallback = -1;
+    for (const x of order) {
+      if (seen.has(x) || x === avoid) continue;
+      seen.add(x);
+      if (c.t < free[x]) continue;
+      if (c.t - last[x] >= cfg.jack && !trillish(x)) return x;
+      if (fallback < 0 || last[x] < last[fallback]) fallback = x;
+    }
+    return fallback;
+  }
+
+  function place(c, l, end) {
+    free[l] = Math.max(c.t + Math.min(cfg.jack, 160), (end !== undefined ? end : c.t) + LANE_REST_MS);
+    last[l] = end !== undefined ? end : c.t;
+  }
+
+  function commit(c, l) {
+    recent.push(l);
+    if (recent.length > 6) recent.shift();
+    if (c.kind === 'tonal') tonal = { t: c.t, pitch: c.pitch, l };
+    if (c.kind === 'kick') kickPrev = { t: c.t, l };
+  }
+
+  return { want, settle, place, commit, free };
 }
 
 function assignLanes(list, cfg, plans, rand) {
   const notes = [];
-  const free = [-Infinity, -Infinity, -Infinity, -Infinity];
-  const pitches = [];
-  const recent = [];
-  let prev = null;
+  const laner = makeLaner(cfg, rand);
+  const patterns = new Map();
+  const flipStart = rand() < 0.5;
   let holdUntil = -Infinity;
+  const bars = new Map();
   for (const c of list) {
-    const run = plans.runs.get(c.gi);
-    if (run === -1) continue;
-    pitches.push(c.pitch);
-    if (pitches.length > 8) pitches.shift();
-    const q = quartileLane(pitches, c.pitch);
-    let lane;
-    if (run !== undefined) lane = run;
-    else if (!prev) lane = q;
-    else {
-      const d = c.pitch - prev.pitch;
-      if (d >= CONTOUR_STEP) lane = prev.l + 1;
-      else if (d <= -CONTOUR_STEP) lane = prev.l - 1;
-      else lane = prev.l ^ 1;
-      if (lane >= LANES) lane = LANES - 2;
-      if (lane < 0) lane = 1;
-      if (Math.abs(lane - q) >= 2) lane += Math.sign(q - lane);
-    }
-    const chord = plans.chords.has(c.gi) && c.t > holdUntil;
-    if (chord && c.down && c.bands.has('L') && c.t >= free[0] && c.t >= free[3]) lane = 0;
-    if (cfg.trills && recent.length >= 4) {
-      const [a, b, x, y] = recent.slice(-4);
-      if (a === x && b === y && a !== b && lane === a) {
-        const other = nearestFree(free, c.t, lane, rand, new Set([a, b]));
-        if (other >= 0) lane = other;
+    if (!bars.has(c.bar)) bars.set(c.bar, []);
+    bars.get(c.bar).push(c);
+  }
+  for (const [bar, inBar] of bars) {
+    const mirrored = (Math.floor(bar / PHRASE_BARS) % 2 === 1) !== flipStart;
+    const sig = signature(inBar);
+    const stored = patterns.get(sig);
+    const base = [];
+    for (let j = 0; j < inBar.length; j++) {
+      const c = inBar[j];
+      const run = plans.runs.get(c.gi);
+      if (run === -1) {
+        base.push(-1);
+        continue;
+      }
+      const w = stored && stored[j] >= 0 ? stored[j] : laner.want(c, run);
+      const lane = laner.settle(c, mirrored ? LANES - 1 - w : w);
+      if (lane < 0) {
+        base.push(-1);
+        continue;
+      }
+      base.push(mirrored ? LANES - 1 - lane : lane);
+      const holdEnd = plans.holds.get(c.gi);
+      const note = { t: Math.round(c.t), l: lane, w: c.score };
+      if (holdEnd !== undefined && c.t > holdUntil) {
+        note.e = holdEnd;
+        holdUntil = holdEnd;
+      }
+      notes.push(note);
+      laner.place(c, lane, note.e);
+      laner.commit(c, lane);
+      if (plans.chords.has(c.gi) && note.e === undefined && c.t > holdUntil) {
+        const other = lane < 2 ? lane + 2 : lane - 2;
+        const second = laner.settle(c, other, lane);
+        if (second >= 0 && (second < 2) !== (lane < 2)) {
+          notes.push({ t: Math.round(c.t), l: second, w: c.score - 0.01 });
+          laner.place(c, second);
+        }
       }
     }
-    if (c.t < free[lane]) lane = nearestFree(free, c.t, lane, rand);
-    if (lane < 0) continue;
-    const holdEnd = plans.holds.get(c.gi);
-    const note = { t: Math.round(c.t), l: lane, w: c.score };
-    const canHold = holdEnd !== undefined && c.t > holdUntil;
-    if (canHold) note.e = holdEnd;
-    notes.push(note);
-    free[lane] = Math.max(c.t + cfg.gap, (note.e !== undefined ? note.e : c.t) + Math.max(LANE_REST_MS, cfg.gap));
-    if (canHold) holdUntil = note.e;
-    recent.push(lane);
-    if (recent.length > 6) recent.shift();
-    if (chord && note.e === undefined) {
-      const want = lane === 0 ? 3 : lane === 3 ? 0 : lane < 2 ? lane + 2 : lane - 2;
-      const second = nearestFree(free, c.t, want, rand, new Set([lane]));
-      if (second >= 0 && Math.abs(second - lane) >= 1) {
-        notes.push({ t: Math.round(c.t), l: second, w: c.score - 0.01 });
-        free[second] = c.t + cfg.gap;
-      }
-    }
-    prev = { pitch: c.pitch, l: lane };
+    if (!stored && inBar.length) patterns.set(sig, base);
   }
   return notes;
 }
@@ -328,8 +444,23 @@ export function sectionMarks(analysis, start, end) {
 }
 
 export function firstBeat(analysis, start) {
+  const meter = analysis.meter || 4;
+  const db = analysis.downbeat || 0;
+  for (let i = 0; i < analysis.beats.length; i++) {
+    const b = analysis.beats[i];
+    if (b < start || (((i - db) % meter) + meter) % meter !== 0) continue;
+    if (b - start <= B0_MAX) return Math.round(b - start);
+    break;
+  }
   for (const b of analysis.beats) if (b >= start) return Math.min(B0_MAX, Math.round(b - start));
   return 0;
+}
+
+export function chartBpm(analysis, start, end) {
+  let bpm = bpmOf(analysis.beats, start, end) || analysis.bpm || 120;
+  while (bpm < BPM_MIN) bpm *= 2;
+  while (bpm > BPM_MAX) bpm /= 2;
+  return Math.min(BPM_MAX, Math.max(BPM_MIN, Math.round(bpm * 100) / 100));
 }
 
 export function makeCharts(analysis, { start = 0, end = analysis.dur, seed = 1 } = {}) {
@@ -341,11 +472,10 @@ export function makeCharts(analysis, { start = 0, end = analysis.dur, seed = 1 }
   const all = {};
   for (const id of DIFF_IDS) {
     const cfg = CHART_DIFFS[id];
-    const chosen = pickTimes(cands, prev, cfg, analysis.energy, rand);
+    const chosen = pickTimes(cands, prev, cfg, analysis.energy || [], rand);
     if (cfg.hold) addSustains(cands, chosen, analysis, cfg);
     const list = cands.filter((c) => chosen.has(c.gi));
-    const holds = planHolds(list, analysis, cfg, end);
-    const plans = { chords: planChords(list, cfg), holds, runs: cfg.runs ? planRuns(list, rand) : new Map() };
+    const plans = { chords: planChords(list, cfg, analysis.marks), holds: planHolds(list, analysis, cfg, end), runs: cfg.runs ? planRuns(list) : new Map() };
     const notes = assignLanes(list, cfg, plans, rand).map((n) => ({ ...n, t: n.t - start, ...(n.e !== undefined ? { e: n.e - start } : {}) }));
     all[id] = legalize(notes, id, len);
     prev = chosen;
@@ -360,8 +490,7 @@ export function makeCharts(analysis, { start = 0, end = analysis.dur, seed = 1 }
     }
   }
   for (const id of DIFF_IDS) d[id] = encodeNotes(all[id].map(({ w, ...n }) => n));
-  const bpm = Math.min(BPM_MAX, Math.max(BPM_MIN, Math.round(analysis.bpm * 100) / 100));
-  return validateCharts({ v: CHART_V, bpm, b0: firstBeat(analysis, start), len, marks: sectionMarks(analysis, start, end), d }, len);
+  return validateCharts({ v: CHART_V, bpm: chartBpm(analysis, start, end), b0: firstBeat(analysis, start), len, marks: sectionMarks(analysis, start, end), d }, len);
 }
 
 export function chartStats(charts) {
@@ -373,15 +502,18 @@ export function chartStats(charts) {
   return out;
 }
 
+function downbeatTimes(analysis) {
+  const meter = analysis.meter || 4;
+  const db = analysis.downbeat || 0;
+  const out = [];
+  for (let i = db; i < analysis.beats.length; i += meter) out.push(analysis.beats[i]);
+  return out;
+}
+
 export function bestPart(analysis, lenMs) {
   const dur = analysis.dur;
   if (dur <= lenMs) return 0;
-  const starts = [];
-  const db = analysis.downbeat || 0;
-  for (let i = db; i < analysis.beats.length; i += 4) {
-    const t = analysis.beats[i];
-    if (t >= 0 && t + lenMs <= dur) starts.push(Math.round(t));
-  }
+  const starts = downbeatTimes(analysis).filter((t) => t >= 0 && t + lenMs <= dur).map((t) => Math.round(t));
   if (!starts.length) starts.push(0);
   let best = starts[0];
   let bestScore = -Infinity;
@@ -392,7 +524,7 @@ export function bestPart(analysis, lenMs) {
     for (const w of analysis.energy) {
       const o = Math.min(e, w.end) - Math.max(s, w.t);
       if (o <= 0) continue;
-      sum += w.rank * o;
+      sum += (w.rank + (w.label === 'drop' ? 0.1 : 0)) * o;
       span += o;
     }
     const score = span ? sum / span : 0;
@@ -405,14 +537,13 @@ export function bestPart(analysis, lenMs) {
 }
 
 export function snapToDownbeat(analysis, t) {
-  const db = analysis.downbeat || 0;
   let best = 0;
   let dist = Infinity;
-  for (let i = db; i < analysis.beats.length; i += 4) {
-    const d = Math.abs(analysis.beats[i] - t);
+  for (const b of downbeatTimes(analysis)) {
+    const d = Math.abs(b - t);
     if (d < dist) {
       dist = d;
-      best = Math.round(analysis.beats[i]);
+      best = Math.round(b);
     }
   }
   return Math.max(0, best);

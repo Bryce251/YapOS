@@ -1,0 +1,1476 @@
+{
+  "detector": "final",
+  "rows": [
+    {
+      "id": "pop-118",
+      "file": "pop-118.mp3",
+      "duration": 48,
+      "ms": 328.5485,
+      "truth": {
+        "tempo": 118,
+        "tempos": [
+          118
+        ]
+      },
+      "result": {
+        "bpm": 118.00221535030812,
+        "beats": 94,
+        "onsets": 177
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 4.076595744681042,
+          "biasMs": 1.891489361702054
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.9971509971509972,
+          "p": 0.9943181818181818,
+          "r": 1,
+          "tp": 175,
+          "nEst": 176,
+          "nRef": 175,
+          "ignored": 0,
+          "bands": {
+            "L": {
+              "recall": 0.34502923976608185,
+              "precisionVsAll": 1
+            },
+            "M": {
+              "recall": 0.16129032258064516,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": 0.47368421052631576,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.9971509971509972,
+          "p": 0.9943181818181818,
+          "r": 1,
+          "tp": 175,
+          "nEst": 176,
+          "nRef": 175,
+          "ignored": 0,
+          "bands": {
+            "L": {
+              "recall": 0.34502923976608185,
+              "precisionVsAll": 1
+            },
+            "M": {
+              "recall": 0.16129032258064516,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": 0.47368421052631576,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 24,
+          "nEst": 24,
+          "nRef": 24
+        },
+        "score": 0.999145299145299,
+        "seconds": 48
+      }
+    },
+    {
+      "id": "edm-128",
+      "file": "edm-128.mp3",
+      "duration": 52,
+      "ms": 369.01099999999997,
+      "truth": {
+        "tempo": 128,
+        "tempos": [
+          128
+        ]
+      },
+      "result": {
+        "bpm": 127.91498836161718,
+        "beats": 110,
+        "onsets": 382
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 3.0709090909087173,
+          "biasMs": 1.2818181818176337
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.1,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.9294403892944039,
+          "p": 1,
+          "r": 0.8681818181818182,
+          "tp": 382,
+          "nEst": 382,
+          "nRef": 440,
+          "ignored": 0,
+          "bands": {
+            "L": {
+              "recall": 0.6153846153846154,
+              "precisionVsAll": 1
+            },
+            "M": {
+              "recall": 0.07045454545454545,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": 0.6025641025641025,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.9294403892944039,
+          "p": 1,
+          "r": 0.8681818181818182,
+          "tp": 382,
+          "nEst": 382,
+          "nRef": 440,
+          "ignored": 0,
+          "bands": {
+            "L": {
+              "recall": 0.6153846153846154,
+              "precisionVsAll": 1
+            },
+            "M": {
+              "recall": 0.07045454545454545,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": 0.6025641025641025,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 28,
+          "nEst": 28,
+          "nRef": 28
+        },
+        "score": 0.978832116788321,
+        "seconds": 52
+      }
+    },
+    {
+      "id": "hiphop-90",
+      "file": "hiphop-90.mp3",
+      "duration": 50,
+      "ms": 385.2629999999999,
+      "truth": {
+        "tempo": 90,
+        "tempos": [
+          90
+        ]
+      },
+      "result": {
+        "bpm": 90.18728947893361,
+        "beats": 75,
+        "onsets": 215
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 5.189333333334402,
+          "biasMs": -1.200000000000004
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.2,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.9717868338557994,
+          "p": 0.9627329192546584,
+          "r": 0.9810126582278481,
+          "tp": 155,
+          "nEst": 161,
+          "nRef": 158,
+          "ignored": 53,
+          "bands": {
+            "L": {
+              "recall": 0.9466666666666667,
+              "precisionVsAll": 0.9113924050632911
+            },
+            "M": {
+              "recall": 0.1111111111111111,
+              "precisionVsAll": 0.38461538461538464
+            },
+            "H": {
+              "recall": 0.5748031496062992,
+              "precisionVsAll": 0.6341463414634146
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.9717868338557994,
+          "p": 0.9627329192546584,
+          "r": 0.9810126582278481,
+          "tp": 155,
+          "nEst": 161,
+          "nRef": 158,
+          "ignored": 53,
+          "bands": {
+            "L": {
+              "recall": 0.9466666666666667,
+              "precisionVsAll": 0.9113924050632911
+            },
+            "M": {
+              "recall": 0.1111111111111111,
+              "precisionVsAll": 0.38461538461538464
+            },
+            "H": {
+              "recall": 0.5748031496062992,
+              "precisionVsAll": 0.6341463414634146
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 19,
+          "nEst": 19,
+          "nRef": 19
+        },
+        "score": 0.9915360501567397,
+        "seconds": 50
+      }
+    },
+    {
+      "id": "rock-165",
+      "file": "rock-165.mp3",
+      "duration": 44,
+      "ms": 299.9984000000002,
+      "truth": {
+        "tempo": 165,
+        "tempos": [
+          165
+        ]
+      },
+      "result": {
+        "bpm": 164.16053846935617,
+        "beats": 120,
+        "onsets": 227
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 5.213333333333278,
+          "biasMs": 3.720000000000027
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.5,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.9190283400809716,
+          "p": 1,
+          "r": 0.850187265917603,
+          "tp": 227,
+          "nEst": 227,
+          "nRef": 267,
+          "ignored": 0,
+          "bands": {
+            "L": {
+              "recall": 0.45023696682464454,
+              "precisionVsAll": 1
+            },
+            "M": {
+              "recall": 0.10144927536231885,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": 0.2796208530805687,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.9190283400809716,
+          "p": 1,
+          "r": 0.850187265917603,
+          "tp": 227,
+          "nEst": 227,
+          "nRef": 267,
+          "ignored": 0,
+          "bands": {
+            "L": {
+              "recall": 0.45023696682464454,
+              "precisionVsAll": 1
+            },
+            "M": {
+              "recall": 0.10144927536231885,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": 0.2796208530805687,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 30,
+          "nEst": 30,
+          "nRef": 30
+        },
+        "score": 0.9757085020242914,
+        "seconds": 44
+      }
+    },
+    {
+      "id": "trap-150",
+      "file": "trap-150.mp3",
+      "duration": 44,
+      "ms": 299.0932,
+      "truth": {
+        "tempo": 150,
+        "tempos": [
+          150
+        ]
+      },
+      "result": {
+        "bpm": 75.00942260261169,
+        "beats": 55,
+        "onsets": 297
+      },
+      "s": {
+        "beats": {
+          "f": 0.6707317073170732,
+          "p": 1,
+          "r": 0.5045871559633027,
+          "anyF": 1,
+          "anyLevel": "halfOdd",
+          "meanAbsMs": 0,
+          "biasMs": 0
+        },
+        "tempo": {
+          "acc1": 0,
+          "acc2": 1,
+          "flag": "/2",
+          "err": 50,
+          "score": 0.5
+        },
+        "onsets": {
+          "f": 0.98989898989899,
+          "p": 0.9839357429718876,
+          "r": 0.9959349593495935,
+          "tp": 245,
+          "nEst": 249,
+          "nRef": 246,
+          "ignored": 48,
+          "bands": {
+            "L": {
+              "recall": 0.9512195121951219,
+              "precisionVsAll": 0.9690721649484536
+            },
+            "M": {
+              "recall": 0.2028985507246377,
+              "precisionVsAll": 0.8947368421052632
+            },
+            "H": {
+              "recall": 0.575107296137339,
+              "precisionVsAll": 0.7403314917127072
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.98989898989899,
+          "p": 0.9839357429718876,
+          "r": 0.9959349593495935,
+          "tp": 245,
+          "nEst": 249,
+          "nRef": 246,
+          "ignored": 48,
+          "bands": {
+            "L": {
+              "recall": 0.9512195121951219,
+              "precisionVsAll": 0.9690721649484536
+            },
+            "M": {
+              "recall": 0.2028985507246377,
+              "precisionVsAll": 0.8947368421052632
+            },
+            "H": {
+              "recall": 0.575107296137339,
+              "precisionVsAll": 0.7403314917127072
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 28,
+          "nEst": 28,
+          "nRef": 28
+        },
+        "score": 0.8067257945306726,
+        "seconds": 44
+      }
+    },
+    {
+      "id": "dnb-174",
+      "file": "dnb-174.mp3",
+      "duration": 40,
+      "ms": 284.9022,
+      "truth": {
+        "tempo": 174,
+        "tempos": [
+          174
+        ]
+      },
+      "result": {
+        "bpm": 87.00633117678224,
+        "beats": 57,
+        "onsets": 180
+      },
+      "s": {
+        "beats": {
+          "f": 0.6627906976744187,
+          "p": 1,
+          "r": 0.4956521739130435,
+          "anyF": 1,
+          "anyLevel": "halfEven",
+          "meanAbsMs": 2.831578947368298,
+          "biasMs": 0.7929824561404096
+        },
+        "tempo": {
+          "acc1": 0,
+          "acc2": 1,
+          "flag": "/2",
+          "err": 50,
+          "score": 0.5
+        },
+        "onsets": {
+          "f": 0.8599033816425121,
+          "p": 1,
+          "r": 0.7542372881355932,
+          "tp": 178,
+          "nEst": 178,
+          "nRef": 236,
+          "ignored": 1,
+          "bands": {
+            "L": {
+              "recall": 0.875,
+              "precisionVsAll": 0.9830508474576272
+            },
+            "M": {
+              "recall": 0,
+              "precisionVsAll": null
+            },
+            "H": {
+              "recall": 0.5240174672489083,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.8599033816425121,
+          "p": 1,
+          "r": 0.7542372881355932,
+          "tp": 178,
+          "nEst": 178,
+          "nRef": 236,
+          "ignored": 1,
+          "bands": {
+            "L": {
+              "recall": 0.875,
+              "precisionVsAll": 0.9830508474576272
+            },
+            "M": {
+              "recall": 0,
+              "precisionVsAll": null
+            },
+            "H": {
+              "recall": 0.5240174672489083,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "downbeats": {
+          "f": 0,
+          "p": 0,
+          "r": 0,
+          "tp": 0,
+          "nEst": 15,
+          "nRef": 29
+        },
+        "score": 0.6649477586788002,
+        "seconds": 40
+      }
+    },
+    {
+      "id": "lofi-78",
+      "file": "lofi-78.mp3",
+      "duration": 50,
+      "ms": 323.47609999999986,
+      "truth": {
+        "tempo": 78,
+        "tempos": [
+          78
+        ]
+      },
+      "result": {
+        "bpm": 78.10650055276683,
+        "beats": 65,
+        "onsets": 138
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 6.723076923076695,
+          "biasMs": 1.2307692307690679
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.1,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.9076305220883534,
+          "p": 0.8308823529411765,
+          "r": 1,
+          "tp": 113,
+          "nEst": 136,
+          "nRef": 113,
+          "ignored": 2,
+          "bands": {
+            "L": {
+              "recall": 1,
+              "precisionVsAll": 0.9855072463768116
+            },
+            "M": {
+              "recall": 0.2153846153846154,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": 0.47692307692307695,
+              "precisionVsAll": 0.5636363636363636
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.9076305220883534,
+          "p": 0.8308823529411765,
+          "r": 1,
+          "tp": 113,
+          "nEst": 136,
+          "nRef": 113,
+          "ignored": 2,
+          "bands": {
+            "L": {
+              "recall": 1,
+              "precisionVsAll": 0.9855072463768116
+            },
+            "M": {
+              "recall": 0.2153846153846154,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": 0.47692307692307695,
+              "precisionVsAll": 0.5636363636363636
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 17,
+          "nEst": 17,
+          "nRef": 17
+        },
+        "score": 0.972289156626506,
+        "seconds": 50
+      }
+    },
+    {
+      "id": "drop-124",
+      "file": "drop-124.mp3",
+      "duration": 56,
+      "ms": 449.12689999999975,
+      "truth": {
+        "tempo": 124,
+        "tempos": [
+          124
+        ]
+      },
+      "result": {
+        "bpm": 124.12219785212498,
+        "beats": 115,
+        "onsets": 305
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 2.8521739130436874,
+          "biasMs": 0.7460869565217323
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.1,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.996415770609319,
+          "p": 0.996415770609319,
+          "r": 0.996415770609319,
+          "tp": 278,
+          "nEst": 279,
+          "nRef": 279,
+          "ignored": 26,
+          "bands": {
+            "L": {
+              "recall": 0.5746268656716418,
+              "precisionVsAll": 1
+            },
+            "M": {
+              "recall": 0.10480349344978165,
+              "precisionVsAll": 0.967741935483871
+            },
+            "H": {
+              "recall": 0.5147058823529411,
+              "precisionVsAll": 0.74
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.996415770609319,
+          "p": 0.996415770609319,
+          "r": 0.996415770609319,
+          "tp": 278,
+          "nEst": 279,
+          "nRef": 279,
+          "ignored": 26,
+          "bands": {
+            "L": {
+              "recall": 0.5746268656716418,
+              "precisionVsAll": 1
+            },
+            "M": {
+              "recall": 0.10480349344978165,
+              "precisionVsAll": 0.967741935483871
+            },
+            "H": {
+              "recall": 0.5147058823529411,
+              "precisionVsAll": 0.74
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 29,
+          "nEst": 29,
+          "nRef": 29
+        },
+        "score": 0.9989247311827957,
+        "seconds": 56
+      }
+    },
+    {
+      "id": "tempo-change-100-128",
+      "file": "tempo-change-100-128.mp3",
+      "duration": 54,
+      "ms": 460.8161,
+      "truth": {
+        "tempo": 100,
+        "tempos": [
+          100,
+          128
+        ]
+      },
+      "result": {
+        "bpm": 99.94930561498506,
+        "beats": 101,
+        "onsets": 176
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 2.200000000000371,
+          "biasMs": 1.1009900990107933
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.1,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.9230769230769231,
+          "p": 0.9942857142857143,
+          "r": 0.8613861386138614,
+          "tp": 174,
+          "nEst": 175,
+          "nRef": 202,
+          "ignored": 0,
+          "bands": {
+            "L": {
+              "recall": 0.5873015873015873,
+              "precisionVsAll": 1
+            },
+            "M": {
+              "recall": 0,
+              "precisionVsAll": 0.5
+            },
+            "H": {
+              "recall": 0.49504950495049505,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.9230769230769231,
+          "p": 0.9942857142857143,
+          "r": 0.8613861386138614,
+          "tp": 174,
+          "nEst": 175,
+          "nRef": 202,
+          "ignored": 0,
+          "bands": {
+            "L": {
+              "recall": 0.5873015873015873,
+              "precisionVsAll": 1
+            },
+            "M": {
+              "recall": 0,
+              "precisionVsAll": 0.5
+            },
+            "H": {
+              "recall": 0.49504950495049505,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 26,
+          "nEst": 26,
+          "nRef": 26
+        },
+        "score": 0.9769230769230769,
+        "seconds": 54
+      }
+    },
+    {
+      "id": "six-eight-76",
+      "file": "six-eight-76.mp3",
+      "duration": 48,
+      "ms": 384.98189999999977,
+      "truth": {
+        "tempo": 76,
+        "tempos": [
+          76
+        ]
+      },
+      "result": {
+        "bpm": 75.99177309675713,
+        "beats": 61,
+        "onsets": 193
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 3.2655737704914984,
+          "biasMs": 0.3803278688524281
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.9544235924932977,
+          "p": 0.9270833333333334,
+          "r": 0.9834254143646409,
+          "tp": 178,
+          "nEst": 192,
+          "nRef": 181,
+          "ignored": 0,
+          "bands": {
+            "L": {
+              "recall": 0.5921052631578947,
+              "precisionVsAll": 0.8695652173913043
+            },
+            "M": {
+              "recall": 0.30939226519337015,
+              "precisionVsAll": 0.9824561403508771
+            },
+            "H": {
+              "recall": 0.23756906077348067,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.9544235924932977,
+          "p": 0.9270833333333334,
+          "r": 0.9834254143646409,
+          "tp": 178,
+          "nEst": 192,
+          "nRef": 181,
+          "ignored": 0,
+          "bands": {
+            "L": {
+              "recall": 0.5921052631578947,
+              "precisionVsAll": 0.8695652173913043
+            },
+            "M": {
+              "recall": 0.30939226519337015,
+              "precisionVsAll": 0.9824561403508771
+            },
+            "H": {
+              "recall": 0.23756906077348067,
+              "precisionVsAll": 1
+            }
+          }
+        },
+        "downbeats": {
+          "f": 0.6808510638297872,
+          "p": 1,
+          "r": 0.5161290322580645,
+          "tp": 16,
+          "nEst": 16,
+          "nRef": 31
+        },
+        "score": 0.954412184130968,
+        "seconds": 48
+      }
+    },
+    {
+      "id": "funk-104",
+      "file": "funk-104.mp3",
+      "duration": 46,
+      "ms": 382.5585000000001,
+      "truth": {
+        "tempo": 104,
+        "tempos": [
+          104
+        ]
+      },
+      "result": {
+        "bpm": 103.98037573837922,
+        "beats": 79,
+        "onsets": 271
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 3.668354430379885,
+          "biasMs": -0.12658227848084413
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.9911111111111112,
+          "p": 1,
+          "r": 0.9823788546255506,
+          "tp": 223,
+          "nEst": 223,
+          "nRef": 227,
+          "ignored": 46,
+          "bands": {
+            "L": {
+              "recall": 0.9256756756756757,
+              "precisionVsAll": 0.9181286549707602
+            },
+            "M": {
+              "recall": 0.024390243902439025,
+              "precisionVsAll": 0.5
+            },
+            "H": {
+              "recall": 0.34810126582278483,
+              "precisionVsAll": 0.7051282051282052
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.9911111111111112,
+          "p": 1,
+          "r": 0.9823788546255506,
+          "tp": 223,
+          "nEst": 223,
+          "nRef": 227,
+          "ignored": 46,
+          "bands": {
+            "L": {
+              "recall": 0.9256756756756757,
+              "precisionVsAll": 0.9181286549707602
+            },
+            "M": {
+              "recall": 0.024390243902439025,
+              "precisionVsAll": 0.5
+            },
+            "H": {
+              "recall": 0.34810126582278483,
+              "precisionVsAll": 0.7051282051282052
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 20,
+          "nEst": 20,
+          "nRef": 20
+        },
+        "score": 0.9973333333333333,
+        "seconds": 46
+      }
+    },
+    {
+      "id": "noisy-96",
+      "file": "noisy-96.mp3",
+      "duration": 48,
+      "ms": 335.6216999999997,
+      "truth": {
+        "tempo": 96,
+        "tempos": [
+          96
+        ]
+      },
+      "result": {
+        "bpm": 95.93079418740467,
+        "beats": 76,
+        "onsets": 109
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 3.81578947368455,
+          "biasMs": 1.8421052631579253
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.1,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.964102564102564,
+          "p": 0.94,
+          "r": 0.9894736842105263,
+          "tp": 94,
+          "nEst": 100,
+          "nRef": 95,
+          "ignored": 9,
+          "bands": {
+            "L": {
+              "recall": 0.6808510638297872,
+              "precisionVsAll": 0.9166666666666666
+            },
+            "M": {
+              "recall": 0.15789473684210525,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": null,
+              "precisionVsAll": 0.8032786885245902
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.964102564102564,
+          "p": 0.94,
+          "r": 0.9894736842105263,
+          "tp": 94,
+          "nEst": 100,
+          "nRef": 95,
+          "ignored": 9,
+          "bands": {
+            "L": {
+              "recall": 0.6808510638297872,
+              "precisionVsAll": 0.9166666666666666
+            },
+            "M": {
+              "recall": 0.15789473684210525,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": null,
+              "precisionVsAll": 0.8032786885245902
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 19,
+          "nEst": 19,
+          "nRef": 19
+        },
+        "score": 0.9892307692307691,
+        "seconds": 48
+      }
+    },
+    {
+      "id": "ballad-72-rubato",
+      "file": "ballad-72-rubato.mp3",
+      "duration": 56,
+      "ms": 436.2444999999998,
+      "truth": {
+        "tempo": 72.02,
+        "tempos": [
+          72.02
+        ]
+      },
+      "result": {
+        "bpm": 72.17635778855626,
+        "beats": 67,
+        "onsets": 135
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 9.929850746268773,
+          "biasMs": 3.7895522388059337
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.2,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.963855421686747,
+          "p": 0.9523809523809523,
+          "r": 0.975609756097561,
+          "tp": 80,
+          "nEst": 84,
+          "nRef": 82,
+          "ignored": 51,
+          "bands": {
+            "L": {
+              "recall": 0.7058823529411765,
+              "precisionVsAll": 0.5263157894736842
+            },
+            "M": {
+              "recall": 0.6233766233766234,
+              "precisionVsAll": 0.6666666666666666
+            },
+            "H": {
+              "recall": null,
+              "precisionVsAll": 0.48
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.963855421686747,
+          "p": 0.9523809523809523,
+          "r": 0.975609756097561,
+          "tp": 80,
+          "nEst": 84,
+          "nRef": 82,
+          "ignored": 51,
+          "bands": {
+            "L": {
+              "recall": 0.7058823529411765,
+              "precisionVsAll": 0.5263157894736842
+            },
+            "M": {
+              "recall": 0.6233766233766234,
+              "precisionVsAll": 0.6666666666666666
+            },
+            "H": {
+              "recall": null,
+              "precisionVsAll": 0.48
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 17,
+          "nEst": 17,
+          "nRef": 17
+        },
+        "score": 0.989156626506024,
+        "seconds": 56
+      }
+    },
+    {
+      "id": "silence-start-120",
+      "file": "silence-start-120.mp3",
+      "duration": 46,
+      "ms": 344.3751000000002,
+      "truth": {
+        "tempo": 120,
+        "tempos": [
+          120
+        ]
+      },
+      "result": {
+        "bpm": 119.89998059951917,
+        "beats": 80,
+        "onsets": 333
+      },
+      "s": {
+        "beats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "anyF": 1,
+          "anyLevel": "same",
+          "meanAbsMs": 1.2500000000001732,
+          "biasMs": 0.2500000000001945
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.1,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.9781420765027322,
+          "p": 0.9572192513368984,
+          "r": 1,
+          "tp": 179,
+          "nEst": 187,
+          "nRef": 179,
+          "ignored": 144,
+          "bands": {
+            "L": {
+              "recall": 0.6037735849056604,
+              "precisionVsAll": 0.8508771929824561
+            },
+            "M": {
+              "recall": 0.35833333333333334,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": 0.2641509433962264,
+              "precisionVsAll": 0.24431818181818182
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.9781420765027322,
+          "p": 0.9572192513368984,
+          "r": 1,
+          "tp": 179,
+          "nEst": 187,
+          "nRef": 179,
+          "ignored": 144,
+          "bands": {
+            "L": {
+              "recall": 0.6037735849056604,
+              "precisionVsAll": 0.8508771929824561
+            },
+            "M": {
+              "recall": 0.35833333333333334,
+              "precisionVsAll": 1
+            },
+            "H": {
+              "recall": 0.2641509433962264,
+              "precisionVsAll": 0.24431818181818182
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 20,
+          "nEst": 20,
+          "nRef": 20
+        },
+        "score": 0.9934426229508196,
+        "seconds": 46
+      }
+    },
+    {
+      "id": "heavy-bass-100",
+      "file": "heavy-bass-100.mp3",
+      "duration": 48,
+      "ms": 344.53760000000057,
+      "truth": {
+        "tempo": 100,
+        "tempos": [
+          100
+        ]
+      },
+      "result": {
+        "bpm": 99.50263204345582,
+        "beats": 79,
+        "onsets": 132
+      },
+      "s": {
+        "beats": {
+          "f": 0.9873417721518988,
+          "p": 0.9873417721518988,
+          "r": 0.9873417721518988,
+          "anyF": 0.9873417721518988,
+          "anyLevel": "same",
+          "meanAbsMs": 14.10256410256412,
+          "biasMs": 5.384615384615099
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.5,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.4727272727272728,
+          "p": 0.37142857142857144,
+          "r": 0.65,
+          "tp": 39,
+          "nEst": 105,
+          "nRef": 60,
+          "ignored": 27,
+          "bands": {
+            "L": {
+              "recall": 0.225,
+              "precisionVsAll": 0.5625
+            },
+            "M": {
+              "recall": 0.05,
+              "precisionVsAll": 0.17647058823529413
+            },
+            "H": {
+              "recall": null,
+              "precisionVsAll": 0.2727272727272727
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.4727272727272728,
+          "p": 0.37142857142857144,
+          "r": 0.65,
+          "tp": 39,
+          "nEst": 105,
+          "nRef": 60,
+          "ignored": 27,
+          "bands": {
+            "L": {
+              "recall": 0.225,
+              "precisionVsAll": 0.5625
+            },
+            "M": {
+              "recall": 0.05,
+              "precisionVsAll": 0.17647058823529413
+            },
+            "H": {
+              "recall": null,
+              "precisionVsAll": 0.2727272727272727
+            }
+          }
+        },
+        "downbeats": {
+          "f": 1,
+          "p": 1,
+          "r": 1,
+          "tp": 20,
+          "nEst": 20,
+          "nRef": 20
+        },
+        "score": 0.8361219792865363,
+        "seconds": 48
+      }
+    },
+    {
+      "id": "vocal-84",
+      "file": "vocal-84.mp3",
+      "duration": 50,
+      "ms": 427.8877999999995,
+      "truth": {
+        "tempo": 84,
+        "tempos": [
+          84
+        ]
+      },
+      "result": {
+        "bpm": 83.60654514849597,
+        "beats": 66,
+        "onsets": 78
+      },
+      "s": {
+        "beats": {
+          "f": 0.9705882352941176,
+          "p": 1,
+          "r": 0.9428571428571428,
+          "anyF": 0.9705882352941176,
+          "anyLevel": "same",
+          "meanAbsMs": 13.999999999999359,
+          "biasMs": 7.512121212121078
+        },
+        "tempo": {
+          "acc1": 1,
+          "acc2": 1,
+          "flag": "ok",
+          "err": 0.5,
+          "score": 1
+        },
+        "onsets": {
+          "f": 0.8636363636363635,
+          "p": 0.7755102040816326,
+          "r": 0.9743589743589743,
+          "tp": 38,
+          "nEst": 49,
+          "nRef": 39,
+          "ignored": 29,
+          "bands": {
+            "L": {
+              "recall": 1,
+              "precisionVsAll": 0.7096774193548387
+            },
+            "M": {
+              "recall": 0,
+              "precisionVsAll": 0
+            },
+            "H": {
+              "recall": 0.875,
+              "precisionVsAll": 0.7619047619047619
+            }
+          }
+        },
+        "onsetsRaw": {
+          "f": 0.8636363636363635,
+          "p": 0.7755102040816326,
+          "r": 0.9743589743589743,
+          "tp": 38,
+          "nEst": 49,
+          "nRef": 39,
+          "ignored": 29,
+          "bands": {
+            "L": {
+              "recall": 1,
+              "precisionVsAll": 0.7096774193548387
+            },
+            "M": {
+              "recall": 0,
+              "precisionVsAll": 0
+            },
+            "H": {
+              "recall": 0.875,
+              "precisionVsAll": 0.7619047619047619
+            }
+          }
+        },
+        "downbeats": {
+          "f": 0.9714285714285714,
+          "p": 1,
+          "r": 0.9444444444444444,
+          "tp": 17,
+          "nEst": 17,
+          "nRef": 18
+        },
+        "score": 0.9429984721161191,
+        "seconds": 50
+      }
+    }
+  ],
+  "summary": {
+    "songs": 16,
+    "beatF": 0.9557157757773442,
+    "beatAnyF": 0.997370625465376,
+    "tempoAcc1": 0.875,
+    "tempoAcc2": 1,
+    "onsetF": 0.9176456593723974,
+    "onsetP": 0.9178870621526454,
+    "onsetR": 0.9289126614183058,
+    "onsetRawF": 0.9176456593723974,
+    "downbeatF": 0.9157674772036474,
+    "msPerMinute": 450.49557692307684,
+    "overall": 0.941733029600692
+  }
+}

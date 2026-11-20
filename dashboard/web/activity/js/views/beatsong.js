@@ -1,10 +1,11 @@
 import { songFetch } from '../games/beatsongs.js';
+import { SONG_MAX_BYTES } from '../games/beatcodec.js';
 
 export const DECODE_RATE = 32000;
 export const SLICE_PAD_S = 2;
 export const FADE_S = 1.5;
 export const RESYNC_S = 0.15;
-export const AUDIO_MAX_BYTES = 8388608;
+export const AUDIO_MAX_BYTES = SONG_MAX_BYTES;
 export const CACHE_MAX = 2;
 
 function setAt(param, v, at) {
@@ -100,6 +101,7 @@ export function createSongAudio({ win, get = songFetch } = {}) {
     const a = Math.max(0, Math.min(full.length - 1, Math.floor(Math.max(0, from) * rate)));
     const b = Math.min(full.length, Math.ceil((from + len + SLICE_PAD_S) * rate));
     const n = Math.max(1, b - a);
+    if (a === 0 && n === full.length) return { buf: full, base: from };
     const ch = Math.max(1, Math.min(2, full.numberOfChannels || 1));
     const out = ctx.createBuffer(ch, n, rate);
     for (let c = 0; c < ch; c += 1) {

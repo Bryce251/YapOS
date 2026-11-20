@@ -845,6 +845,22 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
     for (const b of stage.querySelectorAll('.fx-cta.is-shining')) b.classList.remove('is-shining');
   }
 
+  function toTop() {
+    try {
+      if (win && typeof win.scrollTo === 'function') win.scrollTo(0, 0);
+    } catch {
+      return;
+    }
+  }
+
+  function dropView() {
+    if (!view) return;
+    const old = view;
+    view = null;
+    viewKey = '';
+    old.destroy();
+  }
+
   function paintBody(snap, hm) {
     if (screen === 'results' && hm.phase !== 'results') fx.clear();
     if (hm.phase === 'game') replays.record(snap, snap.game);
@@ -856,7 +872,9 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       return;
     }
     if (hm.phase === 'lobby') {
+      dropView();
       if (screen !== 'lobby') {
+        if (screen === 'game') toTop();
         swap(stage, lobby.el);
         enter(lobby.el);
       }
@@ -866,7 +884,9 @@ export function mountApp({ root, engine, bridge, win, sfx: sound = defaultSfx, j
       return;
     }
     if (hm.phase === 'results') {
+      dropView();
       if (screen !== 'results') {
+        if (screen === 'game') toTop();
         swap(stage, results.el);
         enter(results.el);
       }

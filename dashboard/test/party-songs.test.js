@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { advance } from './helpers.js';
 import { cleanup } from '../worker/cron.js';
 import { sniffAudio } from '../worker/songs.js';
-import { SONG_CHUNK, SONG_CAP_COUNT, encodeNotes } from '../web/activity/js/games/beatcodec.js';
+import { SONG_CHUNK, SONG_CAP_COUNT, SONG_MAX_BYTES, SONG_MAX_PARTS, encodeNotes } from '../web/activity/js/games/beatcodec.js';
 import { OWNER, ADMIN, songsHarness, cookies, makeMp3, makeOgg, splitParts, wholeHash, putBytes, begin, upload, finishBody, makeCharts } from './song-fixtures.js';
 
 const MIN = 60 * 1000;
@@ -53,7 +53,11 @@ test('starting an upload checks the size and the parts', async () => {
   const hash = 'a'.repeat(64);
   const post = (b) => h.api('POST', '/api/party/songs/uploads', owner, b);
   assert.equal((await post({ bytes: 0, parts: 0, hash })).status, 400);
-  assert.equal((await post({ bytes: 9000000, parts: 7, hash })).status, 413);
+  assert.equal((await post({ bytes: SONG_MAX_BYTES + 1, parts: SONG_MAX_PARTS + 1, hash })).status, 413);
+  assert.equal((await post({ bytes: SONG_MAX_BYTES, parts: SONG_MAX_PARTS - 1, hash })).status, 400);
+  const tenMb = await post({ bytes: SONG_MAX_BYTES, parts: SONG_MAX_PARTS, hash: 'b'.repeat(64) });
+  assert.equal(tenMb.status, 201, 'a 10 MB song can start uploading');
+  assert.equal((await tenMb.json()).parts, 7);
   assert.equal((await post({ bytes: SIZE, parts: 1, hash })).status, 400);
   assert.equal((await post({ bytes: SIZE, parts: 2, hash: 'nope' })).status, 400);
   const ok = await post({ bytes: SIZE, parts: 2, hash });
@@ -240,6 +244,41 @@ test('finish checks words, byte rate, the section and the chart', async () => {
   const ok = await fin({ title: '  Night\u0000 Tone  ' });
   assert.equal(ok.status, 201);
   assert.equal(ok.body.song.title, 'Night Tone');
+});
+
+test('a whole 6 minute song can be the played part and its best part is stored and served', async () => {
+  const { h, owner } = await setup();
+  const bytes = makeMp3(SIZE);
+  const b = await begin(h, owner, bytes);
+  const parts = splitParts(bytes);
+  for (let i = 0; i < parts.length; i++) await putBytes(h, owner, `/api/party/songs/uploads/${b.body.upload}/${i}`, parts[i]);
+  const fin = async (extra) => {
+    const res = await h.api('POST', `/api/party/songs/uploads/${b.body.upload}/finish`, owner, finishBody({ duration_ms: 360000, start_ms: 0, end_ms: 360000, charts: makeCharts(360000), ...extra }));
+    return { status: res.status, body: await res.json() };
+  };
+  assert.equal((await fin({ preview_ms: 360000 })).body.error, 'bad_preview');
+  assert.equal((await fin({ preview_ms: -1 })).body.error, 'bad_preview');
+  assert.equal((await fin({ start_ms: 60000, end_ms: 360000, charts: makeCharts(300000), preview_ms: 30000 })).body.error, 'bad_preview', 'the best part must be inside the played part');
+  assert.equal((await fin({ duration_ms: 361000, end_ms: 361000, charts: makeCharts(361000) })).body.error, 'bad_length');
+  const ok = await fin({ preview_ms: 120000 });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.song.start_ms, 0);
+  assert.equal(ok.body.song.end_ms, 360000);
+  assert.equal(ok.body.song.preview_ms, 120000);
+  const id = ok.body.song.id;
+  const list = (await (await h.request('GET', '/api/activity/songs')).json()).songs;
+  assert.equal(list[0][8], 360000);
+  assert.equal(list[0][9], 120000, 'the list has the best part relative to the played part');
+  const full = await (await h.request('GET', `/api/activity/songs/${id}?v=1`)).json();
+  assert.deepEqual([full.start, full.end, full.preview, full.charts.len], [0, 360000, 120000, 360000]);
+  const one = await (await h.request('GET', `/api/activity/songs/${id}/chart?d=expert&v=1`)).json();
+  assert.deepEqual([one.start, one.end, one.preview], [0, 360000, 120000]);
+  const moved = await (await h.api('PATCH', `/api/party/songs/${id}`, owner, { preview_ms: 200000 })).json();
+  assert.equal(moved.song.preview_ms, 200000);
+  assert.equal(moved.song.cv, 1, 'moving the best part keeps the notes');
+  const cut = await (await h.api('PATCH', `/api/party/songs/${id}`, owner, { start_ms: 0, end_ms: 60000, charts: makeCharts(60000) })).json();
+  assert.equal(cut.song.preview_ms, 0, 'a best part left outside a new shorter part moves to its start');
+  assert.equal((await h.api('PATCH', `/api/party/songs/${id}`, owner, { preview_ms: 90000 })).status, 400);
 });
 
 test('the same file twice points at the song already on the shelf', async () => {

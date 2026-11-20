@@ -1,5 +1,5 @@
 import { DIFFS, diffIdx, diffOf, firstNoteAt, objectsBefore, countOf, scoreOf, accOf, gradeOf, tierOf } from './beatchart.js';
-import { catalog, catalogTried, songRow, songMeta, chartSong, loadChart, loadCatalog, SONG_ID_RE } from './beatsongs.js';
+import { catalog, catalogTried, songRow, songMeta, chartSong, loadChart, loadCatalog, songLength, lengthLabel, LENGTH_CHOICES, DEFAULT_LENGTH, SONG_ID_RE } from './beatsongs.js';
 import { shuffle } from '../engine.js';
 import { face } from './trivia.js';
 import { PLACE_POINTS } from './typerace.js';
@@ -198,7 +198,7 @@ export function startState(api) {
   const set = api.settings || {};
   const want = Math.max(1, Math.min(3, Number(set.songs) || 1));
   const df = diffIdx(set.difficulty);
-  const len = [45, 60, 90].includes(Number(set.length)) ? Number(set.length) : 60;
+  const len = songLength(set.length);
   const songs = lineup(set, want, api.random);
   return { n: 0, total: songs.length ? want : 1, want, df, len, lineup: songs, in: [], w: [], so: {} };
 }
@@ -579,7 +579,7 @@ const beatdrop = {
       },
       list: () => songChoices(),
     },
-    { id: 'length', label: 'Song length', type: 'choice', options: [45, 60, 90].map((v) => ({ value: v, label: `${v} s` })), default: 60 },
+    { id: 'length', label: 'Song length', type: 'choice', options: LENGTH_CHOICES.map((v) => ({ value: v, label: lengthLabel(v) })), default: DEFAULT_LENGTH },
     { id: 'songs', label: 'Songs', type: 'choice', options: [1, 2, 3].map((v) => ({ value: v, label: String(v) })), default: 2 },
   ],
 

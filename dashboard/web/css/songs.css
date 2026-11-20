@@ -64,6 +64,32 @@
   background: #0c0a14;
 }
 
+.song-beat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+
+.song-strip {
+  display: block;
+  width: 100%;
+  height: 96px;
+  border-radius: var(--radius);
+  background: #0c0a14;
+}
+
+.song-beat-text {
+  margin: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.song-tap-btn[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
 .song-chips,
 .song-tabs {
   flex-wrap: wrap;

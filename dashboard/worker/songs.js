@@ -8,7 +8,7 @@ import { findBlocked } from '../web/activity/js/filter.js';
 import {
   SONG_MAX_BYTES, SONG_CHUNK, SONG_MAX_PARTS, SONG_MIN_MS, SONG_MAX_MS, SECTION_MIN_MS, SECTION_MAX_MS,
   SONG_CAP_COUNT, SONG_KBPS_MIN, SONG_KBPS_MAX, SONG_ID_RE, UPLOAD_ID_RE, HASH_RE, TITLE_MAX, ARTIST_MAX, CREDIT_MAX,
-  OFFSET_MIN, OFFSET_MAX, DIFF_IDS, ChartError, validateCharts, chartCounts, songCapBytes, partsFor, partSize,
+  OFFSET_MIN, OFFSET_MAX, DIFF_IDS, CHART_MAX_BYTES, ChartError, validateCharts, chartCounts, songCapBytes, partsFor, partSize,
   sha256HexBytes, songHash, songIdOf,
 } from '../web/activity/js/games/beatcodec.js';
 
@@ -17,7 +17,7 @@ export const SONG_AUDIO_CACHE = 'public, max-age=31536000, immutable';
 export const SONG_LIST_CACHE = 'public, max-age=60';
 export const UPLOAD_TTL = HOUR;
 export const PENDING_MAX = 2;
-export const FINISH_BODY_LIMIT = 160 * 1024;
+export const FINISH_BODY_LIMIT = CHART_MAX_BYTES + 64 * 1024;
 export const BEGIN_BODY_LIMIT = 4096;
 export const HIDDEN_GRACE = 15 * 60 * 1000;
 
@@ -157,7 +157,7 @@ function checkTiming(v, bytes) {
   const len = end - start;
   if (len < SECTION_MIN_MS || len > SECTION_MAX_MS) throw badReq(`The part of the song you play must be between ${SECTION_MIN_MS / 1000} seconds and ${SECTION_MAX_MS / 60000} minutes.`, 'bad_section');
   if (!isInt(off) || off < OFFSET_MIN || off > OFFSET_MAX) throw badReq(`The offset must be between ${OFFSET_MIN} and ${OFFSET_MAX} ms.`, 'bad_offset');
-  if (!isInt(preview) || preview < 0 || preview >= dur) throw badReq('The preview must start inside the song.', 'bad_preview');
+  if (!isInt(preview) || preview < start || preview >= end) throw badReq('The best part must start inside the part of the song you play.', 'bad_preview');
   return len;
 }
 
@@ -381,6 +381,7 @@ async function patchSong(request, env, session, role, me, id, t, url) {
     offset_ms: 'offset_ms' in body ? body.offset_ms : Number(row.offset_ms),
     preview_ms: 'preview_ms' in body ? body.preview_ms : Number(row.preview_ms),
   };
+  if (!('preview_ms' in body) && (timing.preview_ms < timing.start_ms || timing.preview_ms >= timing.end_ms)) timing.preview_ms = timing.start_ms;
   const len = checkTiming(timing, Number(row.bytes));
   const charts = 'charts' in body ? checkCharts(body.charts, len) : parseCharts(row.charts);
   const chartText = JSON.stringify(charts);
@@ -485,8 +486,8 @@ export async function activitySongsRoute(request, env, segs, url, t) {
   if (!limit.ok) return tooMany(limit.retryAfter);
   const n = segs.length;
   if (n === 3) {
-    const res = await env.DB.prepare('SELECT id, title, artist, credit, duration_ms, bpm, chart_v, counts, start_ms, end_ms FROM party_songs WHERE hidden = 0 ORDER BY created DESC, id ASC LIMIT ?').bind(SONG_CAP_COUNT).all();
-    const songs = ((res && res.results) || []).map((r) => [r.id, r.title, r.artist, Number(r.duration_ms), Number(r.bpm), Number(r.chart_v), parseCounts(r.counts), r.credit, Number(r.end_ms) - Number(r.start_ms)]);
+    const res = await env.DB.prepare('SELECT id, title, artist, credit, duration_ms, bpm, chart_v, counts, start_ms, end_ms, preview_ms FROM party_songs WHERE hidden = 0 ORDER BY created DESC, id ASC LIMIT ?').bind(SONG_CAP_COUNT).all();
+    const songs = ((res && res.results) || []).map((r) => [r.id, r.title, r.artist, Number(r.duration_ms), Number(r.bpm), Number(r.chart_v), parseCounts(r.counts), r.credit, Number(r.end_ms) - Number(r.start_ms), Math.max(0, Number(r.preview_ms) - Number(r.start_ms))]);
     return json({ songs, diffs: DIFF_IDS }, 200, { 'Cache-Control': SONG_LIST_CACHE });
   }
   const id = segs[3];
@@ -499,7 +500,7 @@ export async function activitySongsRoute(request, env, segs, url, t) {
   if (n === 5) {
     const d = url.searchParams.get('d') || 'normal';
     if (!DIFF_IDS.includes(d)) return fail(400, 'bad_difficulty', 'That difficulty does not exist.');
-    return json({ id, cv, d, bpm: charts.bpm, b0: charts.b0, len: charts.len, marks: charts.marks, notes: charts.d[d], off: Number(row.offset_ms), start: Number(row.start_ms), end: Number(row.end_ms), url: songAudioUrl(row) }, 200, headers);
+    return json({ id, cv, d, bpm: charts.bpm, b0: charts.b0, len: charts.len, marks: charts.marks, notes: charts.d[d], off: Number(row.offset_ms), start: Number(row.start_ms), end: Number(row.end_ms), preview: Number(row.preview_ms), url: songAudioUrl(row) }, 200, headers);
   }
   return json({
     id,

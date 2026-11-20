@@ -275,8 +275,7 @@
 .bd-l2 { --lane: #33d6f5; }
 .bd-l3 { --lane: #b48cff; }
 .bd-pad.is-down { transform: scale(0.94); }
-.bd-pad-key, .bd-keys .bd-sh { display: none; }
-.bd-keys .bd-pad-key { display: inline; }
+.bd-pad-key, .bd-keys .bd-pads { display: none; }
 
 .bd-sh {
   width: 22px;
@@ -288,7 +287,8 @@
 .bd-sh-1 { border-radius: 0; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
 .bd-sh-2 { border-radius: 5px; }
 .bd-sh-3 { border-radius: 0; clip-path: polygon(50% 4%, 100% 92%, 0 92%); }
-.bd-safe { height: 64px; }
+.bd-safe { height: 12px; }
+body:has(.bd-stage.bd-live:not([hidden]):not(.bd-demo)) .party-dock { display: none; }
 
 .bd-tut, .bd-me, .bd-res-wrap {
   display: flex;

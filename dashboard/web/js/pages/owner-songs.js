@@ -1,14 +1,15 @@
 import { h, replace, nextId } from '../dom.js';
 import { button, card, confirmDialog, emptyState, linkButton, pageHeader, setBusy, toast } from '../ui.js';
 import { state } from '../state.js';
-import { TITLE_MAX, ARTIST_MAX, CREDIT_MAX, OFFSET_MIN, OFFSET_MAX, DIFF_IDS, DIFF_NAMES } from '../../activity/js/games/beatcodec.js';
+import { TITLE_MAX, ARTIST_MAX, CREDIT_MAX, OFFSET_MIN, OFFSET_MAX, DIFF_IDS, DIFF_NAMES, SONG_MAX_BYTES, SONG_MIN_MS, SONG_MAX_MS } from '../../activity/js/games/beatcodec.js';
 import { SONGS_PATH, SONG_ACCEPT, ALREADY, fileProblem, uploadSong, usageText, formatLength, formatMb } from '../song-upload.js';
-import { decodeSong, analyzeSong, createSongEditor, clampOffset, NO_PLAY } from '../song-editor.js';
+import { decodeSong, analyzeSong, createSongEditor, clampOffset, NO_PLAY, NO_BEAT } from '../song-editor.js';
 
 export const SONGS_PAGE = '/party/songs';
 export const RIGHTS_TEXT = 'I own this song or have permission to use it in YapOS Party.';
 export const CREDIT_HINT = 'e.g. CC BY 4.0 - Artist name, or Made by me';
-export const OGG_NOTE = 'MP3, OGG or M4A, up to 8 MB and 30 seconds to 6 minutes long. OGG may not play on older iPhones, so MP3 or M4A is safest.';
+export const LENGTH_RULE = `Songs must be between ${SONG_MIN_MS / 1000} seconds and ${SONG_MAX_MS / 60000} minutes long.`;
+export const OGG_NOTE = `MP3, OGG or M4A, up to ${SONG_MAX_BYTES / 1048576} MB and ${SONG_MIN_MS / 1000} seconds to ${SONG_MAX_MS / 60000} minutes long. OGG may not play on older iPhones, so MP3 or M4A is safest.`;
 
 export function readSongs(data) {
   const d = data && typeof data === 'object' ? data : {};
@@ -23,6 +24,7 @@ export function readSongs(data) {
     offset_ms: Number(s.offset_ms) || 0,
     start_ms: Number(s.start_ms) || 0,
     end_ms: Number(s.end_ms) || 0,
+    preview_ms: Number.isInteger(Number(s.preview_ms)) && s.preview_ms !== null ? Number(s.preview_ms) : Number(s.start_ms) || 0,
     cv: Number(s.cv) || 1,
     counts: Array.isArray(s.counts) ? s.counts.map((n) => Number(n) || 0) : [],
     hidden: s.hidden === true,
@@ -91,6 +93,13 @@ export function renderPartySongs(ctx, deps = {}) {
   const meter = h('progress', { class: 'song-meter', max: 1, value: 0, attrs: { 'aria-label': 'Song shelf space used' } });
   const listBox = h('div', { class: 'song-list-wrap' });
 
+  function redetector(buf) {
+    return async (hint, onProgress) => {
+      const d = await (deps.decode || decodeSong)(buf, win);
+      return (deps.analyze || analyzeSong)(d.pcm, d.sr, { win, hint, onProgress });
+    };
+  }
+
   function ready() {
     return Boolean(picked && editor && editor.value() && rights.checked && title.input.value.trim() && artist.input.value.trim() && !busy);
   }
@@ -122,15 +131,16 @@ export function renderPartySongs(ctx, deps = {}) {
       const buf = await file.arrayBuffer();
       const decoded = await (deps.decode || decodeSong)(buf, win);
       if (mine !== gen) return;
-      if (decoded.duration_ms < 30000 || decoded.duration_ms > 360000) throw new Error('Songs must be between 30 seconds and 6 minutes long.');
+      if (decoded.duration_ms < SONG_MIN_MS || decoded.duration_ms > SONG_MAX_MS) throw new Error(LENGTH_RULE);
       fileStatus.textContent = 'Finding the beat...';
       const analysis = await (deps.analyze || analyzeSong)(decoded.pcm, decoded.sr, { win, onProgress: (p) => { analyzeBar.value = p; } });
       if (mine !== gen) return;
+      if (!analysis || !analysis.bpm) throw new Error(NO_BEAT);
       picked = { buf, duration_ms: decoded.duration_ms, name: file.name };
-      editor = createSongEditor({ analysis, buf, win, onChange: refreshButton });
+      editor = createSongEditor({ analysis, buf, win, onChange: refreshButton, redetect: redetector(buf) });
       replace(editorBox, editor.el);
       if (!title.input.value.trim()) title.input.value = String(file.name || '').replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').slice(0, TITLE_MAX);
-      fileStatus.textContent = `Found ${analysis.bpm} BPM. Pick the part to play, check the notes, then upload.`;
+      fileStatus.textContent = `Found ${Math.round(analysis.bpm * 10) / 10} BPM. Check the beat map, pick the part to play, check the notes, then upload.`;
     } catch (err) {
       if (mine !== gen) return;
       fileStatus.textContent = err && err.message ? err.message : NO_PLAY;
@@ -152,7 +162,7 @@ export function renderPartySongs(ctx, deps = {}) {
     uploadBar.value = 0;
     uploadStatus.textContent = '';
     try {
-      const meta = { title: title.input.value.trim(), artist: artist.input.value.trim(), credit: credit.input.value.trim(), rights: rights.checked === true, duration_ms: picked.duration_ms, bpm: v.charts.bpm, ...v };
+      const meta = { title: title.input.value.trim(), artist: artist.input.value.trim(), credit: credit.input.value.trim(), rights: rights.checked === true, duration_ms: Math.max(picked.duration_ms, v.end_ms), bpm: v.charts.bpm, ...v };
       const out = await uploadSong({ buf: picked.buf, meta, api, fetchImpl, sleep, digest: deps.digest, signal: ctx.signal, onProgress: (p) => { uploadBar.value = p.of ? p.done / p.of : 0; } });
       if (out.exists) {
         uploadStatus.textContent = ALREADY;
@@ -254,7 +264,8 @@ export function renderPartySongs(ctx, deps = {}) {
       const decoded = await (deps.decode || decodeSong)(buf, win);
       msg.textContent = 'Finding the beat...';
       const analysis = await (deps.analyze || analyzeSong)(decoded.pcm, decoded.sr, { win, onProgress: (p) => { bar.value = p; } });
-      const ed = createSongEditor({ analysis, buf, win, initial: { start_ms: s.start_ms, end_ms: s.end_ms, offset_ms: s.offset_ms } });
+      if (!analysis || !analysis.bpm) throw new Error(NO_BEAT);
+      const ed = createSongEditor({ analysis, buf, win, initial: { start_ms: s.start_ms, end_ms: s.end_ms, offset_ms: s.offset_ms, preview_ms: s.preview_ms }, redetect: redetector(buf) });
       const err = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
       const save = button({ label: 'Save new notes', variant: 'primary', size: 'sm', onClick: async () => {
         const v = ed.value();

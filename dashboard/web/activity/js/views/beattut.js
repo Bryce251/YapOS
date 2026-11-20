@@ -1,5 +1,5 @@
 import { h, button } from '../ui/dom.js';
-import { createBeatDraw, laneStyle } from './beatdraw.js';
+import { createBeatDraw } from './beatdraw.js';
 
 export const TUT_BPM = 100;
 export const TUT_BEAT = 60 / TUT_BPM;
@@ -69,7 +69,6 @@ export function createTutorial({ perf, loop, synth = null, still = () => false, 
   const skip = button('Skip', { variant: 'ghost', size: 'sm', key: 'bd-tut-skip', on: () => finish({ skipped: true }) });
   const el = h('div', { class: 'bd-tut', dataset: { step: '1' } }, title, h('div', { class: 'bd-tut-lane' }, canvas, glyph), h('div', { class: 'bd-tut-row' }, cap, streakEl), end, h('div', { class: 'bd-tut-actions' }, skip));
   const draw = createBeatDraw(canvas, { doc });
-  const pal = laneStyle(lanes);
   const st = { step: mode === 'timing' ? 3 : 1, start: now(), notes: [], mark: null, dts: [], streak: 0, best: 0, hitAt: -1e9, pressAt: new Float64Array(lanes).fill(-1e9), flash: new Array(lanes).fill(null), judge: new Array(lanes).fill(null), clicks: 0, gone: false, result: null, prev: offset(), size: '' };
   let stop = null;
 
@@ -159,7 +158,6 @@ export function createTutorial({ perf, loop, synth = null, still = () => false, 
       st.hitAt = now();
       st.flash[lane] = { k: 'p', at: now() };
       st.judge[lane] = { k: 'p', at: now(), tag: '' };
-      if (synth) synth.hit(pal[lane], 'p', 0);
       draw.burst(lane, now(), still() ? 0 : 6);
       return true;
     }
@@ -175,10 +173,7 @@ export function createTutorial({ perf, loop, synth = null, still = () => false, 
         bd = dt;
       }
     });
-    if (best < 0) {
-      if (synth) synth.stray();
-      return false;
-    }
+    if (best < 0) return false;
     const a = Math.abs(bd);
     const k = a <= TUT_WIN.p ? 'p' : a <= TUT_WIN.g ? 'g' : 'o';
     st.mark[best] = k === 'p' ? 1 : k === 'g' ? 2 : 3;
@@ -187,7 +182,6 @@ export function createTutorial({ perf, loop, synth = null, still = () => false, 
     st.best = Math.max(st.best, st.streak);
     st.flash[lane] = { k, at: now() };
     st.judge[lane] = { k, at: now(), tag: k !== 'p' && a > 30 ? (bd < 0 ? 'early' : 'late') : '' };
-    if (synth) synth.hit(pal[lane], k, 0);
     draw.burst(lane, now(), still() ? 0 : 6);
     streakEl.textContent = `Streak ${st.streak}`;
     return true;

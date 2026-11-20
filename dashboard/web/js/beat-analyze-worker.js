@@ -7,7 +7,8 @@ export function handleAnalyzeMessage(data, post) {
   try {
     if (!(d.pcm instanceof Float32Array) || !d.pcm.length) throw new Error('empty');
     let last = -1;
-    const analysis = analyze(d.pcm, d.sr || 22050, {
+    const analysis = analyze(d.pcm, d.sr || 44100, {
+      hint: Number(d.hint) || 0,
       onProgress: (p) => {
         const step = Math.floor(p * 50);
         if (step === last) return;

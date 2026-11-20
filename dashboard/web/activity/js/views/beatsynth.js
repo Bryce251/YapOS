@@ -1,33 +1,15 @@
 import { sfx as defaultSfx } from '../ui/sfx.js';
 
 export const MUSIC_GAIN = 0.6;
-export const SFX_GAIN = 0.18;
 export const CLICK_HZ = 1320;
 export const OPEN_HZ = 18000;
-export const DIP_HZ = 900;
 export const DUCK = 0.708;
 export const DUCK_SECS = 0.8;
-export const TAP_ROOT = 57;
-export const TAP_SCALE = Object.freeze([0, 3, 5, 7, 10]);
-
-function midiHz(midi) {
-  return 440 * 2 ** ((midi - 69) / 12);
-}
 
 export function soundNote(state) {
   if (state === 'off') return 'Sound is off. Turn sound on to play to the music. You can still play by watching the notes.';
   if (state === 'none') return "Music can't play on this device, but you can still play by watching the notes.";
   return null;
-}
-
-function noiseSeed() {
-  let a = 0x2f6b9e1d;
-  return () => {
-    a ^= a << 13;
-    a ^= a >>> 17;
-    a ^= a << 5;
-    return ((a >>> 0) / 4294967296) * 2 - 1;
-  };
 }
 
 function setAt(param, v, at) {
@@ -47,11 +29,8 @@ export function createBeatPlayer({ sfx, win } = {}) {
   let master = null;
   let filter = null;
   let music = null;
-  let fxBus = null;
-  let noise = null;
   let voices = 0;
   let musicOn = true;
-  let tapsOn = true;
   let hidden = false;
   let own = false;
   let dead = false;
@@ -112,9 +91,6 @@ export function createBeatPlayer({ sfx, win } = {}) {
       music = c.createGain();
       music.gain.value = musicLevel();
       music.connect(filter);
-      fxBus = c.createGain();
-      fxBus.gain.value = SFX_GAIN;
-      fxBus.connect(filter);
     } catch {
       master = null;
       return null;
@@ -155,22 +131,6 @@ export function createBeatPlayer({ sfx, win } = {}) {
     return v > 0 && v < 0.5 ? v : 0;
   }
 
-  function noiseBuf(c) {
-    if (noise) return noise;
-    if (typeof c.createBuffer !== 'function' || typeof c.createBufferSource !== 'function') return null;
-    try {
-      const rate = c.sampleRate || 44100;
-      const buf = c.createBuffer(1, Math.floor(rate * 0.5), rate);
-      const data = buf.getChannelData(0);
-      const r = noiseSeed();
-      for (let i = 0; i < data.length; i += 1) data[i] = r();
-      noise = buf;
-    } catch {
-      noise = null;
-    }
-    return noise;
-  }
-
   function env(g, at, peak, attack, dur) {
     g.gain.setValueAtTime(0.0001, at);
     g.gain.linearRampToValueAtTime(peak, at + attack);
@@ -191,108 +151,14 @@ export function createBeatPlayer({ sfx, win } = {}) {
     voices += 1;
   }
 
-  function hiss(c, out, { at, dur, peak, type, hz }) {
-    const buf = noiseBuf(c);
-    if (!buf || typeof c.createBiquadFilter !== 'function') return;
-    const src = c.createBufferSource();
-    src.buffer = buf;
-    const f = c.createBiquadFilter();
-    f.type = type;
-    f.frequency.setValueAtTime(hz, at);
-    const g = c.createGain();
-    env(g, at, peak, 0.002, dur);
-    src.connect(f);
-    f.connect(g);
-    g.connect(out);
-    src.start(at);
-    src.stop(at + dur + 0.03);
-    voices += 1;
-  }
-
-  function setMix({ music: m, taps } = {}) {
+  function setMix({ music: m } = {}) {
     if (typeof m === 'boolean') musicOn = m;
-    if (typeof taps === 'boolean') tapsOn = taps;
     if (music && ctx) setAt(music.gain, musicLevel(), now());
   }
 
   function mute(on) {
     hidden = Boolean(on);
     if (music && ctx) setAt(music.gain, musicLevel(), now());
-  }
-
-  function fx() {
-    if (!enabled() || !tapsOn) return null;
-    const c = graph();
-    if (!c || c.state === 'suspended' || !fxBus) return null;
-    return c;
-  }
-
-  function hit(laneIdx, kind) {
-    const c = fx();
-    if (!c) return false;
-    try {
-      const at = now();
-      const m = TAP_ROOT + 24 + TAP_SCALE[Math.max(0, laneIdx) % TAP_SCALE.length] + (kind === 'p' ? 12 : 0);
-      hiss(c, fxBus, { at, dur: 0.03, peak: 0.5, type: 'bandpass', hz: 3200 });
-      osc(c, fxBus, { type: 'triangle', hz: midiHz(m), at, dur: 0.07, peak: 0.55, attack: 0.002 });
-      if (kind === 'p') osc(c, fxBus, { type: 'sine', hz: midiHz(m) * 3, at, dur: 0.12, peak: 0.08, attack: 0.002 });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  function stray() {
-    const c = fx();
-    if (!c) return false;
-    try {
-      hiss(c, fxBus, { at: now(), dur: 0.02, peak: 0.18, type: 'highpass', hz: 2400 });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  function miss() {
-    const c = fx();
-    if (!c) return false;
-    try {
-      const at = now();
-      osc(c, fxBus, { type: 'sine', hz: 110, at, dur: 0.06, peak: 0.55, attack: 0.002 });
-      if (filter && filter !== master && filter.frequency) {
-        const f = filter.frequency;
-        setAt(f, OPEN_HZ, at);
-        f.exponentialRampToValueAtTime(DIP_HZ, at + 0.05);
-        f.exponentialRampToValueAtTime(OPEN_HZ, at + 0.2);
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  function tierUp() {
-    const c = fx();
-    if (!c) return false;
-    try {
-      const at = now();
-      [TAP_ROOT + 24, TAP_ROOT + 27, TAP_ROOT + 31].forEach((m, i) => osc(c, fxBus, { type: 'triangle', hz: midiHz(m), at: at + i * 0.07, dur: 0.16, peak: 0.4, attack: 0.004 }));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  function swell() {
-    const c = fx();
-    if (!c) return false;
-    try {
-      const at = now();
-      for (const m of [0, 4, 7, 12]) osc(c, fxBus, { type: 'triangle', hz: midiHz(TAP_ROOT + 24 + m), at, dur: 1.4, peak: 0.22, attack: 0.25 });
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   function duck(secs = DUCK_SECS) {
@@ -337,11 +203,6 @@ export function createBeatPlayer({ sfx, win } = {}) {
     ensure,
     outLat,
     now,
-    hit,
-    stray,
-    miss,
-    tierUp,
-    swell,
     duck,
     click,
     status,
@@ -354,12 +215,12 @@ export function createBeatPlayer({ sfx, win } = {}) {
       return s;
     },
     get mix() {
-      return { music: musicOn, taps: tapsOn };
+      return { music: musicOn };
     },
     destroy() {
       dead = true;
       if (typeof off === 'function') off();
-      for (const n of [music, fxBus, filter, master]) {
+      for (const n of [music, filter, master]) {
         try {
           if (n) n.disconnect();
         } catch {
@@ -367,10 +228,8 @@ export function createBeatPlayer({ sfx, win } = {}) {
         }
       }
       music = null;
-      fxBus = null;
       filter = null;
       master = null;
-      noise = null;
       if (own && ctx && typeof ctx.close === 'function') {
         try {
           const p = ctx.close();
