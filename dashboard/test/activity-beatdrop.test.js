@@ -7,7 +7,7 @@ import { FUN, ROOM, cleanSetting, settingsFor, pickTourGames, blockedNote } from
 import { GAMES } from '../web/activity/js/games/index.js';
 import beatdrop, { KEY, V, READY_MS, READY_NEXT_MS, READY_MAX_MS, LOAD_WAIT_MS, LEAD_MS, SHOW_MS, SKIP_MS, END_GRACE_MS, PROG_GAP_MS, CHECK_MS, BLURB, GOAL, FLAG_PLAYED, FLAG_SAT, FLAG_LEFT, DIFF_PAY, NEED_TEXT, WAIT_TEXT, SKIP_TEXT, LOAD_FAIL_TEXT, SKIP_LOAD, SKIP_NONE, SKIP_WAIT, WAIT_TRIES, lineup, songChoices, songsNote, usableSongs, checkProgress, checkFinal, songOfState, pointsFor, standings } from '../web/activity/js/games/beatdrop.js';
 import { DIFFS, LANES, lanesFor, windowsFor, lookFor, createJudge, judge, scoreOf, accOf, tierOf, gradeOf, objectsBefore, objectCount, objTimes, countOf, prepSong, releaseKind, lastNoteAt, STRAY_MAX, STRAY_MS, MAX_SCORE, HOLD_GOOD_MS, HOLD_OK_MS } from '../web/activity/js/games/beatchart.js';
-import { setSongFetch, resetSongs, loadCatalog, catalog, catalogTried, loadChart, chartSong, chartEntry, putChart, encodeNotes, decodeNotes, validateChart, readSong, readCatalog, checkNotes, songWindow, songLength, lengthLabel, CHART_TIMEOUT_MS, CHART_MAX_BYTES, CHART_CAPS, CHART_PEAK, SECTION_MAX_MS, LENGTH_CHOICES, FULL_SONG } from '../web/activity/js/games/beatsongs.js';import { createBeatdropView, createSongClock, eventTime, readPrefs, writePrefs, laneOfKey, keyLabels, heightFor, widthFor, rivalLine, tendencyOf, footText, songLine, loadText, OFFSET_KEY, PLAY_SHEET, SONG_SHEET, LANE_KEYS } from '../web/activity/js/views/beatdrop.js';
+import { setSongFetch, resetSongs, loadCatalog, catalog, catalogTried, loadChart, chartSong, chartEntry, putChart, encodeNotes, decodeNotes, validateChart, readSong, readCatalog, checkNotes, songWindow, songLength, lengthLabel, CHART_TIMEOUT_MS, CHART_MAX_BYTES, CHART_CAPS, CHART_PEAK, SECTION_MAX_MS, LENGTH_CHOICES, FULL_SONG } from '../web/activity/js/games/beatsongs.js';import { createBeatdropView, createSongClock, eventTime, readPrefs, writePrefs, laneOfKey, keyLabels, heightFor, widthFor, rivalLine, tendencyOf, footText, songLine, loadText, OFFSET_KEY, PLAY_SHEET, SONG_SHEET, LANE_KEYS, SPEEDS, cleanSpeed, stepSpeed, speedLabel } from '../web/activity/js/views/beatdrop.js';
 import { createSongAudio, songSpan } from '../web/activity/js/views/beatsong.js';
 import { createBeatPlayer, soundNote } from '../web/activity/js/views/beatsynth.js';
 import { timingFrom, tutorialNotes, clampOffset, createTutorial, TIMING_MAX } from '../web/activity/js/views/beattut.js';
@@ -2413,5 +2413,36 @@ test('the lobby shows a song picker built only from the uploaded songs', async (
   assert.equal(all(guestLobby.el).some((n) => n.dataset && n.dataset.key === 'set-song' && n.localName === 'select'), false);
   assert.equal(host.lobby.setting('song', 'beats'), false, 'the old built-in pick is refused');
   assert.equal(host.lobby.setting('song', 'https://elsewhere'), false);
+  noSongs();
+});
+
+test('scroll speed is a per player setting that only changes how fast notes fall', async () => {
+  assert.equal(cleanSpeed(undefined), 1);
+  assert.equal(cleanSpeed('2'), 2);
+  assert.equal(cleanSpeed(9), 1);
+  assert.equal(stepSpeed(1, 1), 1.25);
+  assert.equal(stepSpeed(SPEEDS[0], -1), SPEEDS[0]);
+  assert.equal(stepSpeed(SPEEDS[SPEEDS.length - 1], 1), SPEEDS[SPEEDS.length - 1]);
+  assert.equal(speedLabel(1.5), '1.5x');
+  const mem = new Map();
+  const pstore = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)) };
+  assert.equal(readPrefs(pstore).speed, 1);
+  writePrefs(pstore, { ...readPrefs(pstore), speed: 2.5 });
+  assert.equal(readPrefs(pstore).speed, 2.5);
+  writePrefs(pstore, { ...readPrefs(pstore), speed: 7 });
+  assert.equal(readPrefs(pstore).speed, 1);
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await startGame(1, { length: 45, songs: 1, difficulty: 'hard' });
+  const engine = r.engines[0];
+  const view = makeView(engine, fakeWin(() => r.clock.now(), false));
+  view.update(engine.snapshot());
+  const up = byKey(view, 'bd-speed-up');
+  assert.ok(up && byKey(view, 'bd-speed-down'));
+  fire(up, 'click');
+  fire(byKey(view, 'bd-speed-up'), 'click');
+  await allReady(r);
+  view.update(engine.snapshot());
+  assert.ok(Math.abs(view.local.look - lookFor(2, false) / 1.5) < 1e-9);
+  view.destroy();
   noSongs();
 });

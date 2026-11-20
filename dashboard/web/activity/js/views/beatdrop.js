@@ -48,7 +48,22 @@ export const BANNER_MS = 1200;
 export const LANE_KEYS = Object.freeze({
   4: Object.freeze([Object.freeze(['KeyD', 'ArrowLeft']), Object.freeze(['KeyF', 'ArrowDown']), Object.freeze(['KeyJ', 'ArrowUp']), Object.freeze(['KeyK', 'ArrowRight'])]),
 });
-const DEFAULT_PREFS = Object.freeze({ tapOffset: 0, seen: false, slow: null, calm: false, music: true });
+const DEFAULT_PREFS = Object.freeze({ tapOffset: 0, seen: false, slow: null, calm: false, music: true, speed: 1 });
+export const SPEEDS = Object.freeze([0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4]);
+
+export function cleanSpeed(v) {
+  const n = Number(v);
+  return SPEEDS.includes(n) ? n : 1;
+}
+
+export function speedLabel(v) {
+  return `${cleanSpeed(v)}x`;
+}
+
+export function stepSpeed(v, dir) {
+  const i = SPEEDS.indexOf(cleanSpeed(v));
+  return SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, i + (dir > 0 ? 1 : -1)))];
+}
 
 function defaultStore() {
   try {
@@ -80,6 +95,7 @@ export function readPrefs(store) {
     out.slow = typeof v.slow === 'boolean' ? v.slow : null;
     out.calm = v.calm === true;
     out.music = v.music !== false;
+    out.speed = cleanSpeed(v.speed);
     if (v.best && typeof v.best === 'object') {
       for (const [k, n] of Object.entries(v.best)) if (/^[a-z0-9-]{1,20}\.[0-3]$/.test(k) && Number.isInteger(n) && n >= 0 && n <= 1000) out.best[k] = n;
     }
@@ -90,7 +106,7 @@ export function readPrefs(store) {
 }
 
 export function writePrefs(store, prefs) {
-  const v = { tapOffset: clampOffset(prefs.tapOffset), seen: Boolean(prefs.seen), slow: typeof prefs.slow === 'boolean' ? prefs.slow : null, calm: Boolean(prefs.calm), music: prefs.music !== false, best: prefs.best || {} };
+  const v = { tapOffset: clampOffset(prefs.tapOffset), seen: Boolean(prefs.seen), slow: typeof prefs.slow === 'boolean' ? prefs.slow : null, calm: Boolean(prefs.calm), music: prefs.music !== false, speed: cleanSpeed(prefs.speed), best: prefs.best || {} };
   try {
     if (store) store.setItem(OFFSET_KEY, JSON.stringify(v));
     return true;
@@ -746,7 +762,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     local.n = model.n;
     local.song = song;
     local.lanes = LANES;
-    local.look = lookFor(model.df, slow());
+    local.look = lookFor(model.df, slow()) / cleanSpeed(prefs.speed);
     local.judge = model.playing ? createJudge(song, model.df) : null;
     local.demo = !model.playing;
     local.mark = local.judge ? local.judge.mark : new Uint8Array(song.notes.length);
@@ -1292,7 +1308,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   function readyModel(m) {
     if (!m || m.phase !== 'ready') return null;
     const mine = load.n === m.n && load.state !== 'idle' ? load.state : m.loading ? m.loading.mine : 'wait';
-    return { n: m.n, number: m.number, total: m.total, track: m.track, song: m.song, faster: m.faster, diffName: m.diffName, len: m.len, notes: m.notes, iReady: m.iReady, watching: m.watching, dots: m.dots, starts: m.starts, ends: m.ends, slow: slow(), calm: prefs.calm, offset: prefs.tapOffset, tut: Boolean(tut), load: { mine, pct: mine === 'ok' ? 1 : load.n === m.n ? load.pct : 0, done: m.loading ? m.loading.done : 0, of: m.loading ? m.loading.of : 0 } };
+    return { n: m.n, number: m.number, total: m.total, track: m.track, song: m.song, faster: m.faster, diffName: m.diffName, len: m.len, notes: m.notes, iReady: m.iReady, watching: m.watching, dots: m.dots, starts: m.starts, ends: m.ends, slow: slow(), calm: prefs.calm, speed: cleanSpeed(prefs.speed), offset: prefs.tapOffset, tut: Boolean(tut), load: { mine, pct: mine === 'ok' ? 1 : load.n === m.n ? load.pct : 0, done: m.loading ? m.loading.done : 0, of: m.loading ? m.loading.of : 0 } };
   }
 
   function retryLoad() {
@@ -1344,6 +1360,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
         pressedBtn('Slower notes', r.slow, 'bd-slow', () => {
           prefs.slow = !slow();
           save();
+          if (model) local.look = lookFor(model.df, slow()) / cleanSpeed(prefs.speed);
           repaintReady();
         }),
         pressedBtn('Calm view', r.calm, 'bd-calm', () => {
@@ -1352,11 +1369,26 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
           repaintReady();
         }),
       ),
+      h(
+        'div',
+        { class: 'beatdrop-ready-actions bd-speed', attrs: { role: 'group', 'aria-label': 'Scroll speed' } },
+        h('span', { class: 'muted', text: 'Scroll speed' }),
+        button('Slower', { variant: 'ghost', size: 'sm', key: 'bd-speed-down', disabled: r.speed <= SPEEDS[0], on: () => changeSpeed(-1) }),
+        h('strong', { class: 'bd-speed-value', text: speedLabel(r.speed), attrs: { 'aria-live': 'polite' } }),
+        button('Faster', { variant: 'ghost', size: 'sm', key: 'bd-speed-up', disabled: r.speed >= SPEEDS[SPEEDS.length - 1], on: () => changeSpeed(1) }),
+      ),
       r.offset ? h('p', { class: 'bd-offset muted', text: `Timing offset: ${r.offset > 0 ? '+' : ''}${r.offset} ms` }) : null,
       timer(r.starts, r.ends, 'Song starts in'),
       r.dots.length ? h('div', { class: 'bd-dots', attrs: { 'aria-label': `${r.dots.filter((x) => x.on).length} of ${r.dots.length} ready` } }, r.dots.map((x) => h('span', { class: ['bd-dot', x.on ? 'is-on' : null, x.ld ? 'is-loaded' : null, x.lf ? 'is-fail' : null, x.isMe ? 'is-me' : null] }))) : null,
     );
   });
+
+  function changeSpeed(dir) {
+    prefs.speed = stepSpeed(prefs.speed, dir);
+    save();
+    if (model) local.look = lookFor(model.df, slow()) / prefs.speed;
+    repaintReady();
+  }
 
   function repaintReady() {
     paintReady(cardBody, readyModel(model));
