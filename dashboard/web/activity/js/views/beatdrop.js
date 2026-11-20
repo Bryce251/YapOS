@@ -48,7 +48,32 @@ export const BANNER_MS = 1200;
 export const LANE_KEYS = Object.freeze({
   4: Object.freeze([Object.freeze(['KeyD', 'ArrowLeft']), Object.freeze(['KeyF', 'ArrowDown']), Object.freeze(['KeyJ', 'ArrowUp']), Object.freeze(['KeyK', 'ArrowRight'])]),
 });
-const DEFAULT_PREFS = Object.freeze({ tapOffset: 0, seen: false, slow: null, calm: false, music: true, speed: 1 });
+const DEFAULT_PREFS = Object.freeze({ tapOffset: 0, seen: false, slow: null, calm: false, music: true, speed: 1, keys: null });
+const BLOCKED_KEYS = new Set(['Escape', 'Tab', 'Enter', 'NumpadEnter', 'Backspace', 'CapsLock', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight', 'ContextMenu', 'OSLeft', 'OSRight']);
+
+export function okKey(code) {
+  return typeof code === 'string' && /^[A-Za-z0-9]{1,24}$/.test(code) && !BLOCKED_KEYS.has(code);
+}
+
+export function cleanKeys(v) {
+  if (!Array.isArray(v) || v.length !== LANES) return null;
+  if (!v.every(okKey) || new Set(v).size !== v.length) return null;
+  return v.slice();
+}
+
+export function bindsFor(keys) {
+  const k = cleanKeys(keys);
+  return k ? k.map((x) => [x]) : LANE_KEYS[LANES];
+}
+
+const ARROW_NAMES = Object.freeze({ ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓' });
+
+export function keyName(code) {
+  const c = String(code || '');
+  if (ARROW_NAMES[c]) return ARROW_NAMES[c];
+  if (c === 'Space') return 'Space';
+  return c.replace(/^Key/, '').replace(/^Digit/, '').replace(/^Numpad/, 'Num ');
+}
 export const SPEEDS = Object.freeze([0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4]);
 
 export function cleanSpeed(v) {
@@ -96,6 +121,7 @@ export function readPrefs(store) {
     out.calm = v.calm === true;
     out.music = v.music !== false;
     out.speed = cleanSpeed(v.speed);
+    out.keys = cleanKeys(v.keys);
     if (v.best && typeof v.best === 'object') {
       for (const [k, n] of Object.entries(v.best)) if (/^[a-z0-9-]{1,20}\.[0-3]$/.test(k) && Number.isInteger(n) && n >= 0 && n <= 1000) out.best[k] = n;
     }
@@ -106,7 +132,7 @@ export function readPrefs(store) {
 }
 
 export function writePrefs(store, prefs) {
-  const v = { tapOffset: clampOffset(prefs.tapOffset), seen: Boolean(prefs.seen), slow: typeof prefs.slow === 'boolean' ? prefs.slow : null, calm: Boolean(prefs.calm), music: prefs.music !== false, speed: cleanSpeed(prefs.speed), best: prefs.best || {} };
+  const v = { tapOffset: clampOffset(prefs.tapOffset), seen: Boolean(prefs.seen), slow: typeof prefs.slow === 'boolean' ? prefs.slow : null, calm: Boolean(prefs.calm), music: prefs.music !== false, speed: cleanSpeed(prefs.speed), keys: cleanKeys(prefs.keys), best: prefs.best || {} };
   try {
     if (store) store.setItem(OFFSET_KEY, JSON.stringify(v));
     return true;
@@ -125,16 +151,13 @@ export function keyCodeOf(e) {
   return '';
 }
 
-export function laneOfKey(e) {
+export function laneOfKey(e, keys) {
   const code = keyCodeOf(e);
-  return LANE_KEYS[LANES].findIndex((keys) => keys.includes(code));
+  return bindsFor(keys).findIndex((list) => list.includes(code));
 }
 
-export function keyLabels() {
-  return LANE_KEYS[LANES].map((keys) => {
-    const k = keys[0];
-    return k === 'Space' ? 'Space' : k.replace(/^Key/, '');
-  });
+export function keyLabels(keys) {
+  return bindsFor(keys).map((list) => keyName(list[0]));
 }
 
 export function heightFor(innerHeight, top = 0, wide = false, pads = true) {
@@ -447,6 +470,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   let fixInfo = null;
   let bestInfo = null;
   const held = new Set();
+  let binding = null;
   const pointers = new Map();
   const sideRows = new Map();
   const local = { n: null, song: null, lanes: LANES, songOn: false, judge: null, demo: false, mark: null, sent: false, lastProg: 0, marks: [], drops: [], look: 1.7, pressAt: new Float64Array(4).fill(-1e9), missAt: new Float64Array(4).fill(-1e9), down: [false, false, false, false], flash: [null, null, null, null], judgeFx: [null, null, null, null], shakeAt: -1e9, count: null, audioOn: false, audioWant: false, hiddenAt: null, hiddenMs: 0, frames: [], spanStart: 0, lostAt: -1e9, bannerAt: -1e9, announced: false, demoAt: 0 };
@@ -574,12 +598,12 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   paintToggles();
 
   function labels() {
-    return keyboardy() ? keyLabels() : null;
+    return keyboardy() ? keyLabels(prefs.keys) : null;
   }
 
   function buildPads() {
     const pal = laneStyle();
-    const labs = keyLabels();
+    const labs = keyLabels(prefs.keys);
     holdSig = '';
     pads = pal.map((pi, i) => {
       const pad = h(
@@ -1140,7 +1164,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       loop,
       synth: player,
       still,
-      labels: () => (keyboardy() ? keyLabels() : null),
+      labels: () => (keyboardy() ? keyLabels(prefs.keys) : null),
       touch: () => !keyboardy(),
       offset: () => prefs.tapOffset,
       onOffset: (ms) => {
@@ -1175,7 +1199,8 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     if (!e || e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target;
     if (typing(t) || inDialog(t)) return;
-    const lane = laneOfKey(e);
+    if (binding) return;
+    const lane = laneOfKey(e, prefs.keys);
     if (lane < 0) return;
     const code = keyCodeOf(e);
     const active = tut && !tut.gone;
@@ -1202,9 +1227,9 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   function onKeyUp(e) {
     const code = keyCodeOf(e);
     held.delete(code);
-    const lane = laneOfKey(e);
+    const lane = laneOfKey(e, prefs.keys);
     if (lane < 0) return;
-    if (LANE_KEYS[LANES][lane].some((k) => held.has(k))) return;
+    if (bindsFor(prefs.keys)[lane].some((k) => held.has(k))) return;
     local.down[lane] = false;
     if (pads[lane]) pads[lane].classList.remove('is-down');
     releaseLane(lane, e && e.timeStamp);
@@ -1277,6 +1302,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     if (looping) loop.add(tick);
   }
   if (keyTarget) {
+    keyTarget.addEventListener('keydown', onBindKey, true);
     keyTarget.addEventListener('keydown', onKey);
     keyTarget.addEventListener('keyup', onKeyUp);
     keyTarget.addEventListener('visibilitychange', onVisible);
@@ -1308,7 +1334,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   function readyModel(m) {
     if (!m || m.phase !== 'ready') return null;
     const mine = load.n === m.n && load.state !== 'idle' ? load.state : m.loading ? m.loading.mine : 'wait';
-    return { n: m.n, number: m.number, total: m.total, track: m.track, song: m.song, faster: m.faster, diffName: m.diffName, len: m.len, notes: m.notes, iReady: m.iReady, watching: m.watching, dots: m.dots, starts: m.starts, ends: m.ends, slow: slow(), calm: prefs.calm, speed: cleanSpeed(prefs.speed), offset: prefs.tapOffset, tut: Boolean(tut), load: { mine, pct: mine === 'ok' ? 1 : load.n === m.n ? load.pct : 0, done: m.loading ? m.loading.done : 0, of: m.loading ? m.loading.of : 0 } };
+    return { n: m.n, number: m.number, total: m.total, track: m.track, song: m.song, faster: m.faster, diffName: m.diffName, len: m.len, notes: m.notes, iReady: m.iReady, watching: m.watching, dots: m.dots, starts: m.starts, ends: m.ends, slow: slow(), calm: prefs.calm, speed: cleanSpeed(prefs.speed), keys: keyLabels(prefs.keys), custom: Boolean(cleanKeys(prefs.keys)), binding: binding ? binding.got.length : null, offset: prefs.tapOffset, tut: Boolean(tut), load: { mine, pct: mine === 'ok' ? 1 : load.n === m.n ? load.pct : 0, done: m.loading ? m.loading.done : 0, of: m.loading ? m.loading.of : 0 } };
   }
 
   function retryLoad() {
@@ -1377,11 +1403,63 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
         h('strong', { class: 'bd-speed-value', text: speedLabel(r.speed), attrs: { 'aria-live': 'polite' } }),
         button('Faster', { variant: 'ghost', size: 'sm', key: 'bd-speed-up', disabled: r.speed >= SPEEDS[SPEEDS.length - 1], on: () => changeSpeed(1) }),
       ),
+      h(
+        'div',
+        { class: 'beatdrop-ready-actions bd-keybinds', attrs: { role: 'group', 'aria-label': 'Keys' } },
+        h('span', { class: 'muted', text: r.binding === null ? 'Keys' : `Press the key for lane ${r.binding + 1} of 4 (Esc to cancel)` }),
+        r.binding === null ? h('strong', { class: 'bd-keys-value', text: r.keys.join(' '), attrs: { 'aria-live': 'polite' } }) : null,
+        r.binding === null ? button('Change keys', { variant: 'ghost', size: 'sm', key: 'bd-keys-change', on: () => startBinding() }) : button('Cancel', { variant: 'ghost', size: 'sm', key: 'bd-keys-cancel', on: () => stopBinding() }),
+        r.binding === null && r.custom ? button('Reset', { variant: 'ghost', size: 'sm', key: 'bd-keys-reset', on: () => resetKeys() }) : null,
+      ),
       r.offset ? h('p', { class: 'bd-offset muted', text: `Timing offset: ${r.offset > 0 ? '+' : ''}${r.offset} ms` }) : null,
       timer(r.starts, r.ends, 'Song starts in'),
       r.dots.length ? h('div', { class: 'bd-dots', attrs: { 'aria-label': `${r.dots.filter((x) => x.on).length} of ${r.dots.length} ready` } }, r.dots.map((x) => h('span', { class: ['bd-dot', x.on ? 'is-on' : null, x.ld ? 'is-loaded' : null, x.lf ? 'is-fail' : null, x.isMe ? 'is-me' : null] }))) : null,
     );
   });
+
+  function startBinding() {
+    binding = { got: [] };
+    repaintReady();
+  }
+
+  function stopBinding() {
+    binding = null;
+    repaintReady();
+  }
+
+  function resetKeys() {
+    prefs.keys = null;
+    save();
+    refreshKeys();
+  }
+
+  function refreshKeys() {
+    held.clear();
+    if (typeof buildPads === 'function' && pads && pads.length) {
+      const labs = keyLabels(prefs.keys);
+      pads.forEach((pad, i) => {
+        const tag = pad.querySelector ? pad.querySelector('.bd-pad-key') : null;
+        if (tag) tag.textContent = labs[i];
+        pad.setAttribute('aria-label', `Lane ${i + 1} (${labs[i]})`);
+      });
+    }
+    repaintReady();
+  }
+
+  function onBindKey(e) {
+    if (!binding || !e) return;
+    const code = keyCodeOf(e);
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    if (code === 'Escape') return stopBinding();
+    if (!okKey(code) || binding.got.includes(code)) return;
+    binding.got.push(code);
+    if (binding.got.length < LANES) return repaintReady();
+    prefs.keys = binding.got.slice();
+    binding = null;
+    save();
+    refreshKeys();
+  }
 
   function changeSpeed(dir) {
     prefs.speed = stepSpeed(prefs.speed, dir);
@@ -1595,6 +1673,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     player.destroy();
     if (typeof sfxOff === 'function') sfxOff();
     if (keyTarget) {
+      keyTarget.removeEventListener('keydown', onBindKey, true);
       keyTarget.removeEventListener('keydown', onKey);
       keyTarget.removeEventListener('keyup', onKeyUp);
       keyTarget.removeEventListener('visibilitychange', onVisible);
