@@ -624,6 +624,17 @@ test('the draw view lets the drawer pick and draw, and shows guessers the blanks
   assert.deepEqual(groups.map((g) => g.children.length), word.split(' ').filter(Boolean).map((w) => w.length));
   assert.equal(all(guestView.v.el).some((x) => x.classList && x.classList.contains('is-gap')), false);
   assert.match(hostView.v.el.querySelector('.draw-board').className, /is-drawing/);
+  const swipe = () => {
+    const e = new FakeEvent('touchmove', { bubbles: true });
+    e.cancelable = true;
+    return e;
+  };
+  const t1 = swipe();
+  hostView.canvas.dispatchEvent(t1);
+  assert.equal(t1.defaultPrevented, true, 'a finger on the drawing does not scroll the page for the drawer');
+  const t2 = swipe();
+  guestView.canvas.dispatchEvent(t2);
+  assert.equal(t2.defaultPrevented, false, 'guessers can still scroll past the drawing');
   byKey(hostView.v.el, 'color-3').click();
   byKey(hostView.v.el, 'size-2').click();
   hostView.canvas.dispatchEvent(pointer('pointerdown', 10, 10));

@@ -311,6 +311,11 @@ export function createOddView({ engine, fx, toast, win, cues }) {
   }
 
   canvas.addEventListener('pointerdown', onDown);
+  const holdPage = (e) => {
+    if ((cur || canDraw()) && e.cancelable) e.preventDefault();
+  };
+  canvas.addEventListener('touchstart', holdPage, { passive: false });
+  canvas.addEventListener('touchmove', holdPage, { passive: false });
   canvas.addEventListener('pointermove', onMove);
   canvas.addEventListener('pointerup', onUp);
   canvas.addEventListener('pointercancel', onUp);
