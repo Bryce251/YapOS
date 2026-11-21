@@ -193,13 +193,13 @@ function flux(sp, lag = 2, wid = 1) {
   return { odf, bandOdf };
 }
 
-function peaks(x, pf, pa, pm) {
+function peaks(x, pf, pa, pm, abs = 0) {
   const n = x.length;
   const mean = movingMean(x, 10);
   const med = movingMedian(x, 50);
   let mx = 0;
   for (let i = 0; i < n; i++) if (x[i] > mx) mx = x[i];
-  const floor = mx * pf;
+  const floor = Math.max(mx * pf, abs);
   const out = [];
   let lastT = -1e9;
   for (let i = 1; i < n - 1; i++) {
@@ -239,6 +239,125 @@ function pickOnsets(odf, bandOdf) {
       continue;
     }
     out.push(c);
+  }
+  return out;
+}
+
+export const DETAIL_EDGES = Object.freeze([200, 800, 2000, 6000]);
+export const DETAIL_GROUPS = 4;
+export const DETAIL_DECAY = 0.997;
+export const DETAIL_GAIN = 10;
+
+function detailOdf(sp, lag = 2, wid = 1) {
+  const { spec, frames, nbands, freqs } = sp;
+  const groups = freqs.map((f) => {
+    let g = 0;
+    while (g < DETAIL_EDGES.length && f >= DETAIL_EDGES[g]) g++;
+    return g;
+  });
+  const ng = DETAIL_EDGES.length + 1;
+  const count = new Float32Array(ng);
+  for (const g of groups) count[g] += 1;
+  let top = 0;
+  for (let i = 0; i < spec.length; i++) if (spec[i] > top) top = spec[i];
+  const floor = Math.expm1(top) * 1e-4;
+  const white = new Float32Array(frames * nbands);
+  const mem = new Float32Array(nbands).fill(floor);
+  for (let f = 0; f < frames; f++) {
+    const row = f * nbands;
+    for (let b = 0; b < nbands; b++) {
+      const v = Math.expm1(spec[row + b]);
+      const m = Math.max(v, floor, mem[b] * DETAIL_DECAY);
+      mem[b] = m;
+      white[row + b] = Math.log1p((DETAIL_GAIN * v) / m);
+    }
+  }
+  const out = Array.from({ length: ng }, () => new Float32Array(frames));
+  for (let f = lag; f < frames; f++) {
+    const cur = f * nbands;
+    const prev = (f - lag) * nbands;
+    for (let b = 0; b < nbands; b++) {
+      let p = white[prev + b];
+      for (let k = Math.max(0, b - wid); k <= Math.min(nbands - 1, b + wid); k++) if (white[prev + k] > p) p = white[prev + k];
+      const d = white[cur + b] - p;
+      if (d > 0) out[groups[b]][f] += d / count[groups[b]];
+    }
+  }
+  return out;
+}
+
+export const DETAIL_PEAK = Object.freeze({ a: 1.6, m: 3, floor: 0.12, near: 3, stream: 3, passes: 1, slow: 55, tight: 0.85 });
+
+function subGrid(beats, n) {
+  const out = [];
+  for (let i = 0; i + 1 < beats.length; i++) for (let q = 0; q < n; q++) out.push(beats[i] + (q * (beats[i + 1] - beats[i])) / n);
+  if (beats.length) out.push(beats[beats.length - 1]);
+  return out;
+}
+
+function nearIndex(list, x) {
+  let lo = 0;
+  let hi = list.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid] < x) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo > 0 && Math.abs(list[lo - 1] - x) <= Math.abs(list[lo] - x)) return lo - 1;
+  return lo;
+}
+
+function hasNear(list, x) {
+  if (!list.length) return false;
+  return Math.abs(list[nearIndex(list, x)] - x) <= 2;
+}
+
+function streamOk(i, sub, have) {
+  if (!sub.length) return false;
+  const k = nearIndex(sub, i);
+  if (Math.abs(sub[k] - i) > 2) return false;
+  let n = 0;
+  for (const d of [-2, -1, 1, 2]) {
+    const g = sub[k + d];
+    if (g !== undefined && hasNear(have, g)) n += 1;
+  }
+  return n >= DETAIL_PEAK.stream;
+}
+
+function detailPicks(odf, fine, have, beats) {
+  let gap = 0;
+  for (let i = 1; i < beats.length; i++) gap += beats[i] - beats[i - 1];
+  gap /= Math.max(1, beats.length - 1);
+  const haveI = have.map((p) => p.i).sort((x, y) => x - y);
+  const tight = (sub) => sub.length > 0 && haveI.filter((i) => Math.abs(sub[nearIndex(sub, i)] - i) <= 1).length >= DETAIL_PEAK.tight * haveI.length;
+  const subs = [4, 3, ...(gap >= DETAIL_PEAK.slow ? [8, 6] : [])].map((n) => subGrid(beats, n)).filter(tight);
+  if (!subs.length) return [];
+  const taken = new Uint8Array(odf.length);
+  const mark = (i) => {
+    for (let k = Math.max(0, i - DETAIL_PEAK.near); k <= Math.min(odf.length - 1, i + DETAIL_PEAK.near); k++) taken[k] = 1;
+  };
+  for (const p of have) mark(p.i);
+  const found = [];
+  fine.slice(0, DETAIL_GROUPS).forEach((x, g) => {
+    const top = quantile(Array.from(x).filter((v) => v > 0), 0.98);
+    for (const p of peaks(x, 0, DETAIL_PEAK.a, DETAIL_PEAK.m, top * DETAIL_PEAK.floor)) found.push({ ...p, g });
+  });
+  found.sort((x, y) => y.c - x.c);
+  const out = [];
+  for (let pass = 0; pass < DETAIL_PEAK.passes; pass++) {
+    const add = [];
+    for (const p of found) {
+      if (taken[p.i] || !subs.some((sub) => streamOk(p.i, sub, haveI))) continue;
+      add.push(p);
+    }
+    if (!add.length) break;
+    for (const p of add) {
+      if (taken[p.i]) continue;
+      mark(p.i);
+      out.push({ i: p.i, v: odf[p.i], c: p.c, band: p.g === 0 ? 'L' : p.g <= 2 ? 'M' : 'H', full: 0, fine: 1 });
+      haveI.push(p.i);
+    }
+    haveI.sort((x, y) => x - y);
   }
   return out;
 }
@@ -717,7 +836,8 @@ export function detect(mono, sampleRate, { hint = 0, onProgress = null, features
   const kept = raw.filter((f) => f >= a - per[f] * 0.25 && f <= b + per[f] * 0.25);
   const beats = kept.map((f) => f / FPS);
   const grid = gridMask(raw, frames);
-  const picks = pickOnsets(odf, bandOdf).filter((p) => p.full || grid[p.i]);
+  const base = pickOnsets(odf, bandOdf).filter((p) => p.full || grid[p.i]);
+  const picks = [...base, ...detailPicks(odf, detailOdf(sp), base, raw)].sort((x, y) => x.i - y.i);
   const onsets = picks.map((p) => ({ t: p.i / FPS, raw: p.i / FPS, band: p.band, strength: p.v }));
   const { meter, phase } = barPhase(sp, kept, bandOdf[0]);
   const downbeats = beats.filter((_, i) => i >= phase && (i - phase) % meter === 0);

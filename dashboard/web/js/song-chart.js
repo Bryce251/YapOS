@@ -1,14 +1,14 @@
 import { encodeNotes, decodeNotes, validateCharts, objectCount, peakNps, readTune, DIFF_IDS, DIFF_NAMES, OBJECT_CAPS, NPS_CAPS, HOLD_DIFFS, LANES, LANE_REST_MS, FIRST_NOTE_MS, END_PAD_MS, HOLD_MIN_CS, HOLD_MAX_CS, MARKS_MAX, B0_MAX, BPM_MIN, BPM_MAX, MAX_CHORD, MAX_ACTIVE, CHART_V, TUNE_MIN, TUNE_MAX } from '../activity/js/games/beatcodec.js';
-import { bpmOf } from './beat-grid.js';
+import { bpmOf, SPLIT_MS } from './beat-grid.js';
 
 export const SECTION_CHOICES = Object.freeze([45000, 60000, 90000, 120000, 150000]);
 export const FULL_SECTION = 0;
 export const BEST_PART_MS = 60000;
 export const CHART_DIFFS = Object.freeze({
-  easy: Object.freeze({ q: 4, nps: 1.3, space: 380, jack: 700, chord: null, hold: null, runs: false, trills: true }),
-  normal: Object.freeze({ q: 2, nps: 2.4, space: 200, jack: 420, chord: Object.freeze({ top: 0.1, bars: 2, per: 1, down: true, loud: 0.5 }), hold: null, runs: false, trills: true }),
-  hard: Object.freeze({ q: 2, loud: 0.45, nps: 3.7, space: 115, jack: 240, chord: Object.freeze({ top: 0.18, bars: 1, per: 1, down: false, loud: 0 }), hold: Object.freeze({ min: 500, bars: 2 }), runs: false, trills: false }),
-  expert: Object.freeze({ q: 1, nps: 5.3, space: 80, jack: 150, chord: Object.freeze({ top: 0.3, bars: 1, per: 2, down: false, loud: 0, multi: true }), hold: Object.freeze({ min: 350, bars: 1 }), runs: true, trills: false }),
+  easy: Object.freeze({ q: 4, nps: 2.2, space: 300, jack: 700, chord: null, hold: null, runs: false, trills: true }),
+  normal: Object.freeze({ q: 2, nps: 3.2, space: 160, jack: 420, chord: Object.freeze({ top: 0.1, bars: 2, per: 1, down: true, loud: 0.5 }), hold: null, runs: false, trills: true }),
+  hard: Object.freeze({ q: 2, loud: 0.25, nps: 5.4, space: 100, jack: 240, chord: Object.freeze({ top: 0.18, bars: 1, per: 1, down: false, loud: 0 }), hold: Object.freeze({ min: 500, bars: 2 }), runs: false, trills: false }),
+  expert: Object.freeze({ q: 1, nps: 8.8, cover: 0.98, space: 80, jack: 150, chord: Object.freeze({ top: 0.3, bars: 1, per: 2, down: false, loud: 0, multi: true }), hold: Object.freeze({ min: 350, bars: 1 }), runs: true, trills: false }),
 });
 export const SECTION_SCALE = Object.freeze({ intro: 0.6, quiet: 0.7, build: 0.95, main: 1, drop: 1.2 });
 export const POS_BONUS = Object.freeze({ 4: 0.6, 2: 0.3, 1: 0.1 });
@@ -27,7 +27,14 @@ export const JACK_FLOOR = 120;
 export const LOUD_START = 0.7;
 export const STEP_REACH = TUNE_MAX * 2;
 export const RUNG_GAP = 0.04;
+export const CHORD_WEIGHT = 10;
+export const FAINT = Object.freeze({ s: 0.05, off: 0.2, edgeS: 0.07, edgeOff: 0.15 });
 export { TUNE_MIN, TUNE_MAX };
+
+export function faint(c) {
+  if (c.s < FAINT.s && (c.q === 1 || c.off >= FAINT.off)) return true;
+  return c.s < FAINT.edgeS && c.off >= FAINT.edgeOff;
+}
 
 function clampStep(v) {
   const n = Math.round(Number(v) || 0);
@@ -70,6 +77,7 @@ export function tunedConfig(id, step = 0) {
   return Object.freeze({
     q,
     ...(loud !== undefined ? { loud } : {}),
+    ...(base.cover ? { cover: Math.min(1, base.cover * f) } : {}),
     nps: base.nps * f,
     space: Math.max(SPACE_FLOOR, Math.round(base.space / f)),
     jack: Math.max(JACK_FLOOR, Math.round(base.jack / f ** 0.7)),
@@ -114,13 +122,18 @@ export function candidates(analysis, start, end) {
   const db = analysis.downbeat || 0;
   const energy = analysis.energy || [];
   const by = new Map();
-  for (const o of analysis.onsets) {
-    if (o.t < lo || o.t > hi) continue;
-    let c = by.get(o.gi);
+  const groups = new Map();
+  const list = analysis.onsets.filter((o) => o.t >= lo && o.t <= hi).sort((a, b) => (a.off || 0) - (b.off || 0) || a.t - b.t);
+  for (const o of list) {
+    const group = groups.get(o.gi) || [];
+    let c = group.find((x) => Math.abs(x.at - o.t) < SPLIT_MS);
     if (!c) {
       const g = analysis.grid[o.gi] || {};
-      c = { t: o.t, gi: o.gi, q: o.q, beat: g.beat || 0, k: g.k || 0, kinds: new Map(), bands: new Set(), s: 0, pitch: 0, ts: 0, off: 1 };
-      by.set(o.gi, c);
+      const key = group.length ? o.gi + group.length / (group.length + 1) : o.gi;
+      c = { t: o.t, at: o.t, gi: key, q: group.length ? 1 : o.q, beat: g.beat || 0, k: g.k || 0, kinds: new Map(), bands: new Set(), s: 0, pitch: 0, ts: 0, off: 1 };
+      group.push(c);
+      groups.set(o.gi, group);
+      by.set(key, c);
     }
     const kind = o.kind || (o.band === 'L' ? 'kick' : o.band === 'H' ? 'hat' : 'snare');
     c.kinds.set(kind, Math.max(c.kinds.get(kind) || 0, o.s));
@@ -133,7 +146,7 @@ export function candidates(analysis, start, end) {
       c.ts = o.s;
     }
   }
-  const out = [...by.values()].sort((a, b) => a.t - b.t);
+  const out = [...by.values()].filter((c) => !faint(c)).sort((a, b) => a.t - b.t);
   const slots = new Map();
   for (const c of out) {
     const rel = c.beat - db;
@@ -197,14 +210,28 @@ export function sectionTarget(cfg, w) {
 function pickTimes(cands, prev, cfg, energy, rand) {
   const chosen = new Set(prev);
   const times = cands.filter((c) => chosen.has(c.gi)).map((c) => c.t).sort((a, b) => a - b);
-  const jitter = new Map(cands.map((c) => [c.gi, rand() * 1e-3]));
+  const bySlot = new Map();
+  const jitter = new Map(cands.map((c) => {
+    if (!bySlot.has(c.slot)) bySlot.set(c.slot, rand() * 1e-3);
+    return [c.gi, bySlot.get(c.slot)];
+  }));
   const wins = energy.length ? energy : [{ t: 0, end: Infinity, rank: 0.5, label: 'main' }];
   for (const w of wins) {
     const inWin = cands.filter((c) => c.t >= w.t && c.t < w.end);
     if (!inWin.length) continue;
-    const target = sectionTarget(cfg, { ...w, end: Math.min(w.end, inWin[inWin.length - 1].t + 1000), t: Math.max(w.t, inWin[0].t - 1000) });
+    const target = Math.max(sectionTarget(cfg, { ...w, end: Math.min(w.end, inWin[inWin.length - 1].t + 1000), t: Math.max(w.t, inWin[0].t - 1000) }), Math.round((cfg.cover || 0) * inWin.length));
     let have = inWin.filter((c) => chosen.has(c.gi)).length;
-    const pool = inWin.filter((c) => !chosen.has(c.gi) && allowed(c, cfg)).sort((a, b) => b.score + jitter.get(b.gi) - (a.score + jitter.get(a.gi)));
+    const free = inWin.filter((c) => !chosen.has(c.gi) && allowed(c, cfg));
+    const slotScore = new Map();
+    for (const c of free) {
+      const v = slotScore.get(c.slot) || [0, 0];
+      slotScore.set(c.slot, [v[0] + c.score, v[1] + 1]);
+    }
+    const rankOf = (c) => {
+      const v = slotScore.get(c.slot);
+      return v[0] / v[1] + jitter.get(c.gi);
+    };
+    const pool = free.sort((a, b) => rankOf(b) - rankOf(a) || b.score - a.score);
     for (const c of pool) {
       if (have >= target) break;
       if (!fits(times, c.t, cfg.space)) continue;
@@ -435,7 +462,7 @@ function assignLanes(list, cfg, plans, rand) {
         const other = lane < 2 ? lane + 2 : lane - 2;
         const second = laner.settle(c, other, lane);
         if (second >= 0 && (second < 2) !== (lane < 2)) {
-          notes.push({ t: Math.round(c.t), l: second, w: c.score - 0.01 });
+          notes.push({ t: Math.round(c.t), l: second, w: c.score - CHORD_WEIGHT });
           laner.place(c, second);
         }
       }

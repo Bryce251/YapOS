@@ -11,6 +11,7 @@
     "test": "node --test test/",
     "bench:beats": "node test/beat-bench/run.js",
     "bench:songs": "node test/beat-bench/generate.js",
+    "bench:coverage": "node test/beat-bench/coverage.js",
     "db:init": "wrangler d1 execute yapos-dashboard --remote --file=./schema.sql",
     "db:init:local": "wrangler d1 execute yapos-dashboard --local --file=./schema.sql"
   },

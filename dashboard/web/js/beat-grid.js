@@ -7,6 +7,8 @@ export const FEEL_MIN = 0.05;
 export const FEEL_MAX = 0.72;
 export const STRAIGHT_FEEL = Object.freeze([0.5, 0.5]);
 export const SNAP_MS = 25;
+export const SNAP_KEEP_MS = 15;
+export const SPLIT_MS = 40;
 export const FEEL_GAIN = 1.1;
 export const RAW_MIN_S = 0.15;
 export const TAP_RESET_MS = 2000;
@@ -220,12 +222,15 @@ export function snapHits(hits, grid) {
     if (gi < 0) continue;
     const g = grid[gi];
     const off = Math.abs(g.t - h.raw) / Math.max(1, g.step);
-    const o = { t: Math.abs(g.t - h.raw) > SNAP_MS && h.s >= RAW_MIN_S ? Math.round(h.raw) : Math.round(g.t), raw: h.raw, band: h.band, kind: h.kind, s: h.s, pitch: h.pitch, gi, q: g.q, off: Math.round(off * 100) / 100 };
+    const o = { t: Math.abs(g.t - h.raw) > SNAP_KEEP_MS && h.s >= RAW_MIN_S ? Math.round(h.raw) : Math.round(g.t), raw: h.raw, band: h.band, kind: h.kind, s: h.s, pitch: h.pitch, gi, q: g.q, off: Math.round(off * 100) / 100 };
     const key = `${gi}:${h.band}`;
-    const had = best.get(key);
-    if (!had || had.s < o.s) best.set(key, o);
+    const list = best.get(key) || [];
+    const clash = list.findIndex((x) => Math.abs(x.raw - o.raw) < SPLIT_MS);
+    if (clash < 0) list.push(o);
+    else if (list[clash].s < o.s) list[clash] = o;
+    best.set(key, list);
   }
-  return [...best.values()].sort((a, b) => a.t - b.t || a.band.localeCompare(b.band));
+  return [...best.values()].flat().sort((a, b) => a.t - b.t || a.band.localeCompare(b.band));
 }
 
 export function snapTones(tones, grid) {
