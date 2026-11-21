@@ -2,8 +2,8 @@ import { h, replace, nextId } from './dom.js';
 import { button } from './ui.js';
 import { analyze, mixDown, SR } from './beat-analyze.js';
 import { halfTempo, doubleTempo, shiftGrid, shiftBar, tempoGrid, tapTempo, stripModel, TAP_MIN } from './beat-grid.js';
-import { makeCharts, chartStats, bestPart, snapToDownbeat, SECTION_CHOICES, FULL_SECTION, BEST_PART_MS } from './song-chart.js';
-import { decodeNotes, DIFF_IDS, DIFF_NAMES, OFFSET_MIN, OFFSET_MAX, SECTION_MIN_MS, SECTION_MAX_MS, BPM_MIN, BPM_MAX, ChartError } from '../activity/js/games/beatcodec.js';
+import { makeChartsInfo, chartStats, bestPart, snapToDownbeat, readSteps, tuneNote, SECTION_CHOICES, FULL_SECTION, BEST_PART_MS } from './song-chart.js';
+import { decodeNotes, DIFF_IDS, DIFF_NAMES, OFFSET_MIN, OFFSET_MAX, SECTION_MIN_MS, SECTION_MAX_MS, BPM_MIN, BPM_MAX, TUNE_MIN, TUNE_MAX, ChartError } from '../activity/js/games/beatcodec.js';
 import { formatLength } from './song-upload.js';
 
 export const NO_PLAY = 'This file would not play in your browser. Try an MP3.';
@@ -85,6 +85,24 @@ export function beatSummary(a) {
   return `Tempo ${Math.round(a.bpm * 10) / 10} BPM${changed}, ${a.meter} beats a bar, ${feel} feel.`;
 }
 
+export function stepText(step) {
+  if (!step) return 'Auto';
+  const n = Math.abs(step);
+  return `${n} step${n === 1 ? '' : 's'} ${step > 0 ? 'harder' : 'easier'}`;
+}
+
+export function edgeText(name, step, room, ready = true) {
+  if (!ready) return '';
+  if (!room.harder && step < TUNE_MAX) return `${name} is as hard as this part of the song allows.`;
+  if (!room.easier && step > TUNE_MIN) return `${name} is as easy as this part of the song allows.`;
+  return '';
+}
+
+export function statText(name, s, bpm) {
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  return `${name}: ${plural(s.objects, 'note')}, ${s.avg} a second on average, up to ${s.peak} a second, ${plural(s.chords, 'chord')}, ${plural(s.holds, 'hold')}. Tempo ${bpm} BPM.`;
+}
+
 function nowOf(win) {
   return win.performance && typeof win.performance.now === 'function' ? win.performance.now() : Date.now();
 }
@@ -102,6 +120,8 @@ export function createSongEditor({ analysis, buf, initial = {}, win = globalThis
     offset: clampOffset(initial.offset_ms || 0),
     seed: Number(initial.seed) || 1,
     diff: 'normal',
+    tune: readSteps(initial.tune),
+    info: null,
     charts: null,
     error: '',
     playing: false,
@@ -118,6 +138,7 @@ export function createSongEditor({ analysis, buf, initial = {}, win = globalThis
   let raf = 0;
   let t0 = 0;
   const hit = new Set();
+  const cache = {};
 
   const status = h('p', { class: 'song-editor-status muted', attrs: { 'aria-live': 'polite' } });
   const lenRow = h('div', { class: 'segmented song-chips', attrs: { role: 'group', 'aria-label': 'How long the song plays' } });
@@ -127,7 +148,12 @@ export function createSongEditor({ analysis, buf, initial = {}, win = globalThis
   const startText = h('span', { class: 'song-start-text' });
   const offsetText = h('span', { class: 'song-offset-text', attrs: { 'aria-live': 'polite' } });
   const tabs = h('div', { class: 'segmented song-tabs', attrs: { role: 'group', 'aria-label': 'Difficulty' } });
-  const statLine = h('p', { class: 'song-stat muted' });
+  const statLine = h('p', { class: 'song-stat muted', attrs: { 'aria-live': 'polite' } });
+  const stepLabel = h('span', { class: 'song-step-text', attrs: { 'aria-live': 'polite' } });
+  const tuneText = h('p', { class: 'song-tune-note', attrs: { 'aria-live': 'polite' } });
+  const easierBtn = button({ label: 'Easier', icon: 'minus', size: 'sm', ariaLabel: 'Make this level easier', onClick: () => retune(-1) });
+  const harderBtn = button({ label: 'Harder', icon: 'plus', size: 'sm', ariaLabel: 'Make this level harder', onClick: () => retune(1) });
+  const resetBtn = button({ label: 'Reset to auto', size: 'sm', ariaLabel: 'Reset this level to the automatic notes', onClick: () => retune(0, true) });
   const canvas = h('canvas', { class: 'song-canvas', width: 320, height: 360, attrs: { 'aria-label': 'Note preview' } });
   const strip = h('canvas', { class: 'song-strip', width: 960, height: 144, attrs: { role: 'img', 'aria-label': 'Beat map: the waveform with the beats, bar starts and hits YapOS found' } });
   const beatText = h('p', { class: 'song-beat-text', attrs: { 'aria-live': 'polite' } });
@@ -261,14 +287,32 @@ export function createSongEditor({ analysis, buf, initial = {}, win = globalThis
     }
     const end = st.start + st.len;
     try {
-      st.charts = makeCharts(a, { start: st.start, end, seed: st.seed });
+      st.info = makeChartsInfo(a, { start: st.start, end, seed: st.seed, tune: st.tune, cache });
+      st.charts = st.info.charts;
       st.error = '';
     } catch (err) {
+      st.info = null;
       st.charts = null;
       st.error = err instanceof ChartError ? `${err.message} Try another part of the song.` : 'Notes could not be made for this part. Try another part of the song.';
     }
     draw();
     onChange(value());
+  }
+
+  function retune(delta, reset = false) {
+    const i = DIFF_IDS.indexOf(st.diff);
+    const next = reset ? 0 : Math.min(TUNE_MAX, Math.max(TUNE_MIN, st.tune[i] + delta));
+    if (next === st.tune[i]) return;
+    stop();
+    st.tune = st.tune.map((x, k) => (k === i ? next : x));
+    remake();
+  }
+
+  function pickDiff(id) {
+    if (!DIFF_IDS.includes(id) || id === st.diff) return;
+    stop();
+    st.diff = id;
+    draw();
   }
 
   function draw() {
@@ -297,12 +341,16 @@ export function createSongEditor({ analysis, buf, initial = {}, win = globalThis
       class: ['btn', 'btn-sm', st.diff === id ? 'btn-segment-active' : 'btn-segment'],
       attrs: { 'aria-pressed': st.diff === id ? 'true' : 'false' },
       text: stats ? `${DIFF_NAMES[id]} ${stats[id].objects}` : DIFF_NAMES[id],
-      on: { click: () => {
-        st.diff = id;
-        draw();
-      } },
+      on: { click: () => pickDiff(id) },
     })));
-    statLine.textContent = stats ? `${DIFF_NAMES[st.diff]}: ${stats[st.diff].objects} notes, ${stats[st.diff].holds} hold${stats[st.diff].holds === 1 ? '' : 's'}, up to ${stats[st.diff].peak} a second. Tempo ${st.charts.bpm} BPM.` : '';
+    statLine.textContent = stats ? statText(DIFF_NAMES[st.diff], stats[st.diff], st.charts.bpm) : '';
+    const step = st.tune[DIFF_IDS.indexOf(st.diff)];
+    stepLabel.textContent = `${DIFF_NAMES[st.diff]}: ${stepText(step)}`;
+    const room = st.info && st.info.room ? st.info.room[DIFF_IDS.indexOf(st.diff)] : { easier: true, harder: true };
+    easierBtn.disabled = step <= TUNE_MIN || !st.charts || !room.easier;
+    harderBtn.disabled = step >= TUNE_MAX || !st.charts || !room.harder;
+    resetBtn.disabled = step === 0 || !st.charts;
+    tuneText.textContent = [tuneNote(st.info), edgeText(DIFF_NAMES[st.diff], step, room, Boolean(st.charts))].filter(Boolean).join(' ');
     status.textContent = st.error;
     status.classList.toggle('is-error', Boolean(st.error));
     playBtn.disabled = !st.charts;
@@ -533,7 +581,11 @@ export function createSongEditor({ analysis, buf, initial = {}, win = globalThis
         h('p', { class: 'field-label', text: 'Timing' }),
         h('div', { class: 'song-row' }, ...nudges, offsetText),
         h('p', { class: 'field-help', text: 'If the notes feel early, move them later. If they feel late, move them earlier.' }),
-        h('p', { class: 'field-label', text: 'Difficulty' }), tabs, statLine, status),
+        h('p', { class: 'field-label', text: 'Difficulty tuning' }), tabs,
+        h('div', { class: 'song-row song-tune', attrs: { role: 'group', 'aria-label': 'How hard this level is' } }, easierBtn, stepLabel, harderBtn, resetBtn),
+        statLine, tuneText,
+        h('p', { class: 'field-help', text: 'Pick a level, then press Harder or Easier if it does not feel right for this song. Only that level is remade, and the preview plays it. Each level always stays clearly harder than the one below.' }),
+        status),
       h('div', { class: 'song-editor-preview' }, canvas, h('div', { class: 'song-row' }, playBtn, tapBtn), tapText)));
 
   function value() {
@@ -560,6 +612,9 @@ export function createSongEditor({ analysis, buf, initial = {}, win = globalThis
     get analysis() { return a; },
     nudge: (step) => nudges[OFFSET_STEPS.indexOf(step)].click(),
     chips: () => [...lenRow.querySelectorAll('button')],
+    tabs: () => [...tabs.querySelectorAll('button')],
+    pickDiff,
+    tuning: { easier: easierBtn, harder: harderBtn, reset: resetBtn, step: stepLabel, note: tuneText, stats: statLine },
     controls: { half: halfBtn, double: doubleBtn, tap: tempoTapBtn, earlier: earlierBtn, later: laterBtn, bar: barBtn, redetect: redetectBtn, back: backBtn, next: nextBtn },
     redraw: drawStrip,
   };

@@ -10,8 +10,15 @@ import {
   SONG_MAX_BYTES, SONG_CHUNK, SONG_MAX_PARTS, SONG_MIN_MS, SONG_MAX_MS, SECTION_MIN_MS, SECTION_MAX_MS,
   SONG_CAP_COUNT, SONG_KBPS_MIN, SONG_KBPS_MAX, SONG_ID_RE, UPLOAD_ID_RE, HASH_RE, TITLE_MAX, ARTIST_MAX, CREDIT_MAX,
   OFFSET_MIN, OFFSET_MAX, DIFF_IDS, CHART_MAX_BYTES, ChartError, validateCharts, chartCounts, songCapBytes, partsFor, partSize,
-  sha256HexBytes, songHash, songIdOf,
+  sha256HexBytes, songHash, songIdOf, readTune,
 } from '../web/activity/js/games/beatcodec.js';
+
+const TUNE_RE = /"tune":\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\]/;
+
+export function tuneOfRow(raw) {
+  const m = TUNE_RE.exec(typeof raw === 'string' ? raw : '');
+  return readTune(m ? m.slice(1).map(Number) : null);
+}
 
 export const SONG_AUDIO_PREFIX = '/song-audio/';
 export const SONG_AUDIO_CACHE = 'public, max-age=31536000, immutable';
@@ -190,6 +197,7 @@ function songOut(row, names = new Map()) {
     preview_ms: Number(row.preview_ms),
     cv: Number(row.chart_v),
     counts: parseCounts(row.counts),
+    tune: tuneOfRow(row.charts),
     hidden: Number(row.hidden) === 1,
     mature: isMature(row),
     uploader: row.uploader,

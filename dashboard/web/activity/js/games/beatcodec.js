@@ -40,6 +40,8 @@ export const MAX_CHORD = 2;
 export const MAX_ACTIVE = 2;
 export const FIRST_NOTE_MS = 1500;
 export const END_PAD_MS = 500;
+export const TUNE_MIN = -3;
+export const TUNE_MAX = 3;
 export const SONG_EXTS = Object.freeze({ 'audio/mpeg': 'mp3', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a' });
 
 export class ChartError extends Error {
@@ -145,6 +147,14 @@ export function peakNps(notes) {
   return best;
 }
 
+function tuneOk(v) {
+  return Array.isArray(v) && v.length === DIFF_IDS.length && v.every((x) => isInt(x) && x >= TUNE_MIN && x <= TUNE_MAX);
+}
+
+export function readTune(v) {
+  return tuneOk(v) ? v.slice() : DIFF_IDS.map(() => 0);
+}
+
 export function chartCounts(charts) {
   return DIFF_IDS.map((id) => objectCount(decodeNotes(charts.d[id])));
 }
@@ -212,6 +222,8 @@ export function validateCharts(charts, len) {
     if (m[0] < last || m[0] < 0 || m[0] > len) throw bad('The section marks are out of order.');
     last = m[0];
   }
+  const tune = charts.tune === undefined || charts.tune === null ? null : charts.tune;
+  if (tune !== null && !tuneOk(tune)) throw bad('The difficulty tuning is broken.');
   const d = charts.d;
   if (d === null || typeof d !== 'object' || Array.isArray(d)) throw bad('The chart is missing its difficulties.');
   for (const id of DIFF_IDS) if (!Array.isArray(d[id])) throw bad(`The ${DIFF_NAMES[id]} chart is missing.`);
@@ -222,5 +234,6 @@ export function validateCharts(charts, len) {
   }
   const out = { v: CHART_V, bpm: Math.round(bpm * 100) / 100, b0: Math.round(charts.b0), len, marks: marks.map((m) => [m[0], m[1]]), d: {} };
   for (const id of DIFF_IDS) out.d[id] = d[id].slice();
+  if (tune && tune.some((x) => x !== 0)) out.tune = tune.slice();
   return out;
 }

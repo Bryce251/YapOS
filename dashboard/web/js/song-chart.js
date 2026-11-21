@@ -1,4 +1,4 @@
-import { encodeNotes, decodeNotes, validateCharts, objectCount, peakNps, DIFF_IDS, OBJECT_CAPS, NPS_CAPS, HOLD_DIFFS, LANES, LANE_REST_MS, FIRST_NOTE_MS, END_PAD_MS, HOLD_MIN_CS, HOLD_MAX_CS, MARKS_MAX, B0_MAX, BPM_MIN, BPM_MAX, MAX_CHORD, MAX_ACTIVE, CHART_V } from '../activity/js/games/beatcodec.js';
+import { encodeNotes, decodeNotes, validateCharts, objectCount, peakNps, readTune, DIFF_IDS, DIFF_NAMES, OBJECT_CAPS, NPS_CAPS, HOLD_DIFFS, LANES, LANE_REST_MS, FIRST_NOTE_MS, END_PAD_MS, HOLD_MIN_CS, HOLD_MAX_CS, MARKS_MAX, B0_MAX, BPM_MIN, BPM_MAX, MAX_CHORD, MAX_ACTIVE, CHART_V, TUNE_MIN, TUNE_MAX } from '../activity/js/games/beatcodec.js';
 import { bpmOf } from './beat-grid.js';
 
 export const SECTION_CHOICES = Object.freeze([45000, 60000, 90000, 120000, 150000]);
@@ -18,6 +18,67 @@ export const RUN_MIN = 4;
 export const RUN_MAX = 8;
 export const HOLD_MAX_MS = 3000;
 export const TONAL_MEMORY_MS = 2000;
+export const TUNE_GROWTH = 1.25;
+export const ORDER_RATIO = 1.25;
+export const EXPERT_FLOOR = 0.6;
+export const Q_LEVELS = Object.freeze([1, 2, 4]);
+export const SPACE_FLOOR = 60;
+export const JACK_FLOOR = 120;
+export const LOUD_START = 0.7;
+export const STEP_REACH = TUNE_MAX * 2;
+export const RUNG_GAP = 0.04;
+export { TUNE_MIN, TUNE_MAX };
+
+function clampStep(v) {
+  const n = Math.round(Number(v) || 0);
+  return Math.min(TUNE_MAX, Math.max(TUNE_MIN, n));
+}
+
+export function tunedConfig(id, step = 0) {
+  const base = CHART_DIFFS[id];
+  const s = Math.round(Number(step) || 0);
+  if (!s) return base;
+  const f = TUNE_GROWTH ** s;
+  const qi = Q_LEVELS.indexOf(base.q);
+  const q = s >= 3 ? Q_LEVELS[Math.max(0, qi - 1)] : s <= -2 ? Q_LEVELS[Math.min(Q_LEVELS.length - 1, qi + 1)] : base.q;
+  let loud;
+  if (s > 0 && q > 1) loud = Math.max(0, (base.loud !== undefined ? base.loud : LOUD_START) - 0.15 * (s - 1));
+  else if (s < 0) loud = undefined;
+  else loud = base.loud;
+  let chord = null;
+  if (base.chord) {
+    const c = base.chord;
+    chord = s <= -2 && id === 'normal' ? null : {
+      top: Math.min(s > TUNE_MAX ? 0.85 : 0.6, c.top * f),
+      bars: s >= 1 ? Math.max(1, c.bars - 1) : s <= -2 ? c.bars * 2 : c.bars,
+      per: s > TUNE_MAX ? c.per + 2 * (s - TUNE_MAX) + 1 : s >= 2 ? c.per + 1 : s < 0 ? 1 : c.per,
+      any: s > TUNE_MAX,
+      down: s >= 2 ? false : s <= -2 ? true : c.down,
+      loud: s > 0 ? Math.max(0, c.loud - 0.2 * s) : Math.min(0.9, c.loud + 0.15 * -s),
+      multi: Boolean(c.multi) || (s >= 2 && id === 'hard'),
+    };
+  } else if (s >= 2) {
+    chord = { top: 0.06 * f, bars: 4, per: 1, down: true, loud: 0.6, multi: false };
+  }
+  let hold = null;
+  if (base.hold && HOLD_DIFFS.includes(id)) {
+    hold = {
+      min: Math.max(HOLD_MIN_CS * 10, Math.round(base.hold.min / Math.sqrt(f))),
+      bars: s >= 2 ? 1 : s <= -2 ? base.hold.bars * 2 : base.hold.bars,
+    };
+  }
+  return Object.freeze({
+    q,
+    ...(loud !== undefined ? { loud } : {}),
+    nps: base.nps * f,
+    space: Math.max(SPACE_FLOOR, Math.round(base.space / f)),
+    jack: Math.max(JACK_FLOOR, Math.round(base.jack / f ** 0.7)),
+    chord: chord ? Object.freeze(chord) : null,
+    hold: hold ? Object.freeze(hold) : null,
+    runs: base.runs ? s > -2 : id === 'hard' && s >= 2,
+    trills: base.trills ? s < 2 : s <= -2,
+  });
+}
 
 export function seeded(seed) {
   let a = (Number(seed) >>> 0) || 1;
@@ -185,7 +246,7 @@ function planChords(list, cfg, marks) {
     if (c) atDrop.add(c.gi);
   }
   for (const c of list) {
-    const accent = atDrop.has(c.gi) || (c.score >= cut && (c.kinds.has('kick') || c.kinds.size >= 2 || c.down)) || (ch.multi && c.kinds.size >= 2 && c.s >= 0.6);
+    const accent = atDrop.has(c.gi) || (c.score >= cut && (ch.any || c.kinds.has('kick') || c.kinds.size >= 2 || c.down)) || (ch.multi && c.kinds.size >= 2 && c.s >= 0.6);
     if (!accent) continue;
     if (ch.down && !c.down) continue;
     if (!ch.down && c.q < 2) continue;
@@ -463,41 +524,240 @@ export function chartBpm(analysis, start, end) {
   return Math.min(BPM_MAX, Math.max(BPM_MIN, Math.round(bpm * 100) / 100));
 }
 
-export function makeCharts(analysis, { start = 0, end = analysis.dur, seed = 1 } = {}) {
-  const len = Math.round(end - start);
-  const rand = seeded(seed);
-  const cands = candidates(analysis, start, end);
-  const d = {};
-  let prev = new Set();
-  const all = {};
-  for (const id of DIFF_IDS) {
-    const cfg = CHART_DIFFS[id];
-    const chosen = pickTimes(cands, prev, cfg, analysis.energy || [], rand);
-    if (cfg.hold) addSustains(cands, chosen, analysis, cfg);
-    const list = cands.filter((c) => chosen.has(c.gi));
-    const plans = { chords: planChords(list, cfg, analysis.marks), holds: planHolds(list, analysis, cfg, end), runs: cfg.runs ? planRuns(list) : new Map() };
-    const notes = assignLanes(list, cfg, plans, rand).map((n) => ({ ...n, t: n.t - start, ...(n.e !== undefined ? { e: n.e - start } : {}) }));
-    all[id] = legalize(notes, id, len);
-    prev = chosen;
+function mixSeed(seed, ...parts) {
+  let x = (Number(seed) >>> 0) || 1;
+  for (const p of parts) {
+    x = Math.imul(x ^ ((p + 0x9e3779b9) >>> 0), 0x85ebca6b) >>> 0;
+    x ^= x >>> 13;
   }
-  for (let i = DIFF_IDS.length - 1; i > 0; i--) {
-    const hi = all[DIFF_IDS[i]];
-    const lo = all[DIFF_IDS[i - 1]];
-    while (objectCount(lo) > objectCount(hi) && lo.length) {
-      let k = 0;
-      for (let j = 1; j < lo.length; j++) if ((lo[j].w || 0) < (lo[k].w || 0)) k = j;
-      lo.splice(k, 1);
+  return x || 1;
+}
+
+export function readSteps(tune) {
+  return readTune(Array.isArray(tune) ? tune.map((x) => (Number.isFinite(Number(x)) ? clampStep(x) : 0)) : tune);
+}
+
+function chartContext(analysis, start, end, seed, cache) {
+  const key = `${start}:${end}:${seed}`;
+  if (cache && cache.analysis === analysis && cache.key === key && cache.ctx) return cache.ctx;
+  const ctx = { analysis, start, end, seed, len: Math.round(end - start), cands: candidates(analysis, start, end), chosen: new Map(), built: new Map() };
+  if (cache) {
+    cache.analysis = analysis;
+    cache.key = key;
+    cache.ctx = ctx;
+  }
+  return ctx;
+}
+
+function levelChosen(ctx, i, step) {
+  const k = `${i}:${step}`;
+  if (ctx.chosen.has(k)) return ctx.chosen.get(k);
+  const id = DIFF_IDS[i];
+  const cfg = tunedConfig(id, step);
+  const energy = ctx.analysis.energy || [];
+  const rand = seeded(mixSeed(ctx.seed, i, step + 16, 1));
+  let pool = ctx.cands;
+  let prev = new Set();
+  if (step === 0) prev = i > 0 ? levelChosen(ctx, i - 1, 0) : new Set();
+  else if (step > 0) prev = levelChosen(ctx, i, step - 1);
+  else {
+    const wider = levelChosen(ctx, i, step + 1);
+    pool = ctx.cands.filter((c) => wider.has(c.gi));
+  }
+  const chosen = pickTimes(pool, prev, cfg, energy, rand);
+  if (cfg.hold) addSustains(pool, chosen, ctx.analysis, cfg);
+  ctx.chosen.set(k, chosen);
+  return chosen;
+}
+
+function buildLevel(ctx, i, step) {
+  const k = `${i}:${step}`;
+  if (ctx.built.has(k)) return ctx.built.get(k);
+  const id = DIFF_IDS[i];
+  const cfg = tunedConfig(id, step);
+  const chosen = levelChosen(ctx, i, step);
+  const list = ctx.cands.filter((c) => chosen.has(c.gi));
+  const plans = { chords: planChords(list, cfg, ctx.analysis.marks), holds: planHolds(list, ctx.analysis, cfg, ctx.end), runs: cfg.runs ? planRuns(list) : new Map() };
+  const rand = seeded(mixSeed(ctx.seed, i, step + 16, 2));
+  const notes = assignLanes(list, cfg, plans, rand).map((n) => ({ ...n, t: n.t - ctx.start, ...(n.e !== undefined ? { e: n.e - ctx.start } : {}) }));
+  const out = legalize(notes, id, ctx.len);
+  ctx.built.set(k, out);
+  return out;
+}
+
+function levelFacts(notes) {
+  return { objects: objectCount(notes), peak: peakNps(notes), taps: notes.length };
+}
+
+export function clearlyHarder(lo, hi, idHi) {
+  const objects = Math.min(OBJECT_CAPS[idHi], Math.ceil(lo.objects * ORDER_RATIO));
+  const peak = Math.min(NPS_CAPS[idHi], lo.peak + 1);
+  return hi.objects >= objects && hi.peak >= peak;
+}
+
+export function expertFloor(candCount, len) {
+  const secs = Math.max(1, (len - FIRST_NOTE_MS - END_PAD_MS) / 1000);
+  return Math.min(CHART_DIFFS.expert.nps, candCount / secs) * EXPERT_FLOOR;
+}
+
+function trimTo(notes, max) {
+  const out = notes.slice();
+  while (objectCount(out) > max && out.length) {
+    let k = 0;
+    for (let j = 1; j < out.length; j++) if ((out[j].w || 0) < (out[k].w || 0)) k = j;
+    out.splice(k, 1);
+  }
+  return out;
+}
+
+function trimPeak(notes, max) {
+  const out = notes.slice();
+  while (out.length && peakNps(out) > max) {
+    let best = 0;
+    let from = 0;
+    let to = 0;
+    let j = 0;
+    for (let i = 0; i < out.length; i++) {
+      while (out[i].t - out[j].t >= 1000) j += 1;
+      if (i - j + 1 > best) {
+        best = i - j + 1;
+        from = j;
+        to = i;
+      }
+    }
+    let k = from;
+    for (let m = from + 1; m <= to; m++) if ((out[m].w || 0) < (out[k].w || 0)) k = m;
+    out.splice(k, 1);
+  }
+  return out;
+}
+
+function autoSteps(ctx) {
+  if (ctx.auto) return ctx.auto;
+  const len = ctx.len;
+  const used = DIFF_IDS.map(() => 0);
+  const all = DIFF_IDS.map((id, i) => buildLevel(ctx, i, 0));
+  const floor = expertFloor(ctx.cands.length, len);
+  const last = DIFF_IDS.length - 1;
+  for (let i = 1; i < DIFF_IDS.length; i++) {
+    const good = () => {
+      const hi = levelFacts(all[i]);
+      if (!clearlyHarder(levelFacts(all[i - 1]), hi, DIFF_IDS[i])) return false;
+      return i !== last || hi.taps / Math.max(1, (len - FIRST_NOTE_MS - END_PAD_MS) / 1000) >= floor;
+    };
+    while (used[i] < TUNE_MAX && !good()) {
+      used[i] += 1;
+      all[i] = buildLevel(ctx, i, used[i]);
     }
   }
-  for (const id of DIFF_IDS) d[id] = encodeNotes(all[id].map(({ w, ...n }) => n));
-  return validateCharts({ v: CHART_V, bpm: chartBpm(analysis, start, end), b0: firstBeat(analysis, start), len, marks: sectionMarks(analysis, start, end), d }, len);
+  trimLevels(all);
+  ctx.auto = used;
+  ctx.autoAll = all;
+  return used;
+}
+
+function trimLevels(all) {
+  const trimmed = [];
+  for (let i = all.length - 1; i > 0; i--) {
+    const max = Math.max(1, Math.floor(objectCount(all[i]) / ORDER_RATIO));
+    const peak = peakNps(all[i]);
+    let cut = false;
+    if (objectCount(all[i - 1]) > max) {
+      all[i - 1] = trimTo(all[i - 1], max);
+      cut = true;
+    }
+    if (peakNps(all[i - 1]) > peak) {
+      all[i - 1] = trimPeak(all[i - 1], peak);
+      cut = true;
+    }
+    if (cut) trimmed.unshift(DIFF_IDS[i - 1]);
+  }
+  return trimmed;
+}
+
+function ladder(ctx, i) {
+  ctx.ladders = ctx.ladders || new Map();
+  if (ctx.ladders.has(i)) return ctx.ladders.get(i);
+  const out = [];
+  let prev = null;
+  for (let s = TUNE_MIN; s <= STEP_REACH; s++) {
+    const n = objectCount(buildLevel(ctx, i, s));
+    if (prev === null || Math.abs(n - prev) >= Math.max(2, Math.ceil(prev * RUNG_GAP))) {
+      out.push(s);
+      prev = n;
+    }
+  }
+  ctx.ladders.set(i, out);
+  return out;
+}
+
+function rungOf(steps, s) {
+  let k = 0;
+  while (k + 1 < steps.length && steps[k + 1] <= s) k += 1;
+  return k;
+}
+
+export function makeChartsInfo(analysis, { start = 0, end = analysis.dur, seed = 1, tune = null, cache = null } = {}) {
+  const steps = readSteps(tune);
+  const ctx = chartContext(analysis, start, end, seed, cache);
+  const len = ctx.len;
+  const auto = autoSteps(ctx);
+  const room = [];
+  const asked = auto.map((u, i) => {
+    const lad = ladder(ctx, i);
+    const home = rungOf(lad, u);
+    const k = Math.min(lad.length - 1, Math.max(0, home + steps[i]));
+    room.push({ easier: k > 0, harder: k < lad.length - 1 });
+    return k === home ? u : lad[k];
+  });
+  const used = asked.slice();
+  const level = (i) => (used[i] === auto[i] ? ctx.autoAll[i] : buildLevel(ctx, i, used[i]));
+  const all = DIFF_IDS.map((id, i) => level(i));
+  const raised = [];
+  for (let i = 1; i < DIFF_IDS.length; i++) {
+    if (used[i - 1] <= auto[i - 1] || steps[i] < 0) continue;
+    const ceil = Math.min(STEP_REACH, asked[i] + TUNE_MAX);
+    while (used[i] < ceil && !clearlyHarder(levelFacts(all[i - 1]), levelFacts(all[i]), DIFF_IDS[i])) {
+      used[i] += 1;
+      all[i] = level(i);
+    }
+    if (used[i] !== asked[i]) raised.push(DIFF_IDS[i]);
+  }
+  const trimmed = trimLevels(all);
+  const d = {};
+  DIFF_IDS.forEach((id, i) => { d[id] = encodeNotes(all[i].map(({ w, ...n }) => n)); });
+  const raw = { v: CHART_V, bpm: chartBpm(analysis, start, end), b0: firstBeat(analysis, start), len, marks: sectionMarks(analysis, start, end), d };
+  if (steps.some((x) => x !== 0)) raw.tune = steps.slice();
+  return { charts: validateCharts(raw, len), steps, auto: auto.slice(), used, room, raised, trimmed };
+}
+
+export function makeCharts(analysis, opts = {}) {
+  return makeChartsInfo(analysis, opts).charts;
+}
+
+export function tuneNote(info) {
+  if (!info) return '';
+  const names = DIFF_NAMES;
+  const parts = [];
+  for (const id of info.raised || []) {
+    const i = DIFF_IDS.indexOf(id);
+    parts.push(`${names[id]} was made harder automatically so it stays clearly above ${names[DIFF_IDS[i - 1]]}.`);
+  }
+  for (const id of info.trimmed || []) {
+    const i = DIFF_IDS.indexOf(id);
+    parts.push(`${names[id]} was made easier so it stays below ${names[DIFF_IDS[i + 1]]}.`);
+  }
+  return parts.join(' ');
 }
 
 export function chartStats(charts) {
   const out = {};
+  const secs = Math.max(1, (Number(charts.len) || 0) / 1000);
   for (const id of DIFF_IDS) {
     const notes = decodeNotes(charts.d[id]);
-    out[id] = { objects: objectCount(notes), notes: notes.length, holds: notes.filter((n) => n.e !== undefined).length, peak: peakNps(notes) };
+    let chords = 0;
+    for (let i = 1; i < notes.length; i++) if (notes[i].t === notes[i - 1].t && (i < 2 || notes[i - 2].t !== notes[i].t)) chords += 1;
+    out[id] = { objects: objectCount(notes), notes: notes.length, holds: notes.filter((n) => n.e !== undefined).length, peak: peakNps(notes), chords, avg: Math.round((notes.length / secs) * 10) / 10 };
   }
   return out;
 }

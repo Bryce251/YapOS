@@ -122,6 +122,24 @@
   font-size: 13px;
 }
 
+.song-step-text {
+  min-width: 140px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.song-tune-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.song-tune-note:empty {
+  display: none;
+}
+
 .song-rights {
   display: flex;
   gap: 8px;

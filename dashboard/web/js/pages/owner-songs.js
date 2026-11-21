@@ -1,7 +1,7 @@
 import { h, replace, nextId } from '../dom.js';
 import { button, card, confirmDialog, emptyState, linkButton, pageHeader, setBusy, toast } from '../ui.js';
 import { state } from '../state.js';
-import { TITLE_MAX, ARTIST_MAX, CREDIT_MAX, OFFSET_MIN, OFFSET_MAX, DIFF_IDS, DIFF_NAMES, SONG_MAX_BYTES, SONG_MIN_MS, SONG_MAX_MS } from '../../activity/js/games/beatcodec.js';
+import { TITLE_MAX, ARTIST_MAX, CREDIT_MAX, OFFSET_MIN, OFFSET_MAX, DIFF_IDS, DIFF_NAMES, SONG_MAX_BYTES, SONG_MIN_MS, SONG_MAX_MS, readTune } from '../../activity/js/games/beatcodec.js';
 import { SONGS_PATH, SONG_ACCEPT, ALREADY, fileProblem, uploadSong, usageText, formatLength, formatMb } from '../song-upload.js';
 import { decodeSong, analyzeSong, createSongEditor, clampOffset, NO_PLAY, NO_BEAT } from '../song-editor.js';
 
@@ -29,6 +29,7 @@ export function readSongs(data) {
     preview_ms: Number.isInteger(Number(s.preview_ms)) && s.preview_ms !== null ? Number(s.preview_ms) : Number(s.start_ms) || 0,
     cv: Number(s.cv) || 1,
     counts: Array.isArray(s.counts) ? s.counts.map((n) => Number(n) || 0) : [],
+    tune: readTune(s.tune),
     hidden: s.hidden === true,
     mature: s.mature === true,
     uploader: String(s.uploader || ''),
@@ -271,7 +272,7 @@ export function renderPartySongs(ctx, deps = {}) {
       msg.textContent = 'Finding the beat...';
       const analysis = await (deps.analyze || analyzeSong)(decoded.pcm, decoded.sr, { win, onProgress: (p) => { bar.value = p; } });
       if (!analysis || !analysis.bpm) throw new Error(NO_BEAT);
-      const ed = createSongEditor({ analysis, buf, win, initial: { start_ms: s.start_ms, end_ms: s.end_ms, offset_ms: s.offset_ms, preview_ms: s.preview_ms }, redetect: redetector(buf) });
+      const ed = createSongEditor({ analysis, buf, win, initial: { start_ms: s.start_ms, end_ms: s.end_ms, offset_ms: s.offset_ms, preview_ms: s.preview_ms, tune: s.tune }, redetect: redetector(buf) });
       const err = h('p', { class: 'field-error', attrs: { 'aria-live': 'polite' } });
       const save = button({ label: 'Save new notes', variant: 'primary', size: 'sm', onClick: async () => {
         const v = ed.value();
