@@ -26,8 +26,13 @@ export function laneStyle() {
   return LANE_SETS[4];
 }
 
-export function noteY(noteMs, t, look, hitY) {
-  return hitY - ((noteMs / 1000 - t) / look) * hitY;
+export function hitLine(H, up = false) {
+  return H * (up ? 1 - HIT_Y : HIT_Y);
+}
+
+export function noteY(noteMs, t, look, hitY, up = false, H = 0) {
+  const k = (noteMs / 1000 - t) / look;
+  return up ? hitY + k * (H - hitY) : hitY - k * hitY;
 }
 
 export function gemSize(laneW) {
@@ -56,8 +61,13 @@ export function gemScale(gapMs, look, hitY, gem) {
   return clamp((0.9 * room) / gem, GEM_MIN_SCALE, 1);
 }
 
-export function judgeY(H, hitY, ring = 0) {
+export function judgeY(H, hitY, ring = 0, up = false) {
+  if (up) return Math.max(14, hitY - Math.max(0.45 * hitY, ring + 18));
   return Math.min(H - 14, hitY + Math.max(0.45 * (H - hitY), ring + 18));
+}
+
+export function labelY(H, hitY, ring, dpr = 1, up = false) {
+  return up ? Math.max(10 * dpr, hitY - ring / 2 - 14 * dpr) : Math.min(H - 10 * dpr, hitY + ring / 2 + 14 * dpr);
 }
 
 function clamp(v, lo, hi) {
@@ -87,7 +97,7 @@ function shapePath(g, shape, cx, cy, r) {
 export function createBeatDraw(canvas, { doc } = {}) {
   const d = doc || (typeof document !== 'undefined' ? document : null);
   const g = canvas && typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
-  const view = { W: 0, H: 0, dpr: 1, lanes: 4, lw: 0, hitY: 0, gem: 0, ring: 0 };
+  const view = { W: 0, H: 0, dpr: 1, lanes: 4, lw: 0, hitY: 0, gem: 0, ring: 0, up: false, travel: 0 };
   let sprites = [];
   let grey = null;
   let bg = null;
@@ -150,7 +160,7 @@ export function createBeatDraw(canvas, { doc } = {}) {
   }
 
   function prerender() {
-    const { W, H, dpr, lanes, lw, hitY, gem, ring } = view;
+    const { W, H, dpr, lanes, lw, hitY, gem, ring, up } = view;
     const set = laneStyle(lanes);
     sprites = set.map((pi) => {
       const pal = PALETTE[pi];
@@ -167,11 +177,12 @@ export function createBeatDraw(canvas, { doc } = {}) {
         x.fillStyle = l % 2 ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.06)';
         x.fillRect(l * lw, 0, lw, H);
         if (typeof x.createLinearGradient === 'function') {
-          const gr = x.createLinearGradient(0, 0, 0, hitY);
+          const gr = up ? x.createLinearGradient(0, H, 0, hitY) : x.createLinearGradient(0, 0, 0, hitY);
           gr.addColorStop(0, `rgba(${pal.rgb},0)`);
           gr.addColorStop(1, `rgba(${pal.rgb},0.10)`);
           x.fillStyle = gr;
-          x.fillRect(l * lw, 0, lw, hitY);
+          if (up) x.fillRect(l * lw, hitY, lw, H - hitY);
+          else x.fillRect(l * lw, 0, lw, hitY);
         }
       }
       x.fillStyle = 'rgba(255,255,255,0.20)';
@@ -197,7 +208,7 @@ export function createBeatDraw(canvas, { doc } = {}) {
     } else glow = null;
     const fz = surface(W, H * 0.12);
     if (fz && typeof fz.x.createLinearGradient === 'function') {
-      const gr = fz.x.createLinearGradient(0, 0, 0, H * 0.12);
+      const gr = up ? fz.x.createLinearGradient(0, H * 0.12, 0, 0) : fz.x.createLinearGradient(0, 0, 0, H * 0.12);
       gr.addColorStop(0, 'rgba(12,10,20,0.95)');
       gr.addColorStop(1, 'rgba(12,10,20,0)');
       fz.x.fillStyle = gr;
@@ -206,7 +217,7 @@ export function createBeatDraw(canvas, { doc } = {}) {
     } else fade = null;
   }
 
-  function resize({ width, height, dpr = 1, lanes = 4 }) {
+  function resize({ width, height, dpr = 1, lanes = 4, up = false }) {
     if (!g || !(width > 0) || !(height > 0)) return false;
     const r = clamp(dpr, 1, 2);
     const W = Math.round(width * r);
@@ -215,7 +226,8 @@ export function createBeatDraw(canvas, { doc } = {}) {
     if (canvas.height !== H) canvas.height = H;
     const lw = W / lanes;
     const gem = Math.round(gemSize(width / lanes) * r);
-    Object.assign(view, { W, H, dpr: r, lanes, lw, hitY: H * HIT_Y, gem, ring: Math.round(gem * 1.15) });
+    const hitY = hitLine(H, up);
+    Object.assign(view, { W, H, dpr: r, lanes, lw, hitY, gem, ring: Math.round(gem * 1.15), up: Boolean(up), travel: up ? H - hitY : hitY });
     prerender();
     parts = [];
     return true;
@@ -288,10 +300,11 @@ export function createBeatDraw(canvas, { doc } = {}) {
 
   function draw(f) {
     if (!g || !view.W) return false;
-    const { W, H, dpr, lanes, hitY } = view;
+    const { W, H, dpr, lanes, hitY, up } = view;
     const now = f.now;
     const t = f.t;
     const look = f.look;
+    const ny = (ms) => noteY(ms, t, look, hitY, up, H);
     const song = f.song;
     const calm = Boolean(f.still);
     const lite = Boolean(f.lite);
@@ -323,7 +336,7 @@ export function createBeatDraw(canvas, { doc } = {}) {
       for (let b = b0; zero + b * beat <= t + look; b += 1) {
         const bar = b % 4 === 0;
         if (lite && !bar) continue;
-        const y = noteY((zero + b * beat) * 1000, t, look, hitY);
+        const y = ny((zero + b * beat) * 1000);
         if (y < 0 || y > H) continue;
         g.fillStyle = bar ? 'rgba(255,255,255,0.24)' : 'rgba(255,255,255,0.10)';
         const h = (bar ? 2 : 1) * dpr;
@@ -338,7 +351,7 @@ export function createBeatDraw(canvas, { doc } = {}) {
     const beatLen = song && song.beat > 0 ? song.beat : 0.6;
     const phase = t >= 0 ? (t % beatLen) / beatLen : 1;
     const pulse = phase < 0.15 ? 1 - phase / 0.15 : 0;
-    const jy = judgeY(H, hitY, view.ring / 2);
+    const jy = judgeY(H, hitY, view.ring / 2, up);
     for (let l = 0; l < lanes; l += 1) {
       const s = sprites[l];
       if (!s) continue;
@@ -374,7 +387,7 @@ export function createBeatDraw(canvas, { doc } = {}) {
       const showing = jd && now - jd.at < JUDGE_HOLD_MS + JUDGE_FADE_MS;
       if (f.labels && f.labels[l] && !showing) {
         g.globalAlpha = 0.75;
-        text(f.labels[l], cx, Math.min(H - 10 * dpr, hitY + view.ring / 2 + 14 * dpr), 13 * dpr, '#f4f4f5', 3);
+        text(f.labels[l], cx, labelY(H, hitY, view.ring, dpr, up), 13 * dpr, '#f4f4f5', 3);
         g.globalAlpha = 1;
       }
     }
@@ -388,7 +401,7 @@ export function createBeatDraw(canvas, { doc } = {}) {
         if (!n.c || i === 0 || notes[i - 1].t !== n.t) continue;
         const m = mark ? mark[i] : 0;
         if (m) continue;
-        const y = noteY(n.t, t, look, hitY);
+        const y = ny(n.t);
         const a = Math.min(laneX(n.l), laneX(notes[i - 1].l));
         const b = Math.max(laneX(n.l), laneX(notes[i - 1].l));
         g.fillStyle = 'rgba(255,255,255,0.85)';
@@ -403,16 +416,16 @@ export function createBeatDraw(canvas, { doc } = {}) {
         if (ts >= 1 && ts <= 4) continue;
         const held = ts === 9 || (m === 5 && n.e / 1000 > t);
         if (!held && m >= 1 && m <= 3) continue;
-        drawHold(n.l, held ? hitY : noteY(n.t, t, look, hitY), noteY(n.e, t, look, hitY), held, m === 4);
+        drawHold(n.l, held ? hitY : ny(n.t), ny(n.e), held, m === 4);
       }
-      const gs = gemScale(laneGapMs(notes), look, hitY, view.gem);
+      const gs = gemScale(laneGapMs(notes), look, view.travel || hitY, view.gem);
       for (let i = from; i < notes.length && notes[i].t <= until; i += 1) {
         const n = notes[i];
         const m = mark ? mark[i] : 0;
         if ((m >= 1 && m <= 3) || m === 5) continue;
         const s = sprites[n.l];
         if (!s) continue;
-        const y = noteY(n.t, t, look, hitY);
+        const y = ny(n.t);
         if (m === 4) {
           const k = clamp((t - n.t / 1000) / 0.5, 0, 1);
           g.globalAlpha = 0.5 * (1 - k);
@@ -423,7 +436,7 @@ export function createBeatDraw(canvas, { doc } = {}) {
         centred(s.gem, laneX(n.l), y, gs);
       }
     }
-    if (fade) g.drawImage(fade, 0, 0);
+    if (fade) g.drawImage(fade, 0, up ? H - fade.height : 0);
     if (!lite && !calm && parts.length) {
       const keep = [];
       for (const p of parts) {
@@ -465,9 +478,9 @@ export function createBeatDraw(canvas, { doc } = {}) {
     }
     if (f.dropSoon) {
       const pop = calm ? 1 : 1 + 0.06 * pulse;
-      text('DROP!', W / 2, H * 0.07, 26 * dpr * pop, '#ffe066', 4);
+      text('DROP!', W / 2, H * (up ? 0.93 : 0.07), 26 * dpr * pop, '#ffe066', 4);
     }
-    if (f.countdown) text(f.countdown, W / 2, H * 0.42, 72 * dpr, '#ffffff', 6);
+    if (f.countdown) text(f.countdown, W / 2, H * (up ? 0.58 : 0.42), 72 * dpr, '#ffffff', 6);
     return true;
   }
 

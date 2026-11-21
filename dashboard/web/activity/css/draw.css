@@ -308,10 +308,22 @@
 }
 
 .game-draw .feed-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "p n h f" "p t t t";
+  flex: none;
+  column-gap: var(--space-2);
+  align-items: center;
   min-height: 32px;
-  padding: 2px var(--space-2) 2px 2px;
-  border-radius: var(--radius-full);
+  padding: 6px var(--space-2);
+  border-radius: var(--radius);
 }
+
+.game-draw .feed-item > :first-child { grid-area: p; align-self: start; }
+.game-draw .feed-name { grid-area: n; max-width: none; }
+.game-draw .feed-text { grid-area: t; line-height: 1.35; }
+.game-draw .feed-heat { grid-area: h; margin-left: 0; }
+.game-draw .feed-item > :last-child:not(.feed-heat):not(.feed-text) { grid-area: f; }
 
 .game-draw .feed-item.is-ok {
   background: var(--success-soft);

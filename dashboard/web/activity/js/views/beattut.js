@@ -19,6 +19,11 @@ export const CAPTIONS = Object.freeze([
   'Each lane has its own key, shape and color.',
   'Hit them in a row to build a streak. Extra random taps break it. Hold long notes until they end.',
 ]);
+export const UP_CAPTION = 'Notes rise up their lane. Tap when one touches the ring.';
+
+export function captionFor(step, up = false) {
+  return step === 1 && up ? UP_CAPTION : CAPTIONS[step - 1];
+}
 
 export function clampOffset(ms) {
   const n = Math.round(Number(ms));
@@ -57,7 +62,7 @@ export function tutorialNotes() {
   return order.slice(0, TUT_NOTES).map((l, i) => ({ t: Math.round((first + i) * TUT_BEAT * 1000), l }));
 }
 
-export function createTutorial({ perf, loop, synth = null, still = () => false, labels = () => null, touch = () => false, offset = () => 0, onOffset = () => {}, onDone = () => {}, mode = 'full', doc } = {}) {
+export function createTutorial({ perf, loop, synth = null, still = () => false, labels = () => null, touch = () => false, offset = () => 0, onOffset = () => {}, onDone = () => {}, mode = 'full', up = () => false, doc } = {}) {
   const lanes = TUT_LANES;
   const now = typeof perf === 'function' ? perf : () => Date.now();
   const canvas = h('canvas', { class: 'bd-tut-canvas', attrs: { role: 'application', 'aria-label': 'Practice lanes. Use the lane keys or tap a lane.' } });
@@ -67,7 +72,7 @@ export function createTutorial({ perf, loop, synth = null, still = () => false, 
   const streakEl = h('span', { class: 'bd-tut-streak fx-num' });
   const end = h('div', { class: 'bd-tut-end' });
   const skip = button('Skip', { variant: 'ghost', size: 'sm', key: 'bd-tut-skip', on: () => finish({ skipped: true }) });
-  const el = h('div', { class: 'bd-tut', dataset: { step: '1' } }, title, h('div', { class: 'bd-tut-lane' }, canvas, glyph), h('div', { class: 'bd-tut-row' }, cap, streakEl), end, h('div', { class: 'bd-tut-actions' }, skip));
+  const el = h('div', { class: ['bd-tut', up() ? 'is-up' : null], dataset: { step: '1' } }, title, h('div', { class: 'bd-tut-lane' }, canvas, glyph), h('div', { class: 'bd-tut-row' }, cap, streakEl), end, h('div', { class: 'bd-tut-actions' }, skip));
   const draw = createBeatDraw(canvas, { doc });
   const st = { step: mode === 'timing' ? 3 : 1, start: now(), notes: [], mark: null, dts: [], streak: 0, best: 0, hitAt: -1e9, pressAt: new Float64Array(lanes).fill(-1e9), flash: new Array(lanes).fill(null), judge: new Array(lanes).fill(null), clicks: 0, gone: false, result: null, prev: offset(), size: '' };
   let stop = null;
@@ -82,7 +87,7 @@ export function createTutorial({ perf, loop, synth = null, still = () => false, 
       const lane = n === 1 ? 0 : lanes - 1;
       st.notes = [{ t: Math.round(TUT_LOOK * 1000), l: lane }];
       st.mark = new Uint8Array(1);
-      cap.textContent = CAPTIONS[n - 1];
+      cap.textContent = captionFor(n, up());
       const lab = labels();
       glyph.textContent = touch() || !lab ? '👆' : lab[lane];
       glyph.style.setProperty('--bd-x', `${(((lane + 0.5) / lanes) * 100).toFixed(2)}%`);
@@ -191,8 +196,10 @@ export function createTutorial({ perf, loop, synth = null, still = () => false, 
     if (st.gone) return false;
     const w = canvas.clientWidth || 0;
     const ht = canvas.clientHeight || TUT_H;
-    const sig = `${w}x${ht}`;
-    if (w > 0 && sig !== st.size && draw.resize({ width: w, height: ht, dpr: Math.min(2, Number(globalThis.devicePixelRatio) || 1), lanes })) st.size = sig;
+    const isUp = Boolean(up());
+    const sig = `${w}x${ht}x${isUp}`;
+    el.classList.toggle('is-up', isUp);
+    if (w > 0 && sig !== st.size && draw.resize({ width: w, height: ht, dpr: Math.min(2, Number(globalThis.devicePixelRatio) || 1), lanes, up: isUp })) st.size = sig;
     const t = clockT();
     if ((st.step === 1 || st.step === 2) && st.mark && st.mark[0] && now() - st.hitAt > 700) setStep(st.step + 1);
     if (st.step === 3) {

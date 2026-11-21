@@ -306,6 +306,14 @@ const memory = {
   roster(api) {
     const st = api.get(KEY);
     if (!st) return;
+    const here = present(api);
+    const gone = (st.in || []).filter((s) => !here.has(s) && st.ps[s] && st.ps[s][0] > 0);
+    if (gone.length) {
+      st.ps = { ...st.ps };
+      for (const s of gone) st.ps[s] = [0, ...st.ps[s].slice(1)];
+      st.wait = (st.wait || []).filter((s) => here.has(s));
+      api.put(KEY, st);
+    }
     let added = false;
     for (const p of api.players()) if (admit(api, st, p.slot)) added = true;
     if (added) api.put(KEY, st);

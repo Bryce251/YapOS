@@ -281,3 +281,15 @@ test('the view lights the pads with tones, then taps send one attempt', async ()
   for (const v of views) v.destroy();
   v2.destroy();
 });
+
+test('a player who leaves Memory loses all their lives', async () => {
+  const r = await startGame(3);
+  const slots = slotsOf(r);
+  await toInput(r);
+  const gone = slots[2];
+  const leaver = r.engines.find((e) => e.snapshot().meSlot === gone);
+  r.hub.leave(leaver.snapshot().me);
+  leaver.destroy();
+  await r.clock.advance(800);
+  assert.equal(st(r).ps[gone][0], 0, 'all lives gone');
+});

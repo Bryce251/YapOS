@@ -7,7 +7,7 @@ import { reducedMotion } from '../ui/fx.js';
 import { createBeatPlayer, soundNote } from './beatsynth.js';
 import { createSongAudio, songSpan } from './beatsong.js';
 import { createBeatDraw, laneStyle } from './beatdraw.js';
-import { createTutorial, clampOffset, tapText } from './beattut.js';
+import { createTutorial, clampOffset, tapText, TIMING_MAX } from './beattut.js';
 
 const QUIET = { play() {}, burst() {}, float() {} };
 const MEDALS = ['🥇', '🥈', '🥉'];
@@ -49,7 +49,18 @@ export const BANNER_MS = 1200;
 export const LANE_KEYS = Object.freeze({
   4: Object.freeze([Object.freeze(['KeyD', 'ArrowLeft']), Object.freeze(['KeyF', 'ArrowDown']), Object.freeze(['KeyJ', 'ArrowUp']), Object.freeze(['KeyK', 'ArrowRight'])]),
 });
-const DEFAULT_PREFS = Object.freeze({ tapOffset: 0, seen: false, slow: null, calm: false, music: true, speed: 1, keys: null });
+const DEFAULT_PREFS = Object.freeze({ tapOffset: 0, seen: false, slow: null, calm: false, music: true, speed: 1, keys: null, dir: 'down', panel: true });
+export const DIRS = Object.freeze(['down', 'up']);
+export const NUDGE_MS = 5;
+
+export function cleanDir(v) {
+  return v === 'up' ? 'up' : 'down';
+}
+
+export function offsetLabel(ms) {
+  const n = clampOffset(ms);
+  return `${n > 0 ? '+' : ''}${n} ms`;
+}
 const BLOCKED_KEYS = new Set(['Escape', 'Tab', 'Enter', 'NumpadEnter', 'Backspace', 'CapsLock', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight', 'ContextMenu', 'OSLeft', 'OSRight']);
 
 export function okKey(code) {
@@ -123,6 +134,8 @@ export function readPrefs(store) {
     out.music = v.music !== false;
     out.speed = cleanSpeed(v.speed);
     out.keys = cleanKeys(v.keys);
+    out.dir = cleanDir(v.dir);
+    out.panel = v.panel !== false;
     if (v.best && typeof v.best === 'object') {
       for (const [k, n] of Object.entries(v.best)) if (/^[a-z0-9-]{1,20}\.[0-3]$/.test(k) && Number.isInteger(n) && n >= 0 && n <= 1000) out.best[k] = n;
     }
@@ -133,7 +146,7 @@ export function readPrefs(store) {
 }
 
 export function writePrefs(store, prefs) {
-  const v = { tapOffset: clampOffset(prefs.tapOffset), seen: Boolean(prefs.seen), slow: typeof prefs.slow === 'boolean' ? prefs.slow : null, calm: Boolean(prefs.calm), music: prefs.music !== false, speed: cleanSpeed(prefs.speed), keys: cleanKeys(prefs.keys), best: prefs.best || {} };
+  const v = { tapOffset: clampOffset(prefs.tapOffset), seen: Boolean(prefs.seen), slow: typeof prefs.slow === 'boolean' ? prefs.slow : null, calm: Boolean(prefs.calm), music: prefs.music !== false, speed: cleanSpeed(prefs.speed), keys: cleanKeys(prefs.keys), dir: cleanDir(prefs.dir), panel: prefs.panel !== false, best: prefs.best || {} };
   try {
     if (store) store.setItem(OFFSET_KEY, JSON.stringify(v));
     return true;
@@ -147,6 +160,7 @@ export function keyCodeOf(e) {
   if (typeof e.code === 'string' && e.code) return e.code;
   const k = typeof e.key === 'string' ? e.key : '';
   if (k === ' ' || k === 'Spacebar') return 'Space';
+  if (k === 'Escape' || k === 'Esc') return 'Escape';
   if (/^Arrow(Left|Right|Up|Down)$/.test(k)) return k;
   if (/^[a-z]$/i.test(k)) return `Key${k.toUpperCase()}`;
   return '';
@@ -437,8 +451,22 @@ function show(node, on) {
   else node.setAttribute('hidden', '');
 }
 
-function pressedBtn(label, on, key, fn) {
-  return button(label, { variant: on ? 'primary' : 'ghost', size: 'sm', key, on: fn, attrs: { 'aria-pressed': on ? 'true' : 'false' } });
+let setIds = 0;
+
+function switchBtn(on, key, labelId, fn) {
+  return h('button', { class: ['bd-sw', on ? 'is-on' : null], type: 'button', dataset: { key }, attrs: { role: 'switch', 'aria-checked': on ? 'true' : 'false', 'aria-labelledby': labelId }, on: { click: fn } }, h('span', { class: 'switch-track', attrs: { 'aria-hidden': 'true' } }, h('span', { class: 'switch-thumb' })), h('span', { class: 'bd-sw-text', text: on ? 'On' : 'Off', attrs: { 'aria-hidden': 'true' } }));
+}
+
+function segBtn(label, on, key, fn, extra = {}) {
+  return h('button', { class: ['bd-seg-btn', on ? 'is-on' : null], type: 'button', dataset: { key }, disabled: extra.disabled, attrs: { 'aria-pressed': extra.plain ? null : on ? 'true' : 'false', 'aria-label': extra.label || null }, on: { click: fn } }, label);
+}
+
+function setRow(id, label, hint, ...control) {
+  return h('div', { class: 'bd-set-row' }, h('div', { class: 'bd-set-lab' }, h('span', { class: 'bd-set-name', text: label, attrs: { id } }), hint ? h('span', { class: 'bd-set-hint', text: hint }) : null), h('div', { class: 'bd-set-ctl' }, ...control));
+}
+
+function setGroup(title, ...rows) {
+  return h('div', { class: 'bd-set-grp', attrs: { role: 'group', 'aria-label': title } }, h('h3', { class: 'bd-set-gt', text: title }), ...rows);
 }
 
 export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, songAudio } = {}) {
@@ -450,6 +478,8 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   const audio = songAudio || createSongAudio({ win: w });
   const loop = sharedLoop();
   const prefs = readPrefs(store);
+  setIds += 1;
+  const uid = `bd${setIds}`;
   addSheet(d, PLAY_SHEET, 'data-bd-play');
   addSheet(d, SONG_SHEET, 'data-bd-songs');
   loadCatalog().catch(() => null);
@@ -512,6 +542,10 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     return prefs.slow === null ? readMedia().reduced || prefs.calm : prefs.slow;
   }
 
+  function up() {
+    return cleanDir(prefs.dir) === 'up';
+  }
+
   function keyboardy() {
     if (keysSeen) return true;
     return readMedia().fine;
@@ -565,13 +599,15 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   const main = h('div', { class: 'bd-main' }, wrap, side);
   const padRow = h('div', { class: 'bd-pads' });
   const sr = h('span', { class: 'bd-sr', attrs: { 'aria-live': 'polite', role: 'status' } });
-  const stage = h('div', { class: 'bd-stage' }, hud, lostEl, banner, ticker, main, padRow, h('div', { class: 'bd-safe', attrs: { 'aria-hidden': 'true' } }), sr);
+  const safeEl = h('div', { class: 'bd-safe', attrs: { 'aria-hidden': 'true' } });
+  const stage = h('div', { class: 'bd-stage' }, hud, lostEl, banner, ticker, main, padRow, safeEl, sr);
   const resultsBox = h('div', { class: 'bd-results' });
   const foot = h('div', { class: 'game-foot', attrs: { role: 'status', 'aria-live': 'polite' } });
   show(audioChip, false);
   show(specBox, false);
   show(liteChip, false);
   el.append(head, note, readyBox, stage, resultsBox, foot);
+  placePads();
   const draw = createBeatDraw(canvas, { doc: d });
   let pads = [];
   let canvasW = 0;
@@ -639,6 +675,15 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     });
     padRow.replaceChildren(...pads);
     stage.classList.toggle('bd-keys', keyboardy());
+    placePads();
+  }
+
+  function placePads() {
+    const isUp = up();
+    stage.classList.toggle('bd-up', isUp);
+    padRow.classList.toggle('bd-pads-top', isUp);
+    padRow.classList.toggle('bd-pads-bottom', !isUp);
+    if (padRow.parentNode === stage) stage.insertBefore(padRow, isUp ? main : safeEl);
   }
 
   function ensureAudio() {
@@ -1111,8 +1156,9 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
     const wd = canvasW;
     const ht = canvasH;
     const ratio = lite ? 1 : Math.min(2, Number(w.devicePixelRatio) || 1);
-    const sig = `${wd}x${ht}x${ratio}`;
-    if (wd > 0 && ht > 0 && sig !== canvasSig && draw.resize({ width: wd, height: ht, dpr: ratio, lanes: LANES })) canvasSig = sig;
+    const isUp = up();
+    const sig = `${wd}x${ht}x${ratio}x${isUp}`;
+    if (wd > 0 && ht > 0 && sig !== canvasSig && draw.resize({ width: wd, height: ht, dpr: ratio, lanes: LANES, up: isUp })) canvasSig = sig;
     const j = local.judge;
     paintHolds();
     draw.draw({
@@ -1200,6 +1246,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
         repaintReady();
       },
       mode,
+      up,
       doc: d,
     });
     host.append(tut.el);
@@ -1353,7 +1400,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
   function readyModel(m) {
     if (!m || m.phase !== 'ready') return null;
     const mine = load.n === m.n && load.state !== 'idle' ? load.state : m.loading ? m.loading.mine : 'wait';
-    return { n: m.n, number: m.number, total: m.total, track: m.track, song: m.song, faster: m.faster, diffName: m.diffName, len: m.len, notes: m.notes, iReady: m.iReady, watching: m.watching, dots: m.dots, starts: m.starts, ends: m.ends, slow: slow(), calm: prefs.calm, speed: cleanSpeed(prefs.speed), keys: keyLabels(prefs.keys), custom: Boolean(cleanKeys(prefs.keys)), binding: binding ? binding.got.length : null, offset: prefs.tapOffset, tut: Boolean(tut), load: { mine, pct: mine === 'ok' ? 1 : load.n === m.n ? load.pct : 0, done: m.loading ? m.loading.done : 0, of: m.loading ? m.loading.of : 0 } };
+    return { n: m.n, number: m.number, total: m.total, track: m.track, song: m.song, faster: m.faster, diffName: m.diffName, len: m.len, notes: m.notes, iReady: m.iReady, watching: m.watching, dots: m.dots, starts: m.starts, ends: m.ends, slow: slow(), calm: prefs.calm, speed: cleanSpeed(prefs.speed), keys: keyLabels(prefs.keys), custom: Boolean(cleanKeys(prefs.keys)), binding: binding ? binding.got.length : null, bound: binding ? binding.got.map(keyName) : [], offset: prefs.tapOffset, dir: cleanDir(prefs.dir), panel: prefs.panel !== false, tut: Boolean(tut), load: { mine, pct: mine === 'ok' ? 1 : load.n === m.n ? load.pct : 0, done: m.loading ? m.loading.done : 0, of: m.loading ? m.loading.of : 0 } };
   }
 
   function retryLoad() {
@@ -1398,43 +1445,135 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
       h('p', { class: 'bd-scoreline muted', text: SCORE_LINE }),
       h(
         'div',
-        { class: 'beatdrop-ready-actions' },
-        r.watching ? null : button(r.iReady ? 'Ready!' : "I'm ready", { variant: 'primary', key: 'bd-ready', disabled: r.iReady, on: () => sendReady(model) }),
-        r.tut ? null : button('How to play', { variant: 'ghost', size: 'sm', key: 'bd-how', on: () => openTut('full') }),
-        r.tut ? null : button('Re-check timing', { variant: 'ghost', size: 'sm', key: 'bd-timing', on: () => openTut('timing') }),
-        pressedBtn('Slower notes', r.slow, 'bd-slow', () => {
-          prefs.slow = !slow();
-          save();
-          if (model) local.look = lookFor(model.df, slow()) / cleanSpeed(prefs.speed);
-          repaintReady();
-        }),
-        pressedBtn('Calm view', r.calm, 'bd-calm', () => {
-          prefs.calm = !prefs.calm;
-          save();
-          repaintReady();
-        }),
+        { class: 'beatdrop-ready-actions bd-go' },
+        r.watching ? null : button(r.iReady ? 'Ready!' : "I'm ready", { variant: 'primary', size: 'lg', key: 'bd-ready', disabled: r.iReady, on: () => sendReady(model) }),
+        r.tut ? null : button('How to play', { variant: 'secondary', size: 'lg', key: 'bd-how', on: () => openTut('full') }),
       ),
-      h(
-        'div',
-        { class: 'beatdrop-ready-actions bd-speed', attrs: { role: 'group', 'aria-label': 'Scroll speed' } },
-        h('span', { class: 'muted', text: 'Scroll speed' }),
-        button('Slower', { variant: 'ghost', size: 'sm', key: 'bd-speed-down', disabled: r.speed <= SPEEDS[0], on: () => changeSpeed(-1) }),
-        h('strong', { class: 'bd-speed-value', text: speedLabel(r.speed), attrs: { 'aria-live': 'polite' } }),
-        button('Faster', { variant: 'ghost', size: 'sm', key: 'bd-speed-up', disabled: r.speed >= SPEEDS[SPEEDS.length - 1], on: () => changeSpeed(1) }),
-      ),
-      h(
-        'div',
-        { class: 'beatdrop-ready-actions bd-keybinds', attrs: { role: 'group', 'aria-label': 'Keys' } },
-        h('span', { class: 'muted', text: r.binding === null ? 'Keys' : `Press the key for lane ${r.binding + 1} of 4 (Esc to cancel)` }),
-        r.binding === null ? h('strong', { class: 'bd-keys-value', text: r.keys.join(' '), attrs: { 'aria-live': 'polite' } }) : null,
-        r.binding === null ? button('Change keys', { variant: 'ghost', size: 'sm', key: 'bd-keys-change', on: () => startBinding() }) : button('Cancel', { variant: 'ghost', size: 'sm', key: 'bd-keys-cancel', on: () => stopBinding() }),
-        r.binding === null && r.custom ? button('Reset', { variant: 'ghost', size: 'sm', key: 'bd-keys-reset', on: () => resetKeys() }) : null,
-      ),
-      r.offset ? h('p', { class: 'bd-offset muted', text: `Timing offset: ${r.offset > 0 ? '+' : ''}${r.offset} ms` }) : null,
       timer(r.starts, r.ends, 'Song starts in'),
       r.dots.length ? h('div', { class: 'bd-dots', attrs: { 'aria-label': `${r.dots.filter((x) => x.on).length} of ${r.dots.length} ready` } }, r.dots.map((x) => h('span', { class: ['bd-dot', x.on ? 'is-on' : null, x.ld ? 'is-loaded' : null, x.lf ? 'is-fail' : null, x.isMe ? 'is-me' : null] }))) : null,
+      settingsPanel(r),
     );
   });
+
+  function settingsPanel(r) {
+    const id = (s) => `${uid}-${s}`;
+    const pal = laneStyle();
+    const summary = `${speedLabel(r.speed)} - ${r.dir === 'up' ? 'Up' : 'Down'} - ${r.keys.join(' ')}`;
+    const binding = r.binding !== null;
+    const caps = h(
+      'div',
+      { class: ['bd-caps', binding ? 'is-binding' : null], attrs: { role: 'list', 'aria-label': `Lane keys: ${r.keys.join(', ')}` } },
+      pal.map((pi, i) => {
+        const setting = binding && i === r.binding;
+        const done = binding && i < r.binding;
+        const label = binding ? (done ? r.bound[i] : setting ? '?' : '') : r.keys[i];
+        return h('span', { class: ['bd-cap', `bd-l${pi}`, setting ? 'is-set' : null, done ? 'is-done' : null], dataset: { key: `bd-cap-${i}` }, attrs: { role: 'listitem', 'aria-label': `Lane ${i + 1}: ${label || 'not set'}`, 'aria-current': setting ? 'true' : null } }, h('span', { class: ['bd-sh', `bd-sh-${pi}`], attrs: { 'aria-hidden': 'true' } }), h('span', { class: 'bd-cap-key', text: label }));
+      }),
+    );
+    const keysCtl = [
+      caps,
+      binding ? h('p', { class: 'bd-bind-msg', attrs: { role: 'status', 'aria-live': 'assertive' }, text: `Press the key for lane ${r.binding + 1} of 4. Esc cancels.` }) : null,
+      h(
+        'div',
+        { class: 'bd-set-btns' },
+        binding ? button('Cancel', { variant: 'secondary', size: 'sm', key: 'bd-keys-cancel', on: () => stopBinding() }) : button('Change keys', { variant: 'secondary', size: 'sm', key: 'bd-keys-change', on: () => startBinding() }),
+        !binding && r.custom ? button('Reset to D F J K', { variant: 'secondary', size: 'sm', key: 'bd-keys-reset', on: () => resetKeys() }) : null,
+      ),
+    ];
+    const body = h(
+      'div',
+      { class: 'bd-set-body', attrs: { id: id('set'), hidden: !r.panel } },
+      setGroup(
+        'Gameplay',
+        setRow(
+          id('speed'),
+          'Scroll speed',
+          'Higher spreads notes out',
+          h(
+            'div',
+            { class: 'bd-seg bd-step', attrs: { role: 'group', 'aria-labelledby': id('speed') } },
+            segBtn('−', false, 'bd-speed-down', () => changeSpeed(-1), { plain: true, label: 'Slower', disabled: r.speed <= SPEEDS[0] }),
+            h('output', { class: 'bd-speed-value', text: speedLabel(r.speed), attrs: { 'aria-live': 'polite' } }),
+            segBtn('+', false, 'bd-speed-up', () => changeSpeed(1), { plain: true, label: 'Faster', disabled: r.speed >= SPEEDS[SPEEDS.length - 1] }),
+          ),
+          h('span', { class: 'bd-spd-prev', vars: { '--bd-spd': String(r.speed) }, attrs: { 'aria-hidden': 'true' } }, h('span'), h('span'), h('span')),
+        ),
+        setRow(
+          id('dir'),
+          'Note direction',
+          r.dir === 'up' ? 'Notes rise to the top line' : 'Notes fall to the bottom line',
+          h('div', { class: 'bd-seg', attrs: { role: 'group', 'aria-labelledby': id('dir') } }, segBtn('Down', r.dir === 'down', 'bd-dir-down', () => changeDir('down')), segBtn('Up', r.dir === 'up', 'bd-dir-up', () => changeDir('up'))),
+        ),
+        setRow(id('slow'), 'Slower notes', 'More time to read each note', switchBtn(r.slow, 'bd-slow', id('slow'), () => toggleSlow())),
+      ),
+      setGroup(
+        'Controls',
+        h('div', { class: ['bd-set-row', 'bd-set-keys', 'bd-keybinds'] }, h('div', { class: 'bd-set-lab' }, h('span', { class: 'bd-set-name', text: 'Keys', attrs: { id: id('keys') } }), h('span', { class: 'bd-set-hint', text: 'One key per lane, left to right' })), h('div', { class: 'bd-set-ctl' }, ...keysCtl)),
+        setRow(
+          id('off'),
+          'Timing',
+          'Nudge if hits feel early or late',
+          h(
+            'div',
+            { class: 'bd-seg bd-step', attrs: { role: 'group', 'aria-labelledby': id('off') } },
+            segBtn('−', false, 'bd-off-down', () => nudge(-NUDGE_MS), { plain: true, label: `Earlier by ${NUDGE_MS} ms`, disabled: r.offset <= -TIMING_MAX }),
+            h('output', { class: 'bd-offset', text: offsetLabel(r.offset), attrs: { 'aria-live': 'polite' } }),
+            segBtn('+', false, 'bd-off-up', () => nudge(NUDGE_MS), { plain: true, label: `Later by ${NUDGE_MS} ms`, disabled: r.offset >= TIMING_MAX }),
+          ),
+          r.tut ? null : button('Re-check', { variant: 'secondary', size: 'sm', key: 'bd-timing', attrs: { 'aria-label': 'Re-check timing' }, on: () => openTut('timing') }),
+        ),
+      ),
+      setGroup('Display', setRow(id('calm'), 'Calm view', 'Fewer effects and no shaking', switchBtn(r.calm, 'bd-calm', id('calm'), () => toggleCalm()))),
+    );
+    return h(
+      'section',
+      { class: ['bd-set', r.panel ? 'is-open' : 'is-closed'], attrs: { 'aria-labelledby': id('set-t') } },
+      h(
+        'button',
+        { class: 'bd-set-head', type: 'button', dataset: { key: 'bd-set-toggle' }, attrs: { 'aria-expanded': r.panel ? 'true' : 'false', 'aria-controls': id('set') }, on: { click: () => togglePanel() } },
+        h('span', { class: 'bd-set-title', text: 'Your settings', attrs: { id: id('set-t') } }),
+        h('span', { class: 'bd-set-sum', text: summary }),
+        h('span', { class: 'bd-set-chev', attrs: { 'aria-hidden': 'true' } }),
+      ),
+      body,
+    );
+  }
+
+  function toggleSlow() {
+    prefs.slow = !slow();
+    save();
+    if (model) local.look = lookFor(model.df, slow()) / cleanSpeed(prefs.speed);
+    repaintReady();
+  }
+
+  function toggleCalm() {
+    prefs.calm = !prefs.calm;
+    save();
+    repaintReady();
+  }
+
+  function togglePanel() {
+    prefs.panel = prefs.panel === false;
+    save();
+    repaintReady();
+  }
+
+  function changeDir(dir) {
+    const next = cleanDir(dir);
+    if (prefs.dir === next) return;
+    prefs.dir = next;
+    save();
+    canvasSig = '';
+    placePads();
+    repaintReady();
+  }
+
+  function nudge(ms) {
+    prefs.tapOffset = clampOffset(prefs.tapOffset + ms);
+    clock.offset = prefs.tapOffset;
+    save();
+    repaintReady();
+  }
 
   function startBinding() {
     binding = { got: [] };

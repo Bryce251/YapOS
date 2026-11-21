@@ -521,9 +521,8 @@ function nope(api, slot, action) {
   startTurn(api, st, st.cur, 'again');
 }
 
-export function lateLives(st, present) {
-  const alive = standing(st.order, st.lives, present).map((s) => st.lives[s] || 0);
-  return Math.max(1, alive.length ? Math.min(...alive) : 1);
+export function lateLives() {
+  return 1;
 }
 
 export function seat(order, slot, cur) {
@@ -683,11 +682,22 @@ const chain = {
   roster(api) {
     const st = api.get(KEY);
     if (!st || st.phase !== 'turn') return;
+    const here = presentSlots(api);
+    const gone = st.order.filter((s) => !here.includes(s) && (st.lives[s] || 0) > 0);
+    if (gone.length) {
+      st.lives = { ...st.lives };
+      for (const s of gone) {
+        st.lives[s] = 0;
+        if (!st.out.includes(s)) st.out = st.out.concat([s]);
+      }
+    }
     if (endIfDone(api, st)) return;
-    if (!presentSlots(api).includes(st.cur)) {
+    if (!here.includes(st.cur)) {
       st.last = { kind: 'left', s: st.cur, w: null };
       advance(api, st);
+      return;
     }
+    if (gone.length) api.put(KEY, st);
   },
 
   model(snap, local = {}) {

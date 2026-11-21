@@ -325,13 +325,13 @@ function fakeApi(st, slots) {
   };
 }
 
-test('late joiners slot in after the current player with the fewest lives anyone still has', () => {
+test('late joiners slot in after the current player with 1 life', () => {
   assert.deepEqual(seat([0, 1, 2], 5, 1), [0, 1, 5, 2]);
   assert.deepEqual(seat([0, 1, 2], 5, 2), [0, 1, 2, 5]);
   assert.deepEqual(seat([0, 1, 2], 1, 0), [0, 1, 2]);
   assert.deepEqual(seat([0, 1], 4, null), [0, 1, 4]);
-  assert.equal(lateLives({ order: [0, 1, 2], lives: { 0: 3, 1: 2, 2: 0 } }, [0, 1, 2]), 2);
-  assert.equal(lateLives({ order: [0, 1, 2], lives: { 0: 3, 1: 1, 2: 2 } }, [0, 2]), 2);
+  assert.equal(lateLives({ order: [0, 1, 2], lives: { 0: 3, 1: 2, 2: 0 } }, [0, 1, 2]), 1);
+  assert.equal(lateLives({ order: [0, 1, 2], lives: { 0: 3, 1: 1, 2: 2 } }, [0, 2]), 1);
   assert.equal(lateLives({ order: [0, 1], lives: { 0: 0, 1: 0 } }, [0, 1]), 1);
   const st = { phase: 'turn', order: [0, 1, 2], lives: { 0: 3, 1: 1, 2: 2 }, cur: 1, max: 3 };
   const api = fakeApi(st, [0, 1, 2, 3]);
@@ -358,7 +358,7 @@ test('a late joiner takes turns in a running game', async () => {
   s = st(r);
   assert.ok(Number.isInteger(slot), 'the late joiner gets a slot');
   assert.ok(s.order.includes(slot), 'the late joiner is seated');
-  assert.equal(s.lives[slot], 2);
+  assert.equal(s.lives[slot], 1);
   assert.equal(s.order.indexOf(slot), s.order.indexOf(s.cur) + 1);
   const before = s.t;
   while (st(r).cur !== slot) {
@@ -798,4 +798,18 @@ test('Word Chain lists the new lobby settings with friendly defaults', () => {
   const length = chain.settings.find((x) => x.id === 'length');
   assert.deepEqual(length.options.map((o) => o.label), ['No limit', '3 min', '5 min', '8 min']);
   assert.equal(length.default, 5);
+});
+
+test('a player who leaves Word Chain loses all their lives and stays out', async () => {
+  const r = await startChain(3, { timer: 15 });
+  const [host, a, b] = r.engines;
+  const gone = b.snapshot().meSlot;
+  r.hub.leave(b.snapshot().me);
+  b.destroy();
+  await r.clock.advance(600);
+  const s = host.snapshot().state.chain;
+  assert.equal(s.lives[gone], 0, 'all lives gone');
+  assert.ok(s.out.includes(gone), 'marked out');
+  assert.equal(s.phase, 'turn', 'the other two keep playing');
+  assert.ok(a.snapshot().state.chain);
 });
