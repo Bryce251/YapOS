@@ -2479,3 +2479,27 @@ test('players can set their own four lane keys', async () => {
   view.destroy();
   noSongs();
 });
+
+test('How to play opened while watching closes on Skip and on finishing', async () => {
+  installDom({ url: 'https://yapos.dev/activity/' });
+  const r = await songGame(2);
+  const s = st(r);
+  const [x, y] = slots(r);
+  bySlot(r, x).act({ type: 'loaded', n: s.n });
+  bySlot(r, y).act({ type: 'nolo', n: s.n });
+  for (const e of r.engines) e.act({ type: 'ready', n: s.n });
+  await settle(r, 300);
+  assert.equal(st(r).phase, 'play');
+  const engine = bySlot(r, y);
+  const view = makeView(engine, fakeWin(() => r.clock.now(), false));
+  view.update(engine.snapshot());
+  const tuts = () => all(view.el).filter((n) => n.classList && n.classList.contains('bd-tut')).length;
+  fire(byKey(view, 'bd-spec-how'), 'click');
+  assert.equal(tuts(), 1, 'the tutorial opens while watching');
+  fire(byKey(view, 'bd-tut-skip'), 'click');
+  assert.equal(tuts(), 0, 'Skip closes it');
+  view.update(engine.snapshot());
+  assert.equal(tuts(), 0, 'and it stays closed');
+  view.destroy();
+  noSongs();
+});

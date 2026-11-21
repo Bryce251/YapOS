@@ -1195,6 +1195,7 @@ export function createBeatdropView({ engine, fx, cues, sfx, win, storage, doc, s
         save();
         tut = null;
         tutHost.replaceChildren();
+        for (const c of [...specBox.children]) if (c.classList && c.classList.contains('bd-tut')) c.remove();
         if (!skipped && mode === 'full') sendReady(model);
         repaintReady();
       },
